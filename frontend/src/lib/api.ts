@@ -1,8 +1,6 @@
 import type { Sector, Stock, NewsArticle } from "./types";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL
-  ? `${process.env.NEXT_PUBLIC_API_URL}/api`
-  : "/api";
+const API_BASE = "/api";
 
 export async function fetchSectors(): Promise<Sector[]> {
   const res = await fetch(`${API_BASE}/sectors`);
