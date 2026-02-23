@@ -70,3 +70,9 @@ export async function refreshNews(): Promise<{ message: string }> {
   if (!res.ok) throw new Error("Failed to refresh news");
   return res.json();
 }
+
+export async function syncStocks(): Promise<{ message: string; added: number }> {
+  const res = await fetch(`${API_BASE}/stocks/sync`, { method: "POST" });
+  if (!res.ok) throw new Error("Failed to sync stocks");
+  return res.json();
+}

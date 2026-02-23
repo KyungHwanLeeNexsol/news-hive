@@ -6,7 +6,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.database import SessionLocal, engine, Base
 from app.models import Sector, Stock, NewsArticle, NewsStockRelation  # noqa: F401
 from app.seed.sectors import seed_sectors
+from app.seed.stocks import seed_all_stocks
 from app.services.scheduler import start_scheduler, stop_scheduler
+
+import logging
+
+logging.basicConfig(level=logging.INFO)
 
 
 @asynccontextmanager
@@ -16,6 +21,7 @@ async def lifespan(app: FastAPI):
     db = SessionLocal()
     try:
         seed_sectors(db)
+        seed_all_stocks(db)
     finally:
         db.close()
     start_scheduler()

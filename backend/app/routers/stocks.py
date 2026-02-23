@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 
@@ -8,6 +10,9 @@ from app.models.news import NewsArticle
 from app.models.news_relation import NewsStockRelation
 from app.schemas.stock import StockCreate, StockResponse
 from app.schemas.news import NewsArticleResponse, NewsRelationResponse
+from app.seed.stocks import seed_all_stocks
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["stocks"])
 
@@ -28,6 +33,18 @@ async def create_stock(sector_id: int, body: StockCreate, db: Session = Depends(
     db.commit()
     db.refresh(stock)
     return stock
+
+
+@router.post("/stocks/sync")
+async def sync_stocks(db: Session = Depends(get_db)):
+    """Re-fetch all KOSPI/KOSDAQ stocks from KRX and sync to DB."""
+    current_count = db.query(Stock).count()
+    added = seed_all_stocks(db, force=True)
+    return {
+        "message": f"Stock sync complete. Added {added} new stocks. Total was {current_count}.",
+        "added": added,
+        "previous_total": current_count,
+    }
 
 
 @router.delete("/stocks/{stock_id}", status_code=204)

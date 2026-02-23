@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import random
 
 from sqlalchemy.orm import Session
 
@@ -13,55 +14,96 @@ from app.services.ai_classifier import classify_news
 
 logger = logging.getLogger(__name__)
 
+# Maximum number of individual stock queries per crawl cycle
+MAX_STOCK_QUERIES = 30
+
+
+def _build_search_queries(db: Session, sectors: list[Sector], stocks: list[Stock]) -> list[str]:
+    """Build an optimised list of search queries.
+
+    Strategy for large stock counts (>50):
+    1. Always search by sector name (broad industry news)
+    2. Pick a rotating random sample of individual stocks (MAX_STOCK_QUERIES)
+    3. Include any stocks that have custom keywords (user-curated)
+
+    This keeps API calls manageable (~60 queries x 3 sources = ~180 calls per cycle).
+    """
+    queries: set[str] = set()
+
+    # 1) Sector-level queries — always included
+    for sector in sectors:
+        has_stocks = db.query(Stock.id).filter(Stock.sector_id == sector.id).first()
+        if has_stocks:
+            queries.add(sector.name)
+
+    # 2) Stocks with custom keywords — always included (user explicitly wants these)
+    keyword_stocks = [s for s in stocks if s.keywords]
+    for stock in keyword_stocks:
+        queries.add(stock.name)
+        for kw in stock.keywords:
+            queries.add(kw)
+
+    # 3) Random sample of remaining stocks
+    remaining = [s for s in stocks if not s.keywords]
+    sample_size = max(0, MAX_STOCK_QUERIES - len(keyword_stocks))
+    if len(remaining) > sample_size:
+        sampled = random.sample(remaining, sample_size)
+    else:
+        sampled = remaining
+    for stock in sampled:
+        queries.add(stock.name)
+
+    return list(queries)
+
 
 async def crawl_all_news(db: Session) -> int:
     """Main orchestrator: crawl news for all stocks and sectors, classify, and save."""
     stocks = db.query(Stock).all()
     sectors = db.query(Sector).all()
 
-    # Build search queries from stock names + keywords
-    search_queries: list[str] = []
-    for stock in stocks:
-        search_queries.append(stock.name)
-        if stock.keywords:
-            search_queries.extend(stock.keywords)
-
-    # Also search by sector names for industry-wide news
-    for sector in sectors:
-        if db.query(Stock).filter(Stock.sector_id == sector.id).count() > 0:
-            search_queries.append(sector.name)
-
-    search_queries = list(set(search_queries))
+    search_queries = _build_search_queries(db, sectors, stocks)
     if not search_queries:
         logger.info("No stocks or sectors registered. Skipping news crawl.")
         return 0
 
-    # Crawl from all sources in parallel
-    all_raw_articles: list[dict] = []
-    for query in search_queries:
-        results = await asyncio.gather(
-            search_naver_news(query, display=5),
-            search_google_news(query, num=5),
-            search_newsapi(query, page_size=5),
-            return_exceptions=True,
-        )
-        for result in results:
-            if isinstance(result, list):
-                all_raw_articles.extend(result)
-            elif isinstance(result, Exception):
-                logger.warning(f"Crawler error for query '{query}': {result}")
+    logger.info(f"Crawling news for {len(search_queries)} search queries...")
 
-    # Deduplicate by URL
+    # Crawl from all sources — run queries with a small concurrency limit
+    all_raw_articles: list[dict] = []
+    semaphore = asyncio.Semaphore(5)
+
+    async def _search_one(query: str):
+        async with semaphore:
+            results = await asyncio.gather(
+                search_naver_news(query, display=5),
+                search_google_news(query, num=5),
+                search_newsapi(query, page_size=5),
+                return_exceptions=True,
+            )
+            articles = []
+            for result in results:
+                if isinstance(result, list):
+                    articles.extend(result)
+                elif isinstance(result, Exception):
+                    logger.warning(f"Crawler error for query '{query}': {result}")
+            return articles
+
+    tasks = [_search_one(q) for q in search_queries]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for result in results:
+        if isinstance(result, list):
+            all_raw_articles.extend(result)
+        elif isinstance(result, Exception):
+            logger.warning(f"Query batch error: {result}")
+
+    # Deduplicate by URL — pre-fetch existing URLs in one query
     seen_urls: set[str] = set()
     unique_articles: list[dict] = []
+    existing_urls = {row[0] for row in db.query(NewsArticle.url).all()}
+
     for article in all_raw_articles:
         url = article.get("url", "")
-        if not url or url in seen_urls:
-            continue
-        # Check if already in DB
-        exists = db.query(NewsArticle).filter(NewsArticle.url == url).first()
-        if exists:
-            seen_urls.add(url)
+        if not url or url in seen_urls or url in existing_urls:
             continue
         seen_urls.add(url)
         unique_articles.append(article)
@@ -72,9 +114,8 @@ async def crawl_all_news(db: Session) -> int:
 
     logger.info(f"Found {len(unique_articles)} new articles. Classifying...")
 
-    # AI classification and save
+    # AI classification and save — process in batches
     saved_count = 0
-    # Process in batches of 5 to avoid overloading the AI API
     batch_size = 5
     for i in range(0, len(unique_articles), batch_size):
         batch = unique_articles[i : i + batch_size]
@@ -101,7 +142,6 @@ async def _save_article_with_classification(
     """Save a single article with AI classification."""
     from app.models.news_relation import NewsStockRelation
 
-    # Save the article first
     article = NewsArticle(
         title=article_data["title"],
         summary=article_data.get("description"),

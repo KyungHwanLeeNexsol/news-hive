@@ -8,6 +8,7 @@ import {
   deleteSector,
   createStock,
   deleteStock,
+  syncStocks,
 } from "@/lib/api";
 import type { Sector, Stock } from "@/lib/types";
 
@@ -20,6 +21,8 @@ export default function ManagePage() {
     stock_code: "",
     keywords: "",
   });
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -102,9 +105,47 @@ export default function ManagePage() {
     }
   }
 
+  async function handleSyncStocks() {
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      const result = await syncStocks();
+      setSyncResult(`KRX 동기화 완료: ${result.added}개 종목 추가됨`);
+      await loadSectors();
+      if (selectedSector) {
+        await handleSelectSector(selectedSector.id);
+      }
+    } catch {
+      setError("KRX 종목 동기화 실패");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   return (
     <div>
-      <h1 className="text-2xl font-bold text-gray-900 mb-6">섹터/종목 관리</h1>
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-bold text-gray-900">섹터/종목 관리</h1>
+        <button
+          onClick={handleSyncStocks}
+          disabled={syncing}
+          className="px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        >
+          {syncing ? "동기화 중..." : "KRX 전종목 동기화"}
+        </button>
+      </div>
+
+      {syncResult && (
+        <div className="mb-4 p-3 bg-green-50 text-green-700 rounded-lg text-sm">
+          {syncResult}
+          <button
+            onClick={() => setSyncResult(null)}
+            className="ml-2 text-green-500 hover:text-green-700"
+          >
+            닫기
+          </button>
+        </div>
+      )}
 
       {error && (
         <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-lg text-sm">

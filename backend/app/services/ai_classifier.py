@@ -9,30 +9,55 @@ from app.models.stock import Stock
 
 logger = logging.getLogger(__name__)
 
+# Max stocks to include in AI prompt to keep it under token limits
+MAX_STOCKS_IN_PROMPT = 200
+
 
 async def classify_news(
     title: str,
     sectors: list[Sector],
     stocks: list[Stock],
 ) -> list[dict]:
-    """Use Gemini API to classify a news article against registered sectors/stocks."""
-    if not settings.GEMINI_API_KEY:
-        return _keyword_fallback(title, sectors, stocks)
+    """Classify a news article against registered sectors/stocks.
 
-    # Build sector/stock map for the prompt
+    Two-phase approach for large stock lists:
+    1. Fast keyword scan — exact name match in title
+    2. AI classification with sector-level context (sector names + sampled stocks)
+    """
+    # Phase 1: keyword matching (fast, covers all stocks)
+    keyword_results = _keyword_fallback(title, sectors, stocks)
+    if keyword_results:
+        return keyword_results
+
+    # Phase 2: AI classification
+    if not settings.GEMINI_API_KEY:
+        return []
+
+    return await _ai_classify(title, sectors, stocks)
+
+
+async def _ai_classify(
+    title: str,
+    sectors: list[Sector],
+    stocks: list[Stock],
+) -> list[dict]:
+    """Use Gemini API with a compact prompt."""
     sector_map: dict[str, list[str]] = {}
     stock_id_map: dict[str, int] = {}
     sector_id_map: dict[str, int] = {}
+
     for sector in sectors:
         sector_stocks = [s for s in stocks if s.sector_id == sector.id]
         if sector_stocks:
-            sector_map[sector.name] = [s.name for s in sector_stocks]
+            # Only include top N stocks per sector to keep prompt small
+            sample = sector_stocks[:15]
+            sector_map[sector.name] = [s.name for s in sample]
             sector_id_map[sector.name] = sector.id
-            for s in sector_stocks:
+            for s in sample:
                 stock_id_map[s.name] = s.id
 
     if not sector_map:
-        return _keyword_fallback(title, sectors, stocks)
+        return []
 
     sector_lines = []
     for sector_name, stock_names in sector_map.items():
@@ -72,7 +97,7 @@ async def classify_news(
         classifications = json.loads(content)
     except Exception as e:
         logger.warning(f"AI classification failed: {e}")
-        return _keyword_fallback(title, sectors, stocks)
+        return []
 
     # Convert to relation format
     results = []
@@ -105,12 +130,11 @@ def _keyword_fallback(
     sectors: list[Sector],
     stocks: list[Stock],
 ) -> list[dict]:
-    """Fallback: simple keyword matching when AI is unavailable."""
+    """Fast keyword matching — scans all stocks."""
     results = []
-    title_lower = title.lower()
 
     for stock in stocks:
-        if stock.name in title_lower:
+        if stock.name in title:
             results.append(
                 {
                     "stock_id": stock.id,
@@ -121,7 +145,7 @@ def _keyword_fallback(
             )
         elif stock.keywords:
             for kw in stock.keywords:
-                if kw.lower() in title_lower:
+                if kw.lower() in title.lower():
                     results.append(
                         {
                             "stock_id": stock.id,
