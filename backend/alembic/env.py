@@ -40,6 +40,8 @@ def run_migrations_offline() -> None:
     from app.config import settings
 
     url = settings.DATABASE_URL
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -60,8 +62,11 @@ def run_migrations_online() -> None:
     """
     from app.config import settings
 
+    db_url = settings.DATABASE_URL
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
     configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = settings.DATABASE_URL
+    configuration["sqlalchemy.url"] = db_url
     connectable = engine_from_config(
         configuration,
         prefix="sqlalchemy.",
