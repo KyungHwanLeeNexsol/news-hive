@@ -9,9 +9,11 @@ class Settings(BaseSettings):
 
     NEWSAPI_KEY: str = ""
 
-    ANTHROPIC_API_KEY: str = ""
+    GEMINI_API_KEY: str = ""
 
     NEWS_CRAWL_INTERVAL_MINUTES: int = 30
+
+    FRONTEND_URL: str = "http://localhost:3000"
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

@@ -1,7 +1,7 @@
 import json
 import logging
 
-import anthropic
+from google import genai
 
 from app.config import settings
 from app.models.sector import Sector
@@ -15,8 +15,8 @@ async def classify_news(
     sectors: list[Sector],
     stocks: list[Stock],
 ) -> list[dict]:
-    """Use Claude API to classify a news article against registered sectors/stocks."""
-    if not settings.ANTHROPIC_API_KEY:
+    """Use Gemini API to classify a news article against registered sectors/stocks."""
+    if not settings.GEMINI_API_KEY:
         return _keyword_fallback(title, sectors, stocks)
 
     # Build sector/stock map for the prompt
@@ -48,20 +48,19 @@ async def classify_news(
 직접 언급된 종목은 "direct", 간접 영향은 "indirect"로 표시.
 관련 없으면 빈 배열 []을 반환.
 
-응답 형식 (JSON만 반환):
+응답 형식 (JSON만 반환, 마크다운 코드블록 없이):
 [
   {{"type": "stock", "name": "종목명", "relevance": "direct"}},
   {{"type": "sector", "name": "섹터명", "relevance": "indirect"}}
 ]"""
 
     try:
-        client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=500,
-            messages=[{"role": "user", "content": prompt}],
+        client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
         )
-        content = response.content[0].text.strip()
+        content = response.text.strip()
 
         # Extract JSON from response
         if "```" in content:
