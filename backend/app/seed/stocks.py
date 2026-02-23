@@ -121,22 +121,41 @@ KEYWORD_SECTOR_MAP = {
 }
 
 
-def _parse_fields(part2: str, field_specs: list[tuple[str, int]]) -> dict[str, str]:
-    """Parse fixed-width fields from part2 string."""
+def _parse_fields(part2: bytes, field_specs: list[tuple[str, int]]) -> dict[str, str]:
+    """Parse fixed-width fields from part2 BYTES (all ASCII)."""
     result = {}
     offset = 0
     for name, width in field_specs:
-        result[name] = part2[offset:offset + width].strip()
+        result[name] = part2[offset:offset + width].decode("ascii", errors="replace").strip()
         offset += width
     return result
+
+
+# ETF/ETN/ETP 브랜드명 (대문자로 비교)
+_ETP_NAME_KEYWORDS = [
+    "ETF", "ETN", "ELW",
+    "KODEX", "TIGER", "KBSTAR", "ARIRANG", "HANARO",
+    "SOL ", "ACE ", "KOSEF", "KINDEX", "TIMEFOLIO",
+    "PLUS ", "RISE ", "히어로즈",
+    "1Q ", "마이티",
+    "스팩",
+    # 상품형 키워드
+    "액티브", "패시브", "레버리지", "인버스", "선물", "옵션",
+    "채권", "국고", "통안", "회사채", "금리",
+    "인덱스", "배당성장", "고배당",
+    "(H)", "(합성)", "(UH)",
+]
 
 
 def _download_and_parse_mst(url: str, market: str) -> list[dict]:
     """Download KIS master file and parse stock codes + names.
 
-    The .mst file format (cp949 encoded, fixed-width):
-    KOSPI: each row = variable-length part1 (code+name) + 228 chars part2 (details)
-    KOSDAQ: each row = variable-length part1 (code+name) + 222 chars part2 (details)
+    The .mst file format (cp949 encoded, BYTE-based fixed-width):
+    KOSPI: each row = variable-length part1 (code+name) + 228 BYTES part2
+    KOSDAQ: each row = variable-length part1 (code+name) + 222 BYTES part2
+
+    IMPORTANT: part2 field widths are in BYTES. Since cp949 Korean chars are
+    2 bytes each, we must parse part2 as raw bytes, not decoded characters.
     """
     tail_len = 228 if market == "KOSPI" else 222
     field_specs = KOSPI_FIELD_SPECS if market == "KOSPI" else KOSDAQ_FIELD_SPECS
@@ -164,46 +183,47 @@ def _download_and_parse_mst(url: str, market: str) -> list[dict]:
 
     stocks = []
     try:
-        text = mst_bytes.decode("cp949")
-        for row in text.strip().split("\n"):
-            row = row.rstrip("\r")
-            if len(row) <= tail_len:
+        # Parse line by line in RAW BYTES to ensure correct field alignment
+        for line_bytes in mst_bytes.split(b"\n"):
+            line_bytes = line_bytes.rstrip(b"\r")
+            if len(line_bytes) <= tail_len:
                 continue
 
-            # Part 1: variable length — 단축코드(9) + 표준코드(12) + 한글명(rest)
-            part1 = row[: len(row) - tail_len]
-            short_code = part1[0:9].strip()
-            name = part1[21:].strip()
+            # Part 2: last tail_len BYTES (all ASCII flags/numbers)
+            part2_bytes = line_bytes[-tail_len:]
+            fields = _parse_fields(part2_bytes, field_specs)
 
-            # Part 2: fixed width — parse all fields
-            part2 = row[-tail_len:]
-            fields = _parse_fields(part2, field_specs)
+            # Part 1: remaining bytes — 단축코드(9B) + 표준코드(12B) + 한글명(cp949)
+            part1_bytes = line_bytes[:-tail_len]
+            short_code = part1_bytes[0:9].decode("ascii", errors="replace").strip()
+            name = part1_bytes[21:].decode("cp949", errors="replace").strip()
 
             grp = fields.get("그룹코드", "")
 
-            # === FILTER: Only keep actual stocks ===
-            # Group code: 'ST' = KOSPI stock, 'ST1'/'ST3'/etc = KOSDAQ stock
-            # 'EF' = ETF, 'EN' = ETN, 'FS' = foreign stock
+            # === FILTER 1: Group code ===
+            # 'ST' = stock, 'EF' = ETF, 'EN' = ETN, 'EW' = ELW, 'BC' = BC
             if not grp.startswith("ST"):
                 continue
 
-            # Filter: only 6-digit numeric codes
+            # === FILTER 2: ETP상품구분코드 ===
+            # Non-empty = ETP product (ETF/ETN/ELW)
+            etp_code = fields.get("ETP상품구분코드", "")
+            if etp_code and etp_code != "00":
+                continue
+
+            # === FILTER 3: 6-digit numeric code ===
             if not short_code or len(short_code) != 6 or not short_code.isdigit():
                 continue
             if not name:
                 continue
 
-            # Skip SPAC
+            # === FILTER 4: SPAC ===
             if fields.get(spac_field) == "Y":
                 continue
 
-            # Skip by name pattern (additional safety net)
+            # === FILTER 5: Name pattern (safety net) ===
             name_upper = name.upper()
-            if any(kw in name_upper for kw in [
-                "ETF", "ETN", "KODEX", "TIGER", "KBSTAR", "ARIRANG",
-                "HANARO", "SOL ", "ACE ", "KOSEF", "KINDEX", "스팩",
-                "PLUS ", "RISE ", "TIMEFOLIO",
-            ]):
+            if any(kw in name_upper for kw in _ETP_NAME_KEYWORDS):
                 continue
 
             # Determine sector via KRX flags
@@ -254,12 +274,7 @@ def seed_all_stocks(db: Session, force: bool = False) -> int:
     sectors = db.query(Sector).all()
     sector_lookup = {s.name: s.id for s in sectors}
 
-    # Default fallback sector
-    fallback_sector_id = sector_lookup.get("기계/장비")
-    if not fallback_sector_id and sectors:
-        fallback_sector_id = sectors[0].id
-
-    if not fallback_sector_id:
+    if not sectors:
         logger.error("No sectors found. Run seed_sectors first.")
         return 0
 
@@ -286,13 +301,15 @@ def seed_all_stocks(db: Session, force: bool = False) -> int:
     added = 0
     sector_stats: dict[str, int] = {}
 
+    skipped = 0
     for stock_data in all_stocks:
         if stock_data["code"] in existing_codes:
             continue
 
         sector_id = _map_sector(stock_data, sector_lookup)
         if not sector_id:
-            sector_id = fallback_sector_id
+            skipped += 1
+            continue
 
         # Track stats
         sector_name = next(
@@ -311,5 +328,5 @@ def seed_all_stocks(db: Session, force: bool = False) -> int:
         added += 1
 
     db.commit()
-    logger.info(f"Seeded {added} stocks. Distribution: {sector_stats}")
+    logger.info(f"Seeded {added} stocks, skipped {skipped} unmapped. Distribution: {sector_stats}")
     return added
