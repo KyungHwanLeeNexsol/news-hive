@@ -1,3 +1,4 @@
+import asyncio
 import io
 import logging
 import ssl
@@ -63,62 +64,6 @@ KOSDAQ_FIELD_SPECS = [
     ("시가총액관련", 9), ("기타2", 3), ("플래그1", 1), ("플래그2", 1), ("플래그3", 1),
 ]
 
-# KRX sector flag → our sector name mapping
-KRX_SECTOR_FLAG_MAP = {
-    "KRX자동차": "자동차",
-    "KRX반도체": "반도체",
-    "KRX바이오": "바이오/제약",
-    "KRX은행": "금융",
-    "KRX에너지화학": "화학",
-    "KRX철강": "철강",
-    "KRX미디어통신": "통신",
-    "KRX건설": "건설/부동산",
-    "KRX증권": "금융",
-    "KRX선박": "조선",
-    "KRX보험": "금융",
-    "KRX운송": "운송/물류",
-}
-
-# Fallback: match stock name patterns to sectors
-KEYWORD_SECTOR_MAP = {
-    "반도체": "반도체",
-    "전자": "반도체",
-    "바이오": "바이오/제약",
-    "제약": "바이오/제약",
-    "약품": "바이오/제약",
-    "건설": "건설/부동산",
-    "에너지": "에너지",
-    "화학": "화학",
-    "철강": "철강",
-    "자동차": "자동차",
-    "금융": "금융",
-    "증권": "금융",
-    "은행": "금융",
-    "보험": "금융",
-    "캐피탈": "금융",
-    "통신": "통신",
-    "엔터": "엔터테인먼트",
-    "게임": "엔터테인먼트",
-    "미디어": "엔터테인먼트",
-    "조선": "조선",
-    "해운": "운송/물류",
-    "항공": "방산/항공",
-    "방산": "방산/항공",
-    "식품": "음식료",
-    "음료": "음식료",
-    "유통": "유통/소비재",
-    "소프트": "IT/소프트웨어",
-    "정보": "IT/소프트웨어",
-    "전지": "2차전지",
-    "배터리": "2차전지",
-    "리튬": "2차전지",
-    "섬유": "섬유/의류",
-    "의류": "섬유/의류",
-    "패션": "섬유/의류",
-    "물류": "운송/물류",
-    "택배": "운송/물류",
-    "부동산": "건설/부동산",
-}
 
 
 def _parse_fields(part2: bytes, field_specs: list[tuple[str, int]]) -> dict[str, str]:
@@ -226,17 +171,10 @@ def _download_and_parse_mst(url: str, market: str) -> list[dict]:
             if any(kw in name_upper for kw in _ETP_NAME_KEYWORDS):
                 continue
 
-            # Determine sector via KRX flags
-            krx_sectors = []
-            for flag_name, sector_name in KRX_SECTOR_FLAG_MAP.items():
-                if fields.get(flag_name) == "Y":
-                    krx_sectors.append(sector_name)
-
             stocks.append({
                 "code": short_code,
                 "name": name,
                 "market": market,
-                "krx_sectors": krx_sectors,
             })
     except Exception as e:
         logger.error(f"Failed to parse {market} master file: {e}")
@@ -246,39 +184,58 @@ def _download_and_parse_mst(url: str, market: str) -> list[dict]:
     return stocks
 
 
-def _map_sector(stock_data: dict, sector_lookup: dict[str, int]) -> int | None:
-    """Map stock to our sector using KRX flags first, then name keywords."""
-    # Try KRX sector flags (most reliable)
-    for sector_name in stock_data.get("krx_sectors", []):
-        if sector_name in sector_lookup:
-            return sector_lookup[sector_name]
+def _build_naver_stock_mapping(db: Session) -> dict[str, int]:
+    """Build stock_code → sector_id mapping from Naver sector detail pages.
 
-    # Try keyword matching on stock name
-    name = stock_data.get("name", "")
-    for keyword, sector_name in KEYWORD_SECTOR_MAP.items():
-        if keyword in name:
-            if sector_name in sector_lookup:
-                return sector_lookup[sector_name]
+    Scrapes each Naver sector's detail page to find constituent stock codes.
+    Takes ~24 seconds for ~80 sectors (0.3s delay between requests).
+    """
+    from app.services.naver_finance import fetch_sector_stock_codes
 
-    return None
+    sectors = db.query(Sector).filter(Sector.naver_code.isnot(None)).all()
+    if not sectors:
+        logger.warning("No sectors with naver_code found")
+        return {}
+
+    mapping: dict[str, int] = {}
+
+    async def _fetch_all():
+        for sector in sectors:
+            try:
+                codes = await fetch_sector_stock_codes(sector.naver_code)
+                for code in codes:
+                    mapping[code] = sector.id
+                logger.debug(
+                    f"Sector '{sector.name}' ({sector.naver_code}): {len(codes)} stocks"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to fetch stocks for sector {sector.name}: {e}")
+            await asyncio.sleep(0.3)
+
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(_fetch_all())
+    finally:
+        loop.close()
+
+    logger.info(f"Built Naver stock mapping: {len(mapping)} stocks across {len(sectors)} sectors")
+    return mapping
 
 
 def seed_all_stocks(db: Session, force: bool = False) -> int:
-    """Fetch all KOSPI/KOSDAQ stocks from KIS master files and insert into DB."""
+    """Fetch all KOSPI/KOSDAQ stocks from KIS master files and map to Naver sectors."""
     existing_count = db.query(Stock).count()
     if not force and existing_count > 100:
         logger.info(f"Already have {existing_count} stocks, skipping seed.")
         return 0
 
-    # Build sector name → id lookup
-    sectors = db.query(Sector).all()
-    sector_lookup = {s.name: s.id for s in sectors}
-
-    if not sectors:
-        logger.error("No sectors found. Run seed_sectors first.")
+    # Build Naver-based stock_code → sector_id mapping
+    naver_mapping = _build_naver_stock_mapping(db)
+    if not naver_mapping:
+        logger.error("No Naver stock mapping available. Ensure sectors are seeded first.")
         return 0
 
-    # If force, clear all existing non-custom stocks and re-seed
+    # If force, clear all existing stocks and re-seed
     if force:
         deleted = db.query(Stock).delete()
         db.commit()
@@ -299,22 +256,20 @@ def seed_all_stocks(db: Session, force: bool = False) -> int:
     # Deduplicate by code
     existing_codes = {s.stock_code for s in db.query(Stock.stock_code).all()}
     added = 0
-    sector_stats: dict[str, int] = {}
-
     skipped = 0
+    sector_stats: dict[str, int] = {}
+    sector_names = {s.id: s.name for s in db.query(Sector).all()}
+
     for stock_data in all_stocks:
         if stock_data["code"] in existing_codes:
             continue
 
-        sector_id = _map_sector(stock_data, sector_lookup)
+        sector_id = naver_mapping.get(stock_data["code"])
         if not sector_id:
             skipped += 1
             continue
 
-        # Track stats
-        sector_name = next(
-            (s.name for s in sectors if s.id == sector_id), "unknown"
-        )
+        sector_name = sector_names.get(sector_id, "unknown")
         sector_stats[sector_name] = sector_stats.get(sector_name, 0) + 1
 
         stock = Stock(

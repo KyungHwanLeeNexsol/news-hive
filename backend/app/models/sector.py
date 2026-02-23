@@ -11,6 +11,7 @@ class Sector(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
+    naver_code: Mapped[str | None] = mapped_column(String(10), nullable=True, unique=True)
     is_custom: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

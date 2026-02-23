@@ -15,6 +15,8 @@ router = APIRouter(prefix="/api/sectors", tags=["sectors"])
 
 @router.get("", response_model=list[SectorResponse])
 async def list_sectors(db: Session = Depends(get_db)):
+    from app.services.naver_finance import fetch_sector_performances
+
     rows = (
         db.query(Sector, func.count(Stock.id).label("stock_count"))
         .outerjoin(Stock, Sector.id == Stock.sector_id)
@@ -22,11 +24,31 @@ async def list_sectors(db: Session = Depends(get_db)):
         .order_by(Sector.id)
         .all()
     )
+
+    # Fetch cached performance data (non-blocking, uses 5-min cache)
+    perf_data = await fetch_sector_performances()
+
     results = []
     for sector, stock_count in rows:
         resp = SectorResponse.model_validate(sector)
         resp.stock_count = stock_count
+
+        # Merge Naver performance data by naver_code
+        if sector.naver_code and sector.naver_code in perf_data:
+            perf = perf_data[sector.naver_code]
+            resp.change_rate = perf.change_rate
+            resp.total_stocks = perf.total_stocks
+            resp.rising_stocks = perf.rising_stocks
+            resp.flat_stocks = perf.flat_stocks
+            resp.falling_stocks = perf.falling_stocks
+
         results.append(resp)
+
+    # Sort by change_rate descending (sectors without data go to the end)
+    results.sort(
+        key=lambda s: (s.change_rate is not None, s.change_rate or 0),
+        reverse=True,
+    )
     return results
 
 

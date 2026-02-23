@@ -1,9 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { fetchSectors, fetchNews, refreshNews } from "@/lib/api";
 import type { Sector, NewsArticle } from "@/lib/types";
+import ChangeRate from "@/components/ChangeRate";
+import UpDownBar from "@/components/UpDownBar";
+
+const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return "";
@@ -30,10 +34,18 @@ export default function Dashboard() {
   const [news, setNews] = useState<NewsArticle[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
+  const loadSectors = useCallback(() => {
     fetchSectors().then(setSectors).catch(() => {});
-    fetchNews().then(setNews).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    loadSectors();
+    fetchNews().then(setNews).catch(() => {});
+
+    // Auto-refresh sectors every 5 minutes
+    const interval = setInterval(loadSectors, REFRESH_INTERVAL);
+    return () => clearInterval(interval);
+  }, [loadSectors]);
 
   async function handleRefresh() {
     setRefreshing(true);
@@ -64,16 +76,20 @@ export default function Dashboard() {
           <table className="naver-table">
             <thead>
               <tr>
-                <th className="text-left" style={{ width: "40%" }}>업종명</th>
-                <th style={{ width: "20%" }}>종목수</th>
-                <th style={{ width: "20%" }}>전일대비</th>
-                <th style={{ width: "20%" }}>뉴스</th>
+                <th className="text-left" style={{ width: "22%" }}>업종명</th>
+                <th style={{ width: "12%" }}>전일대비</th>
+                <th style={{ width: "8%" }}>전체</th>
+                <th style={{ width: "8%" }}>상승</th>
+                <th style={{ width: "8%" }}>보합</th>
+                <th style={{ width: "8%" }}>하락</th>
+                <th style={{ width: "22%" }}>등락그래프</th>
+                <th style={{ width: "12%" }}>뉴스</th>
               </tr>
             </thead>
             <tbody>
               {sectors.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="text-center py-8 text-[#999]">
+                  <td colSpan={8} className="text-center py-8 text-[#999]">
                     등록된 업종이 없습니다.
                   </td>
                 </tr>
@@ -91,11 +107,27 @@ export default function Dashboard() {
                         <span className="badge badge-source ml-1">커스텀</span>
                       )}
                     </td>
-                    <td className="text-center text-[#333]">
-                      {sector.stock_count ?? 0}
-                    </td>
                     <td className="text-center">
-                      <span className="text-[#999]">-</span>
+                      <ChangeRate value={sector.change_rate} />
+                    </td>
+                    <td className="text-center text-[#333]">
+                      {sector.total_stocks ?? sector.stock_count ?? 0}
+                    </td>
+                    <td className="text-center text-rise">
+                      {sector.rising_stocks ?? "-"}
+                    </td>
+                    <td className="text-center text-[#333]">
+                      {sector.flat_stocks ?? "-"}
+                    </td>
+                    <td className="text-center text-fall">
+                      {sector.falling_stocks ?? "-"}
+                    </td>
+                    <td className="px-2">
+                      <UpDownBar
+                        rising={sector.rising_stocks ?? 0}
+                        flat={sector.flat_stocks ?? 0}
+                        falling={sector.falling_stocks ?? 0}
+                      />
                     </td>
                     <td className="text-center">
                       <Link

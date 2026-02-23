@@ -5,6 +5,12 @@ export interface Sector {
   created_at: string;
   stock_count?: number;
   stocks?: Stock[];
+  naver_code?: string | null;
+  change_rate?: number | null;
+  total_stocks?: number | null;
+  rising_stocks?: number | null;
+  flat_stocks?: number | null;
+  falling_stocks?: number | null;
 }
 
 export interface Stock {
