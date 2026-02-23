@@ -1,0 +1,24 @@
+# FastAPI
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+
+# Database
+sqlalchemy==2.0.36
+psycopg2-binary==2.9.10
+alembic==1.14.1
+
+# Scheduler
+apscheduler==3.10.4
+
+# News Crawling
+httpx==0.28.1
+feedparser==6.0.11
+beautifulsoup4==4.12.3
+
+# AI Classification
+anthropic==0.43.0
+
+# Utils
+python-dotenv==1.0.1
+pydantic-settings==2.7.1
