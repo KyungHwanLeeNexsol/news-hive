@@ -5,49 +5,112 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { fetchStockNews } from "@/lib/api";
 import type { NewsArticle } from "@/lib/types";
-import NewsCard from "@/components/NewsCard";
+
+function formatDate(dateStr: string | null): string {
+  if (!dateStr) return "";
+  const d = new Date(dateStr);
+  return d.toLocaleDateString("ko-KR", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function sourceLabel(source: string): string {
+  switch (source) {
+    case "naver": return "네이버";
+    case "google": return "구글";
+    case "newsapi": return "NewsAPI";
+    default: return source;
+  }
+}
 
 export default function StockDetail() {
   const params = useParams();
   const stockId = Number(params.id);
 
   const [news, setNews] = useState<NewsArticle[]>([]);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!stockId) return;
-    fetchStockNews(stockId).then(setNews).catch(() => setError("뉴스 로딩 실패"));
+    fetchStockNews(stockId).then(setNews).catch(() => {});
   }, [stockId]);
-
-  if (error) {
-    return (
-      <div className="p-4 bg-red-50 text-red-700 rounded-lg">{error}</div>
-    );
-  }
 
   return (
     <div>
-      <div className="mb-6">
-        <Link
-          href="/"
-          className="text-sm text-blue-600 hover:text-blue-800 mb-2 inline-block"
-        >
-          &larr; 대시보드
+      {/* Breadcrumb */}
+      <div className="flex items-center gap-1 text-[12px] text-[#999] mb-3">
+        <Link href="/" className="hover:text-[#333] hover:underline">
+          업종별 시세
         </Link>
-        <h1 className="text-2xl font-bold text-gray-900">종목 뉴스</h1>
+        <span>&rsaquo;</span>
+        <span className="text-[#333] font-medium">종목 뉴스</span>
       </div>
 
-      <section>
+      <div className="section-box">
+        <div className="section-title">
+          <span>종목 관련 뉴스</span>
+          <span className="text-[12px] font-normal text-[#999]">
+            {news.length}건
+          </span>
+        </div>
         {news.length === 0 ? (
-          <p className="text-gray-500 text-sm">관련 뉴스가 없습니다.</p>
-        ) : (
-          <div className="space-y-3">
-            {news.map((article) => (
-              <NewsCard key={article.id} article={article} />
-            ))}
+          <div className="py-8 text-center text-[13px] text-[#999]">
+            관련 뉴스가 없습니다.
           </div>
+        ) : (
+          <table className="naver-table">
+            <thead>
+              <tr>
+                <th className="text-left" style={{ width: "55%" }}>제목</th>
+                <th style={{ width: "10%" }}>출처</th>
+                <th style={{ width: "15%" }}>관련</th>
+                <th style={{ width: "20%" }}>날짜</th>
+              </tr>
+            </thead>
+            <tbody>
+              {news.map((article) => (
+                <tr key={article.id}>
+                  <td>
+                    <a
+                      href={article.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[#333] hover:text-[#03c75a] hover:underline"
+                    >
+                      {article.title}
+                    </a>
+                    {article.summary && (
+                      <p className="text-[11px] text-[#999] mt-0.5 truncate max-w-[400px]">
+                        {article.summary}
+                      </p>
+                    )}
+                  </td>
+                  <td className="text-center">
+                    <span className="badge badge-source">
+                      {sourceLabel(article.source)}
+                    </span>
+                  </td>
+                  <td className="text-center">
+                    {article.relations.slice(0, 2).map((rel, i) => (
+                      <span
+                        key={i}
+                        className={`badge ${rel.relevance === "direct" ? "badge-direct" : "badge-indirect"} mr-1`}
+                      >
+                        {rel.stock_name || rel.sector_name}
+                      </span>
+                    ))}
+                  </td>
+                  <td className="text-center text-[12px] text-[#999]">
+                    {formatDate(article.published_at)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         )}
-      </section>
+      </div>
     </div>
   );
 }

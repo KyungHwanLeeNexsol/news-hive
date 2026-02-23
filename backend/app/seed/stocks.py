@@ -108,10 +108,20 @@ def _download_and_parse_mst(url: str, market: str) -> list[dict]:
             short_code = part1[0:9].strip()
             name = part1[21:].strip()
 
-            # Part 2: fixed width — extract sector code
+            # Part 2: fixed width — extract sector code and filter flags
             part2 = row[-tail_len:]
-            # group_code(2) + cap_size(1) + sector_large(4) + sector_mid(4) + sector_small(4)
+            # group_code(2) + cap_size(1) + sector_large(4) + ...
             sector_large = part2[3:7].strip()
+
+            # ETP (ETF/ETN) filter
+            if market == "KOSPI":
+                # KOSPI: ETP at offset 22 (width 1)
+                etp_flag = part2[22:23].strip()
+                spac_flag = part2[29:30].strip()
+            else:
+                # KOSDAQ: ETP상품구분코드 at offset 18 (width 1)
+                etp_flag = part2[18:19].strip()
+                spac_flag = part2[24:25].strip()
 
             # Filter: only actual stocks (6-digit numeric codes)
             if not short_code or len(short_code) != 6:
@@ -119,6 +129,18 @@ def _download_and_parse_mst(url: str, market: str) -> list[dict]:
             if not short_code.isdigit():
                 continue
             if not name:
+                continue
+
+            # Skip ETF, ETN, ETP products
+            if etp_flag and etp_flag != "0" and etp_flag != "N" and etp_flag != " ":
+                continue
+            # Skip SPAC
+            if spac_flag == "Y":
+                continue
+            # Skip by name pattern (fallback)
+            name_upper = name.upper()
+            if any(kw in name_upper for kw in ["ETF", "ETN", "KODEX", "TIGER", "KBSTAR",
+                    "ARIRANG", "HANARO", "SOL ", "ACE ", "KOSEF", "KINDEX", "스팩"]):
                 continue
 
             stocks.append({
