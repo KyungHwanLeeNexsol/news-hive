@@ -48,6 +48,7 @@ NAVER_SECTORS_SNAPSHOT = {
 def seed_sectors(db: Session) -> None:
     """Seed sectors from Naver Finance or static fallback."""
     from app.models.stock import Stock
+    from app.models.news_relation import NewsStockRelation
 
     # If we already have Naver sectors, skip seeding but still clean up
     existing_naver = db.query(Sector).filter(Sector.naver_code.isnot(None)).count()
@@ -101,7 +102,12 @@ def seed_sectors(db: Session) -> None:
     )
     removed = 0
     for sector in old_sectors:
-        # Delete stocks belonging to this old sector first
+        # Delete news relations referencing this sector or its stocks
+        stock_ids = [s.id for s in db.query(Stock.id).filter(Stock.sector_id == sector.id).all()]
+        db.query(NewsStockRelation).filter(NewsStockRelation.sector_id == sector.id).delete()
+        if stock_ids:
+            db.query(NewsStockRelation).filter(NewsStockRelation.stock_id.in_(stock_ids)).delete()
+        # Delete stocks belonging to this old sector
         db.query(Stock).filter(Stock.sector_id == sector.id).delete()
         db.delete(sector)
         removed += 1
