@@ -14,8 +14,8 @@ from app.services.crawlers.newsapi import search_newsapi
 logger = logging.getLogger(__name__)
 
 # Keep total queries under this limit to avoid Render free-plan timeout
-MAX_TOTAL_QUERIES = 20
-MAX_STOCK_QUERIES = 5
+MAX_TOTAL_QUERIES = 10
+MAX_STOCK_QUERIES = 3
 
 
 def _build_search_queries(db: Session, sectors: list[Sector], stocks: list[Stock]) -> list[str]:
