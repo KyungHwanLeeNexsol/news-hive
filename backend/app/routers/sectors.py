@@ -110,8 +110,13 @@ async def get_sector(sector_id: int, db: Session = Depends(get_db)):
             news_count=news_count_map.get(stock.id, 0),
         ))
 
-    sector.stocks = stock_responses
-    return sector
+    return SectorDetailResponse(
+        id=sector.id,
+        name=sector.name,
+        is_custom=sector.is_custom,
+        created_at=sector.created_at,
+        stocks=stock_responses,
+    )
 
 
 @router.delete("/{sector_id}", status_code=204)
