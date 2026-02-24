@@ -83,7 +83,7 @@ _ETP_NAME_KEYWORDS = [
     "SOL ", "ACE ", "KOSEF", "KINDEX", "TIMEFOLIO",
     "PLUS ", "RISE ", "히어로즈",
     "1Q ", "마이티",
-    "스팩",
+    "스팩", "기업인수목적",
     # 상품형 키워드
     "액티브", "패시브", "레버리지", "인버스", "선물", "옵션",
     "채권", "국고", "통안", "회사채", "금리",
@@ -104,7 +104,6 @@ def _download_and_parse_mst(url: str, market: str) -> list[dict]:
     """
     tail_len = 228 if market == "KOSPI" else 222
     field_specs = KOSPI_FIELD_SPECS if market == "KOSPI" else KOSDAQ_FIELD_SPECS
-    spac_field = "SPAC" if market == "KOSPI" else "기업인수목적회사여부"
 
     try:
         ssl_ctx = ssl.create_default_context()
@@ -162,11 +161,7 @@ def _download_and_parse_mst(url: str, market: str) -> list[dict]:
             if not name:
                 continue
 
-            # === FILTER 4: SPAC ===
-            if fields.get(spac_field) == "Y":
-                continue
-
-            # === FILTER 5: Name pattern (safety net) ===
+            # === FILTER 4: Name pattern (catches SPAC, ETF, ETN, ELW by name) ===
             name_upper = name.upper()
             if any(kw in name_upper for kw in _ETP_NAME_KEYWORDS):
                 continue
