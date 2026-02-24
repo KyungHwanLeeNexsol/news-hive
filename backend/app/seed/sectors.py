@@ -47,50 +47,67 @@ NAVER_SECTORS_SNAPSHOT = {
 
 def seed_sectors(db: Session) -> None:
     """Seed sectors from Naver Finance or static fallback."""
-    # If we already have Naver sectors, skip
+    from app.models.stock import Stock
+
+    # If we already have Naver sectors, skip seeding but still clean up
     existing_naver = db.query(Sector).filter(Sector.naver_code.isnot(None)).count()
-    if existing_naver > 30:
-        logger.info(f"Already have {existing_naver} Naver sectors, skipping seed.")
-        return
+    if existing_naver <= 30:
+        # Try live fetch first
+        sectors_data = _try_fetch_live()
+        if not sectors_data:
+            logger.info("Using static sector snapshot as fallback")
+            sectors_data = [
+                {"name": name, "code": code}
+                for name, code in NAVER_SECTORS_SNAPSHOT.items()
+            ]
 
-    # Try live fetch first
-    sectors_data = _try_fetch_live()
-    if not sectors_data:
-        logger.info("Using static sector snapshot as fallback")
-        sectors_data = [
-            {"name": name, "code": code}
-            for name, code in NAVER_SECTORS_SNAPSHOT.items()
-        ]
+        # Build lookup for existing sectors
+        existing_by_code = {
+            s.naver_code: s for s in db.query(Sector).all() if s.naver_code
+        }
+        existing_by_name = {s.name: s for s in db.query(Sector).all()}
 
-    # Build lookup for existing sectors
-    existing_by_code = {
-        s.naver_code: s for s in db.query(Sector).all() if s.naver_code
-    }
-    existing_by_name = {s.name: s for s in db.query(Sector).all()}
+        added = 0
+        updated = 0
+        for item in sectors_data:
+            name, code = item["name"], item["code"]
 
-    added = 0
-    updated = 0
-    for item in sectors_data:
-        name, code = item["name"], item["code"]
+            if code in existing_by_code:
+                sector = existing_by_code[code]
+                if sector.name != name:
+                    sector.name = name
+                    updated += 1
+                continue
 
-        if code in existing_by_code:
-            sector = existing_by_code[code]
-            if sector.name != name:
-                sector.name = name
+            if name in existing_by_name:
+                sector = existing_by_name[name]
+                sector.naver_code = code
                 updated += 1
-            continue
+                continue
 
-        if name in existing_by_name:
-            sector = existing_by_name[name]
-            sector.naver_code = code
-            updated += 1
-            continue
+            db.add(Sector(name=name, naver_code=code, is_custom=False))
+            added += 1
 
-        db.add(Sector(name=name, naver_code=code, is_custom=False))
-        added += 1
+        db.commit()
+        logger.info(f"Sector seed: {added} added, {updated} updated")
+    else:
+        logger.info(f"Already have {existing_naver} Naver sectors, skipping seed.")
 
-    db.commit()
-    logger.info(f"Sector seed: {added} added, {updated} updated")
+    # Clean up: remove old sectors that have no naver_code and no stocks
+    old_sectors = (
+        db.query(Sector)
+        .filter(Sector.naver_code.is_(None), Sector.is_custom == False)
+        .all()
+    )
+    removed = 0
+    for sector in old_sectors:
+        stock_count = db.query(Stock).filter(Stock.sector_id == sector.id).count()
+        if stock_count == 0:
+            db.delete(sector)
+            removed += 1
+    if removed:
+        db.commit()
+        logger.info(f"Removed {removed} old sectors without naver_code and no stocks")
 
 
 def _try_fetch_live() -> list[dict]:
