@@ -35,6 +35,9 @@ async def refresh_news(background_tasks: BackgroundTasks, db: Session = Depends(
     # Quick synchronous reclassify (keyword-only, instant)
     reclassified = await _reclassify_unlinked(db)
 
+    # Backfill sentiment for articles that don't have it yet
+    _backfill_sentiment(db)
+
     # Launch crawl in background so the HTTP response returns immediately
     background_tasks.add_task(_run_crawl_background)
 
@@ -58,6 +61,21 @@ async def _run_crawl_background():
         logger.error(f"Background crawl failed: {e}")
     finally:
         db.close()
+
+
+def _backfill_sentiment(db: Session) -> None:
+    """Backfill sentiment for existing articles that don't have it."""
+    from app.services.ai_classifier import classify_sentiment
+
+    articles = db.query(NewsArticle).filter(NewsArticle.sentiment.is_(None)).all()
+    if not articles:
+        return
+
+    for article in articles:
+        article.sentiment = classify_sentiment(article.title)
+
+    db.commit()
+    logger.info(f"Backfilled sentiment for {len(articles)} articles")
 
 
 async def _reclassify_unlinked(db: Session) -> int:

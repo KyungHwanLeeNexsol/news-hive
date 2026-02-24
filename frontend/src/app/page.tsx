@@ -72,7 +72,7 @@ export default function Dashboard() {
       <div className="flex-1 min-w-0">
         <div className="section-box">
           <div className="section-title">
-            <span>업종별 시세</span>
+            <span>업종별 뉴스</span>
             <span className="text-[12px] font-normal text-[#999]">
               {visibleSectors.length}개 업종 / {totalStocks}개 종목
             </span>

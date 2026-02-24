@@ -20,6 +20,7 @@ class NewsArticleResponse(BaseModel):
     summary: str | None = None
     url: str
     source: str
+    sentiment: str | None = None
     published_at: datetime | None = None
     collected_at: datetime
     relations: list[NewsRelationResponse] = []

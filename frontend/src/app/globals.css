@@ -153,3 +153,18 @@
   background: #f0f0f0;
   color: #666;
 }
+
+.badge-positive {
+  background: #fde8eb;
+  color: #e12343;
+}
+
+.badge-negative {
+  background: #e8eeff;
+  color: #1261c4;
+}
+
+.badge-neutral {
+  background: #f0f0f0;
+  color: #999;
+}

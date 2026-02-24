@@ -4,9 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const navItems = [
-  { href: "/", label: "업종별 시세" },
+  { href: "/", label: "업종별 뉴스" },
   { href: "/news", label: "뉴스" },
-  { href: "/manage", label: "관리" },
 ];
 
 export default function Header() {

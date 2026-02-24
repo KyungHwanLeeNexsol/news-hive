@@ -152,7 +152,7 @@ async def _save_article_with_classification(
 ) -> bool:
     """Save a single article with keyword-based classification."""
     from app.models.news_relation import NewsStockRelation
-    from app.services.ai_classifier import _keyword_fallback
+    from app.services.ai_classifier import _keyword_fallback, classify_sentiment
 
     article = NewsArticle(
         title=article_data["title"],
@@ -160,6 +160,7 @@ async def _save_article_with_classification(
         url=article_data["url"],
         source=article_data["source"],
         published_at=article_data.get("published_at"),
+        sentiment=classify_sentiment(article_data["title"]),
     )
     db.add(article)
     try:

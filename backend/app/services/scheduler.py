@@ -18,11 +18,21 @@ def _run_crawl_job():
     safely creates a new event loop without conflicting with uvloop on the main thread.
     """
     from app.services.news_crawler import crawl_all_news
+    from app.services.ai_classifier import classify_sentiment
+    from app.models.news import NewsArticle
 
     db = SessionLocal()
     try:
         count = asyncio.run(crawl_all_news(db))
         logger.info(f"Scheduled crawl completed: {count} new articles")
+
+        # Backfill sentiment for any articles missing it
+        articles = db.query(NewsArticle).filter(NewsArticle.sentiment.is_(None)).all()
+        if articles:
+            for article in articles:
+                article.sentiment = classify_sentiment(article.title)
+            db.commit()
+            logger.info(f"Backfilled sentiment for {len(articles)} articles")
     except Exception as e:
         logger.error(f"Scheduled crawl failed: {e}")
     finally:

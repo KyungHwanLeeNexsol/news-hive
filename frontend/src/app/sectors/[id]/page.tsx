@@ -26,6 +26,14 @@ function sourceLabel(source: string): string {
   }
 }
 
+function sentimentLabel(sentiment: string | null): { text: string; className: string } {
+  switch (sentiment) {
+    case "positive": return { text: "호재", className: "badge-positive" };
+    case "negative": return { text: "악재", className: "badge-negative" };
+    default: return { text: "중립", className: "badge-neutral" };
+  }
+}
+
 export default function SectorDetail() {
   const params = useParams();
   const sectorId = Number(params.id);
@@ -51,7 +59,7 @@ export default function SectorDetail() {
       {/* Breadcrumb */}
       <div className="flex items-center gap-1 text-[12px] text-[#999] mb-3">
         <Link href="/" className="hover:text-[#333] hover:underline">
-          업종별 시세
+          업종별 뉴스
         </Link>
         <span>&rsaquo;</span>
         <span className="text-[#333] font-medium">{sector.name}</span>
@@ -136,45 +144,54 @@ export default function SectorDetail() {
             <table className="naver-table">
               <thead>
                 <tr>
-                  <th className="text-left" style={{ width: "55%" }}>제목</th>
-                  <th style={{ width: "10%" }}>출처</th>
+                  <th className="text-left" style={{ width: "48%" }}>제목</th>
+                  <th style={{ width: "8%" }}>구분</th>
+                  <th style={{ width: "9%" }}>출처</th>
                   <th style={{ width: "15%" }}>관련</th>
                   <th style={{ width: "20%" }}>날짜</th>
                 </tr>
               </thead>
               <tbody>
-                {news.map((article) => (
-                  <tr key={article.id}>
-                    <td>
-                      <a
-                        href={article.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-[#333] hover:text-[#03c75a] hover:underline"
-                      >
-                        {article.title}
-                      </a>
-                    </td>
-                    <td className="text-center">
-                      <span className="badge badge-source">
-                        {sourceLabel(article.source)}
-                      </span>
-                    </td>
-                    <td className="text-center">
-                      {article.relations.slice(0, 2).map((rel, i) => (
-                        <span
-                          key={i}
-                          className={`badge ${rel.relevance === "direct" ? "badge-direct" : "badge-indirect"} mr-1`}
+                {news.map((article) => {
+                  const sentiment = sentimentLabel(article.sentiment);
+                  return (
+                    <tr key={article.id}>
+                      <td>
+                        <a
+                          href={article.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[#333] hover:text-[#03c75a] hover:underline"
                         >
-                          {rel.stock_name || rel.sector_name}
+                          {article.title}
+                        </a>
+                      </td>
+                      <td className="text-center">
+                        <span className={`badge ${sentiment.className}`}>
+                          {sentiment.text}
                         </span>
-                      ))}
-                    </td>
-                    <td className="text-center text-[12px] text-[#999]">
-                      {formatDate(article.published_at)}
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className="text-center">
+                        <span className="badge badge-source">
+                          {sourceLabel(article.source)}
+                        </span>
+                      </td>
+                      <td className="text-center">
+                        {article.relations.slice(0, 2).map((rel, i) => (
+                          <span
+                            key={i}
+                            className={`badge ${rel.relevance === "direct" ? "badge-direct" : "badge-indirect"} mr-1`}
+                          >
+                            {rel.stock_name || rel.sector_name}
+                          </span>
+                        ))}
+                      </td>
+                      <td className="text-center text-[12px] text-[#999]">
+                        {formatDate(article.published_at)}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}

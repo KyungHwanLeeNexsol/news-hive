@@ -183,6 +183,36 @@ def _keyword_fallback(
     return results
 
 
+def classify_sentiment(title: str) -> str:
+    """Classify news sentiment as positive/negative/neutral based on keywords."""
+    title_lower = title.lower()
+
+    positive_keywords = [
+        "급등", "상승", "호재", "최고", "신고가", "흑자", "실적개선", "수주",
+        "계약", "성장", "회복", "반등", "돌파", "호실적", "매출증가", "영업이익",
+        "순이익", "사상최대", "투자유치", "상향", "기대감", "강세", "랠리",
+        "호황", "확대", "증가", "수혜", "특수", "날개", "질주", "도약",
+        "기대", "청신호", "훈풍", "활기", "부활", "선전", "약진", "쾌거",
+    ]
+
+    negative_keywords = [
+        "급락", "하락", "악재", "최저", "신저가", "적자", "실적악화", "손실",
+        "감소", "위기", "폭락", "부진", "하향", "약세", "침체", "매각",
+        "구조조정", "파산", "부도", "리콜", "소송", "제재", "벌금", "처분",
+        "감사의견", "상폐", "상장폐지", "워크아웃", "법정관리", "불확실",
+        "우려", "경고", "리스크", "충격", "타격", "먹구름", "한파", "적신호",
+    ]
+
+    pos_count = sum(1 for kw in positive_keywords if kw in title_lower)
+    neg_count = sum(1 for kw in negative_keywords if kw in title_lower)
+
+    if pos_count > neg_count:
+        return "positive"
+    elif neg_count > pos_count:
+        return "negative"
+    return "neutral"
+
+
 def _extract_sector_keywords(sector_name: str) -> list[str]:
     """Extract meaningful keywords from sector name for matching.
 

@@ -37,6 +37,7 @@ export interface NewsArticle {
   summary: string | null;
   url: string;
   source: string;
+  sentiment: string | null;
   published_at: string | null;
   collected_at: string;
   relations: NewsRelation[];

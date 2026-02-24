@@ -22,12 +22,27 @@ async def lifespan(app: FastAPI):
     try:
         seed_sectors(db)
         seed_all_stocks(db)
+        _backfill_sentiment(db)
     finally:
         db.close()
     start_scheduler()
     yield
     # Shutdown
     stop_scheduler()
+
+
+def _backfill_sentiment(db):
+    """Backfill sentiment for existing articles that don't have it."""
+    from app.models.news import NewsArticle
+    from app.services.ai_classifier import classify_sentiment
+
+    articles = db.query(NewsArticle).filter(NewsArticle.sentiment.is_(None)).all()
+    if not articles:
+        return
+    for article in articles:
+        article.sentiment = classify_sentiment(article.title)
+    db.commit()
+    logging.getLogger(__name__).info(f"Backfilled sentiment for {len(articles)} articles")
 
 
 app = FastAPI(title="Stock News Tracker API", lifespan=lifespan)

@@ -25,6 +25,14 @@ function sourceLabel(source: string): string {
   }
 }
 
+function sentimentLabel(sentiment: string | null): { text: string; className: string } {
+  switch (sentiment) {
+    case "positive": return { text: "호재", className: "badge-positive" };
+    case "negative": return { text: "악재", className: "badge-negative" };
+    default: return { text: "중립", className: "badge-neutral" };
+  }
+}
+
 export default function NewsPage() {
   const [news, setNews] = useState<NewsArticle[]>([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -61,57 +69,66 @@ export default function NewsPage() {
       <table className="naver-table">
         <thead>
           <tr>
-            <th className="text-left" style={{ width: "50%" }}>제목</th>
-            <th style={{ width: "10%" }}>출처</th>
-            <th style={{ width: "20%" }}>관련 종목</th>
+            <th className="text-left" style={{ width: "43%" }}>제목</th>
+            <th style={{ width: "7%" }}>구분</th>
+            <th style={{ width: "8%" }}>출처</th>
+            <th style={{ width: "22%" }}>관련 종목</th>
             <th style={{ width: "20%" }}>날짜</th>
           </tr>
         </thead>
         <tbody>
           {news.length === 0 ? (
             <tr>
-              <td colSpan={4} className="text-center py-8 text-[#999]">
+              <td colSpan={5} className="text-center py-8 text-[#999]">
                 수집된 뉴스가 없습니다. 뉴스 새로고침을 눌러주세요.
               </td>
             </tr>
           ) : (
-            news.map((article) => (
-              <tr key={article.id}>
-                <td>
-                  <a
-                    href={article.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-[#333] hover:text-[#03c75a] hover:underline"
-                  >
-                    {article.title}
-                  </a>
-                  {article.summary && (
-                    <p className="text-[11px] text-[#999] mt-0.5 truncate max-w-[500px]">
-                      {article.summary}
-                    </p>
-                  )}
-                </td>
-                <td className="text-center">
-                  <span className="badge badge-source">{sourceLabel(article.source)}</span>
-                </td>
-                <td className="text-center">
-                  <div className="flex flex-wrap gap-1 justify-center">
-                    {article.relations.slice(0, 3).map((rel, i) => (
-                      <span
-                        key={i}
-                        className={`badge ${rel.relevance === "direct" ? "badge-direct" : "badge-indirect"}`}
-                      >
-                        {rel.stock_name || rel.sector_name}
-                      </span>
-                    ))}
-                  </div>
-                </td>
-                <td className="text-center text-[#999] text-[12px]">
-                  {formatDate(article.published_at)}
-                </td>
-              </tr>
-            ))
+            news.map((article) => {
+              const sentiment = sentimentLabel(article.sentiment);
+              return (
+                <tr key={article.id}>
+                  <td>
+                    <a
+                      href={article.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[#333] hover:text-[#03c75a] hover:underline"
+                    >
+                      {article.title}
+                    </a>
+                    {article.summary && (
+                      <p className="text-[11px] text-[#999] mt-0.5 truncate max-w-[500px]">
+                        {article.summary}
+                      </p>
+                    )}
+                  </td>
+                  <td className="text-center">
+                    <span className={`badge ${sentiment.className}`}>
+                      {sentiment.text}
+                    </span>
+                  </td>
+                  <td className="text-center">
+                    <span className="badge badge-source">{sourceLabel(article.source)}</span>
+                  </td>
+                  <td className="text-center">
+                    <div className="flex flex-wrap gap-1 justify-center">
+                      {article.relations.slice(0, 3).map((rel, i) => (
+                        <span
+                          key={i}
+                          className={`badge ${rel.relevance === "direct" ? "badge-direct" : "badge-indirect"}`}
+                        >
+                          {rel.stock_name || rel.sector_name}
+                        </span>
+                      ))}
+                    </div>
+                  </td>
+                  <td className="text-center text-[#999] text-[12px]">
+                    {formatDate(article.published_at)}
+                  </td>
+                </tr>
+              );
+            })
           )}
         </tbody>
       </table>
