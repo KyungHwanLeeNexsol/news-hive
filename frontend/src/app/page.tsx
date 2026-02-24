@@ -76,10 +76,12 @@ export default function Dashboard() {
   const visibleSectors = sectors;
   const totalStocks = visibleSectors.reduce((sum, s) => sum + (s.total_stocks ?? s.stock_count ?? 0), 0);
 
+  if (loading) {
+    return <LoadingBar loading={true} />;
+  }
+
   return (
     <div className="flex gap-4">
-      <LoadingBar loading={loading} />
-
       {/* Left: Sector table */}
       <div className="flex-1 min-w-0">
         <div className="section-box">

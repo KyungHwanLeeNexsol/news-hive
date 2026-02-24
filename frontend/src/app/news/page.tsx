@@ -59,9 +59,11 @@ export default function NewsPage() {
     }
   }
 
+  if (loading) {
+    return <LoadingBar loading={true} />;
+  }
+
   return (
-    <>
-    <LoadingBar loading={loading} />
     <div className="section-box">
       <div className="section-title">
         <span>전체 뉴스</span>
@@ -138,6 +140,5 @@ export default function NewsPage() {
         </tbody>
       </table>
     </div>
-    </>
   );
 }

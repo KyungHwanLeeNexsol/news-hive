@@ -63,7 +63,7 @@ async def create_sector(body: SectorCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/{sector_id}", response_model=SectorDetailResponse)
-async def get_sector(sector_id: int, limit: int = 50, offset: int = 0, db: Session = Depends(get_db)):
+async def get_sector(sector_id: int, db: Session = Depends(get_db)):
     sector = db.query(Sector).filter(Sector.id == sector_id).first()
     if not sector:
         raise HTTPException(status_code=404, detail="Sector not found")
@@ -71,8 +71,6 @@ async def get_sector(sector_id: int, limit: int = 50, offset: int = 0, db: Sessi
         db.query(Stock)
         .filter(Stock.sector_id == sector_id)
         .order_by(Stock.name)
-        .offset(offset)
-        .limit(limit)
         .all()
     )
     sector.stocks = stocks

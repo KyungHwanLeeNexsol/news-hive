@@ -60,9 +60,11 @@ export default function StockDetail() {
       .finally(() => setLoading(false));
   }, [stockId]);
 
+  if (loading) {
+    return <LoadingBar loading={true} />;
+  }
+
   return (
-    <>
-    <LoadingBar loading={loading} />
     <div>
       {/* Breadcrumb */}
       <div className="flex items-center gap-1 text-[12px] text-[#999] mb-3">
@@ -134,6 +136,5 @@ export default function StockDetail() {
         )}
       </div>
     </div>
-    </>
   );
 }

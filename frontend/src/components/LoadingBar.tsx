@@ -3,8 +3,9 @@
 export default function LoadingBar({ loading }: { loading: boolean }) {
   if (!loading) return null;
   return (
-    <div className="fixed top-0 left-0 right-0 z-50 h-[3px] bg-[#e5e5e5] overflow-hidden">
-      <div className="h-full bg-[#1261c4] animate-progress" />
+    <div className="flex flex-col items-center justify-center py-24">
+      <div className="w-8 h-8 border-[3px] border-[#e5e5e5] border-t-[#1261c4] rounded-full animate-spin" />
+      <p className="mt-3 text-[13px] text-[#999]">불러오는 중...</p>
     </div>
   );
 }

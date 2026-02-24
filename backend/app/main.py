@@ -42,6 +42,8 @@ async def lifespan(app: FastAPI):
         seed_all_stocks(db)
         _backfill_sentiment(db)
         _fix_html_entities(db)
+        _backfill_relations(db)
+        _reset_bad_scraped_content(db)
     finally:
         db.close()
     start_scheduler()
@@ -90,6 +92,78 @@ def _fix_html_entities(db):
     if fixed:
         db.commit()
         logging.getLogger(__name__).info(f"Fixed HTML entities in {fixed} articles")
+
+
+def _backfill_relations(db):
+    """Backfill sector/stock relations for articles that have none.
+
+    Uses keyword matching (fast, synchronous) to tag unlinked articles.
+    """
+    from app.models.news import NewsArticle
+    from app.models.news_relation import NewsStockRelation
+    from app.models.sector import Sector
+    from app.models.stock import Stock
+    from app.services.ai_classifier import _keyword_fallback
+
+    # Find articles with zero relations
+    articles_with_rels = db.query(NewsStockRelation.news_id).distinct()
+    unlinked = (
+        db.query(NewsArticle)
+        .filter(NewsArticle.id.notin_(articles_with_rels))
+        .all()
+    )
+    if not unlinked:
+        return
+
+    sectors = db.query(Sector).all()
+    stocks = db.query(Stock).all()
+    count = 0
+
+    for article in unlinked:
+        results = _keyword_fallback(article.title, sectors, stocks)
+        for cls in results:
+            db.add(NewsStockRelation(
+                news_id=article.id,
+                stock_id=cls.get("stock_id"),
+                sector_id=cls.get("sector_id"),
+                match_type=cls.get("match_type", "keyword"),
+                relevance=cls.get("relevance", "indirect"),
+            ))
+            count += 1
+
+    if count:
+        db.commit()
+        logging.getLogger(__name__).info(
+            f"Backfilled relations: {count} relations for {len(unlinked)} articles"
+        )
+
+
+def _reset_bad_scraped_content(db):
+    """Reset article content that was poorly scraped (contains page-level noise).
+
+    One-time cleanup: clears content for articles where scraping captured
+    the entire page instead of just the article body, so they'll be
+    re-scraped with the improved scraper on next view.
+    """
+    from app.models.news import NewsArticle
+    from sqlalchemy import func
+
+    # Articles with excessively long content likely captured the whole page
+    bad_articles = db.query(NewsArticle).filter(
+        NewsArticle.content.isnot(None),
+        func.length(NewsArticle.content) > 5000,
+    ).all()
+
+    reset = 0
+    noise_markers = ["좋아요", "화나요", "슬퍼요", "많이 본 뉴스", "최신 영상", "암호화폐", "BANNER", "뉴스발전소"]
+    for article in bad_articles:
+        if any(marker in article.content for marker in noise_markers):
+            article.content = None
+            reset += 1
+
+    if reset:
+        db.commit()
+        logging.getLogger(__name__).info(f"Reset {reset} poorly scraped articles for re-scraping")
 
 
 app = FastAPI(title="Stock News Tracker API", lifespan=lifespan)

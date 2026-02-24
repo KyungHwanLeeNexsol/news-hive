@@ -30,6 +30,8 @@ CONTENT_SELECTORS = [
     "#newsEndContents",            # Naver News (alternative)
     "#newsct_article",             # Naver News (sports/entertain)
     # Major Korean economic papers
+    "#newsViewArea",               # 이투데이
+    ".news_body_area",             # 이투데이 (alternative)
     "#article-view-content-div",   # 뉴스1
     ".article_body",               # 한국경제, 매일경제
     "#article_body",
@@ -42,27 +44,57 @@ CONTENT_SELECTORS = [
     ".article__content",           # 중앙일보
     ".news_article",               # 동아일보
     "#article_content",
-    # General patterns
-    "article",
-    ".view_con",
+    "#snsAti498",                  # 서울경제
+    ".view_con",                   # 아시아경제
     ".article-view-body",
-    ".news_view",
-    ".articleView",
     "#articeBody",
     "#textBody",
     ".post-content",
     ".entry-content",
-    "main",
 ]
 
-# Tags to remove from extracted content
-REMOVE_TAGS = [
+# CSS selectors to remove before extraction
+REMOVE_SELECTORS = [
+    # Structural noise
     "script", "style", "iframe", "nav", "header", "footer",
     "aside", "form", "button", "input", "select", "textarea",
+    # Media
     "figure", "figcaption", "img", "video", "audio", "source",
-    "ad", ".ad", ".advertisement", ".social-share", ".related-article",
+    # Ads & promotions
+    ".ad", ".ads", ".advertisement", ".ad_wrap", ".adsbygoogle",
+    "[class*='banner']", "[id*='banner']",
+    "[class*='dable']", "[id*='dable']",
+    # Social / sharing
+    ".social-share", ".sns_share", ".article_sns", ".share_btn",
+    "[class*='social']",
+    # Related articles & recommendations
+    ".related-article", ".related_article", ".relation_news",
+    ".article_relation", ".article_issue", ".news_relation",
+    "[class*='related']", "[class*='recommend']",
+    # Reporter / byline / copyright
     ".reporter_area", ".byline", ".copyright", ".article_footer",
-    ".article_relation", ".article_issue",
+    ".journalist", ".writer_info", ".report_area",
+    "[class*='reporter']", "[class*='byline']",
+    # Comments
+    "[class*='comment']", "[id*='comment']",
+    "[class*='reply']", "[id*='reply']",
+    # Subscription / popup
+    "[class*='subscribe']", "[class*='popup']", "[class*='layer']",
+    "[class*='newsletter']",
+    # Navigation / breadcrumb
+    ".breadcrumb", "[class*='breadcrumb']",
+    ".tab-nav", "[class*='tab_']", "[class*='tabnav']",
+    # Photo captions (keep photos out)
+    ".photo_area", ".img_area", ".image_area",
+    "[class*='photo']", "[class*='caption']",
+    # Stock info cards
+    "[class*='stock_']", "[class*='namecard']",
+    # Sidebar
+    "[class*='sidebar']", "[class*='aside']", "[class*='right_']",
+    # Most viewed / popular
+    "[class*='popular']", "[class*='most_']", "[class*='ranking']",
+    # Crypto / market widgets
+    "[class*='crypto']", "[class*='coin']", "[class*='market_info']",
 ]
 
 
@@ -115,14 +147,13 @@ def _extract_with_bs4(html: str) -> str | None:
     except Exception:
         return None
 
-    # Remove unwanted elements
-    for tag in REMOVE_TAGS:
-        if tag.startswith("."):
-            for el in soup.select(tag):
+    # Remove unwanted elements using CSS selectors
+    for selector in REMOVE_SELECTORS:
+        try:
+            for el in soup.select(selector):
                 el.decompose()
-        else:
-            for el in soup.find_all(tag):
-                el.decompose()
+        except Exception:
+            continue
 
     # Try each content selector
     content_el = None
@@ -185,15 +216,37 @@ HTML:
 
 
 def _find_largest_text_block(soup: BeautifulSoup):
-    """Find the DOM element with the most text content."""
-    best = None
-    best_len = 0
-    for el in soup.find_all(["div", "section", "article", "main"]):
+    """Find the DOM element most likely to be the article body.
+
+    Uses a density heuristic: prefers elements where most children are <p> tags,
+    and avoids top-level wrappers that contain the entire page.
+    """
+    candidates = []
+    for el in soup.find_all(["div", "section", "article"]):
         text = el.get_text(strip=True)
-        if len(text) > best_len:
-            best_len = len(text)
-            best = el
-    return best if best_len > 200 else None
+        text_len = len(text)
+        if text_len < 200:
+            continue
+
+        # Skip elements that contain the entire page (too high in the DOM tree)
+        parent_text_len = len(el.parent.get_text(strip=True)) if el.parent else text_len
+        if parent_text_len > 0 and text_len / parent_text_len > 0.9 and el.parent and el.parent.name != "[document]":
+            # This element has almost the same text as its parent — skip if parent is not root
+            if el.parent.parent and el.parent.parent.name != "[document]":
+                continue
+
+        # Count <p> children as a signal of article content
+        p_count = len(el.find_all("p", recursive=False))
+        # Score: text length + bonus for having many <p> children
+        score = text_len + (p_count * 200)
+        candidates.append((score, text_len, el))
+
+    if not candidates:
+        return None
+
+    # Pick the best candidate
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    return candidates[0][2]
 
 
 def _clean_text(element) -> str:
@@ -211,6 +264,49 @@ def _clean_text(element) -> str:
     text = " ".join(lines)
     # Normalize whitespace
     text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n\s*\n+", "\n\n", text)
+    text = text.strip()
+
+    # Remove duplicate consecutive lines (common in scraped HTML)
+    seen = set()
+    deduped_lines = []
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            deduped_lines.append("")
+            continue
+        if stripped not in seen:
+            seen.add(stripped)
+            deduped_lines.append(line)
+    text = "\n".join(deduped_lines)
+
+    # Remove common noise patterns
+    noise_patterns = [
+        r"좋아요\s*\d*",
+        r"화나요\s*\d*",
+        r"슬퍼요\s*\d*",
+        r"추가취재\s*원해요\s*\d*",
+        r".*기자의 주요 뉴스.*",
+        r".*자세히보기.*",
+        r".*구독.*완료.*",
+        r".*뉴스레터.*신청.*",
+        r".*마이페이지.*확인.*",
+        r".*기자 구독.*",
+        r".*기자 이름을 클릭.*",
+        r".*북마크 되었습니다.*",
+        r"북마크 되었습니다\.",
+        r"BOOK MARK POPUP",
+        r"BANNER",
+        r"BREADCRUMBS",
+        r"\d{2}:\d{2}\s*/\s*\d{2}:\d{2}",
+        r"카카오톡|페이스북|엑스|URL공유",
+        r"가장작게|작게|기본|크게|가장크게",
+        r".*글씨 작게보기.*",
+    ]
+    for pattern in noise_patterns:
+        text = re.sub(pattern, "", text)
+
+    # Final cleanup
     text = re.sub(r"\n\s*\n+", "\n\n", text)
     text = text.strip()
 

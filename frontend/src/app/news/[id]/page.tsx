@@ -100,12 +100,7 @@ export default function NewsDetail() {
   }, [newsId]);
 
   if (!article) {
-    return (
-      <>
-        <LoadingBar loading={true} />
-        <div className="section-box p-8 text-center text-[#999]">로딩 중...</div>
-      </>
-    );
+    return <LoadingBar loading={true} />;
   }
 
   const sentiment = sentimentLabel(article.sentiment);
