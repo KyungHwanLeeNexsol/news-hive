@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" fill="none">
+  <!-- Background -->
+  <rect width="180" height="180" rx="40" fill="#1261c4"/>
+  <!-- Hexagon -->
+  <path d="M90 25L152 60.8V132.2L90 168L28 132.2V60.8L90 25Z" fill="#ffffff" fill-opacity="0.15"/>
+  <!-- N letter -->
+  <path d="M62 62h16v41L118 62h16v56h-16v-41L78 118H62V62Z" fill="#ffffff"/>
+</svg>
