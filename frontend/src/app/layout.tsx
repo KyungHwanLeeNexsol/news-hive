@@ -14,7 +14,15 @@ export default function RootLayout({
 }) {
   return (
     <html lang="ko">
-      <body className="bg-[#f6f6f6] min-h-screen">
+      <head>
+        <link
+          rel="stylesheet"
+          as="style"
+          crossOrigin="anonymous"
+          href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css"
+        />
+      </head>
+      <body className="bg-[#f6f6f6] min-h-screen font-[Pretendard,sans-serif]">
         <Header />
         <main className="max-w-[1200px] mx-auto px-4 py-4">{children}</main>
       </body>

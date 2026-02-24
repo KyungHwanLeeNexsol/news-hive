@@ -36,6 +36,20 @@ function sentimentLabel(sentiment: string | null): { text: string; className: st
   }
 }
 
+/** Strip HTML tags and decode common entities */
+function stripHtml(html: string): string {
+  return html
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export default function NewsDetail() {
   const params = useParams();
   const newsId = Number(params.id);
@@ -68,92 +82,98 @@ export default function NewsDetail() {
   }
 
   const sentiment = sentimentLabel(article.sentiment);
+  const cleanSummary = article.summary ? stripHtml(article.summary) : null;
 
   return (
-    <div>
+    <div className="max-w-[860px]">
       {/* Breadcrumb */}
       <div className="flex items-center gap-1 text-[12px] text-[#999] mb-3">
         <Link href="/news" className="hover:text-[#333] hover:underline">
           전체 뉴스
         </Link>
         <span>&rsaquo;</span>
-        <span className="text-[#333] font-medium truncate max-w-[400px]">
+        <span className="text-[#333] font-medium truncate max-w-[500px]">
           {article.title}
         </span>
       </div>
 
+      {/* Article card */}
       <div className="section-box">
-        {/* Title */}
-        <h1 className="text-[16px] font-bold text-[#333] leading-snug mb-3">
-          {article.title}
-        </h1>
-
-        {/* Metadata badges */}
-        <div className="flex flex-wrap items-center gap-2 mb-4 text-[12px]">
-          <span className={`badge ${sentiment.className}`}>{sentiment.text}</span>
-          <span className="badge badge-source">{sourceLabel(article.source)}</span>
-          <span className="text-[#999]">{formatDate(article.published_at)}</span>
+        {/* Header area */}
+        <div className="p-5 pb-4 border-b border-[#e5e5e5]">
+          <h1 className="text-[18px] font-bold text-[#333] leading-snug mb-3">
+            {article.title}
+          </h1>
+          <div className="flex flex-wrap items-center gap-2 text-[12px]">
+            <span className={`badge ${sentiment.className}`}>{sentiment.text}</span>
+            <span className="badge badge-source">{sourceLabel(article.source)}</span>
+            <span className="text-[#999]">{formatDate(article.published_at)}</span>
+          </div>
         </div>
 
-        {/* Related stocks/sectors */}
-        {article.relations.length > 0 && (
-          <div className="mb-4">
-            <div className="text-[12px] text-[#999] mb-1">관련 종목/섹터</div>
-            <div className="flex flex-wrap gap-1">
-              {article.relations.map((rel, i) => (
-                <Link
-                  key={i}
-                  href={
-                    rel.stock_id
-                      ? `/stocks/${rel.stock_id}`
-                      : `/sectors/${rel.sector_id}`
-                  }
-                  className={`badge ${rel.relevance === 'direct' ? 'badge-direct' : 'badge-indirect'} hover:opacity-80`}
-                >
-                  {rel.stock_name || rel.sector_name}
-                </Link>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Crawler description */}
-        {article.summary && (
-          <div className="mb-4 p-3 bg-[#f9f9f9] rounded text-[13px] text-[#555] leading-relaxed">
-            {article.summary}
-          </div>
-        )}
-
-        {/* AI Summary */}
-        <div className="mb-4 p-4 bg-[#f0f7ff] rounded border border-[#d0e3f7]">
-          <div className="text-[13px] font-semibold text-[#1261c4] mb-2">
-            AI 분석 요약
-          </div>
-          {summaryLoading ? (
-            <div className="text-[13px] text-[#999]">
-              AI 요약을 생성하고 있습니다...
-            </div>
-          ) : aiSummary ? (
-            <div className="text-[13px] text-[#333] leading-relaxed whitespace-pre-line">
-              {aiSummary}
-            </div>
-          ) : (
-            <div className="text-[13px] text-[#999]">
-              AI 요약을 생성할 수 없습니다.
+        {/* Body area */}
+        <div className="p-5">
+          {/* Related stocks/sectors */}
+          {article.relations.length > 0 && (
+            <div className="mb-5">
+              <div className="text-[12px] font-semibold text-[#666] mb-2">관련 종목/섹터</div>
+              <div className="flex flex-wrap gap-1.5">
+                {article.relations.map((rel, i) => (
+                  <Link
+                    key={i}
+                    href={
+                      rel.stock_id
+                        ? `/stocks/${rel.stock_id}`
+                        : `/sectors/${rel.sector_id}`
+                    }
+                    className={`badge ${rel.relevance === 'direct' ? 'badge-direct' : 'badge-indirect'} hover:opacity-80 px-2 py-0.5`}
+                  >
+                    {rel.stock_name || rel.sector_name}
+                  </Link>
+                ))}
+              </div>
             </div>
           )}
-        </div>
 
-        {/* Link to original article */}
-        <div className="pt-3 border-t border-[#f0f0f0]">
-          <a
-            href={article.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[13px] text-[#1261c4] hover:underline"
-          >
-            원문 기사 보기 &rsaquo;
-          </a>
+          {/* Crawler description (HTML stripped) */}
+          {cleanSummary && (
+            <div className="mb-5 p-4 bg-[#fafafa] rounded-md border border-[#eee] text-[13px] text-[#555] leading-[1.8]">
+              {cleanSummary}
+            </div>
+          )}
+
+          {/* AI Summary */}
+          <div className="mb-5 p-4 bg-[#f0f7ff] rounded-md border border-[#d0e3f7]">
+            <div className="flex items-center gap-1.5 mb-2.5">
+              <span className="text-[13px] font-bold text-[#1261c4]">AI 분석 요약</span>
+            </div>
+            {summaryLoading ? (
+              <div className="text-[13px] text-[#999] flex items-center gap-2">
+                <span className="inline-block w-3.5 h-3.5 border-2 border-[#1261c4] border-t-transparent rounded-full animate-spin" />
+                AI 요약을 생성하고 있습니다...
+              </div>
+            ) : aiSummary ? (
+              <div className="text-[13px] text-[#333] leading-[1.9] whitespace-pre-line">
+                {aiSummary}
+              </div>
+            ) : (
+              <div className="text-[13px] text-[#999]">
+                AI 요약을 생성할 수 없습니다.
+              </div>
+            )}
+          </div>
+
+          {/* Link to original article */}
+          <div className="pt-4 border-t border-[#f0f0f0]">
+            <a
+              href={article.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-[13px] text-[#1261c4] hover:underline"
+            >
+              원문 기사 보기 &rsaquo;
+            </a>
+          </div>
         </div>
       </div>
     </div>
