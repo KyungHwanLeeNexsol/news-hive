@@ -10,7 +10,6 @@ from app.models.news import NewsArticle
 from app.services.crawlers.naver import search_naver_news
 from app.services.crawlers.google import search_google_news
 from app.services.crawlers.newsapi import search_newsapi
-from app.services.ai_classifier import classify_news
 
 logger = logging.getLogger(__name__)
 
@@ -151,12 +150,7 @@ async def _save_article_with_classification(
     sectors: list[Sector],
     stocks: list[Stock],
 ) -> bool:
-    """Save a single article with classification.
-
-    Uses keyword matching first (instant). Falls back to AI only if
-    keyword matching finds nothing and AI is available, with a timeout
-    to prevent blocking the crawl pipeline.
-    """
+    """Save a single article with keyword-based classification."""
     from app.models.news_relation import NewsStockRelation
     from app.services.ai_classifier import _keyword_fallback
 
@@ -174,29 +168,14 @@ async def _save_article_with_classification(
         db.rollback()
         return False
 
-    # Phase 1: fast keyword matching (no API call)
     classifications = _keyword_fallback(article_data["title"], sectors, stocks)
-
-    # Phase 2: AI classification only if keyword matching found nothing
-    if not classifications:
-        try:
-            classifications = await asyncio.wait_for(
-                classify_news(article_data["title"], sectors, stocks),
-                timeout=10.0,
-            )
-        except asyncio.TimeoutError:
-            logger.warning(f"AI classification timed out for: {article_data['title'][:50]}")
-            classifications = []
-        except Exception as e:
-            logger.warning(f"AI classification failed: {e}")
-            classifications = []
 
     for cls in classifications:
         relation = NewsStockRelation(
             news_id=article.id,
             stock_id=cls.get("stock_id"),
             sector_id=cls.get("sector_id"),
-            match_type=cls.get("match_type", "ai_classified"),
+            match_type=cls.get("match_type", "keyword"),
             relevance=cls.get("relevance", "indirect"),
         )
         db.add(relation)
