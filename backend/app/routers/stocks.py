@@ -11,6 +11,7 @@ from app.models.news_relation import NewsStockRelation
 from app.schemas.stock import StockCreate, StockResponse
 from app.schemas.news import NewsArticleResponse
 from app.routers.utils import format_articles
+from app.seed.sectors import seed_sectors
 from app.seed.stocks import seed_all_stocks
 
 logger = logging.getLogger(__name__)
@@ -38,13 +39,22 @@ async def create_stock(sector_id: int, body: StockCreate, db: Session = Depends(
 
 @router.post("/stocks/sync")
 async def sync_stocks(db: Session = Depends(get_db)):
-    """Re-fetch all KOSPI/KOSDAQ stocks from KRX and sync to DB."""
+    """Re-seed sectors (fix bad mappings) then re-fetch all stocks from KRX."""
+    sector_count_before = db.query(Sector).count()
+    seed_sectors(db)
+    sector_count_after = db.query(Sector).count()
+
     current_count = db.query(Stock).count()
     added = seed_all_stocks(db, force=True)
     return {
-        "message": f"Stock sync complete. Added {added} new stocks. Total was {current_count}.",
-        "added": added,
-        "previous_total": current_count,
+        "message": (
+            f"Sync complete. Sectors: {sector_count_before} → {sector_count_after}. "
+            f"Stocks: {added} synced (was {current_count})."
+        ),
+        "sectors_before": sector_count_before,
+        "sectors_after": sector_count_after,
+        "stocks_synced": added,
+        "stocks_previous": current_count,
     }
 
 
