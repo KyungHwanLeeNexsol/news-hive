@@ -1,7 +1,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, subqueryload
 
 from app.database import get_db
 from app.models.sector import Sector
@@ -9,7 +9,8 @@ from app.models.stock import Stock
 from app.models.news import NewsArticle
 from app.models.news_relation import NewsStockRelation
 from app.schemas.stock import StockCreate, StockResponse
-from app.schemas.news import NewsArticleResponse, NewsRelationResponse
+from app.schemas.news import NewsArticleResponse
+from app.routers.utils import format_articles
 from app.seed.stocks import seed_all_stocks
 
 logger = logging.getLogger(__name__)
@@ -62,48 +63,24 @@ async def get_stock_news(stock_id: int, db: Session = Depends(get_db)):
     if not stock:
         raise HTTPException(status_code=404, detail="Stock not found")
 
-    news_ids = [
-        r.news_id
-        for r in db.query(NewsStockRelation)
+    # Subquery instead of loading all relation objects into Python
+    news_ids_subq = (
+        db.query(NewsStockRelation.news_id)
         .filter(NewsStockRelation.stock_id == stock_id)
-        .all()
-    ]
-    if not news_ids:
-        return []
+        .distinct()
+        .subquery()
+    )
 
     articles = (
         db.query(NewsArticle)
-        .options(joinedload(NewsArticle.relations))
-        .filter(NewsArticle.id.in_(news_ids))
+        .options(
+            subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.stock),
+            subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.sector),
+        )
+        .filter(NewsArticle.id.in_(db.query(news_ids_subq)))
         .order_by(NewsArticle.published_at.desc().nullslast())
         .limit(50)
         .all()
     )
 
-    results = []
-    for article in articles:
-        relation_responses = []
-        for rel in article.relations:
-            relation_responses.append(
-                NewsRelationResponse(
-                    stock_id=rel.stock_id,
-                    stock_name=rel.stock.name if rel.stock else None,
-                    sector_id=rel.sector_id,
-                    sector_name=rel.sector.name if rel.sector else None,
-                    match_type=rel.match_type,
-                    relevance=rel.relevance,
-                )
-            )
-        results.append(
-            NewsArticleResponse(
-                id=article.id,
-                title=article.title,
-                summary=article.summary,
-                url=article.url,
-                source=article.source,
-                published_at=article.published_at,
-                collected_at=article.collected_at,
-                relations=relation_responses,
-            )
-        )
-    return results
+    return format_articles(articles)

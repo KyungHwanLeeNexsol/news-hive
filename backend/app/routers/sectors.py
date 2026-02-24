@@ -96,19 +96,19 @@ async def get_sector_news(sector_id: int, db: Session = Depends(get_db)):
     if not sector:
         raise HTTPException(status_code=404, detail="Sector not found")
 
-    stock_ids = [s.id for s in db.query(Stock).filter(Stock.sector_id == sector_id).all()]
-
-    relations = (
-        db.query(NewsStockRelation)
+    # Single subquery instead of 3 separate queries
+    stock_ids_subq = (
+        db.query(Stock.id).filter(Stock.sector_id == sector_id).subquery()
+    )
+    news_ids_subq = (
+        db.query(NewsStockRelation.news_id)
         .filter(
             (NewsStockRelation.sector_id == sector_id)
-            | (NewsStockRelation.stock_id.in_(stock_ids) if stock_ids else False)
+            | (NewsStockRelation.stock_id.in_(db.query(stock_ids_subq)))
         )
-        .all()
+        .distinct()
+        .subquery()
     )
-    news_ids = list({r.news_id for r in relations})
-    if not news_ids:
-        return []
 
     articles = (
         db.query(NewsArticle)
@@ -116,7 +116,7 @@ async def get_sector_news(sector_id: int, db: Session = Depends(get_db)):
             subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.stock),
             subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.sector),
         )
-        .filter(NewsArticle.id.in_(news_ids))
+        .filter(NewsArticle.id.in_(db.query(news_ids_subq)))
         .order_by(NewsArticle.published_at.desc().nullslast())
         .limit(50)
         .all()

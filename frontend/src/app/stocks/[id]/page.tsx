@@ -1,36 +1,45 @@
-"use client";
+'use client';
 
-import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
-import Link from "next/link";
-import { fetchStockNews } from "@/lib/api";
-import type { NewsArticle } from "@/lib/types";
+import { useEffect, useState } from 'react';
+import { useParams } from 'next/navigation';
+import Link from 'next/link';
+import { fetchStockNews } from '@/lib/api';
+import type { NewsArticle } from '@/lib/types';
 
 function formatDate(dateStr: string | null): string {
-  if (!dateStr) return "";
+  if (!dateStr) return '';
   const d = new Date(dateStr);
-  return d.toLocaleDateString("ko-KR", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
+  return d.toLocaleDateString('ko-KR', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
   });
 }
 
 function sourceLabel(source: string): string {
   switch (source) {
-    case "naver": return "네이버";
-    case "google": return "구글";
-    case "newsapi": return "NewsAPI";
-    default: return source;
+    case 'naver':
+      return '네이버';
+    case 'google':
+      return '구글';
+    case 'newsapi':
+      return 'NewsAPI';
+    case 'korean_rss':
+      return '경제지';
+    default:
+      return source;
   }
 }
 
 function sentimentLabel(sentiment: string | null): { text: string; className: string } {
   switch (sentiment) {
-    case "positive": return { text: "호재", className: "badge-positive" };
-    case "negative": return { text: "악재", className: "badge-negative" };
-    default: return { text: "중립", className: "badge-neutral" };
+    case 'positive':
+      return { text: '호재', className: 'badge-positive' };
+    case 'negative':
+      return { text: '악재', className: 'badge-negative' };
+    default:
+      return { text: '중립', className: 'badge-neutral' };
   }
 }
 
@@ -42,7 +51,9 @@ export default function StockDetail() {
 
   useEffect(() => {
     if (!stockId) return;
-    fetchStockNews(stockId).then(setNews).catch(() => {});
+    fetchStockNews(stockId)
+      .then(setNews)
+      .catch(() => {});
   }, [stockId]);
 
   return (
@@ -50,7 +61,7 @@ export default function StockDetail() {
       {/* Breadcrumb */}
       <div className="flex items-center gap-1 text-[12px] text-[#999] mb-3">
         <Link href="/" className="hover:text-[#333] hover:underline">
-          업종별 뉴스
+          업종 현황
         </Link>
         <span>&rsaquo;</span>
         <span className="text-[#333] font-medium">종목 뉴스</span>
@@ -59,23 +70,21 @@ export default function StockDetail() {
       <div className="section-box">
         <div className="section-title">
           <span>종목 관련 뉴스</span>
-          <span className="text-[12px] font-normal text-[#999]">
-            {news.length}건
-          </span>
+          <span className="text-[12px] font-normal text-[#999]">{news.length}건</span>
         </div>
         {news.length === 0 ? (
-          <div className="py-8 text-center text-[13px] text-[#999]">
-            관련 뉴스가 없습니다.
-          </div>
+          <div className="py-8 text-center text-[13px] text-[#999]">관련 뉴스가 없습니다.</div>
         ) : (
           <table className="naver-table">
             <thead>
               <tr>
-                <th className="text-left" style={{ width: "48%" }}>제목</th>
-                <th style={{ width: "8%" }}>구분</th>
-                <th style={{ width: "9%" }}>출처</th>
-                <th style={{ width: "15%" }}>관련</th>
-                <th style={{ width: "20%" }}>날짜</th>
+                <th className="text-left" style={{ width: '48%' }}>
+                  제목
+                </th>
+                <th style={{ width: '8%' }}>구분</th>
+                <th style={{ width: '9%' }}>출처</th>
+                <th style={{ width: '15%' }}>관련</th>
+                <th style={{ width: '20%' }}>날짜</th>
               </tr>
             </thead>
             <tbody>
@@ -93,34 +102,26 @@ export default function StockDetail() {
                         {article.title}
                       </a>
                       {article.summary && (
-                        <p className="text-[11px] text-[#999] mt-0.5 truncate max-w-[400px]">
-                          {article.summary}
-                        </p>
+                        <p className="text-[11px] text-[#999] mt-0.5 truncate max-w-[400px]">{article.summary}</p>
                       )}
                     </td>
                     <td className="text-center">
-                      <span className={`badge ${sentiment.className}`}>
-                        {sentiment.text}
-                      </span>
+                      <span className={`badge ${sentiment.className}`}>{sentiment.text}</span>
                     </td>
                     <td className="text-center">
-                      <span className="badge badge-source">
-                        {sourceLabel(article.source)}
-                      </span>
+                      <span className="badge badge-source">{sourceLabel(article.source)}</span>
                     </td>
                     <td className="text-center">
                       {article.relations.slice(0, 2).map((rel, i) => (
                         <span
                           key={i}
-                          className={`badge ${rel.relevance === "direct" ? "badge-direct" : "badge-indirect"} mr-1`}
+                          className={`badge ${rel.relevance === 'direct' ? 'badge-direct' : 'badge-indirect'} mr-1`}
                         >
                           {rel.stock_name || rel.sector_name}
                         </span>
                       ))}
                     </td>
-                    <td className="text-center text-[12px] text-[#999]">
-                      {formatDate(article.published_at)}
-                    </td>
+                    <td className="text-center text-[12px] text-[#999]">{formatDate(article.published_at)}</td>
                   </tr>
                 );
               })}

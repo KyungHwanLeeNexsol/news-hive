@@ -22,6 +22,7 @@ function sourceLabel(source: string): string {
     case "naver": return "네이버";
     case "google": return "구글";
     case "newsapi": return "NewsAPI";
+    case "korean_rss": return "경제지";
     default: return source;
   }
 }

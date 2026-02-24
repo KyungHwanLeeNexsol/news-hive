@@ -1,31 +1,37 @@
-"use client";
+'use client';
 
-import { useEffect, useState, useCallback } from "react";
-import Link from "next/link";
-import { fetchSectors, fetchNews, refreshNews } from "@/lib/api";
-import type { Sector, NewsArticle } from "@/lib/types";
-import ChangeRate from "@/components/ChangeRate";
-import UpDownBar from "@/components/UpDownBar";
+import { useEffect, useState, useCallback } from 'react';
+import Link from 'next/link';
+import { fetchSectors, fetchNews, refreshNews } from '@/lib/api';
+import type { Sector, NewsArticle } from '@/lib/types';
+import ChangeRate from '@/components/ChangeRate';
+import UpDownBar from '@/components/UpDownBar';
 
 const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
 function formatDate(dateStr: string | null): string {
-  if (!dateStr) return "";
+  if (!dateStr) return '';
   const d = new Date(dateStr);
-  return d.toLocaleDateString("ko-KR", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
+  return d.toLocaleDateString('ko-KR', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
   });
 }
 
 function sourceLabel(source: string): string {
   switch (source) {
-    case "naver": return "네이버";
-    case "google": return "구글";
-    case "newsapi": return "NewsAPI";
-    default: return source;
+    case 'naver':
+      return '네이버';
+    case 'google':
+      return '구글';
+    case 'newsapi':
+      return 'NewsAPI';
+    case 'korean_rss':
+      return '경제지';
+    default:
+      return source;
   }
 }
 
@@ -34,18 +40,22 @@ export default function Dashboard() {
   const [news, setNews] = useState<NewsArticle[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
-  const loadSectors = useCallback(() => {
-    fetchSectors().then(setSectors).catch(() => {});
+  const loadData = useCallback(() => {
+    fetchSectors()
+      .then(setSectors)
+      .catch(() => {});
+    fetchNews()
+      .then(setNews)
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
-    loadSectors();
-    fetchNews().then(setNews).catch(() => {});
+    loadData();
 
-    // Auto-refresh sectors every 5 minutes
-    const interval = setInterval(loadSectors, REFRESH_INTERVAL);
+    // Auto-refresh both sectors and news every 5 minutes
+    const interval = setInterval(loadData, REFRESH_INTERVAL);
     return () => clearInterval(interval);
-  }, [loadSectors]);
+  }, [loadData]);
 
   async function handleRefresh() {
     setRefreshing(true);
@@ -61,9 +71,7 @@ export default function Dashboard() {
   }
 
   // Filter: only show sectors that have stocks in our DB
-  const visibleSectors = sectors.filter(
-    (s) => (s.stock_count ?? 0) > 0
-  );
+  const visibleSectors = sectors.filter((s) => (s.stock_count ?? 0) > 0);
   const totalStocks = visibleSectors.reduce((sum, s) => sum + (s.stock_count ?? 0), 0);
 
   return (
@@ -72,7 +80,7 @@ export default function Dashboard() {
       <div className="flex-1 min-w-0">
         <div className="section-box">
           <div className="section-title">
-            <span>업종별 뉴스</span>
+            <span>업종 현황</span>
             <span className="text-[12px] font-normal text-[#999]">
               {visibleSectors.length}개 업종 / {totalStocks}개 종목
             </span>
@@ -80,14 +88,16 @@ export default function Dashboard() {
           <table className="naver-table">
             <thead>
               <tr>
-                <th className="text-left" style={{ width: "22%" }}>업종명</th>
-                <th style={{ width: "12%" }}>전일대비</th>
-                <th style={{ width: "8%" }}>전체</th>
-                <th style={{ width: "8%" }}>상승</th>
-                <th style={{ width: "8%" }}>보합</th>
-                <th style={{ width: "8%" }}>하락</th>
-                <th style={{ width: "22%" }}>등락그래프</th>
-                <th style={{ width: "12%" }}>뉴스</th>
+                <th className="text-left" style={{ width: '22%' }}>
+                  업종명
+                </th>
+                <th style={{ width: '12%' }}>전일대비</th>
+                <th style={{ width: '8%' }}>전체</th>
+                <th style={{ width: '8%' }}>상승</th>
+                <th style={{ width: '8%' }}>보합</th>
+                <th style={{ width: '8%' }}>하락</th>
+                <th style={{ width: '22%' }}>등락그래프</th>
+                <th style={{ width: '12%' }}>뉴스</th>
               </tr>
             </thead>
             <tbody>
@@ -107,25 +117,15 @@ export default function Dashboard() {
                       >
                         {sector.name}
                       </Link>
-                      {sector.is_custom && (
-                        <span className="badge badge-source ml-1">커스텀</span>
-                      )}
+                      {sector.is_custom && <span className="badge badge-source ml-1">커스텀</span>}
                     </td>
                     <td className="text-center">
                       <ChangeRate value={sector.change_rate} />
                     </td>
-                    <td className="text-center text-[#333]">
-                      {sector.stock_count ?? 0}
-                    </td>
-                    <td className="text-center text-rise">
-                      {sector.rising_stocks ?? "-"}
-                    </td>
-                    <td className="text-center text-[#333]">
-                      {sector.flat_stocks ?? "-"}
-                    </td>
-                    <td className="text-center text-fall">
-                      {sector.falling_stocks ?? "-"}
-                    </td>
+                    <td className="text-center text-[#333]">{sector.stock_count ?? 0}</td>
+                    <td className="text-center text-rise">{sector.rising_stocks ?? '-'}</td>
+                    <td className="text-center text-[#333]">{sector.flat_stocks ?? '-'}</td>
+                    <td className="text-center text-fall">{sector.falling_stocks ?? '-'}</td>
                     <td className="px-2">
                       <UpDownBar
                         rising={sector.rising_stocks ?? 0}
@@ -134,10 +134,7 @@ export default function Dashboard() {
                       />
                     </td>
                     <td className="text-center">
-                      <Link
-                        href={`/sectors/${sector.id}`}
-                        className="text-[#1261c4] hover:underline text-[12px]"
-                      >
+                      <Link href={`/sectors/${sector.id}`} className="text-[#1261c4] hover:underline text-[12px]">
                         뉴스보기
                       </Link>
                     </td>
@@ -159,14 +156,12 @@ export default function Dashboard() {
               disabled={refreshing}
               className="text-[12px] font-normal text-[#1261c4] hover:underline disabled:text-[#999]"
             >
-              {refreshing ? "수집 중..." : "새로고침"}
+              {refreshing ? '수집 중...' : '새로고침'}
             </button>
           </div>
           <div>
             {news.length === 0 ? (
-              <div className="py-8 text-center text-[13px] text-[#999]">
-                수집된 뉴스가 없습니다.
-              </div>
+              <div className="py-8 text-center text-[13px] text-[#999]">수집된 뉴스가 없습니다.</div>
             ) : (
               news.slice(0, 20).map((article) => (
                 <div key={article.id} className="news-item">
@@ -180,11 +175,12 @@ export default function Dashboard() {
                       {article.title}
                     </a>
                     <div className="news-meta flex items-center gap-2">
-                      <span className="badge badge-source">
-                        {sourceLabel(article.source)}
-                      </span>
+                      <span className="badge badge-source">{sourceLabel(article.source)}</span>
                       {article.relations.slice(0, 2).map((rel, i) => (
-                        <span key={i} className={`badge ${rel.relevance === "direct" ? "badge-direct" : "badge-indirect"}`}>
+                        <span
+                          key={i}
+                          className={`badge ${rel.relevance === 'direct' ? 'badge-direct' : 'badge-indirect'}`}
+                        >
                           {rel.stock_name || rel.sector_name}
                         </span>
                       ))}
