@@ -200,6 +200,15 @@ def _fetch_sector_stock_codes_sync(naver_code: str) -> list[str]:
             resp.raise_for_status()
 
         content = resp.content.decode("euc-kr", errors="replace")
+
+        # Detect error/redirect pages (Naver auth or CAPTCHA)
+        if "로그인" in content and "비밀번호" in content:
+            logger.warning(f"Naver sector {naver_code}: got login page, skipping")
+            return []
+        if "sise_group_detail" not in content:
+            logger.warning(f"Naver sector {naver_code}: unexpected page content, skipping")
+            return []
+
         soup = BeautifulSoup(content, "html.parser")
 
         stock_codes = []
@@ -229,19 +238,33 @@ def _build_naver_stock_mapping(db: Session) -> dict[str, int]:
         return {}
 
     mapping: dict[str, int] = {}
+    failed_sectors = 0
     for sector in sectors:
         try:
             codes = _fetch_sector_stock_codes_sync(sector.naver_code)
-            for code in codes:
-                mapping[code] = sector.id
-            logger.debug(
-                f"Sector '{sector.name}' ({sector.naver_code}): {len(codes)} stocks"
-            )
+            if not codes:
+                failed_sectors += 1
+                logger.warning(f"Sector '{sector.name}' ({sector.naver_code}): 0 stocks (may be blocked)")
+            else:
+                for code in codes:
+                    mapping[code] = sector.id
+                logger.debug(
+                    f"Sector '{sector.name}' ({sector.naver_code}): {len(codes)} stocks"
+                )
         except Exception as e:
+            failed_sectors += 1
             logger.warning(f"Failed to fetch stocks for sector {sector.name}: {e}")
         time.sleep(0.3)
 
-    logger.info(f"Built Naver stock mapping: {len(mapping)} stocks across {len(sectors)} sectors")
+    # If too many sectors failed, the mapping is likely unreliable
+    if failed_sectors > len(sectors) * 0.3:
+        logger.error(
+            f"Naver mapping unreliable: {failed_sectors}/{len(sectors)} sectors failed. "
+            f"Only {len(mapping)} stocks mapped. Returning empty to avoid bad data."
+        )
+        return {}
+
+    logger.info(f"Built Naver stock mapping: {len(mapping)} stocks across {len(sectors)} sectors ({failed_sectors} failed)")
     return mapping
 
 
@@ -255,14 +278,11 @@ def seed_all_stocks(db: Session, force: bool = False) -> int:
     # Build Naver-based stock_code → sector_id mapping
     naver_mapping = _build_naver_stock_mapping(db)
     if not naver_mapping:
+        if existing_count > 0:
+            logger.warning("Naver mapping failed but stocks exist. Keeping current data.")
+            return 0
         logger.error("No Naver stock mapping available. Ensure sectors are seeded first.")
         return 0
-
-    # If force, clear all existing stocks and re-seed
-    if force:
-        deleted = db.query(Stock).delete()
-        db.commit()
-        logger.info(f"Cleared {deleted} existing stocks for re-seed.")
 
     # Fetch from KIS master files
     all_stocks: list[dict] = []
@@ -276,7 +296,45 @@ def seed_all_stocks(db: Session, force: bool = False) -> int:
 
     logger.info(f"Total stocks fetched: {len(all_stocks)}")
 
-    # Deduplicate by code
+    # If force, update existing stocks' sector mappings + add new ones
+    if force:
+        existing_by_code = {s.stock_code: s for s in db.query(Stock).all()}
+        updated = 0
+        added = 0
+        skipped = 0
+        sector_names = {s.id: s.name for s in db.query(Sector).all()}
+
+        kis_codes = {s["code"] for s in all_stocks}
+
+        for stock_data in all_stocks:
+            sector_id = naver_mapping.get(stock_data["code"])
+            if not sector_id:
+                skipped += 1
+                continue
+
+            if stock_data["code"] in existing_by_code:
+                stock = existing_by_code[stock_data["code"]]
+                if stock.sector_id != sector_id:
+                    old_sector = sector_names.get(stock.sector_id, "?")
+                    new_sector = sector_names.get(sector_id, "?")
+                    logger.info(f"Remapping {stock.name}: {old_sector} → {new_sector}")
+                    stock.sector_id = sector_id
+                    updated += 1
+            else:
+                stock = Stock(
+                    sector_id=sector_id,
+                    name=stock_data["name"],
+                    stock_code=stock_data["code"],
+                    keywords=None,
+                )
+                db.add(stock)
+                added += 1
+
+        db.commit()
+        logger.info(f"Force sync: {added} added, {updated} remapped, {skipped} unmapped")
+        return added + updated
+
+    # Normal seed: only add missing stocks
     existing_codes = {s.stock_code for s in db.query(Stock.stock_code).all()}
     added = 0
     skipped = 0
