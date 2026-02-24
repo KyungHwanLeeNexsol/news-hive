@@ -71,6 +71,12 @@ export async function generateAiSummary(id: number): Promise<NewsArticle> {
   return res.json();
 }
 
+export async function scrapeArticleContent(id: number): Promise<NewsArticle> {
+  const res = await fetch(`${API_BASE}/news/${id}/content`, { method: "POST" });
+  if (!res.ok) throw new Error("Failed to scrape article content");
+  return res.json();
+}
+
 export async function fetchNews(): Promise<NewsArticle[]> {
   const res = await fetch(`${API_BASE}/news`);
   if (!res.ok) throw new Error("Failed to fetch news");

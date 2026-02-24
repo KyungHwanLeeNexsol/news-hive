@@ -19,6 +19,7 @@ class NewsArticleResponse(BaseModel):
     title: str
     summary: str | None = None
     ai_summary: str | None = None
+    content: str | None = None
     url: str
     source: str
     sentiment: str | None = None

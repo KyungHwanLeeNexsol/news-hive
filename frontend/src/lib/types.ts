@@ -36,6 +36,7 @@ export interface NewsArticle {
   title: string;
   summary: string | null;
   ai_summary: string | null;
+  content: string | null;
   url: string;
   source: string;
   sentiment: string | null;

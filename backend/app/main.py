@@ -14,9 +14,25 @@ import logging
 logging.basicConfig(level=logging.INFO)
 
 
+def _run_migrations():
+    """Run Alembic migrations on startup."""
+    from alembic.config import Config
+    from alembic import command
+    import os
+
+    alembic_cfg = Config(os.path.join(os.path.dirname(__file__), "..", "alembic.ini"))
+    alembic_cfg.set_main_option("script_location", os.path.join(os.path.dirname(__file__), "..", "alembic"))
+    try:
+        command.upgrade(alembic_cfg, "head")
+        logging.getLogger(__name__).info("Alembic migrations applied successfully")
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Alembic migration failed (may already be applied): {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: create tables and seed data
+    # Startup: run migrations, create tables, and seed data
+    _run_migrations()
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:

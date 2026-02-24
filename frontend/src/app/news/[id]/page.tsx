@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { fetchNewsById, generateAiSummary } from '@/lib/api';
+import { fetchNewsById, generateAiSummary, scrapeArticleContent } from '@/lib/api';
 import type { NewsArticle } from '@/lib/types';
 
 function formatDate(dateStr: string | null): string {
@@ -56,12 +56,17 @@ export default function NewsDetail() {
   const [article, setArticle] = useState<NewsArticle | null>(null);
   const [aiSummary, setAiSummary] = useState<string | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [articleContent, setArticleContent] = useState<string | null>(null);
+  const [contentLoading, setContentLoading] = useState(false);
+  const [contentFailed, setContentFailed] = useState(false);
 
   useEffect(() => {
     if (!newsId) return;
     fetchNewsById(newsId)
       .then((data) => {
         setArticle(data);
+
+        // AI summary: use cached or generate
         if (data.ai_summary) {
           setAiSummary(data.ai_summary);
         } else {
@@ -70,6 +75,23 @@ export default function NewsDetail() {
             .then((result) => setAiSummary(result.ai_summary))
             .catch(() => {})
             .finally(() => setSummaryLoading(false));
+        }
+
+        // Article content: use cached or scrape
+        if (data.content) {
+          setArticleContent(data.content);
+        } else {
+          setContentLoading(true);
+          scrapeArticleContent(newsId)
+            .then((result) => {
+              if (result.content) {
+                setArticleContent(result.content);
+              } else {
+                setContentFailed(true);
+              }
+            })
+            .catch(() => setContentFailed(true))
+            .finally(() => setContentLoading(false));
         }
       })
       .catch(() => {});
@@ -135,13 +157,6 @@ export default function NewsDetail() {
             </div>
           )}
 
-          {/* Crawler description (HTML stripped) */}
-          {cleanSummary && (
-            <div className="mb-5 p-4 bg-[#fafafa] rounded-md border border-[#eee] text-[13px] text-[#555] leading-[1.8]">
-              {cleanSummary}
-            </div>
-          )}
-
           {/* AI Summary */}
           <div className="mb-5 p-4 bg-[#f0f7ff] rounded-md border border-[#d0e3f7]">
             <div className="flex items-center gap-1.5 mb-2.5">
@@ -161,6 +176,33 @@ export default function NewsDetail() {
                 AI 요약을 생성할 수 없습니다.
               </div>
             )}
+          </div>
+
+          {/* Article content */}
+          <div className="mb-5">
+            <div className="text-[13px] font-bold text-[#333] mb-3">기사 본문</div>
+            {contentLoading ? (
+              <div className="p-6 text-center text-[13px] text-[#999] bg-[#fafafa] rounded-md border border-[#eee]">
+                <span className="inline-block w-3.5 h-3.5 border-2 border-[#999] border-t-transparent rounded-full animate-spin mr-2 align-middle" />
+                기사 본문을 가져오고 있습니다...
+              </div>
+            ) : articleContent ? (
+              <div className="p-4 bg-[#fafafa] rounded-md border border-[#eee] text-[13px] text-[#333] leading-[2] whitespace-pre-line max-h-[600px] overflow-y-auto">
+                {articleContent}
+              </div>
+            ) : contentFailed ? (
+              <div className="rounded-md border border-[#eee] overflow-hidden">
+                <div className="px-4 py-2 bg-[#fafafa] text-[12px] text-[#999] border-b border-[#eee]">
+                  본문을 직접 가져올 수 없어 원문 페이지를 표시합니다.
+                </div>
+                <iframe
+                  src={article.url}
+                  className="w-full h-[600px] border-0"
+                  sandbox="allow-same-origin allow-scripts"
+                  title="원문 기사"
+                />
+              </div>
+            ) : null}
           </div>
 
           {/* Link to original article */}

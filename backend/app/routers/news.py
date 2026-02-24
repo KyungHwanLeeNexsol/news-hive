@@ -105,6 +105,33 @@ async def generate_summary(news_id: int, db: Session = Depends(get_db)):
     return format_articles([article])[0]
 
 
+@router.post("/{news_id}/content", response_model=NewsArticleResponse)
+async def scrape_content(news_id: int, db: Session = Depends(get_db)):
+    """Scrape article content on demand (lazy, cached in DB)."""
+    article = (
+        db.query(NewsArticle)
+        .options(
+            subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.stock),
+            subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.sector),
+        )
+        .filter(NewsArticle.id == news_id)
+        .first()
+    )
+    if not article:
+        raise HTTPException(status_code=404, detail="News article not found")
+
+    if not article.content:
+        from app.services.article_scraper import scrape_article_content
+
+        content = await scrape_article_content(article.url)
+        if content:
+            article.content = content
+            db.commit()
+            db.refresh(article)
+
+    return format_articles([article])[0]
+
+
 async def _run_crawl_background():
     """Run the crawl in background with a dedicated DB session."""
     from app.services.news_crawler import crawl_all_news
