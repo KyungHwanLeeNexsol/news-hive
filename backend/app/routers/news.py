@@ -43,6 +43,22 @@ async def get_news_detail(news_id: int, db: Session = Depends(get_db)):
     )
     if not article:
         raise HTTPException(status_code=404, detail="News article not found")
+
+    # On-demand: if article has no sector relation, classify now
+    has_sector = any(r.sector_id is not None for r in article.relations)
+    if not has_sector:
+        await _classify_article_on_demand(article, db)
+        # Re-query with eager loading to pick up new relations
+        article = (
+            db.query(NewsArticle)
+            .options(
+                subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.stock),
+                subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.sector),
+            )
+            .filter(NewsArticle.id == news_id)
+            .first()
+        )
+
     return format_articles([article])[0]
 
 
@@ -132,6 +148,37 @@ async def scrape_content(news_id: int, db: Session = Depends(get_db)):
     return format_articles([article])[0]
 
 
+async def _classify_article_on_demand(article: NewsArticle, db: Session) -> None:
+    """Classify a single article on-demand when it has no sector tag."""
+    from app.models.sector import Sector
+    from app.models.stock import Stock
+    from app.services.ai_classifier import classify_news
+
+    sectors = db.query(Sector).all()
+    stocks = db.query(Stock).all()
+
+    try:
+        classifications = await classify_news(article.title, sectors, stocks)
+        for cls in classifications:
+            existing = db.query(NewsStockRelation).filter(
+                NewsStockRelation.news_id == article.id,
+                NewsStockRelation.stock_id == cls.get("stock_id"),
+                NewsStockRelation.sector_id == cls.get("sector_id"),
+            ).first()
+            if existing:
+                continue
+            db.add(NewsStockRelation(
+                news_id=article.id,
+                stock_id=cls.get("stock_id"),
+                sector_id=cls.get("sector_id"),
+                match_type=cls.get("match_type", "keyword"),
+                relevance=cls.get("relevance", "indirect"),
+            ))
+        db.commit()
+    except Exception as e:
+        logger.warning(f"On-demand classify failed for article {article.id}: {e}")
+
+
 async def _run_crawl_background():
     """Run the crawl in background with a dedicated DB session."""
     from app.services.news_crawler import crawl_all_news
@@ -162,35 +209,67 @@ def _backfill_sentiment(db: Session) -> None:
 
 
 async def _reclassify_unlinked(db: Session) -> int:
-    """Reclassify articles that have no news_stock_relations.
+    """Reclassify articles that have no sector tag.
 
-    Uses keyword matching first, then AI classification as fallback
-    so every article gets at least one sector tag.
+    Targets two cases:
+    1. Articles with zero relations (completely unlinked)
+    2. Articles that only have stock relations but no sector relation
+
+    Uses keyword matching first, then AI classification as fallback.
     """
+    from sqlalchemy import and_, exists
     from app.models.sector import Sector
     from app.models.stock import Stock
     from app.services.ai_classifier import classify_news
 
-    # Find articles with no relations
+    # Case 1: articles with zero relations
     articles_with_rels = db.query(NewsStockRelation.news_id).distinct()
-    unlinked = (
+    no_relations = (
         db.query(NewsArticle)
         .filter(NewsArticle.id.notin_(articles_with_rels))
         .all()
     )
-    if not unlinked:
+
+    # Case 2: articles that have relations but none with a sector_id
+    has_sector_rel = (
+        db.query(NewsStockRelation.news_id)
+        .filter(NewsStockRelation.sector_id.isnot(None))
+        .distinct()
+    )
+    no_sector = (
+        db.query(NewsArticle)
+        .filter(
+            NewsArticle.id.in_(articles_with_rels),
+            NewsArticle.id.notin_(has_sector_rel),
+        )
+        .all()
+    )
+
+    targets = no_relations + no_sector
+    if not targets:
         return 0
 
-    logger.info(f"Reclassifying {len(unlinked)} unlinked articles (keyword + AI)")
+    logger.info(
+        f"Reclassifying {len(targets)} articles "
+        f"({len(no_relations)} unlinked, {len(no_sector)} missing sector)"
+    )
 
     sectors = db.query(Sector).all()
     stocks = db.query(Stock).all()
     count = 0
 
-    for article in unlinked:
+    for article in targets:
         try:
             classifications = await classify_news(article.title, sectors, stocks)
             for cls in classifications:
+                # Skip if this exact relation already exists
+                existing = db.query(NewsStockRelation).filter(
+                    NewsStockRelation.news_id == article.id,
+                    NewsStockRelation.stock_id == cls.get("stock_id"),
+                    NewsStockRelation.sector_id == cls.get("sector_id"),
+                ).first()
+                if existing:
+                    continue
                 db.add(NewsStockRelation(
                     news_id=article.id,
                     stock_id=cls.get("stock_id"),
