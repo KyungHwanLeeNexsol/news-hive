@@ -256,15 +256,51 @@ def _build_naver_stock_mapping(db: Session) -> dict[str, int]:
             logger.warning(f"Failed to fetch stocks for sector {sector.name}: {e}")
         time.sleep(0.3)
 
-    # If too many sectors failed, the mapping is likely unreliable
+    # If too many sectors failed, fall back to static snapshot
     if failed_sectors > len(sectors) * 0.3:
-        logger.error(
+        logger.warning(
             f"Naver mapping unreliable: {failed_sectors}/{len(sectors)} sectors failed. "
-            f"Only {len(mapping)} stocks mapped. Returning empty to avoid bad data."
+            f"Falling back to static snapshot."
         )
-        return {}
+        return _load_snapshot_mapping(db)
 
     logger.info(f"Built Naver stock mapping: {len(mapping)} stocks across {len(sectors)} sectors ({failed_sectors} failed)")
+    return mapping
+
+
+def _load_snapshot_mapping(db: Session) -> dict[str, int]:
+    """Load static stock_code → sector_id mapping from snapshot file.
+
+    The snapshot maps stock_code → naver_sector_code. We convert to sector_id
+    using the sectors table.
+    """
+    import json
+    from pathlib import Path
+
+    snapshot_path = Path(__file__).parent / "stock_sector_snapshot.json"
+    if not snapshot_path.exists():
+        logger.error("Stock sector snapshot file not found")
+        return {}
+
+    try:
+        raw: dict[str, str] = json.loads(snapshot_path.read_text())
+    except Exception as e:
+        logger.error(f"Failed to load stock sector snapshot: {e}")
+        return {}
+
+    # Build naver_code → sector_id lookup
+    code_to_id = {
+        s.naver_code: s.id
+        for s in db.query(Sector).filter(Sector.naver_code.isnot(None)).all()
+    }
+
+    mapping: dict[str, int] = {}
+    for stock_code, naver_code in raw.items():
+        sector_id = code_to_id.get(naver_code)
+        if sector_id:
+            mapping[stock_code] = sector_id
+
+    logger.info(f"Loaded snapshot mapping: {len(mapping)} stocks from {len(raw)} entries")
     return mapping
 
 
@@ -275,13 +311,16 @@ def seed_all_stocks(db: Session, force: bool = False) -> int:
         logger.info(f"Already have {existing_count} stocks, skipping seed.")
         return 0
 
-    # Build Naver-based stock_code → sector_id mapping
+    # Build Naver-based stock_code → sector_id mapping (live scrape → snapshot fallback)
     naver_mapping = _build_naver_stock_mapping(db)
     if not naver_mapping:
+        # Try static snapshot as last resort
+        naver_mapping = _load_snapshot_mapping(db)
+    if not naver_mapping:
         if existing_count > 0:
-            logger.warning("Naver mapping failed but stocks exist. Keeping current data.")
+            logger.warning("All mapping sources failed but stocks exist. Keeping current data.")
             return 0
-        logger.error("No Naver stock mapping available. Ensure sectors are seeded first.")
+        logger.error("No stock mapping available. Ensure sectors are seeded first.")
         return 0
 
     # Fetch from KIS master files

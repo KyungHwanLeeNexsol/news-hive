@@ -19,7 +19,7 @@ export default function Header() {
             <svg width="22" height="22" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path d="M16 2L28.124 9V23L16 30L3.876 23V9L16 2Z" fill="#1261c4"/>
               <path d="M16 5.5L25.5 10.75V21.25L16 26.5L6.5 21.25V10.75L16 5.5Z" fill="#ffffff" fillOpacity="0.15"/>
-              <path d="M11 11h2.5v6.5L18.5 11H21v10h-2.5v-6.5L13.5 21H11V11Z" fill="#ffffff"/>
+              <path d="M11 11h2.5v6.5L18.5 21H21V11h-2.5v6.5L13.5 11H11Z" fill="#ffffff"/>
             </svg>
             NewsHive
           </Link>
