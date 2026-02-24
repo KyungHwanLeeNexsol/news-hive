@@ -1,4 +1,3 @@
-import asyncio
 import logging
 
 from sqlalchemy.orm import Session
@@ -7,61 +6,31 @@ from app.models.sector import Sector
 
 logger = logging.getLogger(__name__)
 
-# Static fallback: Naver Finance sector snapshot (name → naver_code)
-# Used when live scraping fails (e.g., during CI, first deploy, Naver down)
-NAVER_SECTORS_SNAPSHOT = {
-    "종이목재": "263", "음식료업": "264", "비금속광물": "265",
-    "철강금속": "266", "기계": "267", "전기전자": "268",
-    "의료정밀": "269", "운수장비": "270", "유통업": "271",
-    "전기가스업": "272", "건설업": "273", "운수창고": "274",
-    "통신업": "275", "금융업": "276", "은행": "277",
-    "증권": "278", "보험": "279", "서비스업": "280",
-    "제조업": "281", "섬유의복": "300", "의약품": "301",
-    "화학": "302", "비철금속": "306",
-    "소프트웨어": "326", "전자제품": "327",
-    "전자장비와기기": "328", "생명보험": "329", "전기장비": "330",
-    "디스플레이패널": "331", "창업투자": "332",
-    "인터넷과카탈로그소매": "333", "섬유,의류,신발,호화품": "334",
-    "항공사": "336", "생명과학도구및서비스": "337",
-    "음료": "338", "식품": "339", "건축자재": "340",
-    "출판": "341", "가구": "342", "식품과기본식료품소매": "343",
-    "자동차": "344", "생물공학": "345", "건설": "346",
-    "사무용전자제품": "347", "문구류": "348",
-    "백화점과일반상점": "349", "핸드셋": "350",
-    "상업서비스와공급품": "351", "화장품": "352", "제약": "353",
-    "다각화된금융": "354", "석유와가스": "355",
-    "전자장비와부품": "356", "호텔,레스토랑,레저": "357",
-    "카드": "358", "포장재": "359", "복합유틸리티": "360",
-    "해운사": "361", "광고": "362", "항공화물운송과물류": "363",
-    "반도체와반도체장비": "364", "무역회사와판매업체": "365",
-    "IT서비스": "366", "조선": "367",
-    "운송인프라": "368", "철강": "369", "양방향미디어와서비스": "370",
-    "무선통신서비스": "371", "에너지장비및서비스": "372",
-    "종합부동산": "373", "교육서비스": "374",
-    "미디어": "375", "가정용기기와용품": "376",
-    "자동차부품": "377", "복합기업": "378",
-    "기계장비": "379", "건강관리기술": "380",
-    "건강관리장비와용품": "381", "손해보험": "382",
-}
-
 
 def seed_sectors(db: Session) -> None:
-    """Seed sectors from Naver Finance or static fallback."""
+    """Seed/update sectors from Naver Finance live data.
+
+    Always tries live fetch to keep naver_code up to date.
+    Falls back to static snapshot only on first run when live fails.
+    """
     from app.models.stock import Stock
     from app.models.news_relation import NewsStockRelation
 
-    # If we already have Naver sectors, skip seeding but still clean up
-    existing_naver = db.query(Sector).filter(Sector.naver_code.isnot(None)).count()
-    if existing_naver <= 30:
-        # Try live fetch first
-        sectors_data = _try_fetch_live()
-        if not sectors_data:
-            logger.info("Using static sector snapshot as fallback")
+    # Always try live fetch to keep codes current
+    sectors_data = _try_fetch_live()
+    if not sectors_data:
+        # Only use snapshot if DB is empty (first deploy with Naver blocked)
+        existing_count = db.query(Sector).count()
+        if existing_count > 0:
+            logger.info("Live fetch failed but DB already has sectors, skipping.")
+        else:
+            logger.info("Using static sector snapshot as fallback for first seed")
             sectors_data = [
                 {"name": name, "code": code}
-                for name, code in NAVER_SECTORS_SNAPSHOT.items()
+                for name, code in _SNAPSHOT.items()
             ]
 
+    if sectors_data:
         # Build lookup for existing sectors
         existing_by_code = {
             s.naver_code: s for s in db.query(Sector).all() if s.naver_code
@@ -70,8 +39,10 @@ def seed_sectors(db: Session) -> None:
 
         added = 0
         updated = 0
+        live_codes = set()
         for item in sectors_data:
             name, code = item["name"], item["code"]
+            live_codes.add(code)
 
             if code in existing_by_code:
                 sector = existing_by_code[code]
@@ -82,17 +53,38 @@ def seed_sectors(db: Session) -> None:
 
             if name in existing_by_name:
                 sector = existing_by_name[name]
-                sector.naver_code = code
-                updated += 1
+                if sector.naver_code != code:
+                    sector.naver_code = code
+                    updated += 1
                 continue
 
             db.add(Sector(name=name, naver_code=code, is_custom=False))
             added += 1
 
+        # Remove sectors whose naver_code is stale (not in live data)
+        if live_codes:
+            stale = (
+                db.query(Sector)
+                .filter(
+                    Sector.naver_code.isnot(None),
+                    Sector.naver_code.notin_(live_codes),
+                    Sector.is_custom == False,
+                )
+                .all()
+            )
+            for sector in stale:
+                stock_ids = [s.id for s in db.query(Stock.id).filter(Stock.sector_id == sector.id).all()]
+                db.query(NewsStockRelation).filter(NewsStockRelation.sector_id == sector.id).delete()
+                if stock_ids:
+                    db.query(NewsStockRelation).filter(NewsStockRelation.stock_id.in_(stock_ids)).delete()
+                db.query(Stock).filter(Stock.sector_id == sector.id).delete()
+                db.delete(sector)
+                updated += 1
+            if stale:
+                logger.info(f"Removed {len(stale)} stale sectors with outdated naver_code")
+
         db.commit()
         logger.info(f"Sector seed: {added} added, {updated} updated")
-    else:
-        logger.info(f"Already have {existing_naver} Naver sectors, skipping seed.")
 
     # Clean up: remove old sectors that have no naver_code (and their stocks)
     old_sectors = (
@@ -102,12 +94,10 @@ def seed_sectors(db: Session) -> None:
     )
     removed = 0
     for sector in old_sectors:
-        # Delete news relations referencing this sector or its stocks
         stock_ids = [s.id for s in db.query(Stock.id).filter(Stock.sector_id == sector.id).all()]
         db.query(NewsStockRelation).filter(NewsStockRelation.sector_id == sector.id).delete()
         if stock_ids:
             db.query(NewsStockRelation).filter(NewsStockRelation.stock_id.in_(stock_ids)).delete()
-        # Delete stocks belonging to this old sector
         db.query(Stock).filter(Stock.sector_id == sector.id).delete()
         db.delete(sector)
         removed += 1
@@ -117,14 +107,53 @@ def seed_sectors(db: Session) -> None:
 
 
 def _try_fetch_live() -> list[dict]:
-    """Attempt synchronous fetch of Naver sector list."""
+    """Synchronously fetch Naver sector list (avoids event loop conflicts with uvloop)."""
     try:
-        from app.services.naver_finance import fetch_all_naver_sectors
+        import httpx
+        from bs4 import BeautifulSoup
 
-        loop = asyncio.new_event_loop()
-        result = loop.run_until_complete(fetch_all_naver_sectors())
-        loop.close()
-        return result
+        url = "https://finance.naver.com/sise/sise_group.naver?type=upjong"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        }
+        with httpx.Client(timeout=15, follow_redirects=True) as client:
+            resp = client.get(url, headers=headers)
+            resp.raise_for_status()
+
+        content = resp.content.decode("euc-kr", errors="replace")
+        soup = BeautifulSoup(content, "html.parser")
+
+        table = soup.select_one("table.type_1")
+        if not table:
+            return []
+
+        sectors = []
+        for row in table.select("tr"):
+            link = row.select_one("td a")
+            if not link:
+                continue
+            name = link.get_text(strip=True)
+            href = link.get("href", "")
+            if "no=" in href:
+                code = href.split("no=")[-1].split("&")[0].strip()
+                if name and code:
+                    sectors.append({"name": name, "code": code})
+
+        logger.info(f"Live fetch: found {len(sectors)} sectors from Naver Finance")
+        return sectors
     except Exception as e:
         logger.warning(f"Live sector fetch failed: {e}")
         return []
+
+
+# Static fallback snapshot — only used when DB is empty AND live fetch fails
+_SNAPSHOT = {
+    "종이목재": "263", "음식료업": "264", "비금속광물": "265",
+    "철강금속": "266", "기계": "267", "전기전자": "268",
+    "의료정밀": "269", "운수장비": "270", "유통업": "271",
+    "전기가스업": "272", "건설업": "273", "운수창고": "274",
+    "통신업": "275", "금융업": "276", "은행": "277",
+    "증권": "278", "보험": "279", "서비스업": "280",
+    "제조업": "281",
+}

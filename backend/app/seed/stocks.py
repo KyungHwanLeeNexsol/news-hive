@@ -1,7 +1,7 @@
-import asyncio
 import io
 import logging
 import ssl
+import time
 import urllib.request
 import zipfile
 
@@ -184,39 +184,62 @@ def _download_and_parse_mst(url: str, market: str) -> list[dict]:
     return stocks
 
 
+def _fetch_sector_stock_codes_sync(naver_code: str) -> list[str]:
+    """Synchronously fetch stock codes from a Naver sector detail page."""
+    import httpx
+    from bs4 import BeautifulSoup
+
+    url = f"https://finance.naver.com/sise/sise_group_detail.naver?type=upjong&no={naver_code}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    }
+    try:
+        with httpx.Client(timeout=15, follow_redirects=True) as client:
+            resp = client.get(url, headers=headers)
+            resp.raise_for_status()
+
+        content = resp.content.decode("euc-kr", errors="replace")
+        soup = BeautifulSoup(content, "html.parser")
+
+        stock_codes = []
+        for link in soup.select("a[href*='code=']"):
+            href = link.get("href", "")
+            if "/item/" not in href:
+                continue
+            code = href.split("code=")[-1].split("&")[0].strip()
+            if code and len(code) == 6 and code.isdigit():
+                stock_codes.append(code)
+
+        return list(set(stock_codes))
+    except Exception as e:
+        logger.error(f"Failed to fetch stocks for Naver sector {naver_code}: {e}")
+        return []
+
+
 def _build_naver_stock_mapping(db: Session) -> dict[str, int]:
     """Build stock_code → sector_id mapping from Naver sector detail pages.
 
-    Scrapes each Naver sector's detail page to find constituent stock codes.
+    Uses synchronous HTTP to avoid event loop conflicts with uvloop.
     Takes ~24 seconds for ~80 sectors (0.3s delay between requests).
     """
-    from app.services.naver_finance import fetch_sector_stock_codes
-
     sectors = db.query(Sector).filter(Sector.naver_code.isnot(None)).all()
     if not sectors:
         logger.warning("No sectors with naver_code found")
         return {}
 
     mapping: dict[str, int] = {}
-
-    async def _fetch_all():
-        for sector in sectors:
-            try:
-                codes = await fetch_sector_stock_codes(sector.naver_code)
-                for code in codes:
-                    mapping[code] = sector.id
-                logger.debug(
-                    f"Sector '{sector.name}' ({sector.naver_code}): {len(codes)} stocks"
-                )
-            except Exception as e:
-                logger.warning(f"Failed to fetch stocks for sector {sector.name}: {e}")
-            await asyncio.sleep(0.3)
-
-    loop = asyncio.new_event_loop()
-    try:
-        loop.run_until_complete(_fetch_all())
-    finally:
-        loop.close()
+    for sector in sectors:
+        try:
+            codes = _fetch_sector_stock_codes_sync(sector.naver_code)
+            for code in codes:
+                mapping[code] = sector.id
+            logger.debug(
+                f"Sector '{sector.name}' ({sector.naver_code}): {len(codes)} stocks"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to fetch stocks for sector {sector.name}: {e}")
+        time.sleep(0.3)
 
     logger.info(f"Built Naver stock mapping: {len(mapping)} stocks across {len(sectors)} sectors")
     return mapping
