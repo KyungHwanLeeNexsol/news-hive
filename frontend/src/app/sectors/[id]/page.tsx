@@ -32,7 +32,7 @@ export default function SectorDetail() {
 
   const [sector, setSector] = useState<Sector | null>(null);
   const [news, setNews] = useState<NewsArticle[]>([]);
-  const [tab, setTab] = useState<"stocks" | "news">("stocks");
+  const [tab, setTab] = useState<"stocks" | "news">("news");
 
   useEffect(() => {
     if (!sectorId) return;

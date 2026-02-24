@@ -12,20 +12,21 @@ scheduler = BackgroundScheduler()
 
 
 def _run_crawl_job():
-    """Sync wrapper that runs the async crawl job."""
+    """Sync wrapper that runs the async crawl job.
+
+    BackgroundScheduler runs jobs in a separate thread pool, so asyncio.run()
+    safely creates a new event loop without conflicting with uvloop on the main thread.
+    """
     from app.services.news_crawler import crawl_all_news
 
     db = SessionLocal()
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        count = loop.run_until_complete(crawl_all_news(db))
+        count = asyncio.run(crawl_all_news(db))
         logger.info(f"Scheduled crawl completed: {count} new articles")
     except Exception as e:
         logger.error(f"Scheduled crawl failed: {e}")
     finally:
         db.close()
-        loop.close()
 
 
 def _refresh_sector_performance():
@@ -33,14 +34,10 @@ def _refresh_sector_performance():
     from app.services.naver_finance import fetch_sector_performances
 
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        data = loop.run_until_complete(fetch_sector_performances(force=True))
+        data = asyncio.run(fetch_sector_performances(force=True))
         logger.info(f"Sector performance refreshed: {len(data)} sectors")
     except Exception as e:
         logger.error(f"Sector performance refresh failed: {e}")
-    finally:
-        loop.close()
 
 
 def start_scheduler():
