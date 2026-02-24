@@ -64,6 +64,9 @@ async def create_sector(body: SectorCreate, db: Session = Depends(get_db)):
 
 @router.get("/{sector_id}", response_model=SectorDetailResponse)
 async def get_sector(sector_id: int, db: Session = Depends(get_db)):
+    from app.services.naver_finance import fetch_sector_stock_performances
+    from app.schemas.sector import StockInSector
+
     sector = db.query(Sector).filter(Sector.id == sector_id).first()
     if not sector:
         raise HTTPException(status_code=404, detail="Sector not found")
@@ -73,7 +76,41 @@ async def get_sector(sector_id: int, db: Session = Depends(get_db)):
         .order_by(Stock.name)
         .all()
     )
-    sector.stocks = stocks
+
+    # Fetch stock-level change rates from Naver
+    stock_perfs: dict[str, float] = {}
+    if sector.naver_code:
+        perfs = await fetch_sector_stock_performances(sector.naver_code)
+        stock_perfs = {p.stock_code: p.change_rate for p in perfs}
+
+    # Count news per stock
+    stock_ids = [s.id for s in stocks]
+    news_count_map: dict[int, int] = {}
+    if stock_ids:
+        news_counts_raw = (
+            db.query(
+                NewsStockRelation.stock_id,
+                func.count(func.distinct(NewsStockRelation.news_id)),
+            )
+            .filter(NewsStockRelation.stock_id.in_(stock_ids))
+            .group_by(NewsStockRelation.stock_id)
+            .all()
+        )
+        news_count_map = dict(news_counts_raw)
+
+    # Build enriched stock list
+    stock_responses = []
+    for stock in stocks:
+        stock_responses.append(StockInSector(
+            id=stock.id,
+            name=stock.name,
+            stock_code=stock.stock_code,
+            keywords=stock.keywords,
+            change_rate=stock_perfs.get(stock.stock_code),
+            news_count=news_count_map.get(stock.id, 0),
+        ))
+
+    sector.stocks = stock_responses
     return sector
 
 

@@ -180,6 +180,85 @@ async def fetch_all_naver_sectors() -> list[dict]:
         return []
 
 
+@dataclass
+class StockPerformance:
+    """Live performance data for a single stock within a sector."""
+    stock_code: str
+    name: str
+    change_rate: float  # 등락률 (%)
+
+
+@dataclass
+class _StockPerfCache:
+    """In-memory cache for stock-level performance data, keyed by naver_code."""
+    data: dict[str, list[StockPerformance]] = field(default_factory=dict)
+    last_updated: dict[str, float] = field(default_factory=dict)
+
+
+_stock_perf_cache = _StockPerfCache()
+
+
+async def fetch_sector_stock_performances(naver_code: str) -> list[StockPerformance]:
+    """Fetch stock-level performance data from a Naver sector detail page.
+
+    Scrapes the sector detail page to get each stock's name, code, and change rate.
+    Uses in-memory cache with 5 min TTL.
+    """
+    now = time.time()
+    if (naver_code in _stock_perf_cache.data
+            and (now - _stock_perf_cache.last_updated.get(naver_code, 0)) < CACHE_TTL_SECONDS):
+        return _stock_perf_cache.data[naver_code]
+
+    url = SECTOR_DETAIL_URL.format(code=naver_code)
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            resp = await client.get(url, headers=HEADERS)
+            resp.raise_for_status()
+
+        content = resp.content.decode("euc-kr", errors="replace")
+        soup = BeautifulSoup(content, "html.parser")
+
+        results: list[StockPerformance] = []
+        # The detail page has a table with stock rows
+        for table in soup.select("table.type_5"):
+            for row in table.select("tr"):
+                cols = row.select("td")
+                if len(cols) < 6:
+                    continue
+
+                # Column 0: stock name with link containing code
+                link = cols[0].select_one("a[href*='code=']")
+                if not link:
+                    continue
+
+                name = link.get_text(strip=True)
+                href = link.get("href", "")
+                code = href.split("code=")[-1].split("&")[0].strip()
+                if not code or len(code) != 6 or not code.isdigit():
+                    continue
+
+                # Column 4: 등락률 (change rate %)
+                change_text = cols[4].get_text(strip=True)
+                change_rate = _parse_change_rate(change_text) if change_text else 0.0
+
+                results.append(StockPerformance(
+                    stock_code=code,
+                    name=name,
+                    change_rate=change_rate,
+                ))
+
+        if results:
+            _stock_perf_cache.data[naver_code] = results
+            _stock_perf_cache.last_updated[naver_code] = now
+            logger.info(f"Fetched performance data for {len(results)} stocks in sector {naver_code}")
+
+        return results
+
+    except Exception as e:
+        logger.error(f"Failed to fetch stock performances for sector {naver_code}: {e}")
+        return _stock_perf_cache.data.get(naver_code, [])
+
+
 async def fetch_sector_stock_codes(naver_code: str) -> list[str]:
     """Fetch stock codes belonging to a Naver sector (for stock-to-sector mapping).
 

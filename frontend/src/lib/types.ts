@@ -20,6 +20,8 @@ export interface Stock {
   stock_code: string;
   keywords: string[] | null;
   created_at: string;
+  change_rate?: number | null;
+  news_count?: number;
 }
 
 export interface NewsRelation {

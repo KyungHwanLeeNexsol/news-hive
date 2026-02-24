@@ -6,7 +6,6 @@ import { fetchSectors, fetchNews, refreshNews } from '@/lib/api';
 import type { Sector, NewsArticle } from '@/lib/types';
 import { formatSectorName } from '@/lib/format';
 import ChangeRate from '@/components/ChangeRate';
-import UpDownBar from '@/components/UpDownBar';
 import LoadingBar from '@/components/LoadingBar';
 
 const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
@@ -32,6 +31,8 @@ function sourceLabel(source: string): string {
       return 'NewsAPI';
     case 'korean_rss':
       return '경제지';
+    case 'us_news':
+      return '미국';
     default:
       return source;
   }
@@ -94,22 +95,21 @@ export default function Dashboard() {
           <table className="naver-table">
             <thead>
               <tr>
-                <th className="text-left" style={{ width: '22%' }}>
+                <th className="text-left" style={{ width: '30%' }}>
                   업종명
                 </th>
-                <th style={{ width: '12%' }}>전일대비</th>
-                <th style={{ width: '8%' }}>전체</th>
-                <th style={{ width: '8%' }}>상승</th>
-                <th style={{ width: '8%' }}>보합</th>
-                <th style={{ width: '8%' }}>하락</th>
-                <th style={{ width: '22%' }}>등락그래프</th>
-                <th style={{ width: '12%' }}>뉴스</th>
+                <th style={{ width: '14%' }}>전일대비</th>
+                <th style={{ width: '10%' }}>전체</th>
+                <th style={{ width: '10%' }}>상승</th>
+                <th style={{ width: '10%' }}>보합</th>
+                <th style={{ width: '10%' }}>하락</th>
+                <th style={{ width: '16%' }}>뉴스</th>
               </tr>
             </thead>
             <tbody>
               {visibleSectors.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="text-center py-8 text-[#999]">
+                  <td colSpan={7} className="text-center py-8 text-[#999]">
                     {loading ? '업종 데이터를 불러오는 중...' : '등록된 업종이 없습니다.'}
                   </td>
                 </tr>
@@ -132,13 +132,6 @@ export default function Dashboard() {
                     <td className="text-center text-rise">{sector.rising_stocks ?? '-'}</td>
                     <td className="text-center text-[#333]">{sector.flat_stocks ?? '-'}</td>
                     <td className="text-center text-fall">{sector.falling_stocks ?? '-'}</td>
-                    <td className="px-2">
-                      <UpDownBar
-                        rising={sector.rising_stocks ?? 0}
-                        flat={sector.flat_stocks ?? 0}
-                        falling={sector.falling_stocks ?? 0}
-                      />
-                    </td>
                     <td className="text-center">
                       <Link href={`/sectors/${sector.id}`} className="text-[#1261c4] hover:underline text-[12px]">
                         뉴스보기

@@ -25,6 +25,7 @@ function sourceLabel(source: string): string {
     case "google": return "구글";
     case "newsapi": return "NewsAPI";
     case "korean_rss": return "경제지";
+    case "us_news": return "미국";
     default: return source;
   }
 }

@@ -7,6 +7,7 @@ import { fetchSector, fetchSectorNews } from "@/lib/api";
 import { formatSectorName } from "@/lib/format";
 import type { Sector, NewsArticle } from "@/lib/types";
 import LoadingBar from "@/components/LoadingBar";
+import ChangeRate from "@/components/ChangeRate";
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return "";
@@ -25,6 +26,7 @@ function sourceLabel(source: string): string {
     case "google": return "구글";
     case "newsapi": return "NewsAPI";
     case "korean_rss": return "경제지";
+    case "us_news": return "미국";
     default: return source;
   }
 }
@@ -90,8 +92,8 @@ export default function SectorDetail() {
               <tr>
                 <th className="text-left" style={{ width: "8%" }}>번호</th>
                 <th className="text-left" style={{ width: "42%" }}>종목명</th>
-                <th style={{ width: "20%" }}>종목코드</th>
-                <th style={{ width: "30%" }}>키워드</th>
+                <th style={{ width: "20%" }}>등락률</th>
+                <th style={{ width: "30%" }}>개별뉴스</th>
               </tr>
             </thead>
             <tbody>
@@ -117,16 +119,19 @@ export default function SectorDetail() {
                         {stock.name}
                       </Link>
                     </td>
-                    <td className="text-center text-[#666]">{stock.stock_code}</td>
                     <td className="text-center">
-                      {stock.keywords && stock.keywords.length > 0 ? (
-                        <div className="flex flex-wrap gap-1 justify-center">
-                          {stock.keywords.map((kw, j) => (
-                            <span key={j} className="badge badge-market">{kw}</span>
-                          ))}
-                        </div>
+                      <ChangeRate value={stock.change_rate} />
+                    </td>
+                    <td className="text-center">
+                      {(stock.news_count ?? 0) > 0 ? (
+                        <Link
+                          href={`/stocks/${stock.id}`}
+                          className="text-[#1261c4] hover:underline text-[12px]"
+                        >
+                          {stock.news_count}건
+                        </Link>
                       ) : (
-                        <span className="text-[#ccc]">-</span>
+                        <span className="text-[#ccc] text-[12px]">-</span>
                       )}
                     </td>
                   </tr>

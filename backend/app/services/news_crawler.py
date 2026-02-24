@@ -11,6 +11,7 @@ from app.services.crawlers.naver import search_naver_news
 from app.services.crawlers.google import search_google_news
 from app.services.crawlers.newsapi import search_newsapi
 from app.services.crawlers.korean_rss import fetch_korean_rss_feeds
+from app.services.ai_classifier import _extract_sector_keywords
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +31,16 @@ def _build_search_queries(db: Session, sectors: list[Sector], stocks: list[Stock
     queries: set[str] = set()
 
     # 1) ALL sectors with stocks — guaranteed every cycle
+    #    Also add sub-keywords from compound names (e.g. "반도체와반도체장비" → "반도체", "반도체장비")
     sectors_with_stocks = [
         sector for sector in sectors
         if db.query(Stock.id).filter(Stock.sector_id == sector.id).first()
     ]
     for sector in sectors_with_stocks:
         queries.add(sector.name)
+        for kw in _extract_sector_keywords(sector.name):
+            if kw != sector.name.lower():
+                queries.add(kw)
 
     # 2) Stocks with custom keywords — always included
     keyword_stocks = [s for s in stocks if s.keywords]
@@ -87,7 +92,7 @@ def _resolve_query_relations(
             })
             matched_sector_ids.add(stock.sector_id)
 
-    # Check if query matches a sector name
+    # Check if query matches a sector name (exact or sub-keyword)
     for sector in sectors:
         if sector.id in matched_sector_ids:
             continue
@@ -97,6 +102,13 @@ def _resolve_query_relations(
                 "sector_id": sector.id,
                 "match_type": "keyword",
                 "relevance": "direct",
+            })
+        elif query.lower() in _extract_sector_keywords(sector.name):
+            results.append({
+                "stock_id": None,
+                "sector_id": sector.id,
+                "match_type": "keyword",
+                "relevance": "indirect",
             })
 
     return results
@@ -110,7 +122,7 @@ async def crawl_all_news(db: Session) -> int:
     logger.info(f"DB state: {len(sectors)} sectors, {len(stocks)} stocks")
 
     all_raw_articles: list[dict] = []
-    source_counts: dict[str, int] = {"naver": 0, "google": 0, "newsapi": 0, "korean_rss": 0}
+    source_counts: dict[str, int] = {"naver": 0, "google": 0, "newsapi": 0, "korean_rss": 0, "us_news": 0}
 
     # Phase 1: Fetch Korean financial RSS feeds (once per cycle, not per query)
     try:
@@ -122,6 +134,27 @@ async def crawl_all_news(db: Session) -> int:
         source_counts["korean_rss"] = len(korean_rss_articles)
     except Exception as e:
         logger.warning(f"Korean RSS feeds failed: {e}")
+
+    # Phase 1.5: US industry news (sector-level, English)
+    try:
+        from app.services.crawlers.us_news import fetch_us_industry_news
+
+        sector_names_with_stocks = [
+            sector.name for sector in sectors
+            if db.query(Stock.id).filter(Stock.sector_id == sector.id).first()
+        ]
+        sector_by_name = {s.name: s for s in sectors}
+        us_results = await fetch_us_industry_news(sector_names_with_stocks)
+
+        for sector_name, articles in us_results:
+            sector = sector_by_name.get(sector_name)
+            for a in articles:
+                a["_query"] = None
+                a["_us_sector_id"] = sector.id if sector else None
+            all_raw_articles.extend(articles)
+            source_counts["us_news"] += len(articles)
+    except Exception as e:
+        logger.warning(f"US news fetch failed: {e}")
 
     # Phase 2: Query-based search across all sources
     search_queries = _build_search_queries(db, sectors, stocks)
@@ -237,6 +270,16 @@ async def _save_article_with_classification(
     query_relations = []
     if query:
         query_relations = _resolve_query_relations(query, sectors, stocks)
+
+    # Phase 1.5: US sector-level auto-tagging
+    us_sector_id = article_data.get("_us_sector_id")
+    if us_sector_id:
+        query_relations.append({
+            "stock_id": None,
+            "sector_id": us_sector_id,
+            "match_type": "keyword",
+            "relevance": "indirect",
+        })
 
     # Phase 2+3: Keyword + AI classification (may find additional relations)
     ai_relations = await classify_news(article_data["title"], sectors, stocks)

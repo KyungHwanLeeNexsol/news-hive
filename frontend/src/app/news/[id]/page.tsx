@@ -26,6 +26,7 @@ function sourceLabel(source: string): string {
     case 'google': return '구글';
     case 'newsapi': return 'NewsAPI';
     case 'korean_rss': return '경제지';
+    case 'us_news': return '미국';
     default: return source;
   }
 }
@@ -61,6 +62,7 @@ export default function NewsDetail() {
   const [articleContent, setArticleContent] = useState<string | null>(null);
   const [contentLoading, setContentLoading] = useState(false);
   const [contentFailed, setContentFailed] = useState(false);
+  const [bodyOpen, setBodyOpen] = useState(false);
 
   useEffect(() => {
     if (!newsId) return;
@@ -79,21 +81,9 @@ export default function NewsDetail() {
             .finally(() => setSummaryLoading(false));
         }
 
-        // Article content: use cached or scrape
+        // Article content: use cached only (scraping deferred to when user opens body)
         if (data.content) {
           setArticleContent(data.content);
-        } else {
-          setContentLoading(true);
-          scrapeArticleContent(newsId)
-            .then((result) => {
-              if (result.content) {
-                setArticleContent(result.content);
-              } else {
-                setContentFailed(true);
-              }
-            })
-            .catch(() => setContentFailed(true))
-            .finally(() => setContentLoading(false));
         }
       })
       .catch(() => {});
@@ -199,45 +189,76 @@ export default function NewsDetail() {
             )}
           </div>
 
-          {/* Article content */}
-          <div className="mb-5">
-            <div className="text-[13px] font-bold text-[#333] mb-3">기사 본문</div>
-            {contentLoading ? (
-              <div className="p-6 text-center text-[13px] text-[#999] bg-[#fafafa] rounded-md border border-[#eee]">
-                <span className="inline-block w-3.5 h-3.5 border-2 border-[#999] border-t-transparent rounded-full animate-spin mr-2 align-middle" />
-                기사 본문을 가져오고 있습니다...
-              </div>
-            ) : articleContent ? (
-              <div className="p-4 bg-[#fafafa] rounded-md border border-[#eee] text-[13px] text-[#333] leading-[2] whitespace-pre-line max-h-[600px] overflow-y-auto">
-                {articleContent}
-              </div>
-            ) : contentFailed ? (
-              <div className="p-6 text-center bg-[#fafafa] rounded-md border border-[#eee]">
-                <div className="text-[13px] text-[#999] mb-3">
-                  해당 뉴스 사이트에서 본문을 가져올 수 없습니다.
-                </div>
-                <a
-                  href={article.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 px-4 py-2 bg-[#1261c4] text-white text-[13px] rounded-md hover:bg-[#0e4fa0] transition-colors"
-                >
-                  원문 사이트에서 보기 &rsaquo;
-                </a>
-              </div>
-            ) : null}
-          </div>
-
           {/* Link to original article */}
-          <div className="pt-4 border-t border-[#f0f0f0]">
+          <div className="mb-5">
             <a
               href={article.url}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 text-[13px] text-[#1261c4] hover:underline"
             >
-              원문 기사 보기 &rsaquo;
+              기사 원문 보기 &rsaquo;
             </a>
+          </div>
+
+          {/* Article content (collapsible) */}
+          <div className="mb-5">
+            <button
+              onClick={() => {
+                const opening = !bodyOpen;
+                setBodyOpen(opening);
+                if (opening && !articleContent && !contentLoading && !contentFailed) {
+                  setContentLoading(true);
+                  scrapeArticleContent(newsId)
+                    .then((result) => {
+                      if (result.content) {
+                        setArticleContent(result.content);
+                      } else {
+                        setContentFailed(true);
+                      }
+                    })
+                    .catch(() => setContentFailed(true))
+                    .finally(() => setContentLoading(false));
+                }
+              }}
+              className="flex items-center gap-2 text-[13px] font-bold text-[#333] cursor-pointer hover:text-[#1261c4]"
+            >
+              <span
+                className="inline-block transition-transform duration-200"
+                style={{ transform: bodyOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}
+              >
+                &#9654;
+              </span>
+              기사 본문
+            </button>
+            {bodyOpen && (
+              <div className="mt-3">
+                {contentLoading ? (
+                  <div className="p-6 text-center text-[13px] text-[#999] bg-[#fafafa] rounded-md border border-[#eee]">
+                    <span className="inline-block w-3.5 h-3.5 border-2 border-[#999] border-t-transparent rounded-full animate-spin mr-2 align-middle" />
+                    기사 본문을 가져오고 있습니다...
+                  </div>
+                ) : articleContent ? (
+                  <div className="p-4 bg-[#fafafa] rounded-md border border-[#eee] text-[13px] text-[#333] leading-[2] whitespace-pre-line max-h-[600px] overflow-y-auto">
+                    {articleContent}
+                  </div>
+                ) : contentFailed ? (
+                  <div className="p-6 text-center bg-[#fafafa] rounded-md border border-[#eee]">
+                    <div className="text-[13px] text-[#999] mb-3">
+                      해당 뉴스 사이트에서 본문을 가져올 수 없습니다.
+                    </div>
+                    <a
+                      href={article.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-4 py-2 bg-[#1261c4] text-white text-[13px] rounded-md hover:bg-[#0e4fa0] transition-colors"
+                    >
+                      원문 사이트에서 보기 &rsaquo;
+                    </a>
+                  </div>
+                ) : null}
+              </div>
+            )}
           </div>
         </div>
       </div>

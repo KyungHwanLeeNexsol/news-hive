@@ -12,6 +12,8 @@ class StockInSector(BaseModel):
     name: str
     stock_code: str
     keywords: list[str] | None = None
+    change_rate: float | None = None
+    news_count: int = 0
 
     model_config = {"from_attributes": True}
 
