@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { fetchStockNews } from '@/lib/api';
 import { formatSectorName } from '@/lib/format';
 import type { NewsArticle } from '@/lib/types';
+import LoadingBar from '@/components/LoadingBar';
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return '';
@@ -49,15 +50,19 @@ export default function StockDetail() {
   const stockId = Number(params.id);
 
   const [news, setNews] = useState<NewsArticle[]>([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!stockId) return;
     fetchStockNews(stockId)
       .then(setNews)
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setLoading(false));
   }, [stockId]);
 
   return (
+    <>
+    <LoadingBar loading={loading} />
     <div>
       {/* Breadcrumb */}
       <div className="flex items-center gap-1 text-[12px] text-[#999] mb-3">
@@ -129,5 +134,6 @@ export default function StockDetail() {
         )}
       </div>
     </div>
+    </>
   );
 }

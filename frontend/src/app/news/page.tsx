@@ -5,6 +5,7 @@ import Link from "next/link";
 import { fetchNews, refreshNews } from "@/lib/api";
 import { formatSectorName } from "@/lib/format";
 import type { NewsArticle } from "@/lib/types";
+import LoadingBar from "@/components/LoadingBar";
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return "";
@@ -39,9 +40,10 @@ function sentimentLabel(sentiment: string | null): { text: string; className: st
 export default function NewsPage() {
   const [news, setNews] = useState<NewsArticle[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchNews().then(setNews).catch(() => {});
+    fetchNews().then(setNews).catch(() => {}).finally(() => setLoading(false));
   }, []);
 
   async function handleRefresh() {
@@ -58,6 +60,8 @@ export default function NewsPage() {
   }
 
   return (
+    <>
+    <LoadingBar loading={loading} />
     <div className="section-box">
       <div className="section-title">
         <span>전체 뉴스</span>
@@ -83,7 +87,7 @@ export default function NewsPage() {
           {news.length === 0 ? (
             <tr>
               <td colSpan={5} className="text-center py-8 text-[#999]">
-                수집된 뉴스가 없습니다. 뉴스 새로고침을 눌러주세요.
+                {loading ? '뉴스를 불러오는 중...' : '수집된 뉴스가 없습니다. 뉴스 새로고침을 눌러주세요.'}
               </td>
             </tr>
           ) : (
@@ -134,5 +138,6 @@ export default function NewsPage() {
         </tbody>
       </table>
     </div>
+    </>
   );
 }

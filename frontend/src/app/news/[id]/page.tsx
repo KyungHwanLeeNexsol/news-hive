@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { fetchNewsById, generateAiSummary, scrapeArticleContent } from '@/lib/api';
 import { formatSectorName } from '@/lib/format';
 import type { NewsArticle } from '@/lib/types';
+import LoadingBar from '@/components/LoadingBar';
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return '';
@@ -100,7 +101,10 @@ export default function NewsDetail() {
 
   if (!article) {
     return (
-      <div className="section-box p-8 text-center text-[#999]">로딩 중...</div>
+      <>
+        <LoadingBar loading={true} />
+        <div className="section-box p-8 text-center text-[#999]">로딩 중...</div>
+      </>
     );
   }
 

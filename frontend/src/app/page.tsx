@@ -7,6 +7,7 @@ import type { Sector, NewsArticle } from '@/lib/types';
 import { formatSectorName } from '@/lib/format';
 import ChangeRate from '@/components/ChangeRate';
 import UpDownBar from '@/components/UpDownBar';
+import LoadingBar from '@/components/LoadingBar';
 
 const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
@@ -40,14 +41,14 @@ export default function Dashboard() {
   const [sectors, setSectors] = useState<Sector[]>([]);
   const [news, setNews] = useState<NewsArticle[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   const loadData = useCallback(() => {
-    fetchSectors()
-      .then(setSectors)
-      .catch(() => {});
-    fetchNews()
-      .then(setNews)
-      .catch(() => {});
+    setLoading(true);
+    Promise.all([
+      fetchSectors().then(setSectors).catch(() => {}),
+      fetchNews().then(setNews).catch(() => {}),
+    ]).finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
@@ -77,6 +78,8 @@ export default function Dashboard() {
 
   return (
     <div className="flex gap-4">
+      <LoadingBar loading={loading} />
+
       {/* Left: Sector table */}
       <div className="flex-1 min-w-0">
         <div className="section-box">
@@ -105,7 +108,7 @@ export default function Dashboard() {
               {visibleSectors.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="text-center py-8 text-[#999]">
-                    등록된 업종이 없습니다.
+                    {loading ? '업종 데이터를 불러오는 중...' : '등록된 업종이 없습니다.'}
                   </td>
                 </tr>
               ) : (
@@ -162,7 +165,9 @@ export default function Dashboard() {
           </div>
           <div>
             {news.length === 0 ? (
-              <div className="py-8 text-center text-[13px] text-[#999]">수집된 뉴스가 없습니다.</div>
+              <div className="py-8 text-center text-[13px] text-[#999]">
+                {loading ? '뉴스를 불러오는 중...' : '수집된 뉴스가 없습니다.'}
+              </div>
             ) : (
               news.slice(0, 20).map((article) => (
                 <div key={article.id} className="news-item">
