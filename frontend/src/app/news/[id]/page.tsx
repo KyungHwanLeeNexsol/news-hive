@@ -136,26 +136,47 @@ export default function NewsDetail() {
         {/* Body area */}
         <div className="p-5">
           {/* Related stocks/sectors */}
-          {article.relations.length > 0 && (
-            <div className="mb-5">
-              <div className="text-[12px] font-semibold text-[#666] mb-2">관련 종목/섹터</div>
-              <div className="flex flex-wrap gap-1.5">
-                {article.relations.map((rel, i) => (
-                  <Link
-                    key={i}
-                    href={
-                      rel.stock_id
-                        ? `/stocks/${rel.stock_id}`
-                        : `/sectors/${rel.sector_id}`
-                    }
-                    className={`badge ${rel.relevance === 'direct' ? 'badge-direct' : 'badge-indirect'} hover:opacity-80 px-2 py-0.5`}
-                  >
-                    {rel.stock_name || rel.sector_name}
-                  </Link>
-                ))}
+          {article.relations.length > 0 && (() => {
+            // Deduplicate: collect unique sectors and stocks
+            const sectorMap = new Map<number, { name: string; relevance: string }>();
+            const stockMap = new Map<number, { name: string; relevance: string; sectorId: number | null }>();
+            for (const rel of article.relations) {
+              if (rel.sector_id && rel.sector_name && !sectorMap.has(rel.sector_id)) {
+                sectorMap.set(rel.sector_id, { name: rel.sector_name, relevance: rel.relevance });
+              }
+              if (rel.stock_id && rel.stock_name && !stockMap.has(rel.stock_id)) {
+                stockMap.set(rel.stock_id, { name: rel.stock_name, relevance: rel.relevance, sectorId: rel.sector_id });
+              }
+            }
+            const sectors = Array.from(sectorMap.entries());
+            const stocks = Array.from(stockMap.entries());
+
+            return (
+              <div className="mb-5">
+                <div className="text-[12px] font-semibold text-[#666] mb-2">관련 종목/섹터</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {sectors.map(([id, s]) => (
+                    <Link
+                      key={`sector-${id}`}
+                      href={`/sectors/${id}`}
+                      className="badge badge-indirect hover:opacity-80 px-2 py-0.5"
+                    >
+                      {s.name}
+                    </Link>
+                  ))}
+                  {stocks.map(([id, s]) => (
+                    <Link
+                      key={`stock-${id}`}
+                      href={`/stocks/${id}`}
+                      className={`badge ${s.relevance === 'direct' ? 'badge-direct' : 'badge-indirect'} hover:opacity-80 px-2 py-0.5`}
+                    >
+                      {s.name}
+                    </Link>
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* AI Summary */}
           <div className="mb-5 p-4 bg-[#f0f7ff] rounded-md border border-[#d0e3f7]">

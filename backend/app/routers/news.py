@@ -139,13 +139,47 @@ async def scrape_content(news_id: int, db: Session = Depends(get_db)):
     if not article.content:
         from app.services.article_scraper import scrape_article_content
 
-        content = await scrape_article_content(article.url)
+        # Resolve Google News redirect URL if needed
+        url = article.url
+        if "news.google.com" in url:
+            url = await _resolve_google_url(url)
+            if url != article.url:
+                article.url = url
+                db.flush()
+
+        content = await scrape_article_content(url)
         if content:
             article.content = content
             db.commit()
             db.refresh(article)
+        else:
+            db.commit()  # save resolved URL even if scraping fails
 
     return format_articles([article])[0]
+
+
+async def _resolve_google_url(url: str) -> str:
+    """Resolve a Google News redirect URL to the actual article URL."""
+    import re
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            resp = await client.head(url, follow_redirects=True)
+            final_url = str(resp.url)
+            if "news.google.com" not in final_url:
+                return final_url
+            # Fallback: GET and parse HTML
+            resp = await client.get(url, follow_redirects=True)
+            final_url = str(resp.url)
+            if "news.google.com" not in final_url:
+                return final_url
+            match = re.search(r'data-n-au="([^"]+)"', resp.text)
+            if match:
+                return match.group(1)
+    except Exception:
+        pass
+    return url
 
 
 async def _classify_article_on_demand(article: NewsArticle, db: Session) -> None:
