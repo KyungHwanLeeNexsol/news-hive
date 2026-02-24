@@ -191,16 +191,18 @@ export default function NewsDetail() {
                 {articleContent}
               </div>
             ) : contentFailed ? (
-              <div className="rounded-md border border-[#eee] overflow-hidden">
-                <div className="px-4 py-2 bg-[#fafafa] text-[12px] text-[#999] border-b border-[#eee]">
-                  본문을 직접 가져올 수 없어 원문 페이지를 표시합니다.
+              <div className="p-6 text-center bg-[#fafafa] rounded-md border border-[#eee]">
+                <div className="text-[13px] text-[#999] mb-3">
+                  해당 뉴스 사이트에서 본문을 가져올 수 없습니다.
                 </div>
-                <iframe
-                  src={article.url}
-                  className="w-full h-[600px] border-0"
-                  sandbox="allow-same-origin allow-scripts"
-                  title="원문 기사"
-                />
+                <a
+                  href={article.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 px-4 py-2 bg-[#1261c4] text-white text-[13px] rounded-md hover:bg-[#0e4fa0] transition-colors"
+                >
+                  원문 사이트에서 보기 &rsaquo;
+                </a>
               </div>
             ) : null}
           </div>

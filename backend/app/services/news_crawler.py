@@ -153,9 +153,13 @@ async def _save_article_with_classification(
     sectors: list[Sector],
     stocks: list[Stock],
 ) -> bool:
-    """Save a single article with keyword-based classification."""
+    """Save a single article with keyword + AI classification.
+
+    Uses classify_news which first tries fast keyword matching, then
+    falls back to Gemini AI so every article gets at least one sector tag.
+    """
     from app.models.news_relation import NewsStockRelation
-    from app.services.ai_classifier import _keyword_fallback, classify_sentiment
+    from app.services.ai_classifier import classify_news, classify_sentiment
 
     article = NewsArticle(
         title=article_data["title"],
@@ -172,7 +176,7 @@ async def _save_article_with_classification(
         db.rollback()
         return False
 
-    classifications = _keyword_fallback(article_data["title"], sectors, stocks)
+    classifications = await classify_news(article_data["title"], sectors, stocks)
 
     for cls in classifications:
         relation = NewsStockRelation(

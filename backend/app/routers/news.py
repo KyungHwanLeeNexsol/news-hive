@@ -164,11 +164,12 @@ def _backfill_sentiment(db: Session) -> None:
 async def _reclassify_unlinked(db: Session) -> int:
     """Reclassify articles that have no news_stock_relations.
 
-    Uses keyword matching only (no AI API calls) for speed.
+    Uses keyword matching first, then AI classification as fallback
+    so every article gets at least one sector tag.
     """
     from app.models.sector import Sector
     from app.models.stock import Stock
-    from app.services.ai_classifier import _keyword_fallback
+    from app.services.ai_classifier import classify_news
 
     # Find articles with no relations
     articles_with_rels = db.query(NewsStockRelation.news_id).distinct()
@@ -180,7 +181,7 @@ async def _reclassify_unlinked(db: Session) -> int:
     if not unlinked:
         return 0
 
-    logger.info(f"Reclassifying {len(unlinked)} unlinked articles (keyword-only)")
+    logger.info(f"Reclassifying {len(unlinked)} unlinked articles (keyword + AI)")
 
     sectors = db.query(Sector).all()
     stocks = db.query(Stock).all()
@@ -188,7 +189,7 @@ async def _reclassify_unlinked(db: Session) -> int:
 
     for article in unlinked:
         try:
-            classifications = _keyword_fallback(article.title, sectors, stocks)
+            classifications = await classify_news(article.title, sectors, stocks)
             for cls in classifications:
                 db.add(NewsStockRelation(
                     news_id=article.id,
