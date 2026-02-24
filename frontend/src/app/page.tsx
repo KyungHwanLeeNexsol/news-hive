@@ -71,9 +71,9 @@ export default function Dashboard() {
     }
   }
 
-  // Filter: only show sectors that have stocks in our DB
-  const visibleSectors = sectors.filter((s) => (s.stock_count ?? 0) > 0);
-  const totalStocks = visibleSectors.reduce((sum, s) => sum + (s.stock_count ?? 0), 0);
+  // Show all sectors (backend already sorts by change_rate desc)
+  const visibleSectors = sectors;
+  const totalStocks = visibleSectors.reduce((sum, s) => sum + (s.total_stocks ?? s.stock_count ?? 0), 0);
 
   return (
     <div className="flex gap-4">
@@ -123,7 +123,7 @@ export default function Dashboard() {
                     <td className="text-center">
                       <ChangeRate value={sector.change_rate} />
                     </td>
-                    <td className="text-center text-[#333]">{sector.stock_count ?? 0}</td>
+                    <td className="text-center text-[#333]">{sector.total_stocks ?? sector.stock_count ?? 0}</td>
                     <td className="text-center text-rise">{sector.rising_stocks ?? '-'}</td>
                     <td className="text-center text-[#333]">{sector.flat_stocks ?? '-'}</td>
                     <td className="text-center text-fall">{sector.falling_stocks ?? '-'}</td>
