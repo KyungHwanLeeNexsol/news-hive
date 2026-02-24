@@ -21,5 +21,6 @@ class NewsArticle(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     sentiment: Mapped[str | None] = mapped_column(String(10), nullable=True)  # 'positive' | 'negative' | 'neutral'
+    ai_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     relations = relationship("NewsStockRelation", back_populates="news", cascade="all, delete-orphan")

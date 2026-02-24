@@ -213,6 +213,49 @@ def classify_sentiment(title: str) -> str:
     return "neutral"
 
 
+async def generate_ai_summary(title: str, description: str | None, relations: list[dict]) -> str | None:
+    """Generate an AI investment analysis summary for a news article.
+
+    Uses Gemini 2.0 Flash to produce a Korean-language investment analysis.
+    """
+    if not settings.GEMINI_API_KEY:
+        return None
+
+    related_entities = []
+    for rel in relations:
+        name = rel.get("stock_name") or rel.get("sector_name") or ""
+        rel_type = "직접" if rel.get("relevance") == "direct" else "간접"
+        if name:
+            related_entities.append(f"{name} ({rel_type})")
+
+    related_text = ", ".join(related_entities) if related_entities else "없음"
+    desc_text = description if description else "없음"
+
+    prompt = f"""다음 뉴스 기사를 투자자 관점에서 분석해주세요.
+
+제목: "{title}"
+기사 요약: {desc_text}
+관련 종목/섹터: {related_text}
+
+다음 내용을 포함하여 3-5문장으로 분석해주세요:
+1. 기사의 핵심 내용
+2. 관련 종목/섹터에 미칠 수 있는 영향
+3. 투자자가 주목해야 할 포인트
+
+한국어로 작성해주세요. 마크다운 없이 일반 텍스트로 응답해주세요."""
+
+    try:
+        client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
+        )
+        return response.text.strip()
+    except Exception as e:
+        logger.warning(f"AI summary generation failed: {e}")
+        return None
+
+
 def _extract_sector_keywords(sector_name: str) -> list[str]:
     """Extract meaningful keywords from sector name for matching.
 

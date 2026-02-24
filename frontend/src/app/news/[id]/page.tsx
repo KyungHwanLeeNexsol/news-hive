@@ -1,0 +1,161 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useParams } from 'next/navigation';
+import Link from 'next/link';
+import { fetchNewsById, generateAiSummary } from '@/lib/api';
+import type { NewsArticle } from '@/lib/types';
+
+function formatDate(dateStr: string | null): string {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  return d.toLocaleDateString('ko-KR', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function sourceLabel(source: string): string {
+  switch (source) {
+    case 'naver': return '네이버';
+    case 'google': return '구글';
+    case 'newsapi': return 'NewsAPI';
+    case 'korean_rss': return '경제지';
+    default: return source;
+  }
+}
+
+function sentimentLabel(sentiment: string | null): { text: string; className: string } {
+  switch (sentiment) {
+    case 'positive': return { text: '호재', className: 'badge-positive' };
+    case 'negative': return { text: '악재', className: 'badge-negative' };
+    default: return { text: '중립', className: 'badge-neutral' };
+  }
+}
+
+export default function NewsDetail() {
+  const params = useParams();
+  const newsId = Number(params.id);
+  const [article, setArticle] = useState<NewsArticle | null>(null);
+  const [aiSummary, setAiSummary] = useState<string | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+
+  useEffect(() => {
+    if (!newsId) return;
+    fetchNewsById(newsId)
+      .then((data) => {
+        setArticle(data);
+        if (data.ai_summary) {
+          setAiSummary(data.ai_summary);
+        } else {
+          setSummaryLoading(true);
+          generateAiSummary(newsId)
+            .then((result) => setAiSummary(result.ai_summary))
+            .catch(() => {})
+            .finally(() => setSummaryLoading(false));
+        }
+      })
+      .catch(() => {});
+  }, [newsId]);
+
+  if (!article) {
+    return (
+      <div className="section-box p-8 text-center text-[#999]">로딩 중...</div>
+    );
+  }
+
+  const sentiment = sentimentLabel(article.sentiment);
+
+  return (
+    <div>
+      {/* Breadcrumb */}
+      <div className="flex items-center gap-1 text-[12px] text-[#999] mb-3">
+        <Link href="/news" className="hover:text-[#333] hover:underline">
+          전체 뉴스
+        </Link>
+        <span>&rsaquo;</span>
+        <span className="text-[#333] font-medium truncate max-w-[400px]">
+          {article.title}
+        </span>
+      </div>
+
+      <div className="section-box">
+        {/* Title */}
+        <h1 className="text-[16px] font-bold text-[#333] leading-snug mb-3">
+          {article.title}
+        </h1>
+
+        {/* Metadata badges */}
+        <div className="flex flex-wrap items-center gap-2 mb-4 text-[12px]">
+          <span className={`badge ${sentiment.className}`}>{sentiment.text}</span>
+          <span className="badge badge-source">{sourceLabel(article.source)}</span>
+          <span className="text-[#999]">{formatDate(article.published_at)}</span>
+        </div>
+
+        {/* Related stocks/sectors */}
+        {article.relations.length > 0 && (
+          <div className="mb-4">
+            <div className="text-[12px] text-[#999] mb-1">관련 종목/섹터</div>
+            <div className="flex flex-wrap gap-1">
+              {article.relations.map((rel, i) => (
+                <Link
+                  key={i}
+                  href={
+                    rel.stock_id
+                      ? `/stocks/${rel.stock_id}`
+                      : `/sectors/${rel.sector_id}`
+                  }
+                  className={`badge ${rel.relevance === 'direct' ? 'badge-direct' : 'badge-indirect'} hover:opacity-80`}
+                >
+                  {rel.stock_name || rel.sector_name}
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Crawler description */}
+        {article.summary && (
+          <div className="mb-4 p-3 bg-[#f9f9f9] rounded text-[13px] text-[#555] leading-relaxed">
+            {article.summary}
+          </div>
+        )}
+
+        {/* AI Summary */}
+        <div className="mb-4 p-4 bg-[#f0f7ff] rounded border border-[#d0e3f7]">
+          <div className="text-[13px] font-semibold text-[#1261c4] mb-2">
+            AI 분석 요약
+          </div>
+          {summaryLoading ? (
+            <div className="text-[13px] text-[#999]">
+              AI 요약을 생성하고 있습니다...
+            </div>
+          ) : aiSummary ? (
+            <div className="text-[13px] text-[#333] leading-relaxed whitespace-pre-line">
+              {aiSummary}
+            </div>
+          ) : (
+            <div className="text-[13px] text-[#999]">
+              AI 요약을 생성할 수 없습니다.
+            </div>
+          )}
+        </div>
+
+        {/* Link to original article */}
+        <div className="pt-3 border-t border-[#f0f0f0]">
+          <a
+            href={article.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[13px] text-[#1261c4] hover:underline"
+          >
+            원문 기사 보기 &rsaquo;
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+}

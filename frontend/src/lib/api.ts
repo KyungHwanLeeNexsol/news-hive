@@ -59,6 +59,18 @@ export async function fetchStockNews(id: number): Promise<NewsArticle[]> {
   return res.json();
 }
 
+export async function fetchNewsById(id: number): Promise<NewsArticle> {
+  const res = await fetch(`${API_BASE}/news/${id}`);
+  if (!res.ok) throw new Error("Failed to fetch news article");
+  return res.json();
+}
+
+export async function generateAiSummary(id: number): Promise<NewsArticle> {
+  const res = await fetch(`${API_BASE}/news/${id}/summary`, { method: "POST" });
+  if (!res.ok) throw new Error("Failed to generate AI summary");
+  return res.json();
+}
+
 export async function fetchNews(): Promise<NewsArticle[]> {
   const res = await fetch(`${API_BASE}/news`);
   if (!res.ok) throw new Error("Failed to fetch news");

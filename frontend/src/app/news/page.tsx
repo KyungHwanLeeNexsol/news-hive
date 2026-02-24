@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { fetchNews, refreshNews } from "@/lib/api";
 import type { NewsArticle } from "@/lib/types";
 
@@ -90,14 +91,12 @@ export default function NewsPage() {
               return (
                 <tr key={article.id}>
                   <td>
-                    <a
-                      href={article.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    <Link
+                      href={`/news/${article.id}`}
                       className="text-[#333] hover:text-[#03c75a] hover:underline"
                     >
                       {article.title}
-                    </a>
+                    </Link>
                     {article.summary && (
                       <p className="text-[11px] text-[#999] mt-0.5 truncate max-w-[500px]">
                         {article.summary}

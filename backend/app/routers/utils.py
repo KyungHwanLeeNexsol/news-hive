@@ -25,6 +25,7 @@ def format_articles(articles: list[NewsArticle]) -> list[NewsArticleResponse]:
                 id=article.id,
                 title=article.title,
                 summary=article.summary,
+                ai_summary=article.ai_summary,
                 url=article.url,
                 source=article.source,
                 sentiment=article.sentiment,

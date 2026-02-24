@@ -166,14 +166,12 @@ export default function Dashboard() {
               news.slice(0, 20).map((article) => (
                 <div key={article.id} className="news-item">
                   <div className="flex-1 min-w-0">
-                    <a
-                      href={article.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    <Link
+                      href={`/news/${article.id}`}
                       className="news-title block truncate"
                     >
                       {article.title}
-                    </a>
+                    </Link>
                     <div className="news-meta flex items-center gap-2">
                       <span className="badge badge-source">{sourceLabel(article.source)}</span>
                       {article.relations.slice(0, 2).map((rel, i) => (

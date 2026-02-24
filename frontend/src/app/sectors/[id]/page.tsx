@@ -69,16 +69,16 @@ export default function SectorDetail() {
       {/* Tab nav */}
       <div className="tab-nav">
         <button
-          className={`tab-item ${tab === "stocks" ? "active" : ""}`}
-          onClick={() => setTab("stocks")}
-        >
-          종목 ({sector.stocks?.length ?? 0})
-        </button>
-        <button
           className={`tab-item ${tab === "news" ? "active" : ""}`}
           onClick={() => setTab("news")}
         >
           뉴스 ({news.length})
+        </button>
+        <button
+          className={`tab-item ${tab === "stocks" ? "active" : ""}`}
+          onClick={() => setTab("stocks")}
+        >
+          종목 ({sector.stocks?.length ?? 0})
         </button>
       </div>
 
@@ -158,14 +158,12 @@ export default function SectorDetail() {
                   return (
                     <tr key={article.id}>
                       <td>
-                        <a
-                          href={article.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
+                        <Link
+                          href={`/news/${article.id}`}
                           className="text-[#333] hover:text-[#03c75a] hover:underline"
                         >
                           {article.title}
-                        </a>
+                        </Link>
                       </td>
                       <td className="text-center">
                         <span className={`badge ${sentiment.className}`}>

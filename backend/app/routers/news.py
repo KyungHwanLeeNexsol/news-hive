@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session, subqueryload
 
 from app.database import get_db, SessionLocal
@@ -30,6 +30,22 @@ async def list_news(limit: int = 50, db: Session = Depends(get_db)):
     return format_articles(articles)
 
 
+@router.get("/{news_id}", response_model=NewsArticleResponse)
+async def get_news_detail(news_id: int, db: Session = Depends(get_db)):
+    article = (
+        db.query(NewsArticle)
+        .options(
+            subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.stock),
+            subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.sector),
+        )
+        .filter(NewsArticle.id == news_id)
+        .first()
+    )
+    if not article:
+        raise HTTPException(status_code=404, detail="News article not found")
+    return format_articles([article])[0]
+
+
 @router.post("/refresh")
 async def refresh_news(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     # Quick synchronous reclassify (keyword-only, instant)
@@ -47,6 +63,46 @@ async def refresh_news(background_tasks: BackgroundTasks, db: Session = Depends(
         "reclassified": reclassified,
         "total": total,
     }
+
+
+@router.post("/{news_id}/summary", response_model=NewsArticleResponse)
+async def generate_summary(news_id: int, db: Session = Depends(get_db)):
+    """Generate AI summary for a news article (lazy, cached in DB)."""
+    article = (
+        db.query(NewsArticle)
+        .options(
+            subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.stock),
+            subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.sector),
+        )
+        .filter(NewsArticle.id == news_id)
+        .first()
+    )
+    if not article:
+        raise HTTPException(status_code=404, detail="News article not found")
+
+    if not article.ai_summary:
+        from app.services.ai_classifier import generate_ai_summary
+
+        relations_context = []
+        for rel in article.relations:
+            relations_context.append({
+                "stock_name": rel.stock.name if rel.stock else None,
+                "sector_name": rel.sector.name if rel.sector else None,
+                "relevance": rel.relevance,
+            })
+
+        ai_summary = await generate_ai_summary(
+            title=article.title,
+            description=article.summary,
+            relations=relations_context,
+        )
+
+        if ai_summary:
+            article.ai_summary = ai_summary
+            db.commit()
+            db.refresh(article)
+
+    return format_articles([article])[0]
 
 
 async def _run_crawl_background():
