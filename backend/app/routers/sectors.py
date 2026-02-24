@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, subqueryload
 
 from app.database import get_db
 from app.models.sector import Sector
@@ -8,7 +8,8 @@ from app.models.stock import Stock
 from app.models.news import NewsArticle
 from app.models.news_relation import NewsStockRelation
 from app.schemas.sector import SectorCreate, SectorResponse, SectorDetailResponse
-from app.schemas.news import NewsArticleResponse, NewsRelationResponse
+from app.schemas.news import NewsArticleResponse
+from app.routers.utils import format_articles
 
 router = APIRouter(prefix="/api/sectors", tags=["sectors"])
 
@@ -111,41 +112,14 @@ async def get_sector_news(sector_id: int, db: Session = Depends(get_db)):
 
     articles = (
         db.query(NewsArticle)
-        .options(joinedload(NewsArticle.relations))
+        .options(
+            subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.stock),
+            subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.sector),
+        )
         .filter(NewsArticle.id.in_(news_ids))
         .order_by(NewsArticle.published_at.desc().nullslast())
         .limit(50)
         .all()
     )
 
-    return _format_articles(articles, db)
-
-
-def _format_articles(articles: list[NewsArticle], db: Session) -> list[NewsArticleResponse]:
-    results = []
-    for article in articles:
-        relation_responses = []
-        for rel in article.relations:
-            relation_responses.append(
-                NewsRelationResponse(
-                    stock_id=rel.stock_id,
-                    stock_name=rel.stock.name if rel.stock else None,
-                    sector_id=rel.sector_id,
-                    sector_name=rel.sector.name if rel.sector else None,
-                    match_type=rel.match_type,
-                    relevance=rel.relevance,
-                )
-            )
-        results.append(
-            NewsArticleResponse(
-                id=article.id,
-                title=article.title,
-                summary=article.summary,
-                url=article.url,
-                source=article.source,
-                published_at=article.published_at,
-                collected_at=article.collected_at,
-                relations=relation_responses,
-            )
-        )
-    return results
+    return format_articles(articles)

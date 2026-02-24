@@ -1,11 +1,14 @@
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, subqueryload
 
 from app.database import get_db, SessionLocal
 from app.models.news import NewsArticle
-from app.schemas.news import NewsArticleResponse, NewsRelationResponse
+from app.models.news_relation import NewsStockRelation
+from app.schemas.news import NewsArticleResponse
+from app.routers.utils import format_articles
+
 
 logger = logging.getLogger(__name__)
 
@@ -16,39 +19,15 @@ router = APIRouter(prefix="/api/news", tags=["news"])
 async def list_news(limit: int = 50, db: Session = Depends(get_db)):
     articles = (
         db.query(NewsArticle)
-        .options(joinedload(NewsArticle.relations))
+        .options(
+            subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.stock),
+            subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.sector),
+        )
         .order_by(NewsArticle.published_at.desc().nullslast())
         .limit(limit)
         .all()
     )
-
-    results = []
-    for article in articles:
-        relation_responses = []
-        for rel in article.relations:
-            relation_responses.append(
-                NewsRelationResponse(
-                    stock_id=rel.stock_id,
-                    stock_name=rel.stock.name if rel.stock else None,
-                    sector_id=rel.sector_id,
-                    sector_name=rel.sector.name if rel.sector else None,
-                    match_type=rel.match_type,
-                    relevance=rel.relevance,
-                )
-            )
-        results.append(
-            NewsArticleResponse(
-                id=article.id,
-                title=article.title,
-                summary=article.summary,
-                url=article.url,
-                source=article.source,
-                published_at=article.published_at,
-                collected_at=article.collected_at,
-                relations=relation_responses,
-            )
-        )
-    return results
+    return format_articles(articles)
 
 
 @router.post("/refresh")
@@ -86,7 +65,6 @@ async def _reclassify_unlinked(db: Session) -> int:
 
     Uses keyword matching only (no AI API calls) for speed.
     """
-    from app.models.news_relation import NewsStockRelation
     from app.models.sector import Sector
     from app.models.stock import Stock
     from app.services.ai_classifier import _keyword_fallback
