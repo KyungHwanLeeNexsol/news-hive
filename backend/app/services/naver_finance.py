@@ -5,6 +5,7 @@ to get ~80 sector performance data (등락률, 상승/보합/하락 counts).
 """
 
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -248,8 +249,9 @@ async def fetch_sector_stock_performances(naver_code: str) -> list[StockPerforma
                 # Column 1: 현재가
                 current_price = _parse_int_safe(cols[1].get_text())
 
-                # Column 2: 전일비 (contains direction prefix + number)
-                change_abs = _parse_int_safe(cols[2].get_text())
+                # Column 2: 전일비 (contains direction prefix + number, e.g. "상승130")
+                change_text = re.sub(r"[^\d]", "", cols[2].get_text())
+                change_abs = int(change_text) if change_text else 0
 
                 # Column 3: 등락률
                 change_rate = _parse_change_rate(cols[3].get_text(strip=True))
