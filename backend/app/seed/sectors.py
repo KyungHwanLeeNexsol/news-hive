@@ -8,114 +8,76 @@ logger = logging.getLogger(__name__)
 
 
 def seed_sectors(db: Session) -> None:
-    """Seed/update sectors from Naver Finance live data.
+    """Seed sectors from Naver Finance (live fetch with static fallback).
 
-    Always tries live fetch to keep naver_code up to date.
-    Falls back to static snapshot only on first run when live fails.
+    Uses a clean rebuild approach: deletes all non-custom sectors and recreates
+    them from authoritative data to avoid stale cache / ID mismatch bugs.
     """
     from app.models.stock import Stock
     from app.models.news_relation import NewsStockRelation
 
-    # Always try live fetch to keep codes current
+    # Get authoritative sector data (live or snapshot)
     sectors_data = _try_fetch_live()
     if not sectors_data:
-        # Use snapshot: for first seed OR to fix corrupted data
-        logger.info("Live fetch failed, using static snapshot for seed/correction")
+        logger.info("Live fetch failed, using static snapshot")
         sectors_data = [
             {"name": name, "code": code}
             for name, code in _SNAPSHOT.items()
         ]
 
-    if sectors_data:
-        # Build lookup for existing sectors
-        existing_by_code = {
-            s.naver_code: s for s in db.query(Sector).all() if s.naver_code
-        }
-        existing_by_name = {s.name: s for s in db.query(Sector).all()}
+    if not sectors_data:
+        logger.error("No sector data available")
+        return
 
-        added = 0
-        updated = 0
-        live_codes = set()
-        for item in sectors_data:
-            name, code = item["name"], item["code"]
-            live_codes.add(code)
+    # Build target: naver_code → name
+    target = {item["code"]: item["name"] for item in sectors_data}
 
-            if code in existing_by_code:
-                sector = existing_by_code[code]
-                if sector.name != name:
-                    # Name mismatch = wrong sector classification (e.g. old KRX code reused)
-                    # Delete incorrectly mapped stocks so they get re-mapped on next stock sync
-                    old_stock_ids = [
-                        s.id for s in db.query(Stock.id).filter(Stock.sector_id == sector.id).all()
-                    ]
-                    if old_stock_ids:
-                        db.query(NewsStockRelation).filter(
-                            NewsStockRelation.stock_id.in_(old_stock_ids)
-                        ).delete(synchronize_session=False)
-                        db.query(Stock).filter(Stock.sector_id == sector.id).delete(
-                            synchronize_session=False
-                        )
-                        logger.info(
-                            f"Sector '{sector.name}' → '{name}': cleared {len(old_stock_ids)} "
-                            f"incorrectly mapped stocks"
-                        )
-                    sector.name = name
-                    updated += 1
-                continue
+    # Check if existing data already matches (skip rebuild if so)
+    existing = {
+        s.naver_code: s.name
+        for s in db.query(Sector).filter(
+            Sector.naver_code.isnot(None), Sector.is_custom == False
+        ).all()
+    }
+    if existing == target:
+        logger.info(f"Sectors already up to date ({len(existing)} sectors)")
+        return
 
-            if name in existing_by_name:
-                sector = existing_by_name[name]
-                if sector.naver_code != code:
-                    sector.naver_code = code
-                    updated += 1
-                continue
-
-            db.add(Sector(name=name, naver_code=code, is_custom=False))
-            added += 1
-
-        # Remove sectors whose naver_code is stale (not in live data)
-        if live_codes:
-            stale = (
-                db.query(Sector)
-                .filter(
-                    Sector.naver_code.isnot(None),
-                    Sector.naver_code.notin_(live_codes),
-                    Sector.is_custom == False,
-                )
-                .all()
-            )
-            for sector in stale:
-                stock_ids = [s.id for s in db.query(Stock.id).filter(Stock.sector_id == sector.id).all()]
-                db.query(NewsStockRelation).filter(NewsStockRelation.sector_id == sector.id).delete()
-                if stock_ids:
-                    db.query(NewsStockRelation).filter(NewsStockRelation.stock_id.in_(stock_ids)).delete()
-                db.query(Stock).filter(Stock.sector_id == sector.id).delete()
-                db.delete(sector)
-                updated += 1
-            if stale:
-                logger.info(f"Removed {len(stale)} stale sectors with outdated naver_code")
-
-        db.commit()
-        logger.info(f"Sector seed: {added} added, {updated} updated")
-
-    # Clean up: remove old sectors that have no naver_code (and their stocks)
-    old_sectors = (
-        db.query(Sector)
-        .filter(Sector.naver_code.is_(None), Sector.is_custom == False)
-        .all()
+    # --- Clean rebuild of non-custom sectors ---
+    logger.info(
+        f"Rebuilding sectors: {len(existing)} existing → {len(target)} target"
     )
-    removed = 0
-    for sector in old_sectors:
-        stock_ids = [s.id for s in db.query(Stock.id).filter(Stock.sector_id == sector.id).all()]
-        db.query(NewsStockRelation).filter(NewsStockRelation.sector_id == sector.id).delete()
+
+    # 1. Delete all stocks + relations for non-custom sectors
+    non_custom_ids = [
+        s.id for s in db.query(Sector.id).filter(Sector.is_custom == False).all()
+    ]
+    if non_custom_ids:
+        stock_ids = [
+            s.id for s in db.query(Stock.id).filter(
+                Stock.sector_id.in_(non_custom_ids)
+            ).all()
+        ]
         if stock_ids:
-            db.query(NewsStockRelation).filter(NewsStockRelation.stock_id.in_(stock_ids)).delete()
-        db.query(Stock).filter(Stock.sector_id == sector.id).delete()
-        db.delete(sector)
-        removed += 1
-    if removed:
-        db.commit()
-        logger.info(f"Removed {removed} old sectors without naver_code (and their stocks)")
+            db.query(NewsStockRelation).filter(
+                NewsStockRelation.stock_id.in_(stock_ids)
+            ).delete(synchronize_session=False)
+        db.query(NewsStockRelation).filter(
+            NewsStockRelation.sector_id.in_(non_custom_ids)
+        ).delete(synchronize_session=False)
+        db.query(Stock).filter(
+            Stock.sector_id.in_(non_custom_ids)
+        ).delete(synchronize_session=False)
+        db.query(Sector).filter(
+            Sector.id.in_(non_custom_ids)
+        ).delete(synchronize_session=False)
+
+    # 2. Create fresh sectors
+    for code, name in target.items():
+        db.add(Sector(name=name, naver_code=code, is_custom=False))
+
+    db.commit()
+    logger.info(f"Sector rebuild complete: {len(target)} sectors created")
 
 
 def _try_fetch_live() -> list[dict]:
@@ -162,7 +124,7 @@ def _try_fetch_live() -> list[dict]:
         return []
 
 
-# Static fallback snapshot — only used when DB is empty AND live fetch fails
+# Static fallback snapshot — authoritative Naver GICS sector codes
 # Source: https://finance.naver.com/sise/sise_group.naver?type=upjong (2026-02-24)
 _SNAPSHOT = {
     "제약": "261",
