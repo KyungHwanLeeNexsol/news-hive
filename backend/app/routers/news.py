@@ -51,5 +51,10 @@ async def list_news(limit: int = 50, db: Session = Depends(get_db)):
 async def refresh_news(db: Session = Depends(get_db)):
     from app.services.news_crawler import crawl_all_news
 
-    count = await crawl_all_news(db)
-    return {"message": f"Collected {count} new articles"}
+    try:
+        count = await crawl_all_news(db)
+        total = db.query(NewsArticle).count()
+        return {"message": f"Collected {count} new articles", "new": count, "total": total}
+    except Exception as e:
+        import traceback
+        return {"message": f"Crawl failed: {e}", "error": traceback.format_exc()}

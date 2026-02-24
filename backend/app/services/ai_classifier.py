@@ -130,9 +130,11 @@ def _keyword_fallback(
     sectors: list[Sector],
     stocks: list[Stock],
 ) -> list[dict]:
-    """Fast keyword matching — scans all stocks."""
+    """Fast keyword matching — scans all stocks and sector names."""
     results = []
+    matched_sector_ids: set[int] = set()
 
+    # Match stock names in title
     for stock in stocks:
         if stock.name in title:
             results.append(
@@ -143,6 +145,7 @@ def _keyword_fallback(
                     "relevance": "direct",
                 }
             )
+            matched_sector_ids.add(stock.sector_id)
         elif stock.keywords:
             for kw in stock.keywords:
                 if kw.lower() in title.lower():
@@ -154,6 +157,48 @@ def _keyword_fallback(
                             "relevance": "indirect",
                         }
                     )
+                    matched_sector_ids.add(stock.sector_id)
                     break
 
+    # Match sector names in title (only if not already matched via stock)
+    title_lower = title.lower()
+    for sector in sectors:
+        if sector.id in matched_sector_ids:
+            continue
+        # Use short keywords from sector name for matching
+        # e.g. "반도체와반도체장비" → check if "반도체" is in title
+        sector_keywords = _extract_sector_keywords(sector.name)
+        for kw in sector_keywords:
+            if kw in title_lower:
+                results.append(
+                    {
+                        "stock_id": None,
+                        "sector_id": sector.id,
+                        "match_type": "keyword",
+                        "relevance": "indirect",
+                    }
+                )
+                break
+
     return results
+
+
+def _extract_sector_keywords(sector_name: str) -> list[str]:
+    """Extract meaningful keywords from sector name for matching.
+
+    E.g. "반도체와반도체장비" → ["반도체"]
+         "자동차부품" → ["자동차"]
+         "건설" → ["건설"]
+    """
+    import re
+    # Split by common connectors: 와, 및, ,, ·, /
+    parts = re.split(r"[와및·/,]", sector_name)
+    keywords = []
+    for part in parts:
+        part = part.strip()
+        if len(part) >= 2:  # Skip single-char fragments
+            keywords.append(part.lower())
+    # Also add the full name
+    if sector_name.lower() not in keywords:
+        keywords.append(sector_name.lower())
+    return keywords

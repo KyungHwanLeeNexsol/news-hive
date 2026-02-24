@@ -61,15 +61,18 @@ async def crawl_all_news(db: Session) -> int:
     stocks = db.query(Stock).all()
     sectors = db.query(Sector).all()
 
+    logger.info(f"DB state: {len(sectors)} sectors, {len(stocks)} stocks")
+
     search_queries = _build_search_queries(db, sectors, stocks)
     if not search_queries:
         logger.info("No stocks or sectors registered. Skipping news crawl.")
         return 0
 
-    logger.info(f"Crawling news for {len(search_queries)} search queries...")
+    logger.info(f"Crawling news for {len(search_queries)} search queries (sample: {search_queries[:5]})")
 
     # Crawl from all sources — run queries with a small concurrency limit
     all_raw_articles: list[dict] = []
+    source_counts: dict[str, int] = {"naver": 0, "google": 0, "newsapi": 0}
     semaphore = asyncio.Semaphore(5)
 
     async def _search_one(query: str):
@@ -80,12 +83,14 @@ async def crawl_all_news(db: Session) -> int:
                 search_newsapi(query, page_size=5),
                 return_exceptions=True,
             )
+            source_names = ["naver", "google", "newsapi"]
             articles = []
-            for result in results:
+            for source_name, result in zip(source_names, results):
                 if isinstance(result, list):
                     articles.extend(result)
+                    source_counts[source_name] += len(result)
                 elif isinstance(result, Exception):
-                    logger.warning(f"Crawler error for query '{query}': {result}")
+                    logger.warning(f"Crawler [{source_name}] error for '{query}': {result}")
             return articles
 
     tasks = [_search_one(q) for q in search_queries]
@@ -95,6 +100,8 @@ async def crawl_all_news(db: Session) -> int:
             all_raw_articles.extend(result)
         elif isinstance(result, Exception):
             logger.warning(f"Query batch error: {result}")
+
+    logger.info(f"Raw articles by source: {source_counts}, total={len(all_raw_articles)}")
 
     # Deduplicate by URL — pre-fetch existing URLs in one query
     seen_urls: set[str] = set()
@@ -109,7 +116,7 @@ async def crawl_all_news(db: Session) -> int:
         unique_articles.append(article)
 
     if not unique_articles:
-        logger.info("No new articles found.")
+        logger.info(f"No new articles (existing_urls={len(existing_urls)}, raw={len(all_raw_articles)}).")
         return 0
 
     logger.info(f"Found {len(unique_articles)} new articles. Classifying...")

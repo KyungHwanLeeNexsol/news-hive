@@ -1,13 +1,23 @@
+import logging
 from datetime import datetime, timezone
 
 import httpx
 
 from app.config import settings
 
+logger = logging.getLogger(__name__)
+
+_naver_warned = False
+
 
 async def search_naver_news(query: str, display: int = 10) -> list[dict]:
     """Search Naver News API for articles matching the query."""
+    global _naver_warned
+
     if not settings.NAVER_CLIENT_ID or not settings.NAVER_CLIENT_SECRET:
+        if not _naver_warned:
+            logger.warning("Naver API keys not configured, skipping Naver crawler")
+            _naver_warned = True
         return []
 
     url = "https://openapi.naver.com/v1/search/news.json"
@@ -21,7 +31,13 @@ async def search_naver_news(query: str, display: int = 10) -> list[dict]:
         try:
             resp = await client.get(url, headers=headers, params=params, timeout=10)
             resp.raise_for_status()
-        except httpx.HTTPError:
+        except httpx.HTTPStatusError as e:
+            if not _naver_warned:
+                logger.warning(f"Naver API error: {e.response.status_code} {e.response.text[:200]}")
+                _naver_warned = True
+            return []
+        except httpx.HTTPError as e:
+            logger.warning(f"Naver API request failed: {e}")
             return []
 
     data = resp.json()
