@@ -134,9 +134,9 @@ async def _search_us_news_for_term(
     encoded = quote(en_term)
     rss_url = f"https://news.google.com/rss/search?q={encoded}&hl=en&gl=US&ceid=US:en"
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(follow_redirects=True) as client:
         try:
-            resp = await client.get(rss_url, timeout=5)
+            resp = await client.get(rss_url, timeout=10)
             resp.raise_for_status()
         except httpx.HTTPError:
             return []

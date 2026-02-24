@@ -9,7 +9,7 @@ from app.models.stock import Stock
 from app.models.news import NewsArticle
 from app.services.crawlers.naver import search_naver_news
 from app.services.crawlers.google import search_google_news
-from app.services.crawlers.newsapi import search_newsapi
+from app.services.crawlers.yahoo import search_yahoo_finance_top, search_yahoo_stock_news
 from app.services.crawlers.korean_rss import fetch_korean_rss_feeds
 from app.services.ai_classifier import _extract_sector_keywords
 
@@ -122,7 +122,7 @@ async def crawl_all_news(db: Session) -> int:
     logger.info(f"DB state: {len(sectors)} sectors, {len(stocks)} stocks")
 
     all_raw_articles: list[dict] = []
-    source_counts: dict[str, int] = {"naver": 0, "google": 0, "newsapi": 0, "korean_rss": 0, "us_news": 0}
+    source_counts: dict[str, int] = {"naver": 0, "google": 0, "yahoo": 0, "korean_rss": 0, "us_news": 0}
 
     # Phase 1: Fetch Korean financial RSS feeds (once per cycle, not per query)
     try:
@@ -134,6 +134,16 @@ async def crawl_all_news(db: Session) -> int:
         source_counts["korean_rss"] = len(korean_rss_articles)
     except Exception as e:
         logger.warning(f"Korean RSS feeds failed: {e}")
+
+    # Phase 1.2: Yahoo Finance top headlines (global market, once per cycle)
+    try:
+        yahoo_top_articles = await search_yahoo_finance_top(num=20)
+        for a in yahoo_top_articles:
+            a["_query"] = None
+        all_raw_articles.extend(yahoo_top_articles)
+        source_counts["yahoo"] = len(yahoo_top_articles)
+    except Exception as e:
+        logger.warning(f"Yahoo Finance top headlines failed: {e}")
 
     # Phase 1.5: US industry news (sector-level, English)
     try:
@@ -163,15 +173,27 @@ async def crawl_all_news(db: Session) -> int:
 
         semaphore = asyncio.Semaphore(3)
 
+        # Map stock names to codes for Yahoo per-stock search
+        stock_code_by_name = {s.name: s.stock_code for s in stocks}
+
         async def _search_one(query: str):
             async with semaphore:
-                results = await asyncio.gather(
+                crawlers = [
                     search_naver_news(query, display=5),
                     search_google_news(query, num=10),
-                    search_newsapi(query, page_size=5),
+                ]
+                source_names = ["naver", "google"]
+
+                # If query matches a stock name, also fetch Yahoo per-stock news
+                stock_code = stock_code_by_name.get(query)
+                if stock_code:
+                    crawlers.append(search_yahoo_stock_news(stock_code, num=5))
+                    source_names.append("yahoo")
+
+                results = await asyncio.gather(
+                    *crawlers,
                     return_exceptions=True,
                 )
-                source_names = ["naver", "google", "newsapi"]
                 articles = []
                 for source_name, result in zip(source_names, results):
                     if isinstance(result, list):

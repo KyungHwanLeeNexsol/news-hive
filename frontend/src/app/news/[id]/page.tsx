@@ -24,7 +24,7 @@ function sourceLabel(source: string): string {
   switch (source) {
     case 'naver': return '네이버';
     case 'google': return '구글';
-    case 'newsapi': return 'NewsAPI';
+    case 'yahoo': return 'Yahoo';
     case 'korean_rss': return '경제지';
     case 'us_news': return '미국';
     default: return source;

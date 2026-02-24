@@ -21,8 +21,8 @@ function sourceLabel(source: string): string {
       return "네이버";
     case "google":
       return "구글";
-    case "newsapi":
-      return "NewsAPI";
+    case "yahoo":
+      return "Yahoo";
     default:
       return source;
   }
