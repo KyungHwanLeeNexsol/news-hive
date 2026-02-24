@@ -93,7 +93,7 @@ def seed_sectors(db: Session) -> None:
     else:
         logger.info(f"Already have {existing_naver} Naver sectors, skipping seed.")
 
-    # Clean up: remove old sectors that have no naver_code and no stocks
+    # Clean up: remove old sectors that have no naver_code (and their stocks)
     old_sectors = (
         db.query(Sector)
         .filter(Sector.naver_code.is_(None), Sector.is_custom == False)
@@ -101,13 +101,13 @@ def seed_sectors(db: Session) -> None:
     )
     removed = 0
     for sector in old_sectors:
-        stock_count = db.query(Stock).filter(Stock.sector_id == sector.id).count()
-        if stock_count == 0:
-            db.delete(sector)
-            removed += 1
+        # Delete stocks belonging to this old sector first
+        db.query(Stock).filter(Stock.sector_id == sector.id).delete()
+        db.delete(sector)
+        removed += 1
     if removed:
         db.commit()
-        logger.info(f"Removed {removed} old sectors without naver_code and no stocks")
+        logger.info(f"Removed {removed} old sectors without naver_code (and their stocks)")
 
 
 def _try_fetch_live() -> list[dict]:

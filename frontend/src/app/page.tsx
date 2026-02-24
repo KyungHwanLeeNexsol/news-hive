@@ -60,7 +60,11 @@ export default function Dashboard() {
     }
   }
 
-  const totalStocks = sectors.reduce((sum, s) => sum + (s.stock_count ?? 0), 0);
+  // Filter: only show sectors that have stocks
+  const visibleSectors = sectors.filter(
+    (s) => (s.stock_count ?? 0) > 0 || (s.total_stocks ?? 0) > 0
+  );
+  const totalStocks = visibleSectors.reduce((sum, s) => sum + (s.stock_count ?? 0), 0);
 
   return (
     <div className="flex gap-4">
@@ -70,7 +74,7 @@ export default function Dashboard() {
           <div className="section-title">
             <span>업종별 시세</span>
             <span className="text-[12px] font-normal text-[#999]">
-              {sectors.length}개 업종 / {totalStocks}개 종목
+              {visibleSectors.length}개 업종 / {totalStocks}개 종목
             </span>
           </div>
           <table className="naver-table">
@@ -87,14 +91,14 @@ export default function Dashboard() {
               </tr>
             </thead>
             <tbody>
-              {sectors.length === 0 ? (
+              {visibleSectors.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="text-center py-8 text-[#999]">
                     등록된 업종이 없습니다.
                   </td>
                 </tr>
               ) : (
-                sectors.map((sector) => (
+                visibleSectors.map((sector) => (
                   <tr key={sector.id}>
                     <td>
                       <Link
