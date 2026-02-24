@@ -185,7 +185,14 @@ class StockPerformance:
     """Live performance data for a single stock within a sector."""
     stock_code: str
     name: str
-    change_rate: float  # 등락률 (%)
+    current_price: int = 0          # 현재가
+    price_change: int = 0           # 전일비 (signed)
+    change_rate: float = 0.0        # 등락률 (%)
+    bid_price: int = 0              # 매수호가
+    ask_price: int = 0              # 매도호가
+    volume: int = 0                 # 거래량
+    trading_value: int = 0          # 거래대금 (백만)
+    prev_volume: int = 0            # 전일거래량
 
 
 @dataclass
@@ -220,10 +227,11 @@ async def fetch_sector_stock_performances(naver_code: str) -> list[StockPerforma
 
         results: list[StockPerformance] = []
         # The detail page has a table with stock rows
+        # Columns: 종목명(0) 현재가(1) 전일비(2) 등락률(3) 매수호가(4) 매도호가(5) 거래량(6) 거래대금(7) 전일거래량(8) [기타(9)]
         for table in soup.select("table.type_5"):
             for row in table.select("tr"):
                 cols = row.select("td")
-                if len(cols) < 6:
+                if len(cols) < 9:
                     continue
 
                 # Column 0: stock name with link containing code
@@ -237,14 +245,37 @@ async def fetch_sector_stock_performances(naver_code: str) -> list[StockPerforma
                 if not code or len(code) != 6 or not code.isdigit():
                     continue
 
-                # Column 4: 등락률 (change rate %)
-                change_text = cols[4].get_text(strip=True)
-                change_rate = _parse_change_rate(change_text) if change_text else 0.0
+                # Column 1: 현재가
+                current_price = _parse_int_safe(cols[1].get_text())
+
+                # Column 2: 전일비 (contains direction prefix + number)
+                change_abs = _parse_int_safe(cols[2].get_text())
+
+                # Column 3: 등락률
+                change_rate = _parse_change_rate(cols[3].get_text(strip=True))
+
+                # Apply sign to 전일비 based on 등락률 direction
+                if change_rate < 0:
+                    change_abs = -change_abs
+
+                # Columns 4-8
+                bid_price = _parse_int_safe(cols[4].get_text())
+                ask_price = _parse_int_safe(cols[5].get_text())
+                volume = _parse_int_safe(cols[6].get_text())
+                trading_value = _parse_int_safe(cols[7].get_text())
+                prev_volume = _parse_int_safe(cols[8].get_text())
 
                 results.append(StockPerformance(
                     stock_code=code,
                     name=name,
+                    current_price=current_price,
+                    price_change=change_abs,
                     change_rate=change_rate,
+                    bid_price=bid_price,
+                    ask_price=ask_price,
+                    volume=volume,
+                    trading_value=trading_value,
+                    prev_volume=prev_volume,
                 ))
 
         if results:

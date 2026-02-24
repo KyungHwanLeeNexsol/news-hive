@@ -20,7 +20,14 @@ export interface Stock {
   stock_code: string;
   keywords: string[] | null;
   created_at: string;
+  current_price?: number | null;
+  price_change?: number | null;
   change_rate?: number | null;
+  bid_price?: number | null;
+  ask_price?: number | null;
+  volume?: number | null;
+  trading_value?: number | null;
+  prev_volume?: number | null;
   news_count?: number;
 }
 

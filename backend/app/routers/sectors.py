@@ -77,11 +77,12 @@ async def get_sector(sector_id: int, db: Session = Depends(get_db)):
         .all()
     )
 
-    # Fetch stock-level change rates from Naver
-    stock_perfs: dict[str, float] = {}
+    # Fetch stock-level performance data from Naver
+    from app.services.naver_finance import StockPerformance
+    stock_perfs: dict[str, StockPerformance] = {}
     if sector.naver_code:
         perfs = await fetch_sector_stock_performances(sector.naver_code)
-        stock_perfs = {p.stock_code: p.change_rate for p in perfs}
+        stock_perfs = {p.stock_code: p for p in perfs}
 
     # Count news per stock
     stock_ids = [s.id for s in stocks]
@@ -101,12 +102,20 @@ async def get_sector(sector_id: int, db: Session = Depends(get_db)):
     # Build enriched stock list
     stock_responses = []
     for stock in stocks:
+        perf = stock_perfs.get(stock.stock_code)
         stock_responses.append(StockInSector(
             id=stock.id,
             name=stock.name,
             stock_code=stock.stock_code,
             keywords=stock.keywords,
-            change_rate=stock_perfs.get(stock.stock_code),
+            current_price=perf.current_price if perf else None,
+            price_change=perf.price_change if perf else None,
+            change_rate=perf.change_rate if perf else None,
+            bid_price=perf.bid_price if perf else None,
+            ask_price=perf.ask_price if perf else None,
+            volume=perf.volume if perf else None,
+            trading_value=perf.trading_value if perf else None,
+            prev_volume=perf.prev_volume if perf else None,
             news_count=news_count_map.get(stock.id, 0),
         ))
 

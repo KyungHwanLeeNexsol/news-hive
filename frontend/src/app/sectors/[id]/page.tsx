@@ -20,17 +20,6 @@ function formatDate(dateStr: string | null): string {
   });
 }
 
-function sourceLabel(source: string): string {
-  switch (source) {
-    case "naver": return "네이버";
-    case "google": return "구글";
-    case "newsapi": return "NewsAPI";
-    case "korean_rss": return "경제지";
-    case "us_news": return "미국";
-    default: return source;
-  }
-}
-
 function sentimentLabel(sentiment: string | null): { text: string; className: string } {
   switch (sentiment) {
     case "positive": return { text: "호재", className: "badge-positive" };
@@ -86,20 +75,26 @@ export default function SectorDetail() {
 
       {/* Tab content */}
       {tab === "stocks" ? (
-        <div className="section-box" style={{ borderTop: "none" }}>
-          <table className="naver-table">
+        <div className="section-box" style={{ borderTop: "none", overflowX: "auto" }}>
+          <table className="naver-table" style={{ minWidth: "900px" }}>
             <thead>
               <tr>
-                <th className="text-left" style={{ width: "8%" }}>번호</th>
-                <th className="text-left" style={{ width: "42%" }}>종목명</th>
-                <th style={{ width: "20%" }}>등락률</th>
-                <th style={{ width: "30%" }}>개별뉴스</th>
+                <th className="text-left" style={{ width: "14%" }}>종목명</th>
+                <th style={{ width: "8%" }}>현재가</th>
+                <th style={{ width: "9%" }}>전일비</th>
+                <th style={{ width: "8%" }}>등락률</th>
+                <th style={{ width: "8%" }}>매수호가</th>
+                <th style={{ width: "8%" }}>매도호가</th>
+                <th style={{ width: "11%" }}>거래량</th>
+                <th style={{ width: "11%" }}>거래대금</th>
+                <th style={{ width: "11%" }}>전일거래량</th>
+                <th style={{ width: "7%" }}>뉴스</th>
               </tr>
             </thead>
             <tbody>
               {!sector.stocks || sector.stocks.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="text-center py-8 text-[#999]">
+                  <td colSpan={10} className="text-center py-8 text-[#999]">
                     등록된 종목이 없습니다.{" "}
                     <Link href="/manage" className="text-[#1261c4] hover:underline">
                       관리 페이지
@@ -108,34 +103,61 @@ export default function SectorDetail() {
                   </td>
                 </tr>
               ) : (
-                sector.stocks.map((stock, i) => (
-                  <tr key={stock.id}>
-                    <td className="text-center text-[#999]">{i + 1}</td>
-                    <td>
-                      <Link
-                        href={`/stocks/${stock.id}`}
-                        className="text-[#333] hover:text-[#1261c4] hover:underline font-medium"
-                      >
-                        {stock.name}
-                      </Link>
-                    </td>
-                    <td className="text-center">
-                      <ChangeRate value={stock.change_rate} />
-                    </td>
-                    <td className="text-center">
-                      {(stock.news_count ?? 0) > 0 ? (
+                sector.stocks.map((stock) => {
+                  const pc = stock.price_change ?? 0;
+                  const priceColor = pc > 0 ? "text-rise" : pc < 0 ? "text-fall" : "text-[#333]";
+                  const arrow = pc > 0 ? "▲" : pc < 0 ? "▼" : "";
+                  return (
+                    <tr key={stock.id}>
+                      <td>
                         <Link
                           href={`/stocks/${stock.id}`}
-                          className="text-[#1261c4] hover:underline text-[12px]"
+                          className="text-[#333] hover:text-[#1261c4] hover:underline font-medium"
                         >
-                          {stock.news_count}건
+                          {stock.name}
                         </Link>
-                      ) : (
-                        <span className="text-[#ccc] text-[12px]">-</span>
-                      )}
-                    </td>
-                  </tr>
-                ))
+                      </td>
+                      <td className={`text-right ${priceColor}`}>
+                        {stock.current_price != null ? stock.current_price.toLocaleString() : "-"}
+                      </td>
+                      <td className={`text-right ${priceColor}`}>
+                        {stock.price_change != null
+                          ? `${arrow} ${Math.abs(stock.price_change).toLocaleString()}`
+                          : "-"}
+                      </td>
+                      <td className="text-right">
+                        <ChangeRate value={stock.change_rate} />
+                      </td>
+                      <td className="text-right">
+                        {stock.bid_price != null ? stock.bid_price.toLocaleString() : "-"}
+                      </td>
+                      <td className="text-right">
+                        {stock.ask_price != null ? stock.ask_price.toLocaleString() : "-"}
+                      </td>
+                      <td className="text-right">
+                        {stock.volume != null ? stock.volume.toLocaleString() : "-"}
+                      </td>
+                      <td className="text-right">
+                        {stock.trading_value != null ? stock.trading_value.toLocaleString() : "-"}
+                      </td>
+                      <td className="text-right">
+                        {stock.prev_volume != null ? stock.prev_volume.toLocaleString() : "-"}
+                      </td>
+                      <td className="text-center">
+                        {(stock.news_count ?? 0) > 0 ? (
+                          <Link
+                            href={`/stocks/${stock.id}`}
+                            className="text-[#1261c4] hover:underline text-[12px]"
+                          >
+                            {stock.news_count}건
+                          </Link>
+                        ) : (
+                          <span className="text-[#ccc] text-[12px]">-</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -150,11 +172,10 @@ export default function SectorDetail() {
             <table className="naver-table">
               <thead>
                 <tr>
-                  <th className="text-left" style={{ width: "48%" }}>제목</th>
+                  <th className="text-left" style={{ width: "52%" }}>제목</th>
                   <th style={{ width: "8%" }}>구분</th>
-                  <th style={{ width: "9%" }}>출처</th>
-                  <th style={{ width: "15%" }}>관련</th>
-                  <th style={{ width: "20%" }}>날짜</th>
+                  <th style={{ width: "18%" }}>관련</th>
+                  <th style={{ width: "22%" }}>날짜</th>
                 </tr>
               </thead>
               <tbody>
@@ -173,11 +194,6 @@ export default function SectorDetail() {
                       <td className="text-center">
                         <span className={`badge ${sentiment.className}`}>
                           {sentiment.text}
-                        </span>
-                      </td>
-                      <td className="text-center">
-                        <span className="badge badge-source">
-                          {sourceLabel(article.source)}
                         </span>
                       </td>
                       <td className="text-center">
