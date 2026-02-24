@@ -3,8 +3,8 @@ import "./globals.css";
 import Header from "@/components/Header";
 
 export const metadata: Metadata = {
-  title: "증권 뉴스 트래커",
-  description: "섹터 기반 투자 뉴스 추적",
+  title: "NewsHive — 업종별 투자 뉴스 추적",
+  description: "업종 단위로 종목 뉴스를 모아 놓치기 쉬운 투자 정보를 포착",
 };
 
 export default function RootLayout({

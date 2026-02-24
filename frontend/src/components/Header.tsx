@@ -20,7 +20,7 @@ export default function Header() {
             href="/"
             className="text-[17px] font-bold text-[#03c75a] tracking-tight"
           >
-            증권 뉴스 트래커
+            NewsHive
           </Link>
           <nav className="flex h-full">
             {navItems.map((item) => {
