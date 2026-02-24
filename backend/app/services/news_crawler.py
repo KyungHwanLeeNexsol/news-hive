@@ -146,8 +146,14 @@ async def _save_article_with_classification(
     sectors: list[Sector],
     stocks: list[Stock],
 ) -> bool:
-    """Save a single article with AI classification."""
+    """Save a single article with classification.
+
+    Uses keyword matching first (instant). Falls back to AI only if
+    keyword matching finds nothing and AI is available, with a timeout
+    to prevent blocking the crawl pipeline.
+    """
     from app.models.news_relation import NewsStockRelation
+    from app.services.ai_classifier import _keyword_fallback
 
     article = NewsArticle(
         title=article_data["title"],
@@ -163,8 +169,22 @@ async def _save_article_with_classification(
         db.rollback()
         return False
 
-    # Classify with AI
-    classifications = await classify_news(article_data["title"], sectors, stocks)
+    # Phase 1: fast keyword matching (no API call)
+    classifications = _keyword_fallback(article_data["title"], sectors, stocks)
+
+    # Phase 2: AI classification only if keyword matching found nothing
+    if not classifications:
+        try:
+            classifications = await asyncio.wait_for(
+                classify_news(article_data["title"], sectors, stocks),
+                timeout=10.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"AI classification timed out for: {article_data['title'][:50]}")
+            classifications = []
+        except Exception as e:
+            logger.warning(f"AI classification failed: {e}")
+            classifications = []
 
     for cls in classifications:
         relation = NewsStockRelation(

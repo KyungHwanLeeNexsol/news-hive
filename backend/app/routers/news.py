@@ -73,11 +73,14 @@ async def refresh_news(db: Session = Depends(get_db)):
 
 
 async def _reclassify_unlinked(db: Session) -> int:
-    """Reclassify articles that have no news_stock_relations."""
+    """Reclassify articles that have no news_stock_relations.
+
+    Uses keyword matching only (no AI API calls) for speed.
+    """
     from app.models.news_relation import NewsStockRelation
     from app.models.sector import Sector
     from app.models.stock import Stock
-    from app.services.ai_classifier import classify_news
+    from app.services.ai_classifier import _keyword_fallback
 
     # Find articles with no relations
     articles_with_rels = db.query(NewsStockRelation.news_id).distinct()
@@ -89,7 +92,7 @@ async def _reclassify_unlinked(db: Session) -> int:
     if not unlinked:
         return 0
 
-    logger.info(f"Reclassifying {len(unlinked)} unlinked articles")
+    logger.info(f"Reclassifying {len(unlinked)} unlinked articles (keyword-only)")
 
     sectors = db.query(Sector).all()
     stocks = db.query(Stock).all()
@@ -97,13 +100,13 @@ async def _reclassify_unlinked(db: Session) -> int:
 
     for article in unlinked:
         try:
-            classifications = await classify_news(article.title, sectors, stocks)
+            classifications = _keyword_fallback(article.title, sectors, stocks)
             for cls in classifications:
                 db.add(NewsStockRelation(
                     news_id=article.id,
                     stock_id=cls.get("stock_id"),
                     sector_id=cls.get("sector_id"),
-                    match_type=cls.get("match_type", "ai_classified"),
+                    match_type=cls.get("match_type", "keyword"),
                     relevance=cls.get("relevance", "indirect"),
                 ))
                 count += 1
