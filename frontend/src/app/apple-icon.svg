@@ -4,5 +4,5 @@
   <!-- Hexagon -->
   <path d="M90 25L152 60.8V132.2L90 168L28 132.2V60.8L90 25Z" fill="#ffffff" fill-opacity="0.15"/>
   <!-- N letter -->
-  <path d="M62 62h16v41L118 118h16V62h-16v41L78 62H62Z" fill="#ffffff"/>
+  <path d="M56 118V62h16l36 45V62h16v56h-16l-36-45v45H56Z" fill="#ffffff"/>
 </svg>
