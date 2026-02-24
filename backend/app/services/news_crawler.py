@@ -14,44 +14,49 @@ from app.services.ai_classifier import classify_news
 
 logger = logging.getLogger(__name__)
 
-# Maximum number of individual stock queries per crawl cycle
-MAX_STOCK_QUERIES = 30
+# Keep total queries under this limit to avoid Render free-plan timeout
+MAX_TOTAL_QUERIES = 20
+MAX_STOCK_QUERIES = 5
 
 
 def _build_search_queries(db: Session, sectors: list[Sector], stocks: list[Stock]) -> list[str]:
     """Build an optimised list of search queries.
 
-    Strategy for large stock counts (>50):
-    1. Always search by sector name (broad industry news)
-    2. Pick a rotating random sample of individual stocks (MAX_STOCK_QUERIES)
-    3. Include any stocks that have custom keywords (user-curated)
+    Keeps total queries ≤ MAX_TOTAL_QUERIES to stay within Render
+    free-plan timeout (~2 min for the entire crawl cycle).
 
-    This keeps API calls manageable (~60 queries x 3 sources = ~180 calls per cycle).
+    Strategy:
+    1. Random sample of sector names (broad industry news)
+    2. Stocks with custom keywords (user-curated, always included)
+    3. Random sample of remaining stocks
     """
     queries: set[str] = set()
 
-    # 1) Sector-level queries — always included
-    for sector in sectors:
-        has_stocks = db.query(Stock.id).filter(Stock.sector_id == sector.id).first()
-        if has_stocks:
-            queries.add(sector.name)
-
-    # 2) Stocks with custom keywords — always included (user explicitly wants these)
+    # 1) Stocks with custom keywords — always included (user explicitly wants these)
     keyword_stocks = [s for s in stocks if s.keywords]
     for stock in keyword_stocks:
         queries.add(stock.name)
         for kw in stock.keywords:
             queries.add(kw)
 
+    # 2) Sector-level queries — random sample
+    sectors_with_stocks = [
+        sector for sector in sectors
+        if db.query(Stock.id).filter(Stock.sector_id == sector.id).first()
+    ]
+    remaining_budget = MAX_TOTAL_QUERIES - len(queries) - MAX_STOCK_QUERIES
+    if remaining_budget > 0 and sectors_with_stocks:
+        sample_size = min(remaining_budget, len(sectors_with_stocks))
+        for sector in random.sample(sectors_with_stocks, sample_size):
+            queries.add(sector.name)
+
     # 3) Random sample of remaining stocks
     remaining = [s for s in stocks if not s.keywords]
-    sample_size = max(0, MAX_STOCK_QUERIES - len(keyword_stocks))
-    if len(remaining) > sample_size:
-        sampled = random.sample(remaining, sample_size)
-    else:
-        sampled = remaining
-    for stock in sampled:
-        queries.add(stock.name)
+    stock_budget = max(0, MAX_TOTAL_QUERIES - len(queries))
+    sample_size = min(stock_budget, MAX_STOCK_QUERIES, len(remaining))
+    if sample_size > 0:
+        for stock in random.sample(remaining, sample_size):
+            queries.add(stock.name)
 
     return list(queries)
 
@@ -73,7 +78,7 @@ async def crawl_all_news(db: Session) -> int:
     # Crawl from all sources — run queries with a small concurrency limit
     all_raw_articles: list[dict] = []
     source_counts: dict[str, int] = {"naver": 0, "google": 0, "newsapi": 0}
-    semaphore = asyncio.Semaphore(5)
+    semaphore = asyncio.Semaphore(3)
 
     async def _search_one(query: str):
         async with semaphore:
