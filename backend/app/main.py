@@ -36,8 +36,29 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
+        from app.models.sector import Sector
+        from app.models.stock import Stock
+        sector_count_before = db.query(Sector).count()
         seed_sectors(db)
-        seed_all_stocks(db)
+        sector_count_after = db.query(Sector).count()
+
+        # Force re-sync if sectors changed or some sectors have no stocks
+        sectors_changed = sector_count_after != sector_count_before
+        from sqlalchemy import func
+        empty_sectors = (
+            db.query(Sector)
+            .outerjoin(Stock, Sector.id == Stock.sector_id)
+            .group_by(Sector.id)
+            .having(func.count(Stock.id) == 0)
+            .filter(Sector.is_custom == False)
+            .count()
+        )
+        force = sectors_changed or empty_sectors > 0
+        if force:
+            logging.getLogger(__name__).info(
+                f"Force stock sync: sectors_changed={sectors_changed}, empty_sectors={empty_sectors}"
+            )
+        seed_all_stocks(db, force=force)
         _backfill_sentiment(db)
     finally:
         db.close()
