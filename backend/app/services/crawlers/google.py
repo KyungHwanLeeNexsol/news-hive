@@ -12,7 +12,7 @@ async def search_google_news(query: str, num: int = 10) -> list[dict]:
 
     async with httpx.AsyncClient() as client:
         try:
-            resp = await client.get(rss_url, timeout=10)
+            resp = await client.get(rss_url, timeout=5)
             resp.raise_for_status()
         except httpx.HTTPError:
             return []

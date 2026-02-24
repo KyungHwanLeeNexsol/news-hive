@@ -7,17 +7,20 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-_naver_warned = False
+_naver_disabled = False
 
 
 async def search_naver_news(query: str, display: int = 10) -> list[dict]:
     """Search Naver News API for articles matching the query."""
-    global _naver_warned
+    global _naver_disabled
+
+    # Once disabled (auth failure), skip all further requests this process
+    if _naver_disabled:
+        return []
 
     if not settings.NAVER_CLIENT_ID or not settings.NAVER_CLIENT_SECRET:
-        if not _naver_warned:
-            logger.warning("Naver API keys not configured, skipping Naver crawler")
-            _naver_warned = True
+        logger.warning("Naver API keys not configured, disabling Naver crawler")
+        _naver_disabled = True
         return []
 
     url = "https://openapi.naver.com/v1/search/news.json"
@@ -29,12 +32,11 @@ async def search_naver_news(query: str, display: int = 10) -> list[dict]:
 
     async with httpx.AsyncClient() as client:
         try:
-            resp = await client.get(url, headers=headers, params=params, timeout=10)
+            resp = await client.get(url, headers=headers, params=params, timeout=5)
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
-            if not _naver_warned:
-                logger.warning(f"Naver API error: {e.response.status_code} {e.response.text[:200]}")
-                _naver_warned = True
+            logger.warning(f"Naver API error: {e.response.status_code}, disabling Naver crawler")
+            _naver_disabled = True
             return []
         except httpx.HTTPError as e:
             logger.warning(f"Naver API request failed: {e}")
