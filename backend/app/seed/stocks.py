@@ -311,11 +311,9 @@ def seed_all_stocks(db: Session, force: bool = False) -> int:
         logger.info(f"Already have {existing_count} stocks, skipping seed.")
         return 0
 
-    # Build Naver-based stock_code → sector_id mapping (live scrape → snapshot fallback)
-    naver_mapping = _build_naver_stock_mapping(db)
-    if not naver_mapping:
-        # Try static snapshot as last resort
-        naver_mapping = _load_snapshot_mapping(db)
+    # Primary: use static snapshot (reliable, pre-verified)
+    # Live scraping is unreliable on cloud hosts (Render/Vercel) due to Naver blocking
+    naver_mapping = _load_snapshot_mapping(db)
     if not naver_mapping:
         if existing_count > 0:
             logger.warning("All mapping sources failed but stocks exist. Keeping current data.")
