@@ -71,7 +71,8 @@ async def search_naver_news(query: str, display: int = 10) -> list[dict]:
 
 
 def _strip_html(text: str) -> str:
-    """Remove HTML tags from text."""
+    """Remove HTML tags and decode HTML entities from text."""
     import re
+    import html
 
-    return re.sub(r"<[^>]+>", "", text)
+    return html.unescape(re.sub(r"<[^>]+>", "", text))

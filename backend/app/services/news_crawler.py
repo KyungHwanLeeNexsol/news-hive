@@ -55,6 +55,53 @@ def _build_search_queries(db: Session, sectors: list[Sector], stocks: list[Stock
     return list(queries)
 
 
+def _resolve_query_relations(
+    query: str,
+    sectors: list[Sector],
+    stocks: list[Stock],
+) -> list[dict]:
+    """Resolve a search query to sector/stock relations.
+
+    Since articles are fetched by searching for a specific sector or stock name,
+    we can automatically tag them with the entity that triggered the search.
+    """
+    results = []
+    matched_sector_ids: set[int] = set()
+
+    # Check if query matches a stock name
+    for stock in stocks:
+        if stock.name == query:
+            results.append({
+                "stock_id": stock.id,
+                "sector_id": stock.sector_id,
+                "match_type": "keyword",
+                "relevance": "direct",
+            })
+            matched_sector_ids.add(stock.sector_id)
+        elif stock.keywords and query in stock.keywords:
+            results.append({
+                "stock_id": stock.id,
+                "sector_id": stock.sector_id,
+                "match_type": "keyword",
+                "relevance": "indirect",
+            })
+            matched_sector_ids.add(stock.sector_id)
+
+    # Check if query matches a sector name
+    for sector in sectors:
+        if sector.id in matched_sector_ids:
+            continue
+        if sector.name == query:
+            results.append({
+                "stock_id": None,
+                "sector_id": sector.id,
+                "match_type": "keyword",
+                "relevance": "direct",
+            })
+
+    return results
+
+
 async def crawl_all_news(db: Session) -> int:
     """Main orchestrator: crawl news for all stocks and sectors, classify, and save."""
     stocks = db.query(Stock).all()
@@ -68,6 +115,9 @@ async def crawl_all_news(db: Session) -> int:
     # Phase 1: Fetch Korean financial RSS feeds (once per cycle, not per query)
     try:
         korean_rss_articles = await fetch_korean_rss_feeds()
+        # RSS feeds have no specific query — they'll rely on keyword/AI classification
+        for a in korean_rss_articles:
+            a["_query"] = None
         all_raw_articles.extend(korean_rss_articles)
         source_counts["korean_rss"] = len(korean_rss_articles)
     except Exception as e:
@@ -92,6 +142,9 @@ async def crawl_all_news(db: Session) -> int:
                 articles = []
                 for source_name, result in zip(source_names, results):
                     if isinstance(result, list):
+                        # Tag each article with the query that fetched it
+                        for a in result:
+                            a["_query"] = query
                         articles.extend(result)
                         source_counts[source_name] += len(result)
                     elif isinstance(result, Exception):
@@ -153,10 +206,13 @@ async def _save_article_with_classification(
     sectors: list[Sector],
     stocks: list[Stock],
 ) -> bool:
-    """Save a single article with keyword + AI classification.
+    """Save a single article with query-based + keyword + AI classification.
 
-    Uses classify_news which first tries fast keyword matching, then
-    falls back to Gemini AI so every article gets at least one sector tag.
+    Three-phase tagging:
+    1. Query-based: If the article was fetched by searching for a sector/stock name,
+       automatically tag it with that entity (most reliable).
+    2. Keyword matching: Scan title for exact sector/stock name matches.
+    3. AI classification: Gemini API fallback for articles with no tags yet.
     """
     from app.models.news_relation import NewsStockRelation
     from app.services.ai_classifier import classify_news, classify_sentiment
@@ -176,9 +232,26 @@ async def _save_article_with_classification(
         db.rollback()
         return False
 
-    classifications = await classify_news(article_data["title"], sectors, stocks)
+    # Phase 1: Query-based auto-tagging (guaranteed relation from search context)
+    query = article_data.get("_query")
+    query_relations = []
+    if query:
+        query_relations = _resolve_query_relations(query, sectors, stocks)
 
-    for cls in classifications:
+    # Phase 2+3: Keyword + AI classification (may find additional relations)
+    ai_relations = await classify_news(article_data["title"], sectors, stocks)
+
+    # Merge: deduplicate by (stock_id, sector_id) pair
+    seen_pairs: set[tuple] = set()
+    all_relations: list[dict] = []
+
+    for rel in query_relations + ai_relations:
+        pair = (rel.get("stock_id"), rel.get("sector_id"))
+        if pair not in seen_pairs:
+            seen_pairs.add(pair)
+            all_relations.append(rel)
+
+    for cls in all_relations:
         relation = NewsStockRelation(
             news_id=article.id,
             stock_id=cls.get("stock_id"),

@@ -1,3 +1,4 @@
+import html
 import logging
 import re
 from datetime import datetime, timezone
@@ -71,11 +72,11 @@ async def search_google_news(query: str, num: int = 10) -> list[dict]:
 
             articles.append(
                 {
-                    "title": entry.get("title", ""),
+                    "title": html.unescape(entry.get("title", "")),
                     "url": real_url,
                     "source": "google",
                     "published_at": pub_date,
-                    "description": entry.get("summary", ""),
+                    "description": html.unescape(entry.get("summary", "")),
                 }
             )
     return articles

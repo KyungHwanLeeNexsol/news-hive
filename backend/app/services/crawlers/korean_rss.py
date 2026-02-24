@@ -5,6 +5,7 @@ No API keys required — all feeds are publicly accessible.
 """
 
 import asyncio
+import html
 import logging
 from datetime import datetime, timezone
 
@@ -51,7 +52,7 @@ async def _fetch_single_feed(name: str, url: str) -> list[dict]:
             except (TypeError, ValueError):
                 pub_date = datetime.now(timezone.utc)
 
-        title = entry.get("title", "").strip()
+        title = html.unescape(entry.get("title", "")).strip()
         link = entry.get("link", "").strip()
         if not title or not link:
             continue
@@ -62,7 +63,7 @@ async def _fetch_single_feed(name: str, url: str) -> list[dict]:
                 "url": link,
                 "source": "korean_rss",
                 "published_at": pub_date,
-                "description": entry.get("summary", "").strip(),
+                "description": html.unescape(entry.get("summary", "")).strip(),
             }
         )
     return articles

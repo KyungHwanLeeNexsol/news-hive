@@ -1,3 +1,4 @@
+import html
 from datetime import datetime, timezone
 
 import httpx
@@ -40,11 +41,11 @@ async def search_newsapi(query: str, page_size: int = 10) -> list[dict]:
 
         articles.append(
             {
-                "title": item.get("title", ""),
+                "title": html.unescape(item.get("title", "")),
                 "url": item.get("url", ""),
                 "source": "newsapi",
                 "published_at": pub_date,
-                "description": item.get("description", ""),
+                "description": html.unescape(item.get("description") or ""),
             }
         )
     return articles

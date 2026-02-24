@@ -41,6 +41,7 @@ async def lifespan(app: FastAPI):
         # which deletes all stocks — so seed_all_stocks will always re-add them
         seed_all_stocks(db)
         _backfill_sentiment(db)
+        _fix_html_entities(db)
     finally:
         db.close()
     start_scheduler()
@@ -61,6 +62,34 @@ def _backfill_sentiment(db):
         article.sentiment = classify_sentiment(article.title)
     db.commit()
     logging.getLogger(__name__).info(f"Backfilled sentiment for {len(articles)} articles")
+
+
+def _fix_html_entities(db):
+    """Fix existing articles with raw HTML entities in titles/summaries."""
+    import html as html_mod
+    from app.models.news import NewsArticle
+
+    # Find articles with common HTML entities
+    from sqlalchemy import or_
+    articles = db.query(NewsArticle).filter(
+        or_(
+            NewsArticle.title.contains("&"),
+            NewsArticle.summary.contains("&"),
+        )
+    ).all()
+
+    fixed = 0
+    for article in articles:
+        new_title = html_mod.unescape(article.title)
+        new_summary = html_mod.unescape(article.summary) if article.summary else article.summary
+        if new_title != article.title or new_summary != article.summary:
+            article.title = new_title
+            article.summary = new_summary
+            fixed += 1
+
+    if fixed:
+        db.commit()
+        logging.getLogger(__name__).info(f"Fixed HTML entities in {fixed} articles")
 
 
 app = FastAPI(title="Stock News Tracker API", lifespan=lifespan)
