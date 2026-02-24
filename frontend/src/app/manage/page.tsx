@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { formatSectorName } from "@/lib/format";
 import {
   fetchSectors,
   fetchSector,
@@ -151,7 +152,7 @@ export default function ManagePage() {
               <button
                 onClick={handleSyncStocks}
                 disabled={syncing}
-                className="px-3 py-1 text-[12px] bg-[#03c75a] text-white rounded hover:bg-[#02b350] disabled:opacity-50"
+                className="px-3 py-1 text-[12px] bg-[#1261c4] text-white rounded hover:bg-[#0f54a8] disabled:opacity-50"
               >
                 {syncing ? "동기화 중..." : "전종목 동기화"}
               </button>
@@ -164,7 +165,7 @@ export default function ManagePage() {
                 value={newSectorName}
                 onChange={(e) => setNewSectorName(e.target.value)}
                 placeholder="새 업종명 입력"
-                className="flex-1 px-2 py-1.5 border border-[#ddd] text-[13px] focus:outline-none focus:border-[#03c75a]"
+                className="flex-1 px-2 py-1.5 border border-[#ddd] text-[13px] focus:outline-none focus:border-[#1261c4]"
               />
               <button
                 type="submit"
@@ -191,7 +192,7 @@ export default function ManagePage() {
                     onClick={() => handleSelectSector(sector.id)}
                   >
                     <td>
-                      <span className="font-medium text-[#333]">{sector.name}</span>
+                      <span className="font-medium text-[#333]">{formatSectorName(sector.name)}</span>
                       {sector.is_custom && (
                         <span className="badge badge-source ml-1">커스텀</span>
                       )}
@@ -236,14 +237,14 @@ export default function ManagePage() {
                     value={stockForm.name}
                     onChange={(e) => setStockForm({ ...stockForm, name: e.target.value })}
                     placeholder="종목명"
-                    className="flex-1 px-2 py-1.5 border border-[#ddd] text-[13px] focus:outline-none focus:border-[#03c75a]"
+                    className="flex-1 px-2 py-1.5 border border-[#ddd] text-[13px] focus:outline-none focus:border-[#1261c4]"
                   />
                   <input
                     type="text"
                     value={stockForm.stock_code}
                     onChange={(e) => setStockForm({ ...stockForm, stock_code: e.target.value })}
                     placeholder="종목코드"
-                    className="w-[120px] px-2 py-1.5 border border-[#ddd] text-[13px] focus:outline-none focus:border-[#03c75a]"
+                    className="w-[120px] px-2 py-1.5 border border-[#ddd] text-[13px] focus:outline-none focus:border-[#1261c4]"
                   />
                 </div>
                 <div className="flex gap-2">
@@ -252,11 +253,11 @@ export default function ManagePage() {
                     value={stockForm.keywords}
                     onChange={(e) => setStockForm({ ...stockForm, keywords: e.target.value })}
                     placeholder="키워드 (쉼표 구분)"
-                    className="flex-1 px-2 py-1.5 border border-[#ddd] text-[13px] focus:outline-none focus:border-[#03c75a]"
+                    className="flex-1 px-2 py-1.5 border border-[#ddd] text-[13px] focus:outline-none focus:border-[#1261c4]"
                   />
                   <button
                     type="submit"
-                    className="px-4 py-1.5 bg-[#03c75a] text-white text-[12px] hover:bg-[#02b350]"
+                    className="px-4 py-1.5 bg-[#1261c4] text-white text-[12px] hover:bg-[#0f54a8]"
                   >
                     종목 추가
                   </button>

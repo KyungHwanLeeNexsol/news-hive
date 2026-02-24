@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { fetchStockNews } from '@/lib/api';
+import { formatSectorName } from '@/lib/format';
 import type { NewsArticle } from '@/lib/types';
 
 function formatDate(dateStr: string | null): string {
@@ -95,7 +96,7 @@ export default function StockDetail() {
                     <td>
                       <Link
                         href={`/news/${article.id}`}
-                        className="text-[#333] hover:text-[#03c75a] hover:underline"
+                        className="text-[#333] hover:text-[#1261c4] hover:underline"
                       >
                         {article.title}
                       </Link>
@@ -115,7 +116,7 @@ export default function StockDetail() {
                           key={i}
                           className={`badge ${rel.relevance === 'direct' ? 'badge-direct' : 'badge-indirect'} mr-1`}
                         >
-                          {rel.stock_name || rel.sector_name}
+                          {rel.stock_name || (rel.sector_name && formatSectorName(rel.sector_name))}
                         </span>
                       ))}
                     </td>

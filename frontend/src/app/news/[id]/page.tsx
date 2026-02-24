@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { fetchNewsById, generateAiSummary, scrapeArticleContent } from '@/lib/api';
+import { formatSectorName } from '@/lib/format';
 import type { NewsArticle } from '@/lib/types';
 
 function formatDate(dateStr: string | null): string {
@@ -161,7 +162,7 @@ export default function NewsDetail() {
                       href={`/sectors/${id}`}
                       className="badge badge-indirect hover:opacity-80 px-2 py-0.5"
                     >
-                      {s.name}
+                      {formatSectorName(s.name)}
                     </Link>
                   ))}
                   {stocks.map(([id, s]) => (

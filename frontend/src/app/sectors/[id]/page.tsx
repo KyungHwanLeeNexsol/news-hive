@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { fetchSector, fetchSectorNews } from "@/lib/api";
+import { formatSectorName } from "@/lib/format";
 import type { Sector, NewsArticle } from "@/lib/types";
 
 function formatDate(dateStr: string | null): string {
@@ -63,7 +64,7 @@ export default function SectorDetail() {
           업종별 뉴스
         </Link>
         <span>&rsaquo;</span>
-        <span className="text-[#333] font-medium">{sector.name}</span>
+        <span className="text-[#333] font-medium">{formatSectorName(sector.name)}</span>
       </div>
 
       {/* Tab nav */}
@@ -112,7 +113,7 @@ export default function SectorDetail() {
                     <td>
                       <Link
                         href={`/stocks/${stock.id}`}
-                        className="text-[#333] hover:text-[#03c75a] hover:underline font-medium"
+                        className="text-[#333] hover:text-[#1261c4] hover:underline font-medium"
                       >
                         {stock.name}
                       </Link>
@@ -160,7 +161,7 @@ export default function SectorDetail() {
                       <td>
                         <Link
                           href={`/news/${article.id}`}
-                          className="text-[#333] hover:text-[#03c75a] hover:underline"
+                          className="text-[#333] hover:text-[#1261c4] hover:underline"
                         >
                           {article.title}
                         </Link>
@@ -181,7 +182,7 @@ export default function SectorDetail() {
                             key={i}
                             className={`badge ${rel.relevance === "direct" ? "badge-direct" : "badge-indirect"} mr-1`}
                           >
-                            {rel.stock_name || rel.sector_name}
+                            {rel.stock_name || (rel.sector_name && formatSectorName(rel.sector_name))}
                           </span>
                         ))}
                       </td>

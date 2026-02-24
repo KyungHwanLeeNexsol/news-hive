@@ -15,7 +15,12 @@ export default function Header() {
     <header className="bg-white border-b border-gray-300">
       <div className="max-w-[1200px] mx-auto px-4">
         <div className="flex items-center h-12 gap-6">
-          <Link href="/" className="text-[17px] font-bold text-[#03c75a] tracking-tight">
+          <Link href="/" className="flex items-center gap-1.5 text-[17px] font-bold text-[#1261c4] tracking-tight">
+            <svg width="22" height="22" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M16 2L28.124 9V23L16 30L3.876 23V9L16 2Z" fill="#1261c4"/>
+              <path d="M16 5.5L25.5 10.75V21.25L16 26.5L6.5 21.25V10.75L16 5.5Z" fill="#ffffff" fillOpacity="0.15"/>
+              <path d="M11 11h2.5v6.5L18.5 11H21v10h-2.5v-6.5L13.5 21H11V11Z" fill="#ffffff"/>
+            </svg>
             NewsHive
           </Link>
           <nav className="flex h-full">
@@ -26,7 +31,7 @@ export default function Header() {
                   key={item.href}
                   href={item.href}
                   className={`flex items-center px-4 text-[13px] font-semibold border-b-2 transition-colors ${
-                    isActive ? 'border-[#03c75a] text-[#03c75a]' : 'border-transparent text-[#666] hover:text-[#333]'
+                    isActive ? 'border-[#1261c4] text-[#1261c4]' : 'border-transparent text-[#666] hover:text-[#333]'
                   }`}
                 >
                   {item.label}

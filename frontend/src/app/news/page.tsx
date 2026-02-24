@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { fetchNews, refreshNews } from "@/lib/api";
+import { formatSectorName } from "@/lib/format";
 import type { NewsArticle } from "@/lib/types";
 
 function formatDate(dateStr: string | null): string {
@@ -63,7 +64,7 @@ export default function NewsPage() {
         <button
           onClick={handleRefresh}
           disabled={refreshing}
-          className="px-3 py-1 text-[12px] bg-[#03c75a] text-white rounded hover:bg-[#02b350] disabled:opacity-50"
+          className="px-3 py-1 text-[12px] bg-[#1261c4] text-white rounded hover:bg-[#0f54a8] disabled:opacity-50"
         >
           {refreshing ? "수집 중..." : "뉴스 새로고침"}
         </button>
@@ -93,7 +94,7 @@ export default function NewsPage() {
                   <td>
                     <Link
                       href={`/news/${article.id}`}
-                      className="text-[#333] hover:text-[#03c75a] hover:underline"
+                      className="text-[#333] hover:text-[#1261c4] hover:underline"
                     >
                       {article.title}
                     </Link>
@@ -118,7 +119,7 @@ export default function NewsPage() {
                           key={i}
                           className={`badge ${rel.relevance === "direct" ? "badge-direct" : "badge-indirect"}`}
                         >
-                          {rel.stock_name || rel.sector_name}
+                          {rel.stock_name || (rel.sector_name && formatSectorName(rel.sector_name))}
                         </span>
                       ))}
                     </div>

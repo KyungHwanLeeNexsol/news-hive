@@ -1,6 +1,7 @@
 "use client";
 
 import type { NewsArticle } from "@/lib/types";
+import { formatSectorName } from "@/lib/format";
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return "";
@@ -70,7 +71,7 @@ export default function NewsCard({ article }: { article: NewsArticle }) {
           <span key={i} className="flex items-center gap-1">
             {relevanceBadge(rel.relevance)}
             <span className="text-xs text-gray-500">
-              {rel.stock_name || rel.sector_name}
+              {rel.stock_name || (rel.sector_name && formatSectorName(rel.sector_name))}
             </span>
           </span>
         ))}

@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { fetchSectors, fetchNews, refreshNews } from '@/lib/api';
 import type { Sector, NewsArticle } from '@/lib/types';
+import { formatSectorName } from '@/lib/format';
 import ChangeRate from '@/components/ChangeRate';
 import UpDownBar from '@/components/UpDownBar';
 
@@ -113,9 +114,9 @@ export default function Dashboard() {
                     <td>
                       <Link
                         href={`/sectors/${sector.id}`}
-                        className="text-[#333] hover:text-[#03c75a] hover:underline font-medium"
+                        className="text-[#333] hover:text-[#1261c4] hover:underline font-medium"
                       >
-                        {sector.name}
+                        {formatSectorName(sector.name)}
                       </Link>
                       {sector.is_custom && <span className="badge badge-source ml-1">커스텀</span>}
                     </td>
@@ -179,7 +180,7 @@ export default function Dashboard() {
                           key={i}
                           className={`badge ${rel.relevance === 'direct' ? 'badge-direct' : 'badge-indirect'}`}
                         >
-                          {rel.stock_name || rel.sector_name}
+                          {rel.stock_name || (rel.sector_name && formatSectorName(rel.sector_name))}
                         </span>
                       ))}
                       <span>{formatDate(article.published_at)}</span>
