@@ -128,6 +128,9 @@ def _try_fetch_live() -> list[dict]:
         if not table:
             return []
 
+        # Naver codes to exclude (기타 = mostly ETF/ETN, not useful for sector tracking)
+        _EXCLUDE_CODES = {"25"}
+
         sectors = []
         for row in table.select("tr"):
             link = row.select_one("td a")
@@ -137,7 +140,7 @@ def _try_fetch_live() -> list[dict]:
             href = link.get("href", "")
             if "no=" in href:
                 code = href.split("no=")[-1].split("&")[0].strip()
-                if name and code:
+                if name and code and code not in _EXCLUDE_CODES:
                     sectors.append({"name": name, "code": code})
 
         logger.info(f"Live fetch: found {len(sectors)} sectors from Naver Finance")

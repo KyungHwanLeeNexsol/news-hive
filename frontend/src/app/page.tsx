@@ -60,9 +60,9 @@ export default function Dashboard() {
     }
   }
 
-  // Filter: only show sectors that have stocks
+  // Filter: only show sectors that have stocks in our DB
   const visibleSectors = sectors.filter(
-    (s) => (s.stock_count ?? 0) > 0 || (s.total_stocks ?? 0) > 0
+    (s) => (s.stock_count ?? 0) > 0
   );
   const totalStocks = visibleSectors.reduce((sum, s) => sum + (s.stock_count ?? 0), 0);
 
@@ -115,7 +115,7 @@ export default function Dashboard() {
                       <ChangeRate value={sector.change_rate} />
                     </td>
                     <td className="text-center text-[#333]">
-                      {sector.total_stocks ?? sector.stock_count ?? 0}
+                      {sector.stock_count ?? 0}
                     </td>
                     <td className="text-center text-rise">
                       {sector.rising_stocks ?? "-"}
