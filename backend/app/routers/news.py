@@ -1,9 +1,9 @@
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends
 from sqlalchemy.orm import Session, joinedload
 
-from app.database import get_db
+from app.database import get_db, SessionLocal
 from app.models.news import NewsArticle
 from app.schemas.news import NewsArticleResponse, NewsRelationResponse
 
@@ -52,24 +52,33 @@ async def list_news(limit: int = 50, db: Session = Depends(get_db)):
 
 
 @router.post("/refresh")
-async def refresh_news(db: Session = Depends(get_db)):
+async def refresh_news(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    # Quick synchronous reclassify (keyword-only, instant)
+    reclassified = await _reclassify_unlinked(db)
+
+    # Launch crawl in background so the HTTP response returns immediately
+    background_tasks.add_task(_run_crawl_background)
+
+    total = db.query(NewsArticle).count()
+    return {
+        "message": f"Reclassified {reclassified}. Crawl started in background.",
+        "reclassified": reclassified,
+        "total": total,
+    }
+
+
+async def _run_crawl_background():
+    """Run the crawl in background with a dedicated DB session."""
     from app.services.news_crawler import crawl_all_news
 
+    db = SessionLocal()
     try:
-        # Reclassify existing articles that have no relations
-        reclassified = await _reclassify_unlinked(db)
-
         count = await crawl_all_news(db)
-        total = db.query(NewsArticle).count()
-        return {
-            "message": f"Collected {count} new articles, reclassified {reclassified}",
-            "new": count,
-            "reclassified": reclassified,
-            "total": total,
-        }
+        logger.info(f"Background crawl completed: {count} new articles")
     except Exception as e:
-        import traceback
-        return {"message": f"Crawl failed: {e}", "error": traceback.format_exc()}
+        logger.error(f"Background crawl failed: {e}")
+    finally:
+        db.close()
 
 
 async def _reclassify_unlinked(db: Session) -> int:
