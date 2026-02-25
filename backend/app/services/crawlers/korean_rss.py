@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 # Korean financial news RSS feeds (category-based, no API keys needed)
 KOREAN_RSS_FEEDS = [
-    ("파이낸셜뉴스", "http://www.fnnews.com/rss/fn_realnews_stock.xml"),
+    ("파이낸셜뉴스", "https://www.fnnews.com/rss/r20/fn_realnews_stock.xml"),
     ("이투데이 산업", "https://rss.etoday.co.kr/eto/industry_news.xml"),
     ("이투데이 증권", "https://rss.etoday.co.kr/eto/market_news.xml"),
     ("전자신문 전자", "http://rss.etnews.com/06.xml"),
