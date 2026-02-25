@@ -100,6 +100,12 @@ REMOVE_SELECTORS = [
     "[class*='popular']", "[class*='most_']", "[class*='ranking']",
     # Crypto / market widgets
     "[class*='crypto']", "[class*='coin']", "[class*='market_info']",
+    # Newdaily / other site-specific noise
+    "[class*='news_zone']", "[class*='quickguide']", "[class*='interworks']",
+    "[class*='font_size']", "[class*='fontsize']", "[class*='font-size']",
+    "[class*='voice']", "[class*='tts']",
+    "[class*='article_tool']", "[class*='article-tool']",
+    "[class*='article_util']", "[class*='article-util']",
 ]
 
 
@@ -157,6 +163,22 @@ _NOISE_PATTERNS = [
     r"AD\s*CLOSE",
     r"스폰서\s*링크",
     r"Sponsored",
+    # Site-specific UI text
+    r"news_zone[\w\s_]*",
+    r"quickguide",
+    r"article_body\s*for\s*interworks\s*tag",
+    r"글자크기",
+    r"음성으로\s*듣기",
+    r"글씨\s*크기\s*조절",
+    r"본문\s*듣기",
+    r"본문\s*글씨\s*크기",
+    r"기사\s*제보",
+    r"무단\s*전재.*?금지",
+    r"저작권자.*?무단.*?금지",
+    r"ⓒ\s*\S+.*?무단.*?금지",
+    # Raw HTML class/id attributes leaking through
+    r"\b(?:class|id)\s*=\s*['\"][^'\"]+['\"]",
+    r"</?(?:div|span|img|a|p|br|table|tr|td|ul|li|em|strong|b|i)\b[^>]*>",
 ]
 
 

@@ -63,6 +63,9 @@ _NON_FINANCIAL_PATTERNS: list[str] = [
     "맛집", "레시피", "다이어트", "건강법", "운동법",
     # Weather / Nature (non-business)
     "일기예보", "기상청",
+    # Photo / Video only articles (no real content)
+    "[포토]", "[사진]", "[영상]", "[화보]", "[포토뉴스]",
+    "[Photo]", "[VIDEO]",
 ]
 
 # Compile regex for non-financial detection
@@ -72,9 +75,30 @@ _NON_FINANCIAL_RE = re.compile(
 )
 
 
-def is_non_financial_article(title: str) -> bool:
-    """Check if an article title indicates non-financial content (entertainment, sports, etc.)."""
-    return bool(_NON_FINANCIAL_RE.search(title))
+# Foreign non-investment source domains/suffixes in title or URL
+_FOREIGN_SOURCE_PATTERNS = re.compile(
+    r"(?:Vietnam\.vn|VnExpress|Thanh Niên|Tuổi Trẻ|NHK|Asahi"
+    r"|aljazeera|bbc\.com/(?!korean)|reuters\.com/(?!korean)"
+    r"|thehindu|timesofindia|dawn\.com|inquirer\.net"
+    r"|rappler\.com|bangkokpost|channelnewsasia)",
+    re.IGNORECASE,
+)
+
+
+def is_non_financial_article(title: str, url: str = "") -> bool:
+    """Check if an article title indicates non-financial content.
+
+    Covers entertainment/sports/lifestyle keywords, photo-only articles,
+    and foreign non-investment news sources.
+    """
+    if _NON_FINANCIAL_RE.search(title):
+        return True
+
+    # Foreign source detection (by title suffix or URL)
+    if _FOREIGN_SOURCE_PATTERNS.search(title) or _FOREIGN_SOURCE_PATTERNS.search(url):
+        return True
+
+    return False
 
 
 def classify_news(title: str, index: KeywordIndex) -> list[dict]:
