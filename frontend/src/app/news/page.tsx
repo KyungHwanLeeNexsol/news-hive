@@ -19,17 +19,6 @@ function formatDate(dateStr: string | null): string {
   });
 }
 
-function sourceLabel(source: string): string {
-  switch (source) {
-    case "naver": return "네이버";
-    case "google": return "구글";
-    case "yahoo": return "Yahoo";
-    case "korean_rss": return "경제지";
-    case "us_news": return "미국";
-    default: return source;
-  }
-}
-
 function sentimentLabel(sentiment: string | null): { text: string; className: string } {
   switch (sentiment) {
     case "positive": return { text: "호재", className: "badge-positive" };
@@ -79,17 +68,16 @@ export default function NewsPage() {
       <table className="naver-table">
         <thead>
           <tr>
-            <th className="text-left" style={{ width: "43%" }}>제목</th>
+            <th className="text-left" style={{ width: "50%" }}>제목</th>
             <th style={{ width: "7%" }}>구분</th>
-            <th style={{ width: "8%" }}>출처</th>
-            <th style={{ width: "22%" }}>관련 종목</th>
+            <th style={{ width: "23%" }}>관련 종목</th>
             <th style={{ width: "20%" }}>날짜</th>
           </tr>
         </thead>
         <tbody>
           {news.length === 0 ? (
             <tr>
-              <td colSpan={5} className="text-center py-8 text-[#999]">
+              <td colSpan={4} className="text-center py-8 text-[#999]">
                 {loading ? '뉴스를 불러오는 중...' : '수집된 뉴스가 없습니다. 뉴스 새로고침을 눌러주세요.'}
               </td>
             </tr>
@@ -115,9 +103,6 @@ export default function NewsPage() {
                     <span className={`badge ${sentiment.className}`}>
                       {sentiment.text}
                     </span>
-                  </td>
-                  <td className="text-center">
-                    <span className="badge badge-source">{sourceLabel(article.source)}</span>
                   </td>
                   <td className="text-center">
                     <div className="flex flex-wrap gap-1 justify-center">

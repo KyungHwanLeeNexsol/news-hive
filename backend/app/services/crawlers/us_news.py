@@ -7,7 +7,6 @@ Only industry/sector trends — no individual company tracking.
 import asyncio
 import html
 import logging
-import random
 import re
 from datetime import datetime, timezone
 from urllib.parse import quote
@@ -16,6 +15,9 @@ import httpx
 import feedparser
 
 logger = logging.getLogger(__name__)
+
+# Round-robin index for US news sector rotation (persists across cycles)
+_us_rr_index = 0
 
 # Korean sector name -> English industry search term mapping
 SECTOR_EN_TERMS: dict[str, str] = {
@@ -178,9 +180,15 @@ async def fetch_us_industry_news(
         if en_term:
             queries.append((name, en_term))
 
-    # Limit queries per cycle — rotate which sectors get US news
+    # Limit queries per cycle — round-robin rotation for even coverage
+    global _us_rr_index
     if len(queries) > MAX_US_QUERIES:
-        queries = random.sample(queries, MAX_US_QUERIES)
+        selected = []
+        for i in range(MAX_US_QUERIES):
+            idx = (_us_rr_index + i) % len(queries)
+            selected.append(queries[idx])
+        _us_rr_index = (_us_rr_index + MAX_US_QUERIES) % len(queries)
+        queries = selected
 
     semaphore = asyncio.Semaphore(3)
     results: list[tuple[str, list[dict]]] = []

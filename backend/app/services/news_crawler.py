@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import random
 
 from sqlalchemy.orm import Session
 
@@ -16,8 +15,11 @@ from app.services.ai_classifier import _extract_sector_keywords
 logger = logging.getLogger(__name__)
 
 # Query budget for search-based crawlers
-MAX_TOTAL_QUERIES = 20
-MAX_STOCK_QUERIES = 5
+MAX_TOTAL_QUERIES = 50
+MAX_STOCK_QUERIES = 15
+
+# Round-robin index for stock selection (persists across cycles within same process)
+_stock_rr_index = 0
 
 
 def _build_search_queries(db: Session, sectors: list[Sector], stocks: list[Stock]) -> list[str]:
@@ -49,13 +51,17 @@ def _build_search_queries(db: Session, sectors: list[Sector], stocks: list[Stock
         for kw in stock.keywords:
             queries.add(kw)
 
-    # 3) Random sample of remaining stocks to fill budget
-    remaining = [s for s in stocks if not s.keywords]
+    # 3) Round-robin selection of remaining stocks to fill budget
+    #    Cycles through all stocks evenly across crawl cycles
+    global _stock_rr_index
+    remaining = sorted([s for s in stocks if not s.keywords], key=lambda s: s.id)
     stock_budget = max(0, MAX_TOTAL_QUERIES - len(queries))
     sample_size = min(stock_budget, MAX_STOCK_QUERIES, len(remaining))
-    if sample_size > 0:
-        for stock in random.sample(remaining, sample_size):
-            queries.add(stock.name)
+    if sample_size > 0 and remaining:
+        for i in range(sample_size):
+            idx = (_stock_rr_index + i) % len(remaining)
+            queries.add(remaining[idx].name)
+        _stock_rr_index = (_stock_rr_index + sample_size) % len(remaining)
 
     return list(queries)
 
@@ -179,7 +185,7 @@ async def crawl_all_news(db: Session) -> int:
         async def _search_one(query: str):
             async with semaphore:
                 crawlers = [
-                    search_naver_news(query, display=5),
+                    search_naver_news(query, display=10),
                     search_google_news(query, num=10),
                 ]
                 source_names = ["naver", "google"]
