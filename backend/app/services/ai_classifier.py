@@ -217,11 +217,11 @@ async def generate_ai_summary(title: str, description: str | None, relations: li
         except Exception as e:
             is_rate_limit = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
             if is_rate_limit and attempt < max_retries - 1:
-                wait = 3 * (2 ** attempt)  # 3s, 6s, 12s, 24s
+                wait = 5 * (2 ** attempt)  # 5s, 10s, 20s, 40s
                 logger.info(f"AI summary rate limited, retrying in {wait}s (attempt {attempt + 1}/{max_retries})")
                 await _asyncio.sleep(wait)
             else:
-                logger.warning(f"AI summary generation failed: {e}")
+                logger.info(f"AI summary skipped (rate limited)")
                 return None
     return None
 
@@ -301,16 +301,17 @@ async def translate_articles_batch(articles: list[dict]) -> None:
             except Exception as e:
                 is_rate_limit = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
                 if is_rate_limit and attempt < max_retries - 1:
-                    wait = 3 * (2 ** attempt)  # 3s, 6s, 12s, 24s
-                    logger.info(f"Rate limited, retrying in {wait}s (attempt {attempt + 1}/{max_retries})")
+                    wait = 5 * (2 ** attempt)  # 5s, 10s, 20s, 40s
+                    logger.info(f"Translation rate limited, retrying in {wait}s (attempt {attempt + 1}/{max_retries})")
                     await _asyncio.sleep(wait)
                 else:
-                    logger.warning(f"Batch translation failed: {e}")
+                    # Non-fatal: English titles are kept as-is
+                    logger.info(f"Translation skipped (rate limited), keeping English titles: chunk {chunk_start // chunk_size + 1}")
                     break
 
         # Delay between chunks to avoid rate limits
         if chunk_start + chunk_size < len(en_articles):
-            await _asyncio.sleep(3)
+            await _asyncio.sleep(5)
 
     translated_count = sum(1 for _, a in en_articles if "original_title" in a)
     if translated_count:
