@@ -322,6 +322,31 @@ async def crawl_all_news(db: Session) -> int:
     # Translate English titles to Korean before saving
     await translate_articles_batch(unique_articles)
 
+    # Pre-compute relations and discard articles with no sector/stock match
+    for ad in unique_articles:
+        relations: list[dict] = []
+        query = ad.get("_query")
+        if query:
+            relations.extend(_resolve_query_relations(query, index, sectors))
+        us_sector_id = ad.get("_us_sector_id")
+        if us_sector_id:
+            relations.append({
+                "stock_id": None, "sector_id": us_sector_id,
+                "match_type": "keyword", "relevance": "indirect",
+            })
+        relations.extend(classify_news(ad["title"], index))
+        ad["_relations"] = relations
+
+    pre_rel_count = len(unique_articles)
+    unique_articles = [a for a in unique_articles if a.get("_relations")]
+    no_rel_count = pre_rel_count - len(unique_articles)
+    if no_rel_count:
+        logger.info(f"Skipped {no_rel_count} articles with no sector/stock match")
+
+    if not unique_articles:
+        logger.info("No articles with sector/stock relations to save.")
+        return 0
+
     from sqlalchemy import text as sa_text
 
     saved_count = 0
@@ -369,7 +394,7 @@ async def crawl_all_news(db: Session) -> int:
         if not url_to_id:
             continue
 
-        # Step 2: Bulk insert relations via raw SQL
+        # Step 2: Bulk insert relations via raw SQL (using pre-computed _relations)
         rel_values = []
         rel_params: dict = {}
         rel_idx = 0
@@ -379,22 +404,7 @@ async def crawl_all_news(db: Session) -> int:
             if not article_id:
                 continue
 
-            relations: list[dict] = []
-            query = ad.get("_query")
-            if query:
-                relations.extend(_resolve_query_relations(query, index, sectors))
-
-            us_sector_id = ad.get("_us_sector_id")
-            if us_sector_id:
-                relations.append({
-                    "stock_id": None,
-                    "sector_id": us_sector_id,
-                    "match_type": "keyword",
-                    "relevance": "indirect",
-                })
-
-            keyword_rels = classify_news(ad["title"], index)
-            relations.extend(keyword_rels)
+            relations = ad.get("_relations", [])
 
             seen_pairs: set[tuple] = set()
             for rel in relations:

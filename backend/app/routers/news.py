@@ -423,6 +423,12 @@ def _deduplicate_existing(db: Session) -> int:
         for dup in group[1:]:
             delete_ids.append(dup[0])
 
+    # Also remove orphan articles (no relations at all)
+    orphan_ids = [row[0] for row in rows if row[3] == 0 and row[0] not in delete_ids]
+    if orphan_ids:
+        logger.info(f"Found {len(orphan_ids)} orphan articles (no sector/stock relations)")
+        delete_ids.extend(orphan_ids)
+
     if not delete_ids:
         return 0
 
