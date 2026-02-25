@@ -87,6 +87,9 @@ async def refresh_news(background_tasks: BackgroundTasks, db: Session = Depends(
     # Quick synchronous reclassify (keyword-only, instant)
     reclassified = await _reclassify_unlinked(db)
 
+    # Remove near-duplicate articles
+    deduped = _deduplicate_existing(db)
+
     # Backfill sentiment for articles that don't have it yet
     _backfill_sentiment(db)
 
@@ -98,8 +101,9 @@ async def refresh_news(background_tasks: BackgroundTasks, db: Session = Depends(
 
     total = db.query(NewsArticle).count()
     return {
-        "message": f"Reclassified {reclassified}. Crawl started in background.",
+        "message": f"Reclassified {reclassified}, deduped {deduped}. Crawl started in background.",
         "reclassified": reclassified,
+        "deduped": deduped,
         "total": total,
     }
 
@@ -352,6 +356,53 @@ async def _reclassify_unlinked(db: Session) -> int:
         db.commit()
     logger.info(f"Reclassified: added {count} relations")
     return count
+
+
+def _deduplicate_existing(db: Session) -> int:
+    """Remove near-duplicate articles from DB, keeping the one with most relations."""
+    from app.services.news_crawler import _normalize_title
+
+    articles = (
+        db.query(NewsArticle)
+        .order_by(NewsArticle.published_at.desc().nullslast())
+        .all()
+    )
+
+    # Group by normalized title
+    groups: dict[str, list[NewsArticle]] = {}
+    for article in articles:
+        norm = _normalize_title(article.title)
+        if not norm:
+            continue
+        if norm not in groups:
+            groups[norm] = []
+        groups[norm].append(article)
+
+    deleted = 0
+    for norm_title, group in groups.items():
+        if len(group) <= 1:
+            continue
+
+        # Keep the article with most relations; tie-break by earliest published
+        group.sort(key=lambda a: (
+            -len(a.relations) if a.relations else 0,
+            a.published_at or a.collected_at,
+        ))
+        keep = group[0]
+
+        for dup in group[1:]:
+            # Delete relations first, then the article
+            db.query(NewsStockRelation).filter(
+                NewsStockRelation.news_id == dup.id
+            ).delete()
+            db.delete(dup)
+            deleted += 1
+
+    if deleted:
+        db.commit()
+        logger.info(f"Deduplicated: removed {deleted} near-duplicate articles")
+
+    return deleted
 
 
 async def _backfill_translate(db: Session) -> None:

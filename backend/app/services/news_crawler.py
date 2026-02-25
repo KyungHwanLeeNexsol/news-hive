@@ -25,18 +25,20 @@ MAX_STOCK_QUERIES = 15
 
 # Regex to strip noise for title dedup (whitespace, punctuation, source suffixes)
 _TITLE_NOISE_RE = re.compile(r"[\s\-–—·:;,.\[\](){}「」『』<>《》\u200b]+")
-_SOURCE_SUFFIX_RE = re.compile(r"\s*[-–—|]\s*\S+$")
+# Match source suffix: "- 한국경제", "- 철강금속신문", "| 뉴스1" etc. (1-4 words at end)
+_SOURCE_SUFFIX_RE = re.compile(r"\s*[-–—|]\s*[\w.]{1,20}(?:\s[\w.]{1,10}){0,3}$")
 
 
 def _normalize_title(title: str) -> str:
     """Normalize a title for near-duplicate detection.
 
-    Strips source suffix (e.g. '- 한국경제', '- 연합뉴스'), collapses whitespace/punctuation,
-    and lowercases so that "고려아연 온산제련소 노사, 울주군 온산읍에 2억5000만원 지정기탁"
-    and "고려아연 온산제련소 노사, 울주군 온산읍에 2억5천만원 지정기탁 - 뉴스1" match.
+    Strips source suffix (e.g. '- 한국경제', '- 철강금속신문', '- Yahoo Finance'),
+    normalizes Korean number expressions, collapses whitespace/punctuation, and lowercases.
     """
     t = _SOURCE_SUFFIX_RE.sub("", title)
-    t = t.replace("5천만", "5000만").replace("5백만", "500만")
+    # Normalize Korean number variants
+    t = re.sub(r"(\d)천만", r"\g<1>000만", t)
+    t = re.sub(r"(\d)백만", r"\g<1>00만", t)
     t = _TITLE_NOISE_RE.sub("", t).lower()
     return t
 
