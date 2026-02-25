@@ -186,14 +186,20 @@ export default function NewsPage() {
                   </td>
                   <td className="text-center">
                     <div className="flex flex-wrap gap-1 justify-center">
-                      {article.relations.slice(0, 3).map((rel, i) => (
-                        <span
-                          key={i}
-                          className={`badge ${rel.stock_name ? "badge-stock" : "badge-sector"}`}
-                        >
-                          {rel.stock_name || (rel.sector_name && formatSectorName(rel.sector_name))}
-                        </span>
-                      ))}
+                      {(() => {
+                        const sectors = new Map<number, string>();
+                        const stocks = new Map<number, string>();
+                        for (const rel of article.relations) {
+                          if (rel.sector_id && rel.sector_name) sectors.set(rel.sector_id, rel.sector_name);
+                          if (rel.stock_id && rel.stock_name) stocks.set(rel.stock_id, rel.stock_name);
+                        }
+                        const tags: { key: string; label: string; cls: string }[] = [];
+                        for (const [id, name] of sectors) tags.push({ key: `s${id}`, label: formatSectorName(name), cls: "badge-sector" });
+                        for (const [id, name] of stocks) tags.push({ key: `t${id}`, label: name, cls: "badge-stock" });
+                        return tags.slice(0, 3).map((t) => (
+                          <span key={t.key} className={`badge ${t.cls}`}>{t.label}</span>
+                        ));
+                      })()}
                     </div>
                   </td>
                   <td className="text-center text-[#999] text-[12px]">

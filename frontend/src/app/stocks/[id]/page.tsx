@@ -141,14 +141,20 @@ export default function StockDetail() {
                       <span className="badge badge-source">{sourceLabel(article.source)}</span>
                     </td>
                     <td className="text-center">
-                      {article.relations.slice(0, 2).map((rel, i) => (
-                        <span
-                          key={i}
-                          className={`badge ${rel.stock_name ? 'badge-stock' : 'badge-sector'} mr-1`}
-                        >
-                          {rel.stock_name || (rel.sector_name && formatSectorName(rel.sector_name))}
-                        </span>
-                      ))}
+                      {(() => {
+                        const sectors = new Map<number, string>();
+                        const stocks = new Map<number, string>();
+                        for (const rel of article.relations) {
+                          if (rel.sector_id && rel.sector_name) sectors.set(rel.sector_id, rel.sector_name);
+                          if (rel.stock_id && rel.stock_name) stocks.set(rel.stock_id, rel.stock_name);
+                        }
+                        const tags: { key: string; label: string; cls: string }[] = [];
+                        for (const [id, name] of sectors) tags.push({ key: `s${id}`, label: formatSectorName(name), cls: "badge-sector" });
+                        for (const [id, name] of stocks) tags.push({ key: `t${id}`, label: name, cls: "badge-stock" });
+                        return tags.slice(0, 3).map((t) => (
+                          <span key={t.key} className={`badge ${t.cls} mr-1`}>{t.label}</span>
+                        ));
+                      })()}
                     </td>
                     <td className="text-center text-[12px] text-[#999]">{formatDate(article.published_at)}</td>
                   </tr>
