@@ -23,6 +23,9 @@ def _run_crawl_job():
 
     db = SessionLocal()
     try:
+        # Delete articles older than 7 days
+        _cleanup_old_articles(db)
+
         count = asyncio.run(crawl_all_news(db))
         logger.info(f"Scheduled crawl completed: {count} new articles")
 
@@ -37,6 +40,35 @@ def _run_crawl_job():
         logger.error(f"Scheduled crawl failed: {e}")
     finally:
         db.close()
+
+
+def _cleanup_old_articles(db):
+    """Delete news articles older than 7 days."""
+    from datetime import datetime, timedelta, timezone
+    from app.models.news import NewsArticle
+    from app.models.news_relation import NewsStockRelation
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+
+    # Find old article IDs
+    old_ids = [
+        row[0] for row in
+        db.query(NewsArticle.id)
+        .filter(NewsArticle.published_at < cutoff)
+        .all()
+    ]
+    if not old_ids:
+        return
+
+    # Delete relations first, then articles
+    db.query(NewsStockRelation).filter(
+        NewsStockRelation.news_id.in_(old_ids)
+    ).delete(synchronize_session=False)
+    db.query(NewsArticle).filter(
+        NewsArticle.id.in_(old_ids)
+    ).delete(synchronize_session=False)
+    db.commit()
+    logger.info(f"Cleaned up {len(old_ids)} articles older than 7 days")
 
 
 def _refresh_sector_performance():

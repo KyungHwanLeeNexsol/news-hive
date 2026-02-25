@@ -158,6 +158,79 @@ async def generate_ai_summary(title: str, description: str | None, relations: li
         return None
 
 
+def _is_english_title(title: str) -> bool:
+    """Check if a title is predominantly English (non-Korean)."""
+    korean_chars = sum(1 for c in title if "\uac00" <= c <= "\ud7a3")
+    return korean_chars < len(title) * 0.2
+
+
+async def translate_articles_batch(articles: list[dict]) -> None:
+    """Translate English titles and descriptions to Korean in-place using Gemini.
+
+    Modifies articles in-place: translates title and description fields.
+    """
+    import json as _json
+
+    if not settings.GEMINI_API_KEY:
+        return
+
+    en_articles = [(i, a) for i, a in enumerate(articles) if _is_english_title(a.get("title", ""))]
+    if not en_articles:
+        return
+
+    # Process in chunks of 10 (title + description per item)
+    chunk_size = 10
+    for chunk_start in range(0, len(en_articles), chunk_size):
+        chunk = en_articles[chunk_start:chunk_start + chunk_size]
+
+        items = []
+        for j, (_, a) in enumerate(chunk):
+            desc = (a.get("description") or "").strip()
+            items.append({"id": j + 1, "title": a["title"], "desc": desc[:300] if desc else ""})
+
+        prompt = f"""다음 영문 뉴스 기사의 제목(title)과 요약(desc)을 한국어로 번역해주세요.
+뉴스 제목답게 간결하게 번역하고, desc가 비어있으면 빈 문자열로 두세요.
+반드시 아래 JSON 배열 형식으로만 응답해주세요. 다른 텍스트 없이 JSON만 출력하세요.
+
+입력:
+{_json.dumps(items, ensure_ascii=False)}
+
+출력 형식:
+[{{"id": 1, "title": "번역된 제목", "desc": "번역된 요약"}}, ...]"""
+
+        try:
+            client = genai.Client(api_key=settings.GEMINI_API_KEY)
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt,
+            )
+            text = response.text.strip()
+            # Strip markdown code block if present
+            if text.startswith("```"):
+                text = re.sub(r"^```(?:json)?\s*", "", text)
+                text = re.sub(r"\s*```$", "", text)
+
+            translated_items = _json.loads(text)
+
+            for item in translated_items:
+                idx = item.get("id", 0) - 1
+                if 0 <= idx < len(chunk):
+                    _, article = chunk[idx]
+                    t = item.get("title", "").strip()
+                    d = item.get("desc", "").strip()
+                    if t and len(t) > 2:
+                        article["original_title"] = article["title"]
+                        article["title"] = t
+                    if d and len(d) > 2:
+                        article["description"] = d
+        except Exception as e:
+            logger.warning(f"Batch translation failed: {e}")
+
+    translated_count = sum(1 for _, a in en_articles if "original_title" in a)
+    if translated_count:
+        logger.info(f"Translated {translated_count}/{len(en_articles)} English articles to Korean")
+
+
 def _extract_sector_keywords(sector_name: str) -> list[str]:
     """Extract meaningful keywords from sector name for matching."""
     parts = re.split(r"[와및·/,]", sector_name)

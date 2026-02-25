@@ -13,6 +13,7 @@ from app.services.crawlers.yahoo import search_yahoo_finance_top, search_yahoo_s
 from app.services.crawlers.korean_rss import fetch_korean_rss_feeds
 from app.services.ai_classifier import (
     KeywordIndex, classify_news, classify_sentiment, _extract_sector_keywords,
+    translate_articles_batch,
 )
 
 logger = logging.getLogger(__name__)
@@ -226,6 +227,9 @@ async def crawl_all_news(db: Session) -> int:
         return 0
 
     logger.info(f"Saving {len(unique_articles)} new articles...")
+
+    # Translate English titles to Korean before saving
+    await translate_articles_batch(unique_articles)
 
     from sqlalchemy import text as sa_text
 

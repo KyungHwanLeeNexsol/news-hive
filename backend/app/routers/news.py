@@ -90,6 +90,9 @@ async def refresh_news(background_tasks: BackgroundTasks, db: Session = Depends(
     # Backfill sentiment for articles that don't have it yet
     _backfill_sentiment(db)
 
+    # Backfill: translate existing English titles
+    await _backfill_translate(db)
+
     # Launch crawl in background so the HTTP response returns immediately
     background_tasks.add_task(_run_crawl_background)
 
@@ -341,3 +344,36 @@ async def _reclassify_unlinked(db: Session) -> int:
         db.commit()
     logger.info(f"Reclassified: added {count} relations")
     return count
+
+
+async def _backfill_translate(db: Session) -> None:
+    """Translate existing English-titled articles to Korean (title + summary)."""
+    from app.services.ai_classifier import _is_english_title, translate_articles_batch
+
+    articles = db.query(NewsArticle).filter(
+        NewsArticle.source.in_(["us_news", "yahoo"]),
+    ).all()
+
+    # Filter to ones still in English
+    en_articles = [a for a in articles if _is_english_title(a.title)]
+    if not en_articles:
+        return
+
+    logger.info(f"Backfill translating {len(en_articles)} English articles")
+
+    # Convert to dicts for translate_articles_batch
+    article_dicts = [{"title": a.title, "description": a.summary or ""} for a in en_articles]
+    await translate_articles_batch(article_dicts)
+
+    # Apply translations back to DB
+    translated = 0
+    for article, d in zip(en_articles, article_dicts):
+        if "original_title" in d:
+            article.title = d["title"]
+            if d.get("description"):
+                article.summary = d["description"]
+            translated += 1
+
+    if translated:
+        db.commit()
+        logger.info(f"Backfill translated {translated} articles")
