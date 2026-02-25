@@ -182,7 +182,7 @@ async def generate_ai_summary(title: str, description: str | None, relations: li
     import asyncio as _asyncio
 
     client = genai.Client(api_key=settings.GEMINI_API_KEY)
-    max_retries = 3
+    max_retries = 5
     for attempt in range(max_retries):
         try:
             response = client.models.generate_content(
@@ -193,7 +193,7 @@ async def generate_ai_summary(title: str, description: str | None, relations: li
         except Exception as e:
             is_rate_limit = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
             if is_rate_limit and attempt < max_retries - 1:
-                wait = 2 ** (attempt + 1)
+                wait = 3 * (2 ** attempt)  # 3s, 6s, 12s, 24s
                 logger.info(f"AI summary rate limited, retrying in {wait}s (attempt {attempt + 1}/{max_retries})")
                 await _asyncio.sleep(wait)
             else:
@@ -246,8 +246,8 @@ async def translate_articles_batch(articles: list[dict]) -> None:
 출력 형식:
 [{{"id": 1, "title": "번역된 제목", "desc": "번역된 요약"}}, ...]"""
 
-        # Retry with exponential backoff (max 3 attempts)
-        max_retries = 3
+        # Retry with exponential backoff (max 5 attempts)
+        max_retries = 5
         for attempt in range(max_retries):
             try:
                 response = client.models.generate_content(
@@ -277,7 +277,7 @@ async def translate_articles_batch(articles: list[dict]) -> None:
             except Exception as e:
                 is_rate_limit = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
                 if is_rate_limit and attempt < max_retries - 1:
-                    wait = 2 ** (attempt + 1)  # 2s, 4s
+                    wait = 3 * (2 ** attempt)  # 3s, 6s, 12s, 24s
                     logger.info(f"Rate limited, retrying in {wait}s (attempt {attempt + 1}/{max_retries})")
                     await _asyncio.sleep(wait)
                 else:
@@ -286,7 +286,7 @@ async def translate_articles_batch(articles: list[dict]) -> None:
 
         # Delay between chunks to avoid rate limits
         if chunk_start + chunk_size < len(en_articles):
-            await _asyncio.sleep(1.5)
+            await _asyncio.sleep(3)
 
     translated_count = sum(1 for _, a in en_articles if "original_title" in a)
     if translated_count:
