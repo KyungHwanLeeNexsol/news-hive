@@ -194,15 +194,20 @@ export default function Dashboard() {
                       {article.title}
                     </Link>
                     <div className="news-meta flex items-center gap-2">
-                      <span className="badge badge-source">{sourceLabel(article.source)}</span>
-                      {article.relations.slice(0, 2).map((rel, i) => (
-                        <span
-                          key={i}
-                          className={`badge ${rel.stock_name ? 'badge-stock' : 'badge-sector'}`}
-                        >
-                          {rel.stock_name || (rel.sector_name && formatSectorName(rel.sector_name))}
-                        </span>
-                      ))}
+                      {(() => {
+                        const sectors = new Map<number, string>();
+                        const stocks = new Map<number, string>();
+                        for (const rel of article.relations) {
+                          if (rel.sector_id && rel.sector_name) sectors.set(rel.sector_id, rel.sector_name);
+                          if (rel.stock_id && rel.stock_name) stocks.set(rel.stock_id, rel.stock_name);
+                        }
+                        const tags: { key: string; label: string; cls: string }[] = [];
+                        for (const [id, name] of sectors) tags.push({ key: `s${id}`, label: formatSectorName(name), cls: "badge-sector" });
+                        for (const [id, name] of stocks) tags.push({ key: `t${id}`, label: name, cls: "badge-stock" });
+                        return tags.slice(0, 2).map((t) => (
+                          <span key={t.key} className={`badge ${t.cls}`}>{t.label}</span>
+                        ));
+                      })()}
                       <span>{formatDate(article.published_at)}</span>
                     </div>
                   </div>
