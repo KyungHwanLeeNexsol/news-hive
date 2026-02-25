@@ -7,8 +7,6 @@ class Settings(BaseSettings):
     NAVER_CLIENT_ID: str = ""
     NAVER_CLIENT_SECRET: str = ""
 
-    NEWSAPI_KEY: str = ""
-
     GEMINI_API_KEY: str = ""
 
     KIS_APP_KEY: str = ""

@@ -7,7 +7,6 @@ Only industry/sector trends — no individual company tracking.
 import asyncio
 import html
 import logging
-import re
 from datetime import datetime, timezone
 from urllib.parse import quote
 
@@ -102,33 +101,6 @@ SECTOR_EN_TERMS: dict[str, str] = {
 MAX_US_QUERIES = 15
 
 
-async def _resolve_google_url(google_url: str, client: httpx.AsyncClient) -> str:
-    """Resolve a Google News redirect URL to the actual article URL."""
-    if "news.google.com" not in google_url:
-        return google_url
-
-    try:
-        resp = await client.head(google_url, follow_redirects=True, timeout=8)
-        final_url = str(resp.url)
-        if "news.google.com" not in final_url:
-            return final_url
-    except Exception:
-        pass
-
-    try:
-        resp = await client.get(google_url, follow_redirects=True, timeout=8)
-        final_url = str(resp.url)
-        if "news.google.com" not in final_url:
-            return final_url
-        match = re.search(r'data-n-au="([^"]+)"', resp.text)
-        if match:
-            return match.group(1)
-    except Exception as e:
-        logger.debug(f"Google URL resolve failed for {google_url}: {e}")
-
-    return google_url
-
-
 async def _search_us_news_for_term(
     en_term: str, num: int = 5
 ) -> list[dict]:
@@ -153,12 +125,13 @@ async def _search_us_news_for_term(
                 except (TypeError, ValueError):
                     pub_date = datetime.now(timezone.utc)
 
-            raw_url = entry.get("link", "")
-            real_url = await _resolve_google_url(raw_url, client)
+            url = entry.get("link", "")
+            if not url:
+                continue
 
             articles.append({
                 "title": html.unescape(entry.get("title", "")),
-                "url": real_url,
+                "url": url,
                 "source": "us_news",
                 "published_at": pub_date,
                 "description": html.unescape(entry.get("summary", "")),
