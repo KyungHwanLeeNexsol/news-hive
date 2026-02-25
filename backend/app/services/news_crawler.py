@@ -325,7 +325,7 @@ async def crawl_all_news(db: Session) -> int:
     from sqlalchemy import text as sa_text
 
     saved_count = 0
-    batch_size = 200
+    batch_size = 50
 
     for i in range(0, len(unique_articles), batch_size):
         batch = unique_articles[i : i + batch_size]
@@ -351,14 +351,20 @@ async def crawl_all_news(db: Session) -> int:
             RETURNING id, url"""
         )
 
-        try:
-            result = db.execute(sql, params)
-            url_to_id = {row[1]: row[0] for row in result.fetchall()}
-            db.commit()
-        except Exception as e:
-            db.rollback()
-            logger.warning(f"Article batch insert failed: {e}")
-            continue
+        url_to_id: dict = {}
+        for attempt in range(2):
+            try:
+                result = db.execute(sql, params)
+                url_to_id = {row[1]: row[0] for row in result.fetchall()}
+                db.commit()
+                break
+            except Exception as e:
+                db.rollback()
+                if attempt == 0:
+                    logger.warning(f"Article batch insert failed (retrying): {e}")
+                    await asyncio.sleep(1)
+                else:
+                    logger.warning(f"Article batch insert failed (giving up): {e}")
 
         if not url_to_id:
             continue
@@ -412,12 +418,18 @@ async def crawl_all_news(db: Session) -> int:
                 f"""INSERT INTO news_stock_relations (news_id, stock_id, sector_id, match_type, relevance)
                 VALUES {', '.join(rel_values)}"""
             )
-            try:
-                db.execute(rel_sql, rel_params)
-                db.commit()
-            except Exception as e:
-                db.rollback()
-                logger.warning(f"Relations batch insert failed: {e}")
+            for attempt in range(2):
+                try:
+                    db.execute(rel_sql, rel_params)
+                    db.commit()
+                    break
+                except Exception as e:
+                    db.rollback()
+                    if attempt == 0:
+                        logger.warning(f"Relations batch insert failed (retrying): {e}")
+                        await asyncio.sleep(1)
+                    else:
+                        logger.warning(f"Relations batch insert failed (giving up): {e}")
 
         logger.info(f"Batch {i // batch_size + 1}: {len(url_to_id)} articles ({saved_count} total)")
 
