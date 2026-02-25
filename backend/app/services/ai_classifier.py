@@ -145,6 +145,29 @@ def classify_news(title: str, index: KeywordIndex) -> list[dict]:
     return results
 
 
+def _count_keyword_matches(title: str, keywords: list[str]) -> int:
+    """Count keyword matches ensuring they are not part of a larger word.
+
+    A keyword matches only if its preceding character (if any) is NOT a Korean
+    syllable — this prevents false positives like '이부진' matching '부진'.
+    """
+    count = 0
+    for kw in keywords:
+        start = 0
+        while True:
+            idx = title.find(kw, start)
+            if idx == -1:
+                break
+            # Check that the character before the keyword is not Korean
+            if idx > 0 and "\uac00" <= title[idx - 1] <= "\ud7a3":
+                start = idx + 1
+                continue
+            count += 1
+            break  # one match per keyword is enough
+
+    return count
+
+
 def classify_sentiment(title: str) -> str:
     """Classify news sentiment as positive/negative/neutral based on keywords."""
     title_lower = title.lower()
@@ -165,8 +188,8 @@ def classify_sentiment(title: str) -> str:
         "우려", "경고", "리스크", "충격", "타격", "먹구름", "한파", "적신호",
     ]
 
-    pos_count = sum(1 for kw in positive_keywords if kw in title_lower)
-    neg_count = sum(1 for kw in negative_keywords if kw in title_lower)
+    pos_count = _count_keyword_matches(title_lower, positive_keywords)
+    neg_count = _count_keyword_matches(title_lower, negative_keywords)
 
     if pos_count > neg_count:
         return "positive"
