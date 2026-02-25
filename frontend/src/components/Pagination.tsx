@@ -25,11 +25,11 @@ export default function Pagination({ currentPage, totalPages, onPageChange }: Pa
   return (
     <div className="pagination">
       <button
-        className="page-btn text-[18px]"
+        className="page-btn text-[20px] leading-none"
         disabled={currentPage === 1}
         onClick={() => onPageChange(currentPage - 1)}
       >
-        &lsaquo;
+        &#10094;
       </button>
       {start > 1 && (
         <>
@@ -55,11 +55,11 @@ export default function Pagination({ currentPage, totalPages, onPageChange }: Pa
         </>
       )}
       <button
-        className="page-btn text-[18px]"
+        className="page-btn text-[20px] leading-none"
         disabled={currentPage === totalPages}
         onClick={() => onPageChange(currentPage + 1)}
       >
-        &rsaquo;
+        &#10095;
       </button>
     </div>
   );

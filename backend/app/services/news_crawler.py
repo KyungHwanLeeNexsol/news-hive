@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 
 from sqlalchemy.orm import Session
 
@@ -21,6 +22,23 @@ logger = logging.getLogger(__name__)
 # Query budget for search-based crawlers
 MAX_TOTAL_QUERIES = 50
 MAX_STOCK_QUERIES = 15
+
+# Regex to strip noise for title dedup (whitespace, punctuation, source suffixes)
+_TITLE_NOISE_RE = re.compile(r"[\s\-–—·:;,.\[\](){}「」『』<>《》\u200b]+")
+_SOURCE_SUFFIX_RE = re.compile(r"\s*[-–—|]\s*\S+$")
+
+
+def _normalize_title(title: str) -> str:
+    """Normalize a title for near-duplicate detection.
+
+    Strips source suffix (e.g. '- 한국경제', '- 연합뉴스'), collapses whitespace/punctuation,
+    and lowercases so that "고려아연 온산제련소 노사, 울주군 온산읍에 2억5000만원 지정기탁"
+    and "고려아연 온산제련소 노사, 울주군 온산읍에 2억5천만원 지정기탁 - 뉴스1" match.
+    """
+    t = _SOURCE_SUFFIX_RE.sub("", title)
+    t = t.replace("5천만", "5000만").replace("5백만", "500만")
+    t = _TITLE_NOISE_RE.sub("", t).lower()
+    return t
 
 # Round-robin index for stock selection (persists across cycles within same process)
 _stock_rr_index = 0
@@ -210,17 +228,41 @@ async def crawl_all_news(db: Session) -> int:
 
     logger.info(f"Raw articles by source: {source_counts}, total={len(all_raw_articles)}")
 
-    # Deduplicate by URL
+    # Deduplicate by URL + near-duplicate title detection
     seen_urls: set[str] = set()
+    seen_titles: set[str] = set()
     unique_articles: list[dict] = []
     existing_urls = {row[0] for row in db.query(NewsArticle.url).all()}
 
+    # Load recent titles from DB for cross-batch dedup (last 7 days worth)
+    from datetime import datetime, timedelta, timezone
+    recent_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    existing_titles = {
+        _normalize_title(row[0])
+        for row in db.query(NewsArticle.title)
+        .filter(NewsArticle.published_at >= recent_cutoff)
+        .all()
+    }
+    seen_titles.update(existing_titles)
+
+    title_dedup_count = 0
     for article in all_raw_articles:
         url = article.get("url", "")
         if not url or url in seen_urls or url in existing_urls:
             continue
         seen_urls.add(url)
+
+        norm_title = _normalize_title(article.get("title", ""))
+        if norm_title and norm_title in seen_titles:
+            title_dedup_count += 1
+            continue
+        if norm_title:
+            seen_titles.add(norm_title)
+
         unique_articles.append(article)
+
+    if title_dedup_count:
+        logger.info(f"Filtered {title_dedup_count} near-duplicate articles by title")
 
     # Filter out non-financial articles (entertainment, sports, lifestyle)
     pre_filter_count = len(unique_articles)
