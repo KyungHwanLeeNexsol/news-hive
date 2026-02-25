@@ -6,11 +6,14 @@ from sqlalchemy.orm import Session
 from app.models.sector import Sector
 from app.models.stock import Stock
 from app.models.news import NewsArticle
+from app.models.news_relation import NewsStockRelation
 from app.services.crawlers.naver import search_naver_news
 from app.services.crawlers.google import search_google_news
 from app.services.crawlers.yahoo import search_yahoo_finance_top, search_yahoo_stock_news
 from app.services.crawlers.korean_rss import fetch_korean_rss_feeds
-from app.services.ai_classifier import _extract_sector_keywords
+from app.services.ai_classifier import (
+    KeywordIndex, classify_news, classify_sentiment, _extract_sector_keywords,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,36 +26,26 @@ _stock_rr_index = 0
 
 
 def _build_search_queries(db: Session, sectors: list[Sector], stocks: list[Stock]) -> list[str]:
-    """Build search queries ensuring all sectors are covered.
-
-    Strategy:
-    1. ALL sectors with stocks — guaranteed coverage every crawl
-    2. Stocks with custom keywords (user-curated, always included)
-    3. Random sample of remaining stocks to fill budget
-    """
+    """Build search queries ensuring all sectors are covered within budget."""
     queries: set[str] = set()
 
-    # 1) ALL sectors with stocks — guaranteed every cycle
-    #    Also add sub-keywords from compound names (e.g. "반도체와반도체장비" → "반도체", "반도체장비")
     sectors_with_stocks = [
         sector for sector in sectors
         if db.query(Stock.id).filter(Stock.sector_id == sector.id).first()
     ]
     for sector in sectors_with_stocks:
         queries.add(sector.name)
-        for kw in _extract_sector_keywords(sector.name):
-            if kw != sector.name.lower():
-                queries.add(kw)
+        if len(queries) >= MAX_TOTAL_QUERIES:
+            return list(queries)
 
-    # 2) Stocks with custom keywords — always included
     keyword_stocks = [s for s in stocks if s.keywords]
     for stock in keyword_stocks:
         queries.add(stock.name)
         for kw in stock.keywords:
             queries.add(kw)
+        if len(queries) >= MAX_TOTAL_QUERIES:
+            return list(queries)
 
-    # 3) Round-robin selection of remaining stocks to fill budget
-    #    Cycles through all stocks evenly across crawl cycles
     global _stock_rr_index
     remaining = sorted([s for s in stocks if not s.keywords], key=lambda s: s.id)
     stock_budget = max(0, MAX_TOTAL_QUERIES - len(queries))
@@ -68,37 +61,38 @@ def _build_search_queries(db: Session, sectors: list[Sector], stocks: list[Stock
 
 def _resolve_query_relations(
     query: str,
+    index: KeywordIndex,
     sectors: list[Sector],
-    stocks: list[Stock],
 ) -> list[dict]:
-    """Resolve a search query to sector/stock relations.
-
-    Since articles are fetched by searching for a specific sector or stock name,
-    we can automatically tag them with the entity that triggered the search.
-    """
+    """Resolve a search query to sector/stock relations using index."""
     results = []
     matched_sector_ids: set[int] = set()
 
-    # Check if query matches a stock name
-    for stock in stocks:
-        if stock.name == query:
-            results.append({
-                "stock_id": stock.id,
-                "sector_id": stock.sector_id,
-                "match_type": "keyword",
-                "relevance": "direct",
-            })
-            matched_sector_ids.add(stock.sector_id)
-        elif stock.keywords and query in stock.keywords:
-            results.append({
-                "stock_id": stock.id,
-                "sector_id": stock.sector_id,
-                "match_type": "keyword",
-                "relevance": "indirect",
-            })
-            matched_sector_ids.add(stock.sector_id)
+    # Check stock names
+    if query in index.stock_names:
+        stock_id, sector_id = index.stock_names[query]
+        results.append({
+            "stock_id": stock_id,
+            "sector_id": sector_id,
+            "match_type": "keyword",
+            "relevance": "direct",
+        })
+        matched_sector_ids.add(sector_id)
 
-    # Check if query matches a sector name (exact or sub-keyword)
+    # Check stock keywords
+    query_lower = query.lower()
+    if query_lower in index.stock_keywords:
+        for stock_id, sector_id in index.stock_keywords[query_lower]:
+            if sector_id not in matched_sector_ids:
+                results.append({
+                    "stock_id": stock_id,
+                    "sector_id": sector_id,
+                    "match_type": "keyword",
+                    "relevance": "indirect",
+                })
+                matched_sector_ids.add(sector_id)
+
+    # Check sector names
     for sector in sectors:
         if sector.id in matched_sector_ids:
             continue
@@ -109,7 +103,7 @@ def _resolve_query_relations(
                 "match_type": "keyword",
                 "relevance": "direct",
             })
-        elif query.lower() in _extract_sector_keywords(sector.name):
+        elif query_lower in _extract_sector_keywords(sector.name):
             results.append({
                 "stock_id": None,
                 "sector_id": sector.id,
@@ -121,65 +115,66 @@ def _resolve_query_relations(
 
 
 async def crawl_all_news(db: Session) -> int:
-    """Main orchestrator: crawl news for all stocks and sectors, classify, and save."""
+    """Main orchestrator: crawl news, classify by keyword, and save."""
     stocks = db.query(Stock).all()
     sectors = db.query(Sector).all()
 
     logger.info(f"DB state: {len(sectors)} sectors, {len(stocks)} stocks")
 
+    # Build keyword index once — reused for all articles
+    index = KeywordIndex.build(sectors, stocks)
+
     all_raw_articles: list[dict] = []
     source_counts: dict[str, int] = {"naver": 0, "google": 0, "yahoo": 0, "korean_rss": 0, "us_news": 0}
 
-    # Phase 1: Fetch Korean financial RSS feeds (once per cycle, not per query)
-    try:
-        korean_rss_articles = await fetch_korean_rss_feeds()
-        # RSS feeds have no specific query — they'll rely on keyword/AI classification
-        for a in korean_rss_articles:
+    # Phase 1: RSS feeds (parallel)
+    async def _fetch_korean_rss():
+        articles = await fetch_korean_rss_feeds()
+        for a in articles:
             a["_query"] = None
-        all_raw_articles.extend(korean_rss_articles)
-        source_counts["korean_rss"] = len(korean_rss_articles)
-    except Exception as e:
-        logger.warning(f"Korean RSS feeds failed: {e}")
+        return ("korean_rss", articles)
 
-    # Phase 1.2: Yahoo Finance top headlines (global market, once per cycle)
-    try:
-        yahoo_top_articles = await search_yahoo_finance_top(num=20)
-        for a in yahoo_top_articles:
+    async def _fetch_yahoo_top():
+        articles = await search_yahoo_finance_top(num=20)
+        for a in articles:
             a["_query"] = None
-        all_raw_articles.extend(yahoo_top_articles)
-        source_counts["yahoo"] = len(yahoo_top_articles)
-    except Exception as e:
-        logger.warning(f"Yahoo Finance top headlines failed: {e}")
+        return ("yahoo", articles)
 
-    # Phase 1.5: US industry news (sector-level, English)
-    try:
+    async def _fetch_us_news():
         from app.services.crawlers.us_news import fetch_us_industry_news
-
         sector_names_with_stocks = [
             sector.name for sector in sectors
             if db.query(Stock.id).filter(Stock.sector_id == sector.id).first()
         ]
         sector_by_name = {s.name: s for s in sectors}
         us_results = await fetch_us_industry_news(sector_names_with_stocks)
-
-        for sector_name, articles in us_results:
+        articles = []
+        for sector_name, sector_articles in us_results:
             sector = sector_by_name.get(sector_name)
-            for a in articles:
+            for a in sector_articles:
                 a["_query"] = None
                 a["_us_sector_id"] = sector.id if sector else None
-            all_raw_articles.extend(articles)
-            source_counts["us_news"] += len(articles)
-    except Exception as e:
-        logger.warning(f"US news fetch failed: {e}")
+            articles.extend(sector_articles)
+        return ("us_news", articles)
 
-    # Phase 2: Query-based search across all sources
+    phase1_results = await asyncio.gather(
+        _fetch_korean_rss(), _fetch_yahoo_top(), _fetch_us_news(),
+        return_exceptions=True,
+    )
+    for result in phase1_results:
+        if isinstance(result, tuple):
+            source_name, articles = result
+            all_raw_articles.extend(articles)
+            source_counts[source_name] = len(articles)
+        elif isinstance(result, Exception):
+            logger.warning(f"Phase 1 fetch failed: {result}")
+
+    # Phase 2: Query-based search
     search_queries = _build_search_queries(db, sectors, stocks)
     if search_queries:
-        logger.info(f"Crawling news for {len(search_queries)} search queries (sample: {search_queries[:5]})")
+        logger.info(f"Crawling {len(search_queries)} queries (sample: {search_queries[:5]})")
 
-        semaphore = asyncio.Semaphore(3)
-
-        # Map stock names to codes for Yahoo per-stock search
+        semaphore = asyncio.Semaphore(5)
         stock_code_by_name = {s.name: s.stock_code for s in stocks}
 
         async def _search_one(query: str):
@@ -189,27 +184,21 @@ async def crawl_all_news(db: Session) -> int:
                     search_google_news(query, num=10),
                 ]
                 source_names = ["naver", "google"]
-
-                # If query matches a stock name, also fetch Yahoo per-stock news
                 stock_code = stock_code_by_name.get(query)
                 if stock_code:
                     crawlers.append(search_yahoo_stock_news(stock_code, num=5))
                     source_names.append("yahoo")
 
-                results = await asyncio.gather(
-                    *crawlers,
-                    return_exceptions=True,
-                )
+                results = await asyncio.gather(*crawlers, return_exceptions=True)
                 articles = []
-                for source_name, result in zip(source_names, results):
+                for sn, result in zip(source_names, results):
                     if isinstance(result, list):
-                        # Tag each article with the query that fetched it
                         for a in result:
                             a["_query"] = query
                         articles.extend(result)
-                        source_counts[source_name] += len(result)
+                        source_counts[sn] += len(result)
                     elif isinstance(result, Exception):
-                        logger.warning(f"Crawler [{source_name}] error for '{query}': {result}")
+                        logger.warning(f"[{sn}] error for '{query}': {result}")
                 return articles
 
         tasks = [_search_one(q) for q in search_queries]
@@ -217,14 +206,10 @@ async def crawl_all_news(db: Session) -> int:
         for result in results:
             if isinstance(result, list):
                 all_raw_articles.extend(result)
-            elif isinstance(result, Exception):
-                logger.warning(f"Query batch error: {result}")
-    else:
-        logger.info("No search queries built. Using RSS feeds only.")
 
     logger.info(f"Raw articles by source: {source_counts}, total={len(all_raw_articles)}")
 
-    # Deduplicate by URL — pre-fetch existing URLs in one query
+    # Deduplicate by URL
     seen_urls: set[str] = set()
     unique_articles: list[dict] = []
     existing_urls = {row[0] for row in db.query(NewsArticle.url).all()}
@@ -237,100 +222,109 @@ async def crawl_all_news(db: Session) -> int:
         unique_articles.append(article)
 
     if not unique_articles:
-        logger.info(f"No new articles (existing_urls={len(existing_urls)}, raw={len(all_raw_articles)}).")
+        logger.info(f"No new articles (existing={len(existing_urls)}, raw={len(all_raw_articles)}).")
         return 0
 
-    logger.info(f"Found {len(unique_articles)} new articles. Classifying...")
+    logger.info(f"Saving {len(unique_articles)} new articles...")
 
-    # AI classification and save — process in batches
+    from sqlalchemy import text as sa_text
+
     saved_count = 0
-    batch_size = 5
+    batch_size = 200
+
     for i in range(0, len(unique_articles), batch_size):
         batch = unique_articles[i : i + batch_size]
-        for article_data in batch:
+
+        # Step 1: Bulk insert articles via raw SQL (single round-trip)
+        values_parts = []
+        params: dict = {}
+        for j, ad in enumerate(batch):
+            values_parts.append(
+                f"(:t{j}, :sm{j}, :u{j}, :sr{j}, :pa{j}, :se{j})"
+            )
+            params[f"t{j}"] = ad["title"][:500]
+            params[f"sm{j}"] = (ad.get("description") or "")[:2000]
+            params[f"u{j}"] = ad["url"][:1000]
+            params[f"sr{j}"] = ad["source"]
+            params[f"pa{j}"] = ad.get("published_at")
+            params[f"se{j}"] = classify_sentiment(ad["title"])
+
+        sql = sa_text(
+            f"""INSERT INTO news_articles (title, summary, url, source, published_at, sentiment)
+            VALUES {', '.join(values_parts)}
+            ON CONFLICT (url) DO NOTHING
+            RETURNING id, url"""
+        )
+
+        try:
+            result = db.execute(sql, params)
+            url_to_id = {row[1]: row[0] for row in result.fetchall()}
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.warning(f"Article batch insert failed: {e}")
+            continue
+
+        if not url_to_id:
+            continue
+
+        # Step 2: Bulk insert relations via raw SQL
+        rel_values = []
+        rel_params: dict = {}
+        rel_idx = 0
+
+        for ad in batch:
+            article_id = url_to_id.get(ad["url"])
+            if not article_id:
+                continue
+
+            relations: list[dict] = []
+            query = ad.get("_query")
+            if query:
+                relations.extend(_resolve_query_relations(query, index, sectors))
+
+            us_sector_id = ad.get("_us_sector_id")
+            if us_sector_id:
+                relations.append({
+                    "stock_id": None,
+                    "sector_id": us_sector_id,
+                    "match_type": "keyword",
+                    "relevance": "indirect",
+                })
+
+            keyword_rels = classify_news(ad["title"], index)
+            relations.extend(keyword_rels)
+
+            seen_pairs: set[tuple] = set()
+            for rel in relations:
+                pair = (rel.get("stock_id"), rel.get("sector_id"))
+                if pair not in seen_pairs:
+                    seen_pairs.add(pair)
+                    rel_values.append(
+                        f"(:ni{rel_idx}, :si{rel_idx}, :se{rel_idx}, :mt{rel_idx}, :rv{rel_idx})"
+                    )
+                    rel_params[f"ni{rel_idx}"] = article_id
+                    rel_params[f"si{rel_idx}"] = rel.get("stock_id")
+                    rel_params[f"se{rel_idx}"] = rel.get("sector_id")
+                    rel_params[f"mt{rel_idx}"] = rel.get("match_type", "keyword")
+                    rel_params[f"rv{rel_idx}"] = rel.get("relevance", "indirect")
+                    rel_idx += 1
+
+            saved_count += 1
+
+        if rel_values:
+            rel_sql = sa_text(
+                f"""INSERT INTO news_stock_relations (news_id, stock_id, sector_id, match_type, relevance)
+                VALUES {', '.join(rel_values)}"""
+            )
             try:
-                saved = await _save_article_with_classification(
-                    db, article_data, sectors, stocks
-                )
-                if saved:
-                    saved_count += 1
+                db.execute(rel_sql, rel_params)
+                db.commit()
             except Exception as e:
-                logger.warning(f"Error saving article: {e}")
+                db.rollback()
+                logger.warning(f"Relations batch insert failed: {e}")
+
+        logger.info(f"Batch {i // batch_size + 1}: {len(url_to_id)} articles ({saved_count} total)")
 
     logger.info(f"Saved {saved_count} new articles.")
     return saved_count
-
-
-async def _save_article_with_classification(
-    db: Session,
-    article_data: dict,
-    sectors: list[Sector],
-    stocks: list[Stock],
-) -> bool:
-    """Save a single article with query-based + keyword + AI classification.
-
-    Three-phase tagging:
-    1. Query-based: If the article was fetched by searching for a sector/stock name,
-       automatically tag it with that entity (most reliable).
-    2. Keyword matching: Scan title for exact sector/stock name matches.
-    3. AI classification: Gemini API fallback for articles with no tags yet.
-    """
-    from app.models.news_relation import NewsStockRelation
-    from app.services.ai_classifier import classify_news, classify_sentiment
-
-    article = NewsArticle(
-        title=article_data["title"],
-        summary=article_data.get("description"),
-        url=article_data["url"],
-        source=article_data["source"],
-        published_at=article_data.get("published_at"),
-        sentiment=classify_sentiment(article_data["title"]),
-    )
-    db.add(article)
-    try:
-        db.flush()
-    except Exception:
-        db.rollback()
-        return False
-
-    # Phase 1: Query-based auto-tagging (guaranteed relation from search context)
-    query = article_data.get("_query")
-    query_relations = []
-    if query:
-        query_relations = _resolve_query_relations(query, sectors, stocks)
-
-    # Phase 1.5: US sector-level auto-tagging
-    us_sector_id = article_data.get("_us_sector_id")
-    if us_sector_id:
-        query_relations.append({
-            "stock_id": None,
-            "sector_id": us_sector_id,
-            "match_type": "keyword",
-            "relevance": "indirect",
-        })
-
-    # Phase 2+3: Keyword + AI classification (may find additional relations)
-    ai_relations = await classify_news(article_data["title"], sectors, stocks)
-
-    # Merge: deduplicate by (stock_id, sector_id) pair
-    seen_pairs: set[tuple] = set()
-    all_relations: list[dict] = []
-
-    for rel in query_relations + ai_relations:
-        pair = (rel.get("stock_id"), rel.get("sector_id"))
-        if pair not in seen_pairs:
-            seen_pairs.add(pair)
-            all_relations.append(rel)
-
-    for cls in all_relations:
-        relation = NewsStockRelation(
-            news_id=article.id,
-            stock_id=cls.get("stock_id"),
-            sector_id=cls.get("sector_id"),
-            match_type=cls.get("match_type", "keyword"),
-            relevance=cls.get("relevance", "indirect"),
-        )
-        db.add(relation)
-
-    db.commit()
-    return True

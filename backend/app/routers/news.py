@@ -186,13 +186,14 @@ async def _classify_article_on_demand(article: NewsArticle, db: Session) -> None
     """Classify a single article on-demand when it has no sector tag."""
     from app.models.sector import Sector
     from app.models.stock import Stock
-    from app.services.ai_classifier import classify_news
+    from app.services.ai_classifier import KeywordIndex, classify_news
 
     sectors = db.query(Sector).all()
     stocks = db.query(Stock).all()
+    index = KeywordIndex.build(sectors, stocks)
 
     try:
-        classifications = await classify_news(article.title, sectors, stocks)
+        classifications = classify_news(article.title, index)
         for cls in classifications:
             existing = db.query(NewsStockRelation).filter(
                 NewsStockRelation.news_id == article.id,
@@ -254,7 +255,7 @@ async def _reclassify_unlinked(db: Session) -> int:
     from sqlalchemy import and_, exists
     from app.models.sector import Sector
     from app.models.stock import Stock
-    from app.services.ai_classifier import classify_news
+    from app.services.ai_classifier import KeywordIndex, classify_news
 
     # Case 1: articles with zero relations
     articles_with_rels = db.query(NewsStockRelation.news_id).distinct()
@@ -290,11 +291,12 @@ async def _reclassify_unlinked(db: Session) -> int:
 
     sectors = db.query(Sector).all()
     stocks = db.query(Stock).all()
+    index = KeywordIndex.build(sectors, stocks)
     count = 0
 
     for article in targets:
         try:
-            classifications = await classify_news(article.title, sectors, stocks)
+            classifications = classify_news(article.title, index)
             for cls in classifications:
                 # Skip if this exact relation already exists
                 existing = db.query(NewsStockRelation).filter(
