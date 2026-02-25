@@ -76,11 +76,11 @@ _NON_FINANCIAL_RE = re.compile(
 
 
 # Foreign non-investment source domains/suffixes in title or URL
+# Note: Reuters, BBC, Bloomberg, CNBC etc. are ALLOWED (major financial sources)
 _FOREIGN_SOURCE_PATTERNS = re.compile(
-    r"(?:Vietnam\.vn|VnExpress|Thanh Niên|Tuổi Trẻ|NHK|Asahi"
-    r"|aljazeera|bbc\.com/(?!korean)|reuters\.com/(?!korean)"
+    r"(?:Vietnam\.vn|VnExpress|Thanh Niên|Tuổi Trẻ"
     r"|thehindu|timesofindia|dawn\.com|inquirer\.net"
-    r"|rappler\.com|bangkokpost|channelnewsasia)",
+    r"|rappler\.com|bangkokpost)",
     re.IGNORECASE,
 )
 

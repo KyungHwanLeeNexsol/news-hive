@@ -98,7 +98,7 @@ SECTOR_EN_TERMS: dict[str, str] = {
 }
 
 # Budget: limit the number of US news queries per cycle
-MAX_US_QUERIES = 15
+MAX_US_QUERIES = 40
 
 
 async def _search_us_news_for_term(
