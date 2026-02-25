@@ -360,49 +360,56 @@ async def _reclassify_unlinked(db: Session) -> int:
 
 def _deduplicate_existing(db: Session) -> int:
     """Remove near-duplicate articles from DB, keeping the one with most relations."""
+    from sqlalchemy import text as sa_text
     from app.services.news_crawler import _normalize_title
 
-    articles = (
-        db.query(NewsArticle)
-        .order_by(NewsArticle.published_at.desc().nullslast())
-        .all()
-    )
+    # Load article id, title, relation count without triggering ORM cascade
+    rows = db.execute(sa_text(
+        """SELECT a.id, a.title, a.published_at,
+                  COALESCE(r.rel_count, 0) as rel_count
+           FROM news_articles a
+           LEFT JOIN (
+               SELECT news_id, COUNT(*) as rel_count
+               FROM news_stock_relations
+               GROUP BY news_id
+           ) r ON r.news_id = a.id
+           ORDER BY a.published_at DESC NULLS LAST"""
+    )).fetchall()
 
     # Group by normalized title
-    groups: dict[str, list[NewsArticle]] = {}
-    for article in articles:
-        norm = _normalize_title(article.title)
+    groups: dict[str, list[tuple]] = {}
+    for row in rows:
+        norm = _normalize_title(row[1])
         if not norm:
             continue
         if norm not in groups:
             groups[norm] = []
-        groups[norm].append(article)
+        groups[norm].append(row)  # (id, title, published_at, rel_count)
 
-    deleted = 0
+    # Collect IDs to delete (keep the one with most relations per group)
+    delete_ids: list[int] = []
     for norm_title, group in groups.items():
         if len(group) <= 1:
             continue
-
-        # Keep the article with most relations; tie-break by earliest published
-        group.sort(key=lambda a: (
-            -len(a.relations) if a.relations else 0,
-            a.published_at or a.collected_at,
-        ))
-        keep = group[0]
-
+        # Sort: most relations first, then earliest published
+        group.sort(key=lambda r: (-r[3], r[2] or ""))
+        # Skip first (keep), delete the rest
         for dup in group[1:]:
-            # Delete relations first, then the article
-            db.query(NewsStockRelation).filter(
-                NewsStockRelation.news_id == dup.id
-            ).delete()
-            db.delete(dup)
-            deleted += 1
+            delete_ids.append(dup[0])
 
-    if deleted:
-        db.commit()
-        logger.info(f"Deduplicated: removed {deleted} near-duplicate articles")
+    if not delete_ids:
+        return 0
 
-    return deleted
+    # Bulk delete via raw SQL to avoid ORM cascade warnings
+    for i in range(0, len(delete_ids), 500):
+        batch = delete_ids[i:i + 500]
+        ids_str = ",".join(str(x) for x in batch)
+        db.execute(sa_text(f"DELETE FROM news_stock_relations WHERE news_id IN ({ids_str})"))
+        db.execute(sa_text(f"DELETE FROM news_articles WHERE id IN ({ids_str})"))
+
+    db.commit()
+    logger.info(f"Deduplicated: removed {len(delete_ids)} near-duplicate articles")
+    return len(delete_ids)
 
 
 async def _backfill_translate(db: Session) -> None:
