@@ -77,11 +77,18 @@ async def fetch_sector_performances(force: bool = False) -> dict[str, SectorPerf
     """Fetch all sector performance data from Naver Finance.
 
     Returns dict keyed by naver_code. Uses in-memory cache with 5 min TTL.
-    On failure, returns stale cached data (graceful degradation).
+    Non-forced calls always return cached data immediately (even if stale)
+    — the scheduler refreshes the cache every 5 minutes in the background.
+    Only blocks when force=True (scheduler) or on first call with empty cache.
     """
     now = time.time()
-    if not force and _cache.data and (now - _cache.last_updated) < CACHE_TTL_SECONDS:
-        return _cache.data
+    cache_fresh = (now - _cache.last_updated) < CACHE_TTL_SECONDS
+
+    if not force:
+        if _cache.data:
+            return _cache.data
+        if cache_fresh:
+            return _cache.data
 
     try:
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:

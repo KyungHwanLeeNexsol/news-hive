@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy import func
-from sqlalchemy.orm import Session, subqueryload
+from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
 from app.models.sector import Sector
@@ -89,8 +89,8 @@ async def get_stock_news(stock_id: int, limit: int = 30, offset: int = 0, db: Se
     articles = (
         db.query(NewsArticle)
         .options(
-            subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.stock),
-            subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.sector),
+            selectinload(NewsArticle.relations).selectinload(NewsStockRelation.stock),
+            selectinload(NewsArticle.relations).selectinload(NewsStockRelation.sector),
         )
         .filter(NewsArticle.id.in_(db.query(news_ids_subq)))
         .order_by(NewsArticle.published_at.desc().nullslast())

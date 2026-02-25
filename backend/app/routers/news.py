@@ -4,7 +4,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy import func
-from sqlalchemy.orm import Session, subqueryload
+from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db, SessionLocal
 from app.models.news import NewsArticle
@@ -24,8 +24,8 @@ async def list_news(limit: int = 30, offset: int = 0, db: Session = Depends(get_
     articles = (
         db.query(NewsArticle)
         .options(
-            subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.stock),
-            subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.sector),
+            selectinload(NewsArticle.relations).selectinload(NewsStockRelation.stock),
+            selectinload(NewsArticle.relations).selectinload(NewsStockRelation.sector),
         )
         .order_by(NewsArticle.published_at.desc().nullslast())
         .offset(offset)
@@ -44,8 +44,8 @@ async def get_news_detail(news_id: int, db: Session = Depends(get_db)):
     article = (
         db.query(NewsArticle)
         .options(
-            subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.stock),
-            subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.sector),
+            selectinload(NewsArticle.relations).selectinload(NewsStockRelation.stock),
+            selectinload(NewsArticle.relations).selectinload(NewsStockRelation.sector),
         )
         .filter(NewsArticle.id == news_id)
         .first()
@@ -61,8 +61,8 @@ async def get_news_detail(news_id: int, db: Session = Depends(get_db)):
         article = (
             db.query(NewsArticle)
             .options(
-                subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.stock),
-                subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.sector),
+                selectinload(NewsArticle.relations).selectinload(NewsStockRelation.stock),
+                selectinload(NewsArticle.relations).selectinload(NewsStockRelation.sector),
             )
             .filter(NewsArticle.id == news_id)
             .first()
@@ -96,8 +96,8 @@ async def generate_summary(news_id: int, db: Session = Depends(get_db)):
     article = (
         db.query(NewsArticle)
         .options(
-            subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.stock),
-            subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.sector),
+            selectinload(NewsArticle.relations).selectinload(NewsStockRelation.stock),
+            selectinload(NewsArticle.relations).selectinload(NewsStockRelation.sector),
         )
         .filter(NewsArticle.id == news_id)
         .first()
@@ -136,8 +136,8 @@ async def scrape_content(news_id: int, db: Session = Depends(get_db)):
     article = (
         db.query(NewsArticle)
         .options(
-            subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.stock),
-            subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.sector),
+            selectinload(NewsArticle.relations).selectinload(NewsStockRelation.stock),
+            selectinload(NewsArticle.relations).selectinload(NewsStockRelation.sector),
         )
         .filter(NewsArticle.id == news_id)
         .first()
