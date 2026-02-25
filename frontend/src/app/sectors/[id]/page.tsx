@@ -117,7 +117,7 @@ export default function SectorDetail() {
                           {stock.name}
                         </Link>
                       </td>
-                      <td className={`text-right ${priceColor}`}>
+                      <td className="text-right text-[#333]">
                         {stock.current_price != null ? stock.current_price.toLocaleString() : "-"}
                       </td>
                       <td className={`text-right ${priceColor}`}>
