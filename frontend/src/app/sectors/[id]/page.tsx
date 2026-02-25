@@ -214,7 +214,7 @@ export default function SectorDetail() {
                           {article.relations.slice(0, 2).map((rel, i) => (
                             <span
                               key={i}
-                              className={`badge ${rel.relevance === "direct" ? "badge-direct" : "badge-indirect"} mr-1`}
+                              className={`badge ${rel.stock_name ? "badge-stock" : "badge-sector"} mr-1`}
                             >
                               {rel.stock_name || (rel.sector_name && formatSectorName(rel.sector_name))}
                             </span>

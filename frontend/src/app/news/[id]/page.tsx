@@ -149,7 +149,7 @@ export default function NewsDetail() {
                     <Link
                       key={`sector-${id}`}
                       href={`/sectors/${id}`}
-                      className="badge badge-indirect hover:opacity-80 px-2 py-0.5"
+                      className="badge badge-sector hover:opacity-80 px-2 py-0.5"
                     >
                       {formatSectorName(s.name)}
                     </Link>
@@ -158,7 +158,7 @@ export default function NewsDetail() {
                     <Link
                       key={`stock-${id}`}
                       href={`/stocks/${id}`}
-                      className={`badge ${s.relevance === 'direct' ? 'badge-direct' : 'badge-indirect'} hover:opacity-80 px-2 py-0.5`}
+                      className="badge badge-stock hover:opacity-80 px-2 py-0.5"
                     >
                       {s.name}
                     </Link>

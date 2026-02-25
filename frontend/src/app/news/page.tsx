@@ -180,7 +180,7 @@ export default function NewsPage() {
                         {article.relations.slice(0, 3).map((rel, i) => (
                           <span
                             key={i}
-                            className={`badge ${rel.relevance === "direct" ? "badge-direct" : "badge-indirect"}`}
+                            className={`badge ${rel.stock_name ? "badge-stock" : "badge-sector"}`}
                           >
                             {rel.stock_name || (rel.sector_name && formatSectorName(rel.sector_name))}
                           </span>

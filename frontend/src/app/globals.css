@@ -138,24 +138,19 @@
   font-weight: 500;
 }
 
-.badge-direct {
-  background: #fde8eb;
-  color: #e12343;
+.badge-stock {
+  background: #e8f4fd;
+  color: #1261c4;
 }
 
-.badge-indirect {
-  background: #fff3cd;
-  color: #856404;
+.badge-sector {
+  background: #f0f0f0;
+  color: #555;
 }
 
 .badge-source {
   background: #e8f4fd;
   color: #1261c4;
-}
-
-.badge-market {
-  background: #f0f0f0;
-  color: #666;
 }
 
 .badge-positive {
