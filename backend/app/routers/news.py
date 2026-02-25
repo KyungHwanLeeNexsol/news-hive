@@ -359,9 +359,9 @@ async def _reclassify_unlinked(db: Session) -> int:
 
 
 def _deduplicate_existing(db: Session) -> int:
-    """Remove near-duplicate articles from DB, keeping the one with most relations."""
+    """Remove near-duplicate articles from DB using exact + fuzzy title matching."""
     from sqlalchemy import text as sa_text
-    from app.services.news_crawler import _normalize_title
+    from app.services.news_crawler import _normalize_title, _title_bigrams, _is_similar_title
 
     # Load article id, title, relation count without triggering ORM cascade
     rows = db.execute(sa_text(
@@ -376,15 +376,41 @@ def _deduplicate_existing(db: Session) -> int:
            ORDER BY a.published_at DESC NULLS LAST"""
     )).fetchall()
 
-    # Group by normalized title
+    # Phase 1: Group by exact normalized title
     groups: dict[str, list[tuple]] = {}
+    norm_cache: dict[int, str] = {}  # id -> normalized title
     for row in rows:
         norm = _normalize_title(row[1])
         if not norm:
             continue
+        norm_cache[row[0]] = norm
         if norm not in groups:
             groups[norm] = []
-        groups[norm].append(row)  # (id, title, published_at, rel_count)
+        groups[norm].append(row)
+
+    # Phase 2: Merge groups that are fuzzy-similar
+    group_keys = list(groups.keys())
+    merged: dict[str, bool] = {}  # track which keys have been merged into another
+    for i in range(len(group_keys)):
+        if group_keys[i] in merged:
+            continue
+        bg_i = _title_bigrams(group_keys[i])
+        if not bg_i or len(bg_i) < 4:
+            continue
+        for j in range(i + 1, len(group_keys)):
+            if group_keys[j] in merged:
+                continue
+            bg_j = _title_bigrams(group_keys[j])
+            if not bg_j or len(bg_j) < 4:
+                continue
+            if _is_similar_title(bg_i, bg_j):
+                # Merge group j into group i
+                groups[group_keys[i]].extend(groups[group_keys[j]])
+                merged[group_keys[j]] = True
+
+    # Remove merged keys
+    for key in merged:
+        del groups[key]
 
     # Collect IDs to delete (keep the one with most relations per group)
     delete_ids: list[int] = []

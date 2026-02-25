@@ -42,6 +42,22 @@ def _normalize_title(title: str) -> str:
     t = _TITLE_NOISE_RE.sub("", t).lower()
     return t
 
+
+def _title_bigrams(norm_title: str) -> set[str]:
+    """Extract character bigrams from a normalized title for fuzzy matching."""
+    if len(norm_title) < 2:
+        return set()
+    return {norm_title[i:i+2] for i in range(len(norm_title) - 1)}
+
+
+def _is_similar_title(bigrams_a: set[str], bigrams_b: set[str], threshold: float = 0.55) -> bool:
+    """Check if two titles are similar using Jaccard similarity on bigrams."""
+    if not bigrams_a or not bigrams_b:
+        return False
+    intersection = len(bigrams_a & bigrams_b)
+    union = len(bigrams_a | bigrams_b)
+    return (intersection / union) >= threshold
+
 # Round-robin index for stock selection (persists across cycles within same process)
 _stock_rr_index = 0
 
@@ -230,24 +246,30 @@ async def crawl_all_news(db: Session) -> int:
 
     logger.info(f"Raw articles by source: {source_counts}, total={len(all_raw_articles)}")
 
-    # Deduplicate by URL + near-duplicate title detection
+    # Deduplicate by URL + near-duplicate title detection (exact + fuzzy)
     seen_urls: set[str] = set()
     seen_titles: set[str] = set()
+    seen_bigrams: list[set[str]] = []  # for fuzzy matching
     unique_articles: list[dict] = []
     existing_urls = {row[0] for row in db.query(NewsArticle.url).all()}
 
     # Load recent titles from DB for cross-batch dedup (last 7 days worth)
     from datetime import datetime, timedelta, timezone
     recent_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
-    existing_titles = {
-        _normalize_title(row[0])
-        for row in db.query(NewsArticle.title)
-        .filter(NewsArticle.published_at >= recent_cutoff)
-        .all()
-    }
-    seen_titles.update(existing_titles)
+    existing_norm_titles = []
+    for row in db.query(NewsArticle.title).filter(NewsArticle.published_at >= recent_cutoff).all():
+        norm = _normalize_title(row[0])
+        if norm:
+            seen_titles.add(norm)
+            existing_norm_titles.append(norm)
+    # Build bigram index for existing titles (for fuzzy dedup)
+    for norm in existing_norm_titles:
+        bg = _title_bigrams(norm)
+        if bg:
+            seen_bigrams.append(bg)
 
     title_dedup_count = 0
+    fuzzy_dedup_count = 0
     for article in all_raw_articles:
         url = article.get("url", "")
         if not url or url in seen_urls or url in existing_urls:
@@ -255,16 +277,34 @@ async def crawl_all_news(db: Session) -> int:
         seen_urls.add(url)
 
         norm_title = _normalize_title(article.get("title", ""))
-        if norm_title and norm_title in seen_titles:
+        if not norm_title:
+            unique_articles.append(article)
+            continue
+
+        # Exact match dedup
+        if norm_title in seen_titles:
             title_dedup_count += 1
             continue
-        if norm_title:
-            seen_titles.add(norm_title)
 
+        # Fuzzy match dedup (bigram Jaccard similarity)
+        new_bigrams = _title_bigrams(norm_title)
+        if new_bigrams and len(new_bigrams) >= 4:  # skip very short titles
+            is_fuzzy_dup = False
+            for existing_bg in seen_bigrams:
+                if _is_similar_title(new_bigrams, existing_bg):
+                    is_fuzzy_dup = True
+                    break
+            if is_fuzzy_dup:
+                fuzzy_dedup_count += 1
+                continue
+
+        seen_titles.add(norm_title)
+        if new_bigrams:
+            seen_bigrams.append(new_bigrams)
         unique_articles.append(article)
 
-    if title_dedup_count:
-        logger.info(f"Filtered {title_dedup_count} near-duplicate articles by title")
+    if title_dedup_count or fuzzy_dedup_count:
+        logger.info(f"Filtered {title_dedup_count} exact + {fuzzy_dedup_count} fuzzy duplicate articles by title")
 
     # Filter out non-financial articles (entertainment, sports, lifestyle)
     pre_filter_count = len(unique_articles)
