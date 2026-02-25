@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/stock_news_tracker"
+    DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/news_hive"
 
     NAVER_CLIENT_ID: str = ""
     NAVER_CLIENT_SECRET: str = ""

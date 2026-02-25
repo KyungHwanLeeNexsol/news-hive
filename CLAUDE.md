@@ -1,4 +1,4 @@
-# Stock News Tracker - 섹터 기반 투자 뉴스 추적 앱
+# NewsHive - 섹터 기반 투자 뉴스 추적 앱
 
 ## 프로젝트 목적
 투자자가 특정 종목만 보면 놓치기 쉬운 **산업 섹터 내 중요 뉴스**를 자동으로 추적하는 앱.
@@ -27,7 +27,7 @@
 
 ## 프로젝트 구조
 ```
-stock-news-tracker/
+news-hive/
 ├── backend/
 │   ├── app/
 │   │   ├── main.py                  # FastAPI 앱 진입점 + 스케줄러 시작

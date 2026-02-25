@@ -1,11 +1,11 @@
 services:
   db:
     image: postgres:16-alpine
-    container_name: stock-news-db
+    container_name: news-hive-db
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: stock_news_tracker
+      POSTGRES_DB: news_hive
     ports:
       - "5432:5432"
     volumes:

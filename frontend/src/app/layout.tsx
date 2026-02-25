@@ -3,7 +3,7 @@ import "./globals.css";
 import Header from "@/components/Header";
 
 export const metadata: Metadata = {
-  title: "NewsHive — 업종별 투자 뉴스 추적",
+  title: "NewsHive",
   description: "업종 단위로 종목 뉴스를 모아 놓치기 쉬운 투자 정보를 포착",
 };
 
