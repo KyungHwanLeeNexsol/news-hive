@@ -178,13 +178,13 @@
 }
 
 .page-btn {
-  min-width: 28px;
-  height: 28px;
-  padding: 0 6px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
   border: 1px solid #e5e5e5;
   background: #fff;
   color: #333;
-  font-size: 12px;
+  font-size: 14px;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -210,7 +210,7 @@
 }
 
 .page-ellipsis {
-  font-size: 12px;
+  font-size: 14px;
   color: #999;
   padding: 0 4px;
 }
