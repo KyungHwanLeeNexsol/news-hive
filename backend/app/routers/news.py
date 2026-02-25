@@ -1,6 +1,9 @@
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
+from sqlalchemy import func
 from sqlalchemy.orm import Session, subqueryload
 
 from app.database import get_db, SessionLocal
@@ -15,8 +18,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/news", tags=["news"])
 
 
-@router.get("", response_model=list[NewsArticleResponse])
-async def list_news(limit: int = 50, db: Session = Depends(get_db)):
+@router.get("")
+async def list_news(limit: int = 30, offset: int = 0, db: Session = Depends(get_db)):
+    total = db.query(func.count(NewsArticle.id)).scalar()
     articles = (
         db.query(NewsArticle)
         .options(
@@ -24,10 +28,15 @@ async def list_news(limit: int = 50, db: Session = Depends(get_db)):
             subqueryload(NewsArticle.relations).subqueryload(NewsStockRelation.sector),
         )
         .order_by(NewsArticle.published_at.desc().nullslast())
+        .offset(offset)
         .limit(limit)
         .all()
     )
-    return format_articles(articles)
+    data = format_articles(articles)
+    return JSONResponse(
+        content=jsonable_encoder(data),
+        headers={"X-Total-Count": str(total), "Access-Control-Expose-Headers": "X-Total-Count"},
+    )
 
 
 @router.get("/{news_id}", response_model=NewsArticleResponse)

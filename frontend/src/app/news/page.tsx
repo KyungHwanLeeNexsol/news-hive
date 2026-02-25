@@ -6,6 +6,9 @@ import { fetchNews, refreshNews } from "@/lib/api";
 import { formatSectorName } from "@/lib/format";
 import type { NewsArticle } from "@/lib/types";
 import LoadingBar from "@/components/LoadingBar";
+import Pagination from "@/components/Pagination";
+
+const PAGE_SIZE = 30;
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return "";
@@ -29,19 +32,27 @@ function sentimentLabel(sentiment: string | null): { text: string; className: st
 
 export default function NewsPage() {
   const [news, setNews] = useState<NewsArticle[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchNews().then(setNews).catch(() => {}).finally(() => setLoading(false));
-  }, []);
+    setLoading(true);
+    fetchNews((page - 1) * PAGE_SIZE, PAGE_SIZE)
+      .then((r) => { setNews(r.articles); setTotal(r.total); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [page]);
 
   async function handleRefresh() {
     setRefreshing(true);
     try {
       await refreshNews();
-      const updated = await fetchNews();
-      setNews(updated);
+      const r = await fetchNews(0, PAGE_SIZE);
+      setNews(r.articles);
+      setTotal(r.total);
+      setPage(1);
     } catch {
       // ignore
     } finally {
@@ -49,14 +60,16 @@ export default function NewsPage() {
     }
   }
 
-  if (loading) {
+  const totalPages = Math.ceil(total / PAGE_SIZE);
+
+  if (loading && news.length === 0) {
     return <LoadingBar loading={true} />;
   }
 
   return (
     <div className="section-box">
       <div className="section-title">
-        <span>전체 뉴스</span>
+        <span>전체 뉴스 ({total}건)</span>
         <button
           onClick={handleRefresh}
           disabled={refreshing}
@@ -78,7 +91,7 @@ export default function NewsPage() {
           {news.length === 0 ? (
             <tr>
               <td colSpan={4} className="text-center py-8 text-[#999]">
-                {loading ? '뉴스를 불러오는 중...' : '수집된 뉴스가 없습니다. 뉴스 새로고침을 눌러주세요.'}
+                수집된 뉴스가 없습니다. 뉴스 새로고침을 눌러주세요.
               </td>
             </tr>
           ) : (
@@ -125,6 +138,7 @@ export default function NewsPage() {
           )}
         </tbody>
       </table>
+      <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} />
     </div>
   );
 }

@@ -8,6 +8,9 @@ import { formatSectorName } from "@/lib/format";
 import type { Sector, NewsArticle } from "@/lib/types";
 import LoadingBar from "@/components/LoadingBar";
 import ChangeRate from "@/components/ChangeRate";
+import Pagination from "@/components/Pagination";
+
+const PAGE_SIZE = 30;
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return "";
@@ -34,17 +37,27 @@ export default function SectorDetail() {
 
   const [sector, setSector] = useState<Sector | null>(null);
   const [news, setNews] = useState<NewsArticle[]>([]);
+  const [newsTotal, setNewsTotal] = useState(0);
+  const [newsPage, setNewsPage] = useState(1);
   const [tab, setTab] = useState<"stocks" | "news">("news");
 
   useEffect(() => {
     if (!sectorId) return;
     fetchSector(sectorId).then(setSector).catch(() => {});
-    fetchSectorNews(sectorId).then(setNews).catch(() => {});
   }, [sectorId]);
+
+  useEffect(() => {
+    if (!sectorId) return;
+    fetchSectorNews(sectorId, (newsPage - 1) * PAGE_SIZE, PAGE_SIZE)
+      .then((r) => { setNews(r.articles); setNewsTotal(r.total); })
+      .catch(() => {});
+  }, [sectorId, newsPage]);
 
   if (!sector) {
     return <LoadingBar loading={true} />;
   }
+
+  const newsTotalPages = Math.ceil(newsTotal / PAGE_SIZE);
 
   return (
     <div>
@@ -63,7 +76,7 @@ export default function SectorDetail() {
           className={`tab-item ${tab === "news" ? "active" : ""}`}
           onClick={() => setTab("news")}
         >
-          뉴스 ({news.length})
+          뉴스 ({newsTotal})
         </button>
         <button
           className={`tab-item ${tab === "stocks" ? "active" : ""}`}
@@ -169,51 +182,54 @@ export default function SectorDetail() {
               관련 뉴스가 없습니다.
             </div>
           ) : (
-            <table className="naver-table">
-              <thead>
-                <tr>
-                  <th className="text-left" style={{ width: "52%" }}>제목</th>
-                  <th style={{ width: "8%" }}>구분</th>
-                  <th style={{ width: "18%" }}>관련</th>
-                  <th style={{ width: "22%" }}>날짜</th>
-                </tr>
-              </thead>
-              <tbody>
-                {news.map((article) => {
-                  const sentiment = sentimentLabel(article.sentiment);
-                  return (
-                    <tr key={article.id}>
-                      <td>
-                        <Link
-                          href={`/news/${article.id}`}
-                          className="text-[#333] hover:text-[#1261c4] hover:underline"
-                        >
-                          {article.title}
-                        </Link>
-                      </td>
-                      <td className="text-center">
-                        <span className={`badge ${sentiment.className}`}>
-                          {sentiment.text}
-                        </span>
-                      </td>
-                      <td className="text-center">
-                        {article.relations.slice(0, 2).map((rel, i) => (
-                          <span
-                            key={i}
-                            className={`badge ${rel.relevance === "direct" ? "badge-direct" : "badge-indirect"} mr-1`}
+            <>
+              <table className="naver-table">
+                <thead>
+                  <tr>
+                    <th className="text-left" style={{ width: "52%" }}>제목</th>
+                    <th style={{ width: "8%" }}>구분</th>
+                    <th style={{ width: "18%" }}>관련</th>
+                    <th style={{ width: "22%" }}>날짜</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {news.map((article) => {
+                    const sentiment = sentimentLabel(article.sentiment);
+                    return (
+                      <tr key={article.id}>
+                        <td>
+                          <Link
+                            href={`/news/${article.id}`}
+                            className="text-[#333] hover:text-[#1261c4] hover:underline"
                           >
-                            {rel.stock_name || (rel.sector_name && formatSectorName(rel.sector_name))}
+                            {article.title}
+                          </Link>
+                        </td>
+                        <td className="text-center">
+                          <span className={`badge ${sentiment.className}`}>
+                            {sentiment.text}
                           </span>
-                        ))}
-                      </td>
-                      <td className="text-center text-[12px] text-[#999]">
-                        {formatDate(article.published_at)}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                        </td>
+                        <td className="text-center">
+                          {article.relations.slice(0, 2).map((rel, i) => (
+                            <span
+                              key={i}
+                              className={`badge ${rel.relevance === "direct" ? "badge-direct" : "badge-indirect"} mr-1`}
+                            >
+                              {rel.stock_name || (rel.sector_name && formatSectorName(rel.sector_name))}
+                            </span>
+                          ))}
+                        </td>
+                        <td className="text-center text-[12px] text-[#999]">
+                          {formatDate(article.published_at)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <Pagination currentPage={newsPage} totalPages={newsTotalPages} onPageChange={setNewsPage} />
+            </>
           )}
         </div>
       )}

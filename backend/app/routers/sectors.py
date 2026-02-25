@@ -1,4 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session, subqueryload
 
@@ -139,8 +141,8 @@ async def delete_sector(sector_id: int, db: Session = Depends(get_db)):
     db.commit()
 
 
-@router.get("/{sector_id}/news", response_model=list[NewsArticleResponse])
-async def get_sector_news(sector_id: int, db: Session = Depends(get_db)):
+@router.get("/{sector_id}/news")
+async def get_sector_news(sector_id: int, limit: int = 30, offset: int = 0, db: Session = Depends(get_db)):
     sector = db.query(Sector).filter(Sector.id == sector_id).first()
     if not sector:
         raise HTTPException(status_code=404, detail="Sector not found")
@@ -159,6 +161,8 @@ async def get_sector_news(sector_id: int, db: Session = Depends(get_db)):
         .subquery()
     )
 
+    total = db.query(func.count()).select_from(news_ids_subq).scalar()
+
     articles = (
         db.query(NewsArticle)
         .options(
@@ -167,8 +171,13 @@ async def get_sector_news(sector_id: int, db: Session = Depends(get_db)):
         )
         .filter(NewsArticle.id.in_(db.query(news_ids_subq)))
         .order_by(NewsArticle.published_at.desc().nullslast())
-        .limit(50)
+        .offset(offset)
+        .limit(limit)
         .all()
     )
 
-    return format_articles(articles)
+    data = format_articles(articles)
+    return JSONResponse(
+        content=jsonable_encoder(data),
+        headers={"X-Total-Count": str(total), "Access-Control-Expose-Headers": "X-Total-Count"},
+    )

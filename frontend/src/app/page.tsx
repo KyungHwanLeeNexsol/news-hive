@@ -48,7 +48,7 @@ export default function Dashboard() {
     setLoading(true);
     Promise.all([
       fetchSectors().then(setSectors).catch(() => {}),
-      fetchNews().then(setNews).catch(() => {}),
+      fetchNews(0, 20).then((r) => setNews(r.articles)).catch(() => {}),
     ]).finally(() => setLoading(false));
   }, []);
 
@@ -64,8 +64,8 @@ export default function Dashboard() {
     setRefreshing(true);
     try {
       await refreshNews();
-      const updated = await fetchNews();
-      setNews(updated);
+      const { articles } = await fetchNews(0, 20);
+      setNews(articles);
     } catch {
       // ignore
     } finally {

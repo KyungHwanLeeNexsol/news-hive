@@ -29,10 +29,16 @@ export async function deleteSector(id: number): Promise<void> {
   if (!res.ok) throw new Error("Failed to delete sector");
 }
 
-export async function fetchSectorNews(id: number): Promise<NewsArticle[]> {
-  const res = await fetch(`${API_BASE}/sectors/${id}/news`);
+export async function fetchSectorNews(
+  id: number,
+  offset = 0,
+  limit = 30,
+): Promise<{ articles: NewsArticle[]; total: number }> {
+  const res = await fetch(`${API_BASE}/sectors/${id}/news?limit=${limit}&offset=${offset}`);
   if (!res.ok) throw new Error("Failed to fetch sector news");
-  return res.json();
+  const total = parseInt(res.headers.get("X-Total-Count") || "0", 10);
+  const articles = await res.json();
+  return { articles, total };
 }
 
 export async function createStock(
@@ -53,10 +59,16 @@ export async function deleteStock(id: number): Promise<void> {
   if (!res.ok) throw new Error("Failed to delete stock");
 }
 
-export async function fetchStockNews(id: number): Promise<NewsArticle[]> {
-  const res = await fetch(`${API_BASE}/stocks/${id}/news`);
+export async function fetchStockNews(
+  id: number,
+  offset = 0,
+  limit = 30,
+): Promise<{ articles: NewsArticle[]; total: number }> {
+  const res = await fetch(`${API_BASE}/stocks/${id}/news?limit=${limit}&offset=${offset}`);
   if (!res.ok) throw new Error("Failed to fetch stock news");
-  return res.json();
+  const total = parseInt(res.headers.get("X-Total-Count") || "0", 10);
+  const articles = await res.json();
+  return { articles, total };
 }
 
 export async function fetchNewsById(id: number): Promise<NewsArticle> {
@@ -77,10 +89,15 @@ export async function scrapeArticleContent(id: number): Promise<NewsArticle> {
   return res.json();
 }
 
-export async function fetchNews(): Promise<NewsArticle[]> {
-  const res = await fetch(`${API_BASE}/news`);
+export async function fetchNews(
+  offset = 0,
+  limit = 30,
+): Promise<{ articles: NewsArticle[]; total: number }> {
+  const res = await fetch(`${API_BASE}/news?limit=${limit}&offset=${offset}`);
   if (!res.ok) throw new Error("Failed to fetch news");
-  return res.json();
+  const total = parseInt(res.headers.get("X-Total-Count") || "0", 10);
+  const articles = await res.json();
+  return { articles, total };
 }
 
 export async function refreshNews(): Promise<{ message: string }> {
