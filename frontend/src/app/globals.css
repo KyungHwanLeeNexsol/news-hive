@@ -215,23 +215,31 @@
   padding: 0 4px;
 }
 
-/* Loading overlay */
-.loading-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 10;
+/* Skeleton loading */
+.skeleton {
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 3px;
 }
 
-.loading-progress-bar {
-  height: 2px;
-  background: #1261c4;
-  animation: progress 1.5s ease-in-out infinite;
+.skeleton-text {
+  height: 14px;
+  margin-bottom: 4px;
 }
 
-@keyframes progress {
-  0% { width: 0; }
-  50% { width: 70%; }
-  100% { width: 100%; }
+.skeleton-text-sm {
+  height: 10px;
+}
+
+.skeleton-badge {
+  height: 18px;
+  width: 48px;
+  display: inline-block;
+  border-radius: 2px;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }

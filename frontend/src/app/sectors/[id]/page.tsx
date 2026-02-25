@@ -6,7 +6,6 @@ import Link from "next/link";
 import { fetchSector, fetchSectorNews } from "@/lib/api";
 import { formatSectorName } from "@/lib/format";
 import type { Sector, NewsArticle } from "@/lib/types";
-import LoadingBar from "@/components/LoadingBar";
 import ChangeRate from "@/components/ChangeRate";
 import Pagination from "@/components/Pagination";
 
@@ -40,22 +39,24 @@ export default function SectorDetail() {
   const [newsTotal, setNewsTotal] = useState(0);
   const [newsPage, setNewsPage] = useState(1);
   const [tab, setTab] = useState<"stocks" | "news">("news");
+  const [sectorLoading, setSectorLoading] = useState(true);
+  const [newsLoading, setNewsLoading] = useState(true);
 
   useEffect(() => {
     if (!sectorId) return;
-    fetchSector(sectorId).then(setSector).catch(() => {});
+    setSectorLoading(true);
+    fetchSector(sectorId).then(setSector).catch(() => {}).finally(() => setSectorLoading(false));
   }, [sectorId]);
 
   useEffect(() => {
     if (!sectorId) return;
+    setNewsLoading(true);
+    window.scrollTo({ top: 0 });
     fetchSectorNews(sectorId, (newsPage - 1) * PAGE_SIZE, PAGE_SIZE)
       .then((r) => { setNews(r.articles); setNewsTotal(r.total); })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setNewsLoading(false));
   }, [sectorId, newsPage]);
-
-  if (!sector) {
-    return <LoadingBar loading={true} />;
-  }
 
   const newsTotalPages = Math.ceil(newsTotal / PAGE_SIZE);
 
@@ -67,7 +68,11 @@ export default function SectorDetail() {
           업종별 뉴스
         </Link>
         <span>&rsaquo;</span>
-        <span className="text-[#333] font-medium">{formatSectorName(sector.name)}</span>
+        {sectorLoading ? (
+          <div className="skeleton skeleton-text" style={{ width: '80px', display: 'inline-block' }} />
+        ) : (
+          <span className="text-[#333] font-medium">{sector ? formatSectorName(sector.name) : ""}</span>
+        )}
       </div>
 
       {/* Tab nav */}
@@ -76,13 +81,13 @@ export default function SectorDetail() {
           className={`tab-item ${tab === "news" ? "active" : ""}`}
           onClick={() => setTab("news")}
         >
-          뉴스 ({newsTotal})
+          뉴스 {!newsLoading && `(${newsTotal})`}
         </button>
         <button
           className={`tab-item ${tab === "stocks" ? "active" : ""}`}
           onClick={() => setTab("stocks")}
         >
-          종목 ({sector.stocks?.length ?? 0})
+          종목 {!sectorLoading && `(${sector?.stocks?.length ?? 0})`}
         </button>
       </div>
 
@@ -105,7 +110,16 @@ export default function SectorDetail() {
               </tr>
             </thead>
             <tbody>
-              {!sector.stocks || sector.stocks.length === 0 ? (
+              {sectorLoading ? (
+                Array.from({ length: 8 }).map((_, i) => (
+                  <tr key={`sk-${i}`}>
+                    <td><div className="skeleton skeleton-text" style={{ width: `${50 + Math.random() * 30}%` }} /></td>
+                    {Array.from({ length: 9 }).map((_, j) => (
+                      <td key={j} className="text-right"><div className="skeleton skeleton-text-sm" style={{ width: '70%', marginLeft: 'auto' }} /></td>
+                    ))}
+                  </tr>
+                ))
+              ) : !sector?.stocks || sector.stocks.length === 0 ? (
                 <tr>
                   <td colSpan={10} className="text-center py-8 text-[#999]">
                     등록된 종목이 없습니다.{" "}
@@ -177,59 +191,75 @@ export default function SectorDetail() {
         </div>
       ) : (
         <div className="section-box" style={{ borderTop: "none" }}>
-          {news.length === 0 ? (
-            <div className="py-8 text-center text-[13px] text-[#999]">
-              관련 뉴스가 없습니다.
-            </div>
-          ) : (
-            <>
-              <table className="naver-table">
-                <thead>
-                  <tr>
-                    <th className="text-left" style={{ width: "52%" }}>제목</th>
-                    <th style={{ width: "8%" }}>구분</th>
-                    <th style={{ width: "18%" }}>관련</th>
-                    <th style={{ width: "22%" }}>날짜</th>
+          <table className="naver-table">
+            <thead>
+              <tr>
+                <th className="text-left" style={{ width: "52%" }}>제목</th>
+                <th style={{ width: "8%" }}>구분</th>
+                <th style={{ width: "18%" }}>관련</th>
+                <th style={{ width: "22%" }}>날짜</th>
+              </tr>
+            </thead>
+            <tbody>
+              {newsLoading ? (
+                Array.from({ length: 15 }).map((_, i) => (
+                  <tr key={`sk-${i}`}>
+                    <td><div className="skeleton skeleton-text" style={{ width: `${55 + Math.random() * 35}%` }} /></td>
+                    <td className="text-center"><div className="skeleton skeleton-badge mx-auto" /></td>
+                    <td className="text-center">
+                      <div className="flex gap-1 justify-center">
+                        <div className="skeleton skeleton-badge" />
+                        <div className="skeleton skeleton-badge" />
+                      </div>
+                    </td>
+                    <td className="text-center"><div className="skeleton skeleton-text-sm mx-auto" style={{ width: "80%" }} /></td>
                   </tr>
-                </thead>
-                <tbody>
-                  {news.map((article) => {
-                    const sentiment = sentimentLabel(article.sentiment);
-                    return (
-                      <tr key={article.id}>
-                        <td>
-                          <Link
-                            href={`/news/${article.id}`}
-                            className="text-[#333] hover:text-[#1261c4] hover:underline"
+                ))
+              ) : news.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="text-center py-8 text-[#999]">
+                    관련 뉴스가 없습니다.
+                  </td>
+                </tr>
+              ) : (
+                news.map((article) => {
+                  const sentiment = sentimentLabel(article.sentiment);
+                  return (
+                    <tr key={article.id}>
+                      <td>
+                        <Link
+                          href={`/news/${article.id}`}
+                          className="text-[#333] hover:text-[#1261c4] hover:underline"
+                        >
+                          {article.title}
+                        </Link>
+                      </td>
+                      <td className="text-center">
+                        <span className={`badge ${sentiment.className}`}>
+                          {sentiment.text}
+                        </span>
+                      </td>
+                      <td className="text-center">
+                        {article.relations.slice(0, 2).map((rel, i) => (
+                          <span
+                            key={i}
+                            className={`badge ${rel.stock_name ? "badge-stock" : "badge-sector"} mr-1`}
                           >
-                            {article.title}
-                          </Link>
-                        </td>
-                        <td className="text-center">
-                          <span className={`badge ${sentiment.className}`}>
-                            {sentiment.text}
+                            {rel.stock_name || (rel.sector_name && formatSectorName(rel.sector_name))}
                           </span>
-                        </td>
-                        <td className="text-center">
-                          {article.relations.slice(0, 2).map((rel, i) => (
-                            <span
-                              key={i}
-                              className={`badge ${rel.stock_name ? "badge-stock" : "badge-sector"} mr-1`}
-                            >
-                              {rel.stock_name || (rel.sector_name && formatSectorName(rel.sector_name))}
-                            </span>
-                          ))}
-                        </td>
-                        <td className="text-center text-[12px] text-[#999]">
-                          {formatDate(article.published_at)}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              <Pagination currentPage={newsPage} totalPages={newsTotalPages} onPageChange={setNewsPage} />
-            </>
+                        ))}
+                      </td>
+                      <td className="text-center text-[12px] text-[#999]">
+                        {formatDate(article.published_at)}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+          {!newsLoading && news.length > 0 && (
+            <Pagination currentPage={newsPage} totalPages={newsTotalPages} onPageChange={setNewsPage} />
           )}
         </div>
       )}

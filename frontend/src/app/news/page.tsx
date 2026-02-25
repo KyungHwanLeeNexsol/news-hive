@@ -5,7 +5,6 @@ import Link from "next/link";
 import { fetchNews, searchNews, refreshNews } from "@/lib/api";
 import { formatSectorName } from "@/lib/format";
 import type { NewsArticle } from "@/lib/types";
-import LoadingBar from "@/components/LoadingBar";
 import Pagination from "@/components/Pagination";
 
 const PAGE_SIZE = 30;
@@ -36,7 +35,6 @@ export default function NewsPage() {
   const [page, setPage] = useState(1);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [initialLoad, setInitialLoad] = useState(true);
 
   // Search state
   const [searchInput, setSearchInput] = useState("");
@@ -44,13 +42,14 @@ export default function NewsPage() {
 
   useEffect(() => {
     setLoading(true);
+    window.scrollTo({ top: 0 });
     const fetcher = query
       ? searchNews(query, (page - 1) * PAGE_SIZE, PAGE_SIZE)
       : fetchNews((page - 1) * PAGE_SIZE, PAGE_SIZE);
     fetcher
       .then((r) => { setNews(r.articles); setTotal(r.total); })
       .catch(() => {})
-      .finally(() => { setLoading(false); setInitialLoad(false); });
+      .finally(() => setLoading(false));
   }, [page, query]);
 
   function handleSearch(e: React.FormEvent) {
@@ -84,11 +83,6 @@ export default function NewsPage() {
   }
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
-
-  // First load — show full-page spinner
-  if (initialLoad) {
-    return <LoadingBar loading={true} />;
-  }
 
   return (
     <div className="section-box">
@@ -129,75 +123,89 @@ export default function NewsPage() {
         )}
       </form>
 
-      {/* Content area with loading overlay */}
-      <div className="relative">
-        {loading && (
-          <div className="loading-overlay">
-            <div className="loading-progress-bar" />
-          </div>
-        )}
-        <table className={`naver-table${loading ? " opacity-40 pointer-events-none" : ""}`}>
-          <thead>
-            <tr>
-              <th className="text-left" style={{ width: "50%" }}>제목</th>
-              <th style={{ width: "7%" }}>구분</th>
-              <th style={{ width: "23%" }}>관련 종목</th>
-              <th style={{ width: "20%" }}>날짜</th>
-            </tr>
-          </thead>
-          <tbody>
-            {news.length === 0 ? (
-              <tr>
-                <td colSpan={4} className="text-center py-8 text-[#999]">
-                  {query ? `"${query}"에 대한 검색 결과가 없습니다.` : "수집된 뉴스가 없습니다. 뉴스 새로고침을 눌러주세요."}
+      {/* Content area */}
+      <table className="naver-table">
+        <thead>
+          <tr>
+            <th className="text-left" style={{ width: "50%" }}>제목</th>
+            <th style={{ width: "7%" }}>구분</th>
+            <th style={{ width: "23%" }}>관련 종목</th>
+            <th style={{ width: "20%" }}>날짜</th>
+          </tr>
+        </thead>
+        <tbody>
+          {loading ? (
+            Array.from({ length: 15 }).map((_, i) => (
+              <tr key={`skeleton-${i}`}>
+                <td>
+                  <div className="skeleton skeleton-text" style={{ width: `${60 + Math.random() * 30}%` }} />
+                  <div className="skeleton skeleton-text-sm" style={{ width: `${40 + Math.random() * 20}%` }} />
+                </td>
+                <td className="text-center">
+                  <div className="skeleton skeleton-badge mx-auto" />
+                </td>
+                <td className="text-center">
+                  <div className="flex gap-1 justify-center">
+                    <div className="skeleton skeleton-badge" />
+                    <div className="skeleton skeleton-badge" />
+                  </div>
+                </td>
+                <td className="text-center">
+                  <div className="skeleton skeleton-text-sm mx-auto" style={{ width: "80%" }} />
                 </td>
               </tr>
-            ) : (
-              news.map((article) => {
-                const sentiment = sentimentLabel(article.sentiment);
-                return (
-                  <tr key={article.id}>
-                    <td>
-                      <Link
-                        href={`/news/${article.id}`}
-                        className="text-[#333] hover:text-[#1261c4] hover:underline"
-                      >
-                        {article.title}
-                      </Link>
-                      {article.summary && (
-                        <p className="text-[11px] text-[#999] mt-0.5 truncate max-w-[500px]">
-                          {article.summary}
-                        </p>
-                      )}
-                    </td>
-                    <td className="text-center">
-                      <span className={`badge ${sentiment.className}`}>
-                        {sentiment.text}
-                      </span>
-                    </td>
-                    <td className="text-center">
-                      <div className="flex flex-wrap gap-1 justify-center">
-                        {article.relations.slice(0, 3).map((rel, i) => (
-                          <span
-                            key={i}
-                            className={`badge ${rel.stock_name ? "badge-stock" : "badge-sector"}`}
-                          >
-                            {rel.stock_name || (rel.sector_name && formatSectorName(rel.sector_name))}
-                          </span>
-                        ))}
-                      </div>
-                    </td>
-                    <td className="text-center text-[#999] text-[12px]">
-                      {formatDate(article.published_at)}
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-        <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} />
-      </div>
+            ))
+          ) : news.length === 0 ? (
+            <tr>
+              <td colSpan={4} className="text-center py-8 text-[#999]">
+                {query ? `"${query}"에 대한 검색 결과가 없습니다.` : "수집된 뉴스가 없습니다. 뉴스 새로고침을 눌러주세요."}
+              </td>
+            </tr>
+          ) : (
+            news.map((article) => {
+              const sentiment = sentimentLabel(article.sentiment);
+              return (
+                <tr key={article.id}>
+                  <td>
+                    <Link
+                      href={`/news/${article.id}`}
+                      className="text-[#333] hover:text-[#1261c4] hover:underline"
+                    >
+                      {article.title}
+                    </Link>
+                    {article.summary && (
+                      <p className="text-[11px] text-[#999] mt-0.5 truncate max-w-[500px]">
+                        {article.summary}
+                      </p>
+                    )}
+                  </td>
+                  <td className="text-center">
+                    <span className={`badge ${sentiment.className}`}>
+                      {sentiment.text}
+                    </span>
+                  </td>
+                  <td className="text-center">
+                    <div className="flex flex-wrap gap-1 justify-center">
+                      {article.relations.slice(0, 3).map((rel, i) => (
+                        <span
+                          key={i}
+                          className={`badge ${rel.stock_name ? "badge-stock" : "badge-sector"}`}
+                        >
+                          {rel.stock_name || (rel.sector_name && formatSectorName(rel.sector_name))}
+                        </span>
+                      ))}
+                    </div>
+                  </td>
+                  <td className="text-center text-[#999] text-[12px]">
+                    {formatDate(article.published_at)}
+                  </td>
+                </tr>
+              );
+            })
+          )}
+        </tbody>
+      </table>
+      <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} />
     </div>
   );
 }

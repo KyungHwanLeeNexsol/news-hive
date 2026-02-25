@@ -6,8 +6,6 @@ import Link from 'next/link';
 import { fetchNewsById, generateAiSummary, scrapeArticleContent } from '@/lib/api';
 import { formatSectorName } from '@/lib/format';
 import type { NewsArticle } from '@/lib/types';
-import LoadingBar from '@/components/LoadingBar';
-
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return '';
   const d = new Date(dateStr);
@@ -90,7 +88,41 @@ export default function NewsDetail() {
   }, [newsId]);
 
   if (!article) {
-    return <LoadingBar loading={true} />;
+    return (
+      <div className="max-w-[860px]">
+        <div className="flex items-center gap-1 text-[12px] text-[#999] mb-3">
+          <Link href="/news" className="hover:text-[#333] hover:underline">전체 뉴스</Link>
+          <span>&rsaquo;</span>
+          <div className="skeleton skeleton-text" style={{ width: '200px', display: 'inline-block' }} />
+        </div>
+        <div className="section-box">
+          <div className="p-5 pb-4 border-b border-[#e5e5e5]">
+            <div className="skeleton skeleton-text mb-2" style={{ width: '80%', height: '18px' }} />
+            <div className="skeleton skeleton-text mb-3" style={{ width: '50%', height: '18px' }} />
+            <div className="flex gap-2">
+              <div className="skeleton skeleton-badge" />
+              <div className="skeleton skeleton-badge" />
+              <div className="skeleton skeleton-text-sm" style={{ width: '100px' }} />
+            </div>
+          </div>
+          <div className="p-5">
+            <div className="mb-5">
+              <div className="skeleton skeleton-text-sm mb-2" style={{ width: '80px' }} />
+              <div className="flex gap-1.5">
+                <div className="skeleton skeleton-badge" style={{ width: '60px' }} />
+                <div className="skeleton skeleton-badge" style={{ width: '60px' }} />
+              </div>
+            </div>
+            <div className="mb-5 p-4 bg-[#f0f7ff] rounded-md border border-[#d0e3f7]">
+              <div className="skeleton skeleton-text mb-2" style={{ width: '100px', height: '13px' }} />
+              <div className="skeleton skeleton-text mb-1" style={{ width: '100%' }} />
+              <div className="skeleton skeleton-text mb-1" style={{ width: '90%' }} />
+              <div className="skeleton skeleton-text" style={{ width: '70%' }} />
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   const sentiment = sentimentLabel(article.sentiment);

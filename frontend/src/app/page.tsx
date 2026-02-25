@@ -6,7 +6,6 @@ import { fetchSectors, fetchNews, refreshNews } from '@/lib/api';
 import type { Sector, NewsArticle } from '@/lib/types';
 import { formatSectorName } from '@/lib/format';
 import ChangeRate from '@/components/ChangeRate';
-import LoadingBar from '@/components/LoadingBar';
 
 const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
@@ -77,10 +76,6 @@ export default function Dashboard() {
   const visibleSectors = sectors;
   const totalStocks = visibleSectors.reduce((sum, s) => sum + (s.total_stocks ?? s.stock_count ?? 0), 0);
 
-  if (loading) {
-    return <LoadingBar loading={true} />;
-  }
-
   return (
     <div className="flex gap-4">
       {/* Left: Sector table */}
@@ -88,16 +83,16 @@ export default function Dashboard() {
         <div className="section-box">
           <div className="section-title">
             <span>업종 현황</span>
-            <span className="text-[12px] font-normal text-[#999]">
-              {visibleSectors.length}개 업종 / {totalStocks}개 종목
-            </span>
+            {!loading && (
+              <span className="text-[12px] font-normal text-[#999]">
+                {visibleSectors.length}개 업종 / {totalStocks}개 종목
+              </span>
+            )}
           </div>
           <table className="naver-table">
             <thead>
               <tr>
-                <th className="text-left" style={{ width: '30%' }}>
-                  업종명
-                </th>
+                <th className="text-left" style={{ width: '30%' }}>업종명</th>
                 <th style={{ width: '14%' }}>전일대비</th>
                 <th style={{ width: '10%' }}>전체</th>
                 <th style={{ width: '10%' }}>상승</th>
@@ -107,10 +102,22 @@ export default function Dashboard() {
               </tr>
             </thead>
             <tbody>
-              {visibleSectors.length === 0 ? (
+              {loading ? (
+                Array.from({ length: 10 }).map((_, i) => (
+                  <tr key={`sk-${i}`}>
+                    <td><div className="skeleton skeleton-text" style={{ width: `${50 + Math.random() * 30}%` }} /></td>
+                    <td className="text-center"><div className="skeleton skeleton-badge mx-auto" /></td>
+                    <td className="text-center"><div className="skeleton skeleton-text-sm mx-auto" style={{ width: '40%' }} /></td>
+                    <td className="text-center"><div className="skeleton skeleton-text-sm mx-auto" style={{ width: '40%' }} /></td>
+                    <td className="text-center"><div className="skeleton skeleton-text-sm mx-auto" style={{ width: '40%' }} /></td>
+                    <td className="text-center"><div className="skeleton skeleton-text-sm mx-auto" style={{ width: '40%' }} /></td>
+                    <td className="text-center"><div className="skeleton skeleton-text-sm mx-auto" style={{ width: '60%' }} /></td>
+                  </tr>
+                ))
+              ) : visibleSectors.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="text-center py-8 text-[#999]">
-                    {loading ? '업종 데이터를 불러오는 중...' : '등록된 업종이 없습니다.'}
+                    등록된 업종이 없습니다.
                   </td>
                 </tr>
               ) : (
@@ -159,9 +166,22 @@ export default function Dashboard() {
             </button>
           </div>
           <div>
-            {news.length === 0 ? (
+            {loading ? (
+              Array.from({ length: 8 }).map((_, i) => (
+                <div key={`sk-news-${i}`} className="news-item">
+                  <div className="flex-1 min-w-0">
+                    <div className="skeleton skeleton-text" style={{ width: `${60 + Math.random() * 30}%` }} />
+                    <div className="flex items-center gap-2 mt-1.5">
+                      <div className="skeleton skeleton-badge" style={{ width: '36px' }} />
+                      <div className="skeleton skeleton-badge" />
+                      <div className="skeleton skeleton-text-sm" style={{ width: '60px' }} />
+                    </div>
+                  </div>
+                </div>
+              ))
+            ) : news.length === 0 ? (
               <div className="py-8 text-center text-[13px] text-[#999]">
-                {loading ? '뉴스를 불러오는 중...' : '수집된 뉴스가 없습니다.'}
+                수집된 뉴스가 없습니다.
               </div>
             ) : (
               news.slice(0, 20).map((article) => (
@@ -190,7 +210,7 @@ export default function Dashboard() {
               ))
             )}
           </div>
-          {news.length > 0 && (
+          {!loading && news.length > 0 && (
             <div className="p-3 text-center border-t border-[#f0f0f0]">
               <Link href="/news" className="text-[12px] text-[#1261c4] hover:underline">
                 뉴스 더보기 &rsaquo;

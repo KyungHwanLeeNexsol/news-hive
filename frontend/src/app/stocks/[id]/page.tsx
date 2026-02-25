@@ -6,7 +6,6 @@ import Link from 'next/link';
 import { fetchStockNews } from '@/lib/api';
 import { formatSectorName } from '@/lib/format';
 import type { NewsArticle } from '@/lib/types';
-import LoadingBar from '@/components/LoadingBar';
 import Pagination from '@/components/Pagination';
 
 const PAGE_SIZE = 30;
@@ -62,6 +61,7 @@ export default function StockDetail() {
   useEffect(() => {
     if (!stockId) return;
     setLoading(true);
+    window.scrollTo({ top: 0 });
     fetchStockNews(stockId, (page - 1) * PAGE_SIZE, PAGE_SIZE)
       .then((r) => { setNews(r.articles); setTotal(r.total); })
       .catch(() => {})
@@ -69,10 +69,6 @@ export default function StockDetail() {
   }, [stockId, page]);
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
-
-  if (loading && news.length === 0) {
-    return <LoadingBar loading={true} />;
-  }
 
   return (
     <div>
@@ -88,64 +84,81 @@ export default function StockDetail() {
       <div className="section-box">
         <div className="section-title">
           <span>종목 관련 뉴스</span>
-          <span className="text-[12px] font-normal text-[#999]">{total}건</span>
+          {!loading && <span className="text-[12px] font-normal text-[#999]">{total}건</span>}
         </div>
-        {news.length === 0 ? (
-          <div className="py-8 text-center text-[13px] text-[#999]">관련 뉴스가 없습니다.</div>
-        ) : (
-          <>
-            <table className="naver-table">
-              <thead>
-                <tr>
-                  <th className="text-left" style={{ width: '48%' }}>
-                    제목
-                  </th>
-                  <th style={{ width: '8%' }}>구분</th>
-                  <th style={{ width: '9%' }}>출처</th>
-                  <th style={{ width: '15%' }}>관련</th>
-                  <th style={{ width: '20%' }}>날짜</th>
+        <table className="naver-table">
+          <thead>
+            <tr>
+              <th className="text-left" style={{ width: '48%' }}>제목</th>
+              <th style={{ width: '8%' }}>구분</th>
+              <th style={{ width: '9%' }}>출처</th>
+              <th style={{ width: '15%' }}>관련</th>
+              <th style={{ width: '20%' }}>날짜</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              Array.from({ length: 15 }).map((_, i) => (
+                <tr key={`sk-${i}`}>
+                  <td>
+                    <div className="skeleton skeleton-text" style={{ width: `${55 + Math.random() * 35}%` }} />
+                    <div className="skeleton skeleton-text-sm" style={{ width: `${35 + Math.random() * 20}%` }} />
+                  </td>
+                  <td className="text-center"><div className="skeleton skeleton-badge mx-auto" /></td>
+                  <td className="text-center"><div className="skeleton skeleton-badge mx-auto" /></td>
+                  <td className="text-center">
+                    <div className="flex gap-1 justify-center">
+                      <div className="skeleton skeleton-badge" />
+                    </div>
+                  </td>
+                  <td className="text-center"><div className="skeleton skeleton-text-sm mx-auto" style={{ width: "80%" }} /></td>
                 </tr>
-              </thead>
-              <tbody>
-                {news.map((article) => {
-                  const sentiment = sentimentLabel(article.sentiment);
-                  return (
-                    <tr key={article.id}>
-                      <td>
-                        <Link
-                          href={`/news/${article.id}`}
-                          className="text-[#333] hover:text-[#1261c4] hover:underline"
+              ))
+            ) : news.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="text-center py-8 text-[#999]">관련 뉴스가 없습니다.</td>
+              </tr>
+            ) : (
+              news.map((article) => {
+                const sentiment = sentimentLabel(article.sentiment);
+                return (
+                  <tr key={article.id}>
+                    <td>
+                      <Link
+                        href={`/news/${article.id}`}
+                        className="text-[#333] hover:text-[#1261c4] hover:underline"
+                      >
+                        {article.title}
+                      </Link>
+                      {article.summary && (
+                        <p className="text-[11px] text-[#999] mt-0.5 truncate max-w-[400px]">{article.summary}</p>
+                      )}
+                    </td>
+                    <td className="text-center">
+                      <span className={`badge ${sentiment.className}`}>{sentiment.text}</span>
+                    </td>
+                    <td className="text-center">
+                      <span className="badge badge-source">{sourceLabel(article.source)}</span>
+                    </td>
+                    <td className="text-center">
+                      {article.relations.slice(0, 2).map((rel, i) => (
+                        <span
+                          key={i}
+                          className={`badge ${rel.stock_name ? 'badge-stock' : 'badge-sector'} mr-1`}
                         >
-                          {article.title}
-                        </Link>
-                        {article.summary && (
-                          <p className="text-[11px] text-[#999] mt-0.5 truncate max-w-[400px]">{article.summary}</p>
-                        )}
-                      </td>
-                      <td className="text-center">
-                        <span className={`badge ${sentiment.className}`}>{sentiment.text}</span>
-                      </td>
-                      <td className="text-center">
-                        <span className="badge badge-source">{sourceLabel(article.source)}</span>
-                      </td>
-                      <td className="text-center">
-                        {article.relations.slice(0, 2).map((rel, i) => (
-                          <span
-                            key={i}
-                            className={`badge ${rel.stock_name ? 'badge-stock' : 'badge-sector'} mr-1`}
-                          >
-                            {rel.stock_name || (rel.sector_name && formatSectorName(rel.sector_name))}
-                          </span>
-                        ))}
-                      </td>
-                      <td className="text-center text-[12px] text-[#999]">{formatDate(article.published_at)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} />
-          </>
+                          {rel.stock_name || (rel.sector_name && formatSectorName(rel.sector_name))}
+                        </span>
+                      ))}
+                    </td>
+                    <td className="text-center text-[12px] text-[#999]">{formatDate(article.published_at)}</td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+        {!loading && news.length > 0 && (
+          <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} />
         )}
       </div>
     </div>
