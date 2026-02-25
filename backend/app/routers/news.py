@@ -177,6 +177,14 @@ async def scrape_content(news_id: int, db: Session = Depends(get_db)):
             db.refresh(article)
         else:
             db.commit()  # save resolved URL even if scraping fails
+    else:
+        # Re-filter cached content to remove ads that slipped through
+        from app.services.article_scraper import clean_cached_content
+        cleaned = clean_cached_content(article.content)
+        if cleaned != article.content:
+            article.content = cleaned
+            db.commit()
+            db.refresh(article)
 
     return format_articles([article])[0]
 

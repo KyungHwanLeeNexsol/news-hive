@@ -64,6 +64,11 @@ REMOVE_SELECTORS = [
     ".ad", ".ads", ".advertisement", ".ad_wrap", ".adsbygoogle",
     "[class*='banner']", "[id*='banner']",
     "[class*='dable']", "[id*='dable']",
+    "[class*='ad_']", "[id*='ad_']",
+    "[class*='_ad']", "[id*='_ad']",
+    "[class*='AdWrap']", "[class*='adwrap']",
+    "[data-role='ad']", "[data-type='ad']",
+    "[class*='sponsor']", "[id*='sponsor']",
     # Social / sharing
     ".social-share", ".sns_share", ".article_sns", ".share_btn",
     "[class*='social']",
@@ -96,6 +101,71 @@ REMOVE_SELECTORS = [
     # Crypto / market widgets
     "[class*='crypto']", "[class*='coin']", "[class*='market_info']",
 ]
+
+
+_NOISE_PATTERNS = [
+    # Reaction buttons
+    r"좋아요\s*\d*",
+    r"화나요\s*\d*",
+    r"슬퍼요\s*\d*",
+    r"후속기사\s*원해요\s*\d*",
+    r"추가취재\s*원해요\s*\d*",
+    # Reporter / subscription
+    r".*기자의 주요 뉴스.*",
+    r".*자세히보기.*",
+    r".*구독.*완료.*",
+    r".*뉴스레터.*신청.*",
+    r".*마이페이지.*확인.*",
+    r".*기자 구독.*",
+    r".*기자 이름을 클릭.*",
+    r".*북마크 되었습니다.*",
+    r"북마크 되었습니다\.",
+    # Ad slot markers
+    r"본문내?상단\s*광고\s*시작",
+    r"본문내?상단\s*광고\s*끝",
+    r"본문내?중단\s*광고\s*시작",
+    r"본문내?중단\s*광고\s*끝",
+    r"본문내?하단\s*광고\s*시작",
+    r"본문내?하단\s*광고\s*끝",
+    r"페이지상단\s*광고",
+    r"페이지하단\s*광고",
+    r"광고\s*시작",
+    r"광고\s*끝",
+    r"웹배너\s*시작",
+    r"웹배너\s*끝",
+    # Ad unit IDs (e.g., /77034085/article/mid(1)_300×250)
+    r"/\d+/article/\S+",
+    r"\d+×\d+",
+    # UI element markers
+    r"요약\s*버튼\s*시작",
+    r"요약\s*버튼\s*끝",
+    r"말풍선\s*전체\s*감싼\s*요소",
+    r"BOOK MARK POPUP",
+    r"BANNER",
+    r"BREADCRUMBS",
+    # Font size / share buttons
+    r"\d{2}:\d{2}\s*/\s*\d{2}:\d{2}",
+    r"카카오톡|페이스북|엑스|URL공유",
+    r"가장작게|작게|기본|크게|가장크게",
+    r".*글씨 작게보기.*",
+    # Naver in-article ad markers
+    r"PC 기사뷰.*?//",
+    r"AD Manager\s*\|\s*AD\d+\s*//",
+    r"AD\d{10,}\s*//",
+    r"_기사내\d*_\w+",
+    # Misc ad noise
+    r"AD\s*CLOSE",
+    r"스폰서\s*링크",
+    r"Sponsored",
+]
+
+
+def clean_cached_content(text: str) -> str:
+    """Re-apply noise filtering to previously cached article content."""
+    for pattern in _NOISE_PATTERNS:
+        text = re.sub(pattern, "", text)
+    text = re.sub(r"\n\s*\n+", "\n\n", text)
+    return text.strip()
 
 
 async def scrape_article_content(url: str) -> str | None:
@@ -281,29 +351,7 @@ def _clean_text(element) -> str:
     text = "\n".join(deduped_lines)
 
     # Remove common noise patterns
-    noise_patterns = [
-        r"좋아요\s*\d*",
-        r"화나요\s*\d*",
-        r"슬퍼요\s*\d*",
-        r"추가취재\s*원해요\s*\d*",
-        r".*기자의 주요 뉴스.*",
-        r".*자세히보기.*",
-        r".*구독.*완료.*",
-        r".*뉴스레터.*신청.*",
-        r".*마이페이지.*확인.*",
-        r".*기자 구독.*",
-        r".*기자 이름을 클릭.*",
-        r".*북마크 되었습니다.*",
-        r"북마크 되었습니다\.",
-        r"BOOK MARK POPUP",
-        r"BANNER",
-        r"BREADCRUMBS",
-        r"\d{2}:\d{2}\s*/\s*\d{2}:\d{2}",
-        r"카카오톡|페이스북|엑스|URL공유",
-        r"가장작게|작게|기본|크게|가장크게",
-        r".*글씨 작게보기.*",
-    ]
-    for pattern in noise_patterns:
+    for pattern in _NOISE_PATTERNS:
         text = re.sub(pattern, "", text)
 
     # Final cleanup
