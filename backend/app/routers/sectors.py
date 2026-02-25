@@ -167,7 +167,7 @@ async def get_sector_news(sector_id: int, limit: int = 30, offset: int = 0, db: 
             selectinload(NewsArticle.relations).selectinload(NewsStockRelation.stock),
             selectinload(NewsArticle.relations).selectinload(NewsStockRelation.sector),
         )
-        .filter(NewsArticle.id.in_(news_ids_subq))
+        .filter(NewsArticle.id.in_(news_ids_subq.select()))
         .order_by(NewsArticle.published_at.desc().nullslast())
         .offset(offset)
         .limit(limit)

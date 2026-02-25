@@ -44,6 +44,39 @@ class KeywordIndex:
         return idx
 
 
+# Patterns indicating non-financial content (entertainment, sports, lifestyle, etc.)
+_NON_FINANCIAL_PATTERNS: list[str] = [
+    # TV/Entertainment
+    "동상이몽", "흑백요리사", "나는솔로", "솔로지옥", "런닝맨", "무한도전",
+    "놀면뭐하니", "전참시", "전지적참견시점", "라디오스타", "1박2일",
+    "예능", "드라마", "시청률", "방송", "출연", "MC",
+    "아이돌", "걸그룹", "보이그룹", "컴백", "음원", "뮤직비디오",
+    "K-POP", "K팝", "케이팝", "팬미팅", "콘서트",
+    "배우", "연기", "영화", "개봉", "흥행", "박스오피스",
+    "넷플릭스", "디즈니플러스", "티빙", "쿠팡플레이", "웨이브",
+    "연예", "결혼", "열애", "파경", "이혼", "스캔들",
+    # Sports (non-business context)
+    "프로야구", "KBO", "K리그", "프로축구", "NBA", "MLB",
+    "올림픽", "월드컵", "감독", "선발", "홈런", "타율",
+    "득점", "골", "어시스트", "선수", "경기", "우승",
+    # Lifestyle / Food
+    "맛집", "레시피", "다이어트", "건강법", "운동법",
+    # Weather / Nature (non-business)
+    "일기예보", "기상청",
+]
+
+# Compile regex for non-financial detection
+_NON_FINANCIAL_RE = re.compile(
+    "|".join(re.escape(p) for p in _NON_FINANCIAL_PATTERNS),
+    re.IGNORECASE,
+)
+
+
+def is_non_financial_article(title: str) -> bool:
+    """Check if an article title indicates non-financial content (entertainment, sports, etc.)."""
+    return bool(_NON_FINANCIAL_RE.search(title))
+
+
 def classify_news(title: str, index: KeywordIndex) -> list[dict]:
     """Classify a news article using pre-built keyword index. O(keywords) not O(stocks)."""
     results = []
@@ -146,16 +179,27 @@ async def generate_ai_summary(title: str, description: str | None, relations: li
 
 한국어로 작성해주세요. 마크다운 없이 일반 텍스트로 응답해주세요."""
 
-    try:
-        client = genai.Client(api_key=settings.GEMINI_API_KEY)
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt,
-        )
-        return response.text.strip()
-    except Exception as e:
-        logger.warning(f"AI summary generation failed: {e}")
-        return None
+    import asyncio as _asyncio
+
+    client = genai.Client(api_key=settings.GEMINI_API_KEY)
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt,
+            )
+            return response.text.strip()
+        except Exception as e:
+            is_rate_limit = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
+            if is_rate_limit and attempt < max_retries - 1:
+                wait = 2 ** (attempt + 1)
+                logger.info(f"AI summary rate limited, retrying in {wait}s (attempt {attempt + 1}/{max_retries})")
+                await _asyncio.sleep(wait)
+            else:
+                logger.warning(f"AI summary generation failed: {e}")
+                return None
+    return None
 
 
 def _is_english_title(title: str) -> bool:

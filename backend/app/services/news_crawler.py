@@ -13,7 +13,7 @@ from app.services.crawlers.yahoo import search_yahoo_finance_top, search_yahoo_s
 from app.services.crawlers.korean_rss import fetch_korean_rss_feeds
 from app.services.ai_classifier import (
     KeywordIndex, classify_news, classify_sentiment, _extract_sector_keywords,
-    translate_articles_batch,
+    translate_articles_batch, is_non_financial_article,
 )
 
 logger = logging.getLogger(__name__)
@@ -221,6 +221,13 @@ async def crawl_all_news(db: Session) -> int:
             continue
         seen_urls.add(url)
         unique_articles.append(article)
+
+    # Filter out non-financial articles (entertainment, sports, lifestyle)
+    pre_filter_count = len(unique_articles)
+    unique_articles = [a for a in unique_articles if not is_non_financial_article(a.get("title", ""))]
+    filtered_count = pre_filter_count - len(unique_articles)
+    if filtered_count:
+        logger.info(f"Filtered {filtered_count} non-financial articles (entertainment/sports/lifestyle)")
 
     if not unique_articles:
         logger.info(f"No new articles (existing={len(existing_urls)}, raw={len(all_raw_articles)}).")

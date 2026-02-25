@@ -30,16 +30,30 @@ async def search_naver_news(query: str, display: int = 10) -> list[dict]:
     }
     params = {"query": query, "display": display, "sort": "date"}
 
-    async with httpx.AsyncClient() as client:
-        try:
-            resp = await client.get(url, headers=headers, params=params, timeout=5)
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            logger.warning(f"Naver API error: {e.response.status_code}, disabling Naver crawler")
-            _naver_disabled = True
-            return []
-        except httpx.HTTPError as e:
-            logger.warning(f"Naver API request failed: {e}")
+    async with httpx.AsyncClient(timeout=10) as client:
+        last_err = None
+        for attempt in range(2):
+            try:
+                resp = await client.get(url, headers=headers, params=params)
+                resp.raise_for_status()
+                last_err = None
+                break
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429 and attempt < 1:
+                    import asyncio
+                    await asyncio.sleep(1)
+                    continue
+                logger.warning(f"Naver API error: {e.response.status_code}, disabling Naver crawler")
+                _naver_disabled = True
+                return []
+            except httpx.HTTPError as e:
+                last_err = e
+                if attempt < 1:
+                    import asyncio
+                    await asyncio.sleep(0.5)
+                    continue
+        if last_err:
+            logger.warning(f"Naver API request failed: {last_err}")
             return []
 
     data = resp.json()
