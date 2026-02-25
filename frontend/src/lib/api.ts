@@ -100,6 +100,19 @@ export async function fetchNews(
   return { articles, total };
 }
 
+export async function searchNews(
+  query: string,
+  offset = 0,
+  limit = 30,
+): Promise<{ articles: NewsArticle[]; total: number }> {
+  const params = new URLSearchParams({ q: query, limit: String(limit), offset: String(offset) });
+  const res = await fetch(`${API_BASE}/news?${params}`);
+  if (!res.ok) throw new Error("Failed to search news");
+  const total = parseInt(res.headers.get("X-Total-Count") || "0", 10);
+  const articles = await res.json();
+  return { articles, total };
+}
+
 export async function refreshNews(): Promise<{ message: string }> {
   const res = await fetch(`${API_BASE}/news/refresh`, { method: "POST" });
   if (!res.ok) throw new Error("Failed to refresh news");

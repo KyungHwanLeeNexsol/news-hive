@@ -3,7 +3,7 @@ import logging
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db, SessionLocal
@@ -19,10 +19,21 @@ router = APIRouter(prefix="/api/news", tags=["news"])
 
 
 @router.get("")
-async def list_news(limit: int = 30, offset: int = 0, db: Session = Depends(get_db)):
-    total = db.query(func.count(NewsArticle.id)).scalar()
+async def list_news(limit: int = 30, offset: int = 0, q: str | None = None, db: Session = Depends(get_db)):
+    base_query = db.query(NewsArticle)
+    count_query = db.query(func.count(NewsArticle.id))
+
+    if q:
+        keyword_filter = or_(
+            NewsArticle.title.ilike(f"%{q}%"),
+            NewsArticle.summary.ilike(f"%{q}%"),
+        )
+        base_query = base_query.filter(keyword_filter)
+        count_query = count_query.filter(keyword_filter)
+
+    total = count_query.scalar()
     articles = (
-        db.query(NewsArticle)
+        base_query
         .options(
             selectinload(NewsArticle.relations).selectinload(NewsStockRelation.stock),
             selectinload(NewsArticle.relations).selectinload(NewsStockRelation.sector),

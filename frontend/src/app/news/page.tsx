@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { fetchNews, refreshNews } from "@/lib/api";
+import { fetchNews, searchNews, refreshNews } from "@/lib/api";
 import { formatSectorName } from "@/lib/format";
 import type { NewsArticle } from "@/lib/types";
 import LoadingBar from "@/components/LoadingBar";
@@ -37,19 +37,41 @@ export default function NewsPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // Search state
+  const [searchInput, setSearchInput] = useState("");
+  const [query, setQuery] = useState("");
+
   useEffect(() => {
     setLoading(true);
-    fetchNews((page - 1) * PAGE_SIZE, PAGE_SIZE)
+    const fetcher = query
+      ? searchNews(query, (page - 1) * PAGE_SIZE, PAGE_SIZE)
+      : fetchNews((page - 1) * PAGE_SIZE, PAGE_SIZE);
+    fetcher
       .then((r) => { setNews(r.articles); setTotal(r.total); })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [page]);
+  }, [page, query]);
+
+  function handleSearch(e: React.FormEvent) {
+    e.preventDefault();
+    const trimmed = searchInput.trim();
+    setQuery(trimmed);
+    setPage(1);
+  }
+
+  function handleClearSearch() {
+    setSearchInput("");
+    setQuery("");
+    setPage(1);
+  }
 
   async function handleRefresh() {
     setRefreshing(true);
     try {
       await refreshNews();
-      const r = await fetchNews(0, PAGE_SIZE);
+      const r = query
+        ? await searchNews(query, 0, PAGE_SIZE)
+        : await fetchNews(0, PAGE_SIZE);
       setNews(r.articles);
       setTotal(r.total);
       setPage(1);
@@ -69,7 +91,7 @@ export default function NewsPage() {
   return (
     <div className="section-box">
       <div className="section-title">
-        <span>전체 뉴스 ({total}건)</span>
+        <span>{query ? `"${query}" 검색 결과 (${total}건)` : `전체 뉴스 (${total}건)`}</span>
         <button
           onClick={handleRefresh}
           disabled={refreshing}
@@ -78,6 +100,33 @@ export default function NewsPage() {
           {refreshing ? "수집 중..." : "뉴스 새로고침"}
         </button>
       </div>
+
+      {/* Search bar */}
+      <form onSubmit={handleSearch} className="flex gap-2 px-4 py-3 border-b border-[#e5e5e5]">
+        <input
+          type="text"
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          placeholder="키워드 검색 (예: 상법 개정, 전기차, 반도체)"
+          className="flex-1 px-3 py-1.5 border border-[#ddd] rounded text-[13px] focus:outline-none focus:border-[#1261c4]"
+        />
+        <button
+          type="submit"
+          className="px-4 py-1.5 bg-[#1261c4] text-white text-[13px] rounded hover:bg-[#0f54a8]"
+        >
+          검색
+        </button>
+        {query && (
+          <button
+            type="button"
+            onClick={handleClearSearch}
+            className="px-3 py-1.5 border border-[#ddd] text-[13px] text-[#666] rounded hover:bg-[#f5f5f5]"
+          >
+            초기화
+          </button>
+        )}
+      </form>
+
       <table className="naver-table">
         <thead>
           <tr>
@@ -91,7 +140,7 @@ export default function NewsPage() {
           {news.length === 0 ? (
             <tr>
               <td colSpan={4} className="text-center py-8 text-[#999]">
-                수집된 뉴스가 없습니다. 뉴스 새로고침을 눌러주세요.
+                {query ? `"${query}"에 대한 검색 결과가 없습니다.` : "수집된 뉴스가 없습니다. 뉴스 새로고침을 눌러주세요."}
               </td>
             </tr>
           ) : (
