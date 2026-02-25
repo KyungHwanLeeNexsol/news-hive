@@ -168,7 +168,9 @@ async def translate_articles_batch(articles: list[dict]) -> None:
     """Translate English titles and descriptions to Korean in-place using Gemini.
 
     Modifies articles in-place: translates title and description fields.
+    Includes retry with exponential backoff for rate-limit (429) errors.
     """
+    import asyncio as _asyncio
     import json as _json
 
     if not settings.GEMINI_API_KEY:
@@ -178,8 +180,10 @@ async def translate_articles_batch(articles: list[dict]) -> None:
     if not en_articles:
         return
 
-    # Process in chunks of 10 (title + description per item)
-    chunk_size = 10
+    client = genai.Client(api_key=settings.GEMINI_API_KEY)
+
+    # Process in chunks of 5 (smaller chunks to avoid rate limits)
+    chunk_size = 5
     for chunk_start in range(0, len(en_articles), chunk_size):
         chunk = en_articles[chunk_start:chunk_start + chunk_size]
 
@@ -198,33 +202,47 @@ async def translate_articles_batch(articles: list[dict]) -> None:
 출력 형식:
 [{{"id": 1, "title": "번역된 제목", "desc": "번역된 요약"}}, ...]"""
 
-        try:
-            client = genai.Client(api_key=settings.GEMINI_API_KEY)
-            response = client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=prompt,
-            )
-            text = response.text.strip()
-            # Strip markdown code block if present
-            if text.startswith("```"):
-                text = re.sub(r"^```(?:json)?\s*", "", text)
-                text = re.sub(r"\s*```$", "", text)
+        # Retry with exponential backoff (max 3 attempts)
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = client.models.generate_content(
+                    model="gemini-2.0-flash",
+                    contents=prompt,
+                )
+                text = response.text.strip()
+                # Strip markdown code block if present
+                if text.startswith("```"):
+                    text = re.sub(r"^```(?:json)?\s*", "", text)
+                    text = re.sub(r"\s*```$", "", text)
 
-            translated_items = _json.loads(text)
+                translated_items = _json.loads(text)
 
-            for item in translated_items:
-                idx = item.get("id", 0) - 1
-                if 0 <= idx < len(chunk):
-                    _, article = chunk[idx]
-                    t = item.get("title", "").strip()
-                    d = item.get("desc", "").strip()
-                    if t and len(t) > 2:
-                        article["original_title"] = article["title"]
-                        article["title"] = t
-                    if d and len(d) > 2:
-                        article["description"] = d
-        except Exception as e:
-            logger.warning(f"Batch translation failed: {e}")
+                for item in translated_items:
+                    idx = item.get("id", 0) - 1
+                    if 0 <= idx < len(chunk):
+                        _, article = chunk[idx]
+                        t = item.get("title", "").strip()
+                        d = item.get("desc", "").strip()
+                        if t and len(t) > 2:
+                            article["original_title"] = article["title"]
+                            article["title"] = t
+                        if d and len(d) > 2:
+                            article["description"] = d
+                break  # Success, exit retry loop
+            except Exception as e:
+                is_rate_limit = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
+                if is_rate_limit and attempt < max_retries - 1:
+                    wait = 2 ** (attempt + 1)  # 2s, 4s
+                    logger.info(f"Rate limited, retrying in {wait}s (attempt {attempt + 1}/{max_retries})")
+                    await _asyncio.sleep(wait)
+                else:
+                    logger.warning(f"Batch translation failed: {e}")
+                    break
+
+        # Delay between chunks to avoid rate limits
+        if chunk_start + chunk_size < len(en_articles):
+            await _asyncio.sleep(1.5)
 
     translated_count = sum(1 for _, a in en_articles if "original_title" in a)
     if translated_count:
