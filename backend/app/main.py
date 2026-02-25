@@ -103,7 +103,7 @@ def _backfill_relations(db):
     from app.models.news_relation import NewsStockRelation
     from app.models.sector import Sector
     from app.models.stock import Stock
-    from app.services.ai_classifier import _keyword_fallback
+    from app.services.ai_classifier import KeywordIndex, classify_news
 
     # Find articles with zero relations
     articles_with_rels = db.query(NewsStockRelation.news_id).distinct()
@@ -117,10 +117,11 @@ def _backfill_relations(db):
 
     sectors = db.query(Sector).all()
     stocks = db.query(Stock).all()
+    index = KeywordIndex.build(sectors, stocks)
     count = 0
 
     for article in unlinked:
-        results = _keyword_fallback(article.title, sectors, stocks)
+        results = classify_news(article.title, index)
         for cls in results:
             db.add(NewsStockRelation(
                 news_id=article.id,
