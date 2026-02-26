@@ -107,16 +107,32 @@ def classify_news(title: str, index: KeywordIndex) -> list[dict]:
     matched_sector_ids: set[int] = set()
     title_lower = title.lower()
 
-    # Match stock names in title (exact substring match)
-    for stock_name, (stock_id, sector_id) in index.stock_names.items():
-        if stock_name in title:
-            results.append({
-                "stock_id": stock_id,
-                "sector_id": sector_id,
-                "match_type": "keyword",
-                "relevance": "direct",
-            })
-            matched_sector_ids.add(sector_id)
+    # Match stock names in title — longest match first to avoid
+    # shorter names matching inside longer ones (e.g. "이닉스" inside "SK하이닉스")
+    matched_stock_ids: set[int] = set()
+    sorted_names = sorted(index.stock_names.items(), key=lambda x: len(x[0]), reverse=True)
+    matched_spans: list[tuple[int, int]] = []  # (start, end) of already matched substrings
+
+    for stock_name, (stock_id, sector_id) in sorted_names:
+        idx = title.find(stock_name)
+        if idx == -1:
+            continue
+        end = idx + len(stock_name)
+        # Skip if this match is fully contained within an already matched span
+        if any(s <= idx and end <= e for s, e in matched_spans):
+            continue
+        # Skip if preceded by a Korean char (part of a longer word, e.g. "하이닉스" → "이닉스")
+        if idx > 0 and "\uac00" <= title[idx - 1] <= "\ud7a3":
+            continue
+        matched_spans.append((idx, end))
+        matched_stock_ids.add(stock_id)
+        results.append({
+            "stock_id": stock_id,
+            "sector_id": sector_id,
+            "match_type": "keyword",
+            "relevance": "direct",
+        })
+        matched_sector_ids.add(sector_id)
 
     # Match stock custom keywords
     for kw, stock_list in index.stock_keywords.items():
