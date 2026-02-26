@@ -28,6 +28,15 @@ class StockListItem(BaseModel):
     sector_id: int
     sector_name: str | None = None
     market: str | None = None
+    current_price: int | None = None
+    price_change: int | None = None
+    change_rate: float | None = None
+    bid_price: int | None = None
+    ask_price: int | None = None
+    volume: int | None = None
+    trading_value: int | None = None
+    prev_volume: int | None = None
+    news_count: int = 0
 
 
 class StockDetailResponse(BaseModel):

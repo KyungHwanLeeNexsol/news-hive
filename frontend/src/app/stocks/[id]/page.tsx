@@ -3,10 +3,11 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { fetchStockDetail, fetchStockNews, fetchStockPrices, fetchStockFinancials } from '@/lib/api';
+import { fetchStockDetail, fetchStockNews, fetchStockPrices, fetchStockFinancials, fetchSentimentTrend, fetchStockDisclosures } from '@/lib/api';
 import { formatSectorName } from '@/lib/format';
-import type { StockDetail, NewsArticle, PriceRecord, FinancialPeriod } from '@/lib/types';
+import type { StockDetail, NewsArticle, PriceRecord, FinancialPeriod, SentimentTrendItem, DisclosureItem } from '@/lib/types';
 import Pagination from '@/components/Pagination';
+import { useWatchlist } from '@/lib/watchlist';
 
 const PAGE_SIZE = 30;
 
@@ -53,53 +54,196 @@ function sourceLabel(source: string): string {
   }
 }
 
-/* ─── Mini SVG line chart ─── */
+/* ─── Candlestick Chart ─── */
 
 function PriceChart({ prices }: { prices: PriceRecord[] }) {
   if (prices.length < 2) return <p className="text-[13px] text-[#999] py-8 text-center">차트 데이터가 부족합니다.</p>;
 
   const data = [...prices].reverse();
-  const closes = data.map(p => p.close);
-  const minP = Math.min(...closes);
-  const maxP = Math.max(...closes);
-  const range = maxP - minP || 1;
+  const n = data.length;
 
-  const w = 700;
-  const h = 200;
-  const padX = 0;
-  const padY = 10;
+  // Price range (use high/low for full range)
+  const allHighs = data.map(p => p.high || p.close);
+  const allLows = data.map(p => (p.low || p.close));
+  const minP = Math.min(...allLows);
+  const maxP = Math.max(...allHighs);
+  const priceRange = maxP - minP || 1;
 
-  const points = data.map((_, i) => {
-    const x = padX + (i / (data.length - 1)) * (w - 2 * padX);
-    const y = padY + (1 - (closes[i] - minP) / range) * (h - 2 * padY);
-    return `${x},${y}`;
-  });
+  // Volume range
+  const volumes = data.map(p => p.volume);
+  const maxVol = Math.max(...volumes, 1);
 
-  const first = closes[0];
-  const last = closes[closes.length - 1];
-  const color = last >= first ? '#e12343' : '#1261c4';
+  // Layout constants
+  const w = 800;
+  const chartH = 240;       // candlestick area height
+  const volH = 60;           // volume bar area height
+  const gap = 8;             // gap between chart and volume
+  const totalH = chartH + gap + volH;
+  const padL = 60;           // left padding for price labels
+  const padR = 10;
+  const padT = 10;
+  const padB = 25;           // bottom for date labels
+  const chartAreaW = w - padL - padR;
+  const candleW = Math.max(2, Math.min(8, (chartAreaW / n) * 0.7));
+  const candleGap = chartAreaW / n;
 
-  const areaPath = `M${points[0]} ${points.join(' L')} L${w - padX},${h - padY} L${padX},${h - padY} Z`;
+  // Price → Y coordinate (in candlestick area)
+  const priceY = (price: number) => padT + (1 - (price - minP) / priceRange) * (chartH - padT);
+
+  // Volume → Y coordinate (in volume area)
+  const volY = (vol: number) => chartH + gap + volH - (vol / maxVol) * volH;
+
+  // Generate ~5 price ticks for the y-axis
+  const priceTicks: number[] = [];
+  const tickCount = 5;
+  for (let i = 0; i <= tickCount; i++) {
+    priceTicks.push(Math.round(minP + (priceRange * i) / tickCount));
+  }
 
   return (
     <div className="px-4 py-3">
-      <div className="flex justify-between text-[11px] text-[#999] mb-1">
-        <span>{data[0].date}</span>
-        <span>{data[data.length - 1].date}</span>
+      <div className="flex items-center gap-3 mb-2">
+        <span className="text-[12px] font-bold text-[#333]">주가 차트</span>
+        <span className="flex items-center gap-1 text-[11px]">
+          <span className="inline-block w-3 h-3 bg-[#e12343]" /> 상승
+        </span>
+        <span className="flex items-center gap-1 text-[11px]">
+          <span className="inline-block w-3 h-3 bg-[#1261c4]" /> 하락
+        </span>
       </div>
-      <svg viewBox={`0 0 ${w} ${h}`} className="w-full" style={{ height: 200 }}>
-        <defs>
-          <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={color} stopOpacity="0.15" />
-            <stop offset="100%" stopColor={color} stopOpacity="0.01" />
-          </linearGradient>
-        </defs>
-        <path d={areaPath} fill="url(#areaGrad)" />
-        <polyline points={points.join(' ')} fill="none" stroke={color} strokeWidth="2" />
-      </svg>
+      <div className="overflow-x-auto">
+        <svg viewBox={`0 0 ${w} ${totalH + padB}`} className="w-full" style={{ minWidth: 500, height: totalH + padB }}>
+          {/* Price grid lines + labels */}
+          {priceTicks.map((tick) => {
+            const y = priceY(tick);
+            return (
+              <g key={`tick-${tick}`}>
+                <line x1={padL} y1={y} x2={w - padR} y2={y} stroke="#eee" strokeWidth={1} />
+                <text x={padL - 5} y={y + 3} textAnchor="end" fontSize={10} fill="#999">
+                  {tick.toLocaleString()}
+                </text>
+              </g>
+            );
+          })}
+
+          {/* Volume label */}
+          <text x={padL - 5} y={chartH + gap + 10} textAnchor="end" fontSize={9} fill="#999">거래량</text>
+
+          {/* Candlesticks + Volume bars */}
+          {data.map((d, i) => {
+            const cx = padL + i * candleGap + candleGap / 2;
+            const isUp = d.close >= d.open;
+            const color = isUp ? '#e12343' : '#1261c4';
+
+            const bodyTop = priceY(Math.max(d.open, d.close));
+            const bodyBot = priceY(Math.min(d.open, d.close));
+            const bodyH = Math.max(1, bodyBot - bodyTop);
+
+            const wickTop = priceY(d.high || Math.max(d.open, d.close));
+            const wickBot = priceY(d.low || Math.min(d.open, d.close));
+
+            const vTop = volY(d.volume);
+            const vBot = chartH + gap + volH;
+
+            // Date labels: show a few evenly spaced
+            const showDate = i === 0 || i === n - 1 || (n > 10 && i % Math.ceil(n / 6) === 0);
+            const dateLabel = d.date.replace(/\./g, '/').replace(/^20/, '');
+
+            return (
+              <g key={`c-${i}`}>
+                {/* Wick (high-low line) */}
+                <line x1={cx} y1={wickTop} x2={cx} y2={wickBot} stroke={color} strokeWidth={1} />
+                {/* Candle body */}
+                <rect
+                  x={cx - candleW / 2}
+                  y={bodyTop}
+                  width={candleW}
+                  height={bodyH}
+                  fill={isUp ? color : color}
+                  stroke={color}
+                  strokeWidth={0.5}
+                />
+                {/* Volume bar */}
+                <rect
+                  x={cx - candleW / 2}
+                  y={vTop}
+                  width={candleW}
+                  height={vBot - vTop}
+                  fill={color}
+                  opacity={0.35}
+                />
+                {/* Date label */}
+                {showDate && (
+                  <text
+                    x={cx}
+                    y={totalH + padB - 5}
+                    textAnchor="middle"
+                    fontSize={9}
+                    fill="#999"
+                  >
+                    {dateLabel}
+                  </text>
+                )}
+              </g>
+            );
+          })}
+        </svg>
+      </div>
       <div className="flex justify-between text-[11px] text-[#999] mt-1">
         <span>최저 {formatNumber(minP)}원</span>
         <span>최고 {formatNumber(maxP)}원</span>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Sentiment Trend Chart ─── */
+
+function SentimentChart({ data }: { data: SentimentTrendItem[] }) {
+  if (data.length === 0) return <p className="text-[13px] text-[#999] py-8 text-center">감성 분석 데이터가 없습니다.</p>;
+
+  const maxTotal = Math.max(...data.map(d => d.positive + d.negative + d.neutral), 1);
+  const barW = Math.max(12, Math.min(32, 600 / data.length));
+  const w = data.length * (barW + 4) + 40;
+  const h = 150;
+
+  return (
+    <div className="px-4 py-3">
+      <h3 className="text-[13px] font-bold text-[#333] mb-2">뉴스 감성 트렌드 (최근 30일)</h3>
+      <div className="overflow-x-auto">
+        <svg viewBox={`0 0 ${w} ${h + 30}`} className="w-full" style={{ minWidth: Math.min(w, 400), height: h + 30 }}>
+          {data.map((d, i) => {
+            const x = 20 + i * (barW + 4);
+            const total = d.positive + d.negative + d.neutral;
+            const scale = total > 0 ? h / maxTotal : 0;
+
+            const negH = d.negative * scale;
+            const neutralH = d.neutral * scale;
+            const posH = d.positive * scale;
+
+            return (
+              <g key={d.date}>
+                {/* Negative (bottom) */}
+                <rect x={x} y={h - negH} width={barW} height={negH} fill="#1261c4" opacity={0.7} rx={1} />
+                {/* Neutral (middle) */}
+                <rect x={x} y={h - negH - neutralH} width={barW} height={neutralH} fill="#999" opacity={0.4} rx={1} />
+                {/* Positive (top) */}
+                <rect x={x} y={h - negH - neutralH - posH} width={barW} height={posH} fill="#e12343" opacity={0.7} rx={1} />
+                {/* Date label (show every few) */}
+                {(i === 0 || i === data.length - 1 || i % Math.ceil(data.length / 5) === 0) && (
+                  <text x={x + barW / 2} y={h + 15} textAnchor="middle" fontSize={9} fill="#999">
+                    {d.date.slice(5)}
+                  </text>
+                )}
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+      <div className="flex gap-4 justify-center mt-1 text-[11px]">
+        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm bg-[#e12343] opacity-70" /> 호재</span>
+        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm bg-[#999] opacity-40" /> 중립</span>
+        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-sm bg-[#1261c4] opacity-70" /> 악재</span>
       </div>
     </div>
   );
@@ -171,11 +315,12 @@ function FinancialTable({ data, type }: { data: FinancialPeriod[]; type: 'annual
 
 /* ─── Main Page ─── */
 
-type Tab = 'indicators' | 'financials' | 'news';
+type Tab = 'indicators' | 'financials' | 'news' | 'disclosures';
 
 export default function StockDetailPage() {
   const params = useParams();
   const stockId = Number(params.id);
+  const { toggleStock, isWatched } = useWatchlist();
 
   const [detail, setDetail] = useState<StockDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(true);
@@ -186,6 +331,8 @@ export default function StockDetailPage() {
   const [prices, setPrices] = useState<PriceRecord[]>([]);
   const [pricesLoading, setPricesLoading] = useState(false);
   const [pricesLoaded, setPricesLoaded] = useState(false);
+  const [sentimentTrend, setSentimentTrend] = useState<SentimentTrendItem[]>([]);
+  const [sentimentLoaded, setSentimentLoaded] = useState(false);
 
   // Financials tab
   const [financials, setFinancials] = useState<{ annual: FinancialPeriod[]; quarter: FinancialPeriod[] } | null>(null);
@@ -198,6 +345,12 @@ export default function StockDetailPage() {
   const [newsPage, setNewsPage] = useState(1);
   const [newsLoading, setNewsLoading] = useState(false);
   const [newsLoaded, setNewsLoaded] = useState(false);
+
+  // Disclosures tab
+  const [disclosures, setDisclosures] = useState<DisclosureItem[]>([]);
+  const [disclosuresTotal, setDisclosuresTotal] = useState(0);
+  const [disclosuresLoading, setDisclosuresLoading] = useState(false);
+  const [disclosuresLoaded, setDisclosuresLoaded] = useState(false);
 
   // Load detail on mount
   useEffect(() => {
@@ -221,6 +374,12 @@ export default function StockDetailPage() {
         .finally(() => setPricesLoading(false));
     }
 
+    if (tab === 'indicators' && !sentimentLoaded) {
+      fetchSentimentTrend(stockId)
+        .then((d) => { setSentimentTrend(d); setSentimentLoaded(true); })
+        .catch(() => {});
+    }
+
     if (tab === 'financials' && !financialsLoaded) {
       setFinancialsLoading(true);
       fetchStockFinancials(stockId)
@@ -236,7 +395,15 @@ export default function StockDetailPage() {
         .catch(() => {})
         .finally(() => setNewsLoading(false));
     }
-  }, [stockId, tab, pricesLoaded, financialsLoaded, newsLoaded]);
+
+    if (tab === 'disclosures' && !disclosuresLoaded) {
+      setDisclosuresLoading(true);
+      fetchStockDisclosures(stockId, 20)
+        .then((r) => { setDisclosures(r.disclosures); setDisclosuresTotal(r.total); setDisclosuresLoaded(true); })
+        .catch(() => {})
+        .finally(() => setDisclosuresLoading(false));
+    }
+  }, [stockId, tab, pricesLoaded, sentimentLoaded, financialsLoaded, newsLoaded, disclosuresLoaded]);
 
   // News pagination
   useEffect(() => {
@@ -280,6 +447,15 @@ export default function StockDetailPage() {
         ) : d ? (
           <div className="px-4 py-3 border-b border-[#e5e5e5]">
             <div className="flex items-baseline gap-3">
+              <button
+                onClick={() => toggleStock(d.id)}
+                className={`text-[20px] leading-none transition-colors ${
+                  isWatched(d.id) ? 'text-[#ffa723]' : 'text-[#ccc] hover:text-[#ffa723]'
+                }`}
+                title={isWatched(d.id) ? '관심종목 해제' : '관심종목 추가'}
+              >
+                {isWatched(d.id) ? '★' : '☆'}
+              </button>
               <h1 className="text-[18px] font-bold text-[#333]">{d.name}</h1>
               <span className="text-[13px] text-[#999]">{d.stock_code}</span>
               {d.sector_name && (
@@ -331,6 +507,7 @@ export default function StockDetailPage() {
             { key: 'indicators' as Tab, label: '투자지표' },
             { key: 'financials' as Tab, label: '재무실적' },
             { key: 'news' as Tab, label: '뉴스' },
+            { key: 'disclosures' as Tab, label: '공시' },
           ]).map((t) => (
             <button
               key={t.key}
@@ -372,6 +549,11 @@ export default function StockDetailPage() {
                 </div>
               ) : (
                 <PriceChart prices={prices} />
+              )}
+              {sentimentLoaded && (
+                <div className="border-t border-[#e5e5e5]">
+                  <SentimentChart data={sentimentTrend} />
+                </div>
               )}
             </div>
           )}
@@ -479,6 +661,64 @@ export default function StockDetailPage() {
               {!newsLoading && news.length > 0 && (
                 <Pagination currentPage={newsPage} totalPages={newsTotalPages} onPageChange={setNewsPage} />
               )}
+            </div>
+          )}
+
+          {/* ─── Disclosures Tab ─── */}
+          {tab === 'disclosures' && (
+            <div>
+              <table className="naver-table">
+                <thead>
+                  <tr>
+                    <th className="text-left" style={{ width: '55%' }}>공시 제목</th>
+                    <th style={{ width: '12%' }}>유형</th>
+                    <th style={{ width: '15%' }}>날짜</th>
+                    <th style={{ width: '18%' }}>원문</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {disclosuresLoading ? (
+                    Array.from({ length: 8 }).map((_, i) => (
+                      <tr key={`sk-${i}`}>
+                        <td><div className="skeleton skeleton-text" style={{ width: `${55 + Math.random() * 35}%` }} /></td>
+                        <td className="text-center"><div className="skeleton skeleton-badge mx-auto" /></td>
+                        <td className="text-center"><div className="skeleton skeleton-text-sm mx-auto" style={{ width: '80%' }} /></td>
+                        <td className="text-center"><div className="skeleton skeleton-badge mx-auto" /></td>
+                      </tr>
+                    ))
+                  ) : disclosures.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="text-center py-8 text-[#999]">
+                        공시 내역이 없습니다.
+                      </td>
+                    </tr>
+                  ) : (
+                    disclosures.map((disc) => (
+                      <tr key={disc.rcept_no}>
+                        <td className="text-[13px]">{disc.report_name}</td>
+                        <td className="text-center">
+                          {disc.report_type && (
+                            <span className="badge badge-neutral">{disc.report_type}</span>
+                          )}
+                        </td>
+                        <td className="text-center text-[12px] text-[#999]">
+                          {disc.rcept_dt ? `${disc.rcept_dt.slice(0, 4)}.${disc.rcept_dt.slice(4, 6)}.${disc.rcept_dt.slice(6, 8)}` : '-'}
+                        </td>
+                        <td className="text-center">
+                          <a
+                            href={disc.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[12px] text-[#1261c4] hover:underline"
+                          >
+                            DART 원문
+                          </a>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
           )}
         </div>

@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { fetchSector, fetchSectorNews } from "@/lib/api";
+import { fetchSector, fetchSectorNews, generateSectorInsight } from "@/lib/api";
 import { formatSectorName } from "@/lib/format";
-import type { Sector, NewsArticle } from "@/lib/types";
+import type { Sector, NewsArticle, SectorInsight } from "@/lib/types";
 import ChangeRate from "@/components/ChangeRate";
 import Pagination from "@/components/Pagination";
 
@@ -41,12 +41,22 @@ export default function SectorDetail() {
   const [tab, setTab] = useState<"stocks" | "news">("news");
   const [sectorLoading, setSectorLoading] = useState(true);
   const [newsLoading, setNewsLoading] = useState(true);
+  const [insight, setInsight] = useState<SectorInsight | null>(null);
+  const [insightLoading, setInsightLoading] = useState(false);
 
-  useEffect(() => {
+  const loadSector = useCallback((silent = false) => {
     if (!sectorId) return;
-    setSectorLoading(true);
-    fetchSector(sectorId).then(setSector).catch(() => {}).finally(() => setSectorLoading(false));
+    if (!silent) setSectorLoading(true);
+    fetchSector(sectorId).then(setSector).catch(() => {}).finally(() => { if (!silent) setSectorLoading(false); });
   }, [sectorId]);
+
+  useEffect(() => { loadSector(); }, [loadSector]);
+
+  // Auto-refresh sector data (stock prices) every 5 minutes
+  useEffect(() => {
+    const interval = setInterval(() => loadSector(true), 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [loadSector]);
 
   useEffect(() => {
     if (!sectorId) return;
@@ -73,6 +83,49 @@ export default function SectorDetail() {
         ) : (
           <span className="text-[#333] font-medium">{sector ? formatSectorName(sector.name) : ""}</span>
         )}
+      </div>
+
+      {/* AI Insight card */}
+      <div className="section-box mb-3">
+        <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#e5e5e5]">
+          <span className="text-[13px] font-bold text-[#333]">AI 업종 인사이트</span>
+          <button
+            onClick={async () => {
+              setInsightLoading(true);
+              try {
+                const result = await generateSectorInsight(sectorId);
+                setInsight(result);
+              } catch { /* ignore */ }
+              setInsightLoading(false);
+            }}
+            disabled={insightLoading}
+            className="text-[12px] text-[#1261c4] hover:underline disabled:text-[#999]"
+          >
+            {insightLoading ? '생성 중...' : insight ? '다시 생성' : '인사이트 생성'}
+          </button>
+        </div>
+        <div className="px-4 py-3">
+          {insightLoading ? (
+            <div className="space-y-2">
+              <div className="skeleton skeleton-text" style={{ width: '90%' }} />
+              <div className="skeleton skeleton-text" style={{ width: '75%' }} />
+              <div className="skeleton skeleton-text" style={{ width: '85%' }} />
+            </div>
+          ) : insight ? (
+            <div>
+              <p className="text-[13px] text-[#333] leading-relaxed whitespace-pre-line">{insight.content}</p>
+              {insight.created_at && (
+                <p className="text-[11px] text-[#999] mt-2">
+                  {insight.cached ? '캐시됨' : '새로 생성'} · {new Date(insight.created_at).toLocaleString('ko-KR')}
+                </p>
+              )}
+            </div>
+          ) : (
+            <p className="text-[13px] text-[#999]">
+              버튼을 클릭하면 최근 7일 뉴스를 기반으로 AI 인사이트를 생성합니다.
+            </p>
+          )}
+        </div>
       </div>
 
       {/* Tab nav */}

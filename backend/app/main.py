@@ -5,6 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import SessionLocal, engine, Base
 from app.models import Sector, Stock, NewsArticle, NewsStockRelation  # noqa: F401
+from app.models.sector_insight import SectorInsight  # noqa: F401
+from app.models.disclosure import Disclosure  # noqa: F401
 from app.seed.sectors import seed_sectors
 from app.seed.stocks import seed_all_stocks
 from app.services.scheduler import start_scheduler, stop_scheduler
@@ -198,11 +200,12 @@ app.add_middleware(
 )
 
 # Import and register routers
-from app.routers import sectors, stocks, news  # noqa: E402
+from app.routers import sectors, stocks, news, disclosures  # noqa: E402
 
 app.include_router(sectors.router)
 app.include_router(stocks.router)
 app.include_router(news.router)
+app.include_router(disclosures.router)
 
 
 @app.get("/api/health")

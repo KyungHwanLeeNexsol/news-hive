@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     KIS_APP_KEY: str = ""
     KIS_APP_SECRET: str = ""
 
+    DART_API_KEY: str = ""
+
     NEWS_CRAWL_INTERVAL_MINUTES: int = 10
 
     FRONTEND_URL: str = "http://localhost:3000"

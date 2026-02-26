@@ -3,11 +3,13 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { fetchStocks } from '@/lib/api';
-import { formatSectorName } from '@/lib/format';
 import type { StockListItem } from '@/lib/types';
 import Pagination from '@/components/Pagination';
+import ChangeRate from '@/components/ChangeRate';
+import { useWatchlist } from '@/lib/watchlist';
 
 const PAGE_SIZE = 50;
+const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
 type MarketTab = '' | 'KOSPI' | 'KOSDAQ';
 
@@ -19,28 +21,46 @@ export default function StocksPage() {
   const [searchInput, setSearchInput] = useState('');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
+  const [watchlistOnly, setWatchlistOnly] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { watchlist, toggleStock, isWatched } = useWatchlist();
 
-  const load = useCallback(() => {
-    setLoading(true);
-    fetchStocks({
+  const load = useCallback((silent = false) => {
+    if (watchlistOnly && watchlist.length === 0) {
+      setStocks([]);
+      setTotal(0);
+      setLoading(false);
+      return;
+    }
+    if (!silent) setLoading(true);
+    const params: Parameters<typeof fetchStocks>[0] = {
       q: query,
       market: market || undefined,
       limit: PAGE_SIZE,
       offset: (page - 1) * PAGE_SIZE,
-    })
+    };
+    if (watchlistOnly) {
+      params.ids = watchlist.join(',');
+    }
+    fetchStocks(params)
       .then((r) => {
         setStocks(r.stocks);
         setTotal(r.total);
       })
       .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [query, market, page]);
+      .finally(() => { if (!silent) setLoading(false); });
+  }, [query, market, page, watchlistOnly, watchlist]);
 
   useEffect(() => { load(); }, [load]);
 
+  // Auto-refresh every 5 minutes (silent — no loading spinner)
+  useEffect(() => {
+    const interval = setInterval(() => load(true), REFRESH_INTERVAL);
+    return () => clearInterval(interval);
+  }, [load]);
+
   // Reset page when filters change
-  useEffect(() => { setPage(1); }, [query, market]);
+  useEffect(() => { setPage(1); }, [query, market, watchlistOnly]);
 
   // Debounced search
   const handleSearchChange = (value: string) => {
@@ -74,6 +94,18 @@ export default function StocksPage() {
                 {t.label}
               </button>
             ))}
+
+            <button
+              onClick={() => setWatchlistOnly(!watchlistOnly)}
+              className={`px-3 py-1 text-[12px] font-medium rounded transition-colors flex items-center gap-1 ${
+                watchlistOnly
+                  ? 'bg-[#ffa723] text-white'
+                  : 'bg-[#f5f5f5] text-[#666] hover:bg-[#e5e5e5]'
+              }`}
+            >
+              <span className="text-[13px]">{watchlistOnly ? '★' : '☆'}</span>
+              관심종목
+            </button>
           </div>
 
           <div className="flex-1" />
@@ -102,63 +134,115 @@ export default function StocksPage() {
         </div>
 
         {/* Stock table */}
-        <table className="naver-table">
+        <div style={{ overflowX: 'auto' }}>
+        <table className="naver-table" style={{ minWidth: '1000px' }}>
           <thead>
             <tr>
-              <th className="text-left" style={{ width: '30%' }}>종목명</th>
-              <th style={{ width: '12%' }}>종목코드</th>
-              <th style={{ width: '10%' }}>시장</th>
-              <th className="text-left" style={{ width: '48%' }}>업종</th>
+              <th style={{ width: '3%' }}></th>
+              <th className="text-left" style={{ width: '14%' }}>종목명</th>
+              <th style={{ width: '9%' }}>현재가</th>
+              <th style={{ width: '9%' }}>전일비</th>
+              <th style={{ width: '8%' }}>등락률</th>
+              <th style={{ width: '9%' }}>매수호가</th>
+              <th style={{ width: '9%' }}>매도호가</th>
+              <th style={{ width: '10%' }}>거래량</th>
+              <th style={{ width: '10%' }}>거래대금</th>
+              <th style={{ width: '10%' }}>전일거래량</th>
+              <th style={{ width: '5%' }}>뉴스</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               Array.from({ length: 15 }).map((_, i) => (
                 <tr key={`sk-${i}`}>
-                  <td><div className="skeleton skeleton-text" style={{ width: `${40 + Math.random() * 30}%` }} /></td>
-                  <td className="text-center"><div className="skeleton skeleton-text-sm mx-auto" style={{ width: '60%' }} /></td>
-                  <td className="text-center"><div className="skeleton skeleton-badge mx-auto" /></td>
-                  <td><div className="skeleton skeleton-text" style={{ width: `${30 + Math.random() * 40}%` }} /></td>
+                  <td className="text-center text-[#ccc]">☆</td>
+                  <td><div className="skeleton skeleton-text" style={{ width: `${50 + Math.random() * 30}%` }} /></td>
+                  {Array.from({ length: 9 }).map((_, j) => (
+                    <td key={j} className="text-right"><div className="skeleton skeleton-text-sm" style={{ width: '70%', marginLeft: 'auto' }} /></td>
+                  ))}
                 </tr>
               ))
             ) : stocks.length === 0 ? (
               <tr>
-                <td colSpan={4} className="text-center py-8 text-[#999]">
-                  {query ? '검색 결과가 없습니다.' : '종목이 없습니다.'}
+                <td colSpan={11} className="text-center py-8 text-[#999]">
+                  {watchlistOnly ? '관심종목이 없습니다.' : query ? '검색 결과가 없습니다.' : '종목이 없습니다.'}
                 </td>
               </tr>
             ) : (
-              stocks.map((stock) => (
-                <tr key={stock.id} className="cursor-pointer hover:bg-[#f7f8fa]">
-                  <td>
-                    <Link
-                      href={`/stocks/${stock.id}`}
-                      className="text-[#333] hover:text-[#1261c4] hover:underline font-medium"
-                    >
-                      {stock.name}
-                    </Link>
-                  </td>
-                  <td className="text-center text-[12px] text-[#666]">{stock.stock_code}</td>
-                  <td className="text-center">
-                    <span className={`badge ${stock.market === 'KOSPI' ? 'badge-positive' : 'badge-neutral'}`}>
-                      {stock.market || '-'}
-                    </span>
-                  </td>
-                  <td>
-                    {stock.sector_name && (
-                      <Link
-                        href={`/sectors/${stock.sector_id}`}
-                        className="text-[12px] text-[#666] hover:text-[#1261c4] hover:underline"
+              stocks.map((stock) => {
+                const pc = stock.price_change ?? 0;
+                const priceColor = pc > 0 ? 'text-rise' : pc < 0 ? 'text-fall' : 'text-[#333]';
+                const arrow = pc > 0 ? '▲' : pc < 0 ? '▼' : '';
+                const rate = stock.change_rate ?? 0;
+                // Highlight ±5% or more
+                const rowBg = rate >= 5 ? 'bg-[#fff5f5]' : rate <= -5 ? 'bg-[#f5f5ff]' : '';
+
+                return (
+                  <tr key={stock.id} className={`hover:bg-[#f7f8fa] ${rowBg}`}>
+                    <td className="text-center">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); toggleStock(stock.id); }}
+                        className={`text-[16px] leading-none transition-colors ${
+                          isWatched(stock.id) ? 'text-[#ffa723]' : 'text-[#ccc] hover:text-[#ffa723]'
+                        }`}
+                        title={isWatched(stock.id) ? '관심종목 해제' : '관심종목 추가'}
                       >
-                        {formatSectorName(stock.sector_name)}
+                        {isWatched(stock.id) ? '★' : '☆'}
+                      </button>
+                    </td>
+                    <td>
+                      <Link
+                        href={`/stocks/${stock.id}`}
+                        className="text-[#333] hover:text-[#1261c4] hover:underline font-medium"
+                      >
+                        {stock.name}
                       </Link>
-                    )}
-                  </td>
-                </tr>
-              ))
+                    </td>
+                    <td className="text-right text-[#333]">
+                      {stock.current_price != null ? stock.current_price.toLocaleString() : '-'}
+                    </td>
+                    <td className={`text-right ${priceColor}`}>
+                      {stock.price_change != null
+                        ? `${arrow} ${Math.abs(stock.price_change).toLocaleString()}`
+                        : '-'}
+                    </td>
+                    <td className="text-right">
+                      <ChangeRate value={stock.change_rate} />
+                    </td>
+                    <td className="text-right">
+                      {stock.bid_price != null ? stock.bid_price.toLocaleString() : '-'}
+                    </td>
+                    <td className="text-right">
+                      {stock.ask_price != null ? stock.ask_price.toLocaleString() : '-'}
+                    </td>
+                    <td className="text-right">
+                      {stock.volume != null ? stock.volume.toLocaleString() : '-'}
+                    </td>
+                    <td className="text-right">
+                      {stock.trading_value != null ? stock.trading_value.toLocaleString() : '-'}
+                    </td>
+                    <td className="text-right">
+                      {stock.prev_volume != null ? stock.prev_volume.toLocaleString() : '-'}
+                    </td>
+                    <td className="text-center">
+                      {stock.news_count > 0 ? (
+                        <Link
+                          href={`/stocks/${stock.id}`}
+                          className="text-[#1261c4] hover:underline text-[12px]"
+                        >
+                          {stock.news_count}건
+                        </Link>
+                      ) : (
+                        <span className="text-[#ccc] text-[12px]">-</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
+        </div>
 
         {!loading && stocks.length > 0 && (
           <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} />

@@ -1,17 +1,24 @@
+import logging
+from datetime import datetime, timedelta
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
+from app.config import settings
 from app.database import get_db
 from app.models.sector import Sector
 from app.models.stock import Stock
 from app.models.news import NewsArticle
 from app.models.news_relation import NewsStockRelation
+from app.models.sector_insight import SectorInsight
 from app.schemas.sector import SectorCreate, SectorResponse, SectorDetailResponse
 from app.schemas.news import NewsArticleResponse
 from app.routers.utils import format_articles
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/sectors", tags=["sectors"])
 
@@ -179,3 +186,110 @@ async def get_sector_news(sector_id: int, limit: int = 30, offset: int = 0, db: 
         content=jsonable_encoder(data),
         headers={"X-Total-Count": str(total), "Access-Control-Expose-Headers": "X-Total-Count"},
     )
+
+
+@router.post("/{sector_id}/insight")
+async def generate_sector_insight(sector_id: int, db: Session = Depends(get_db)):
+    """Generate or return cached AI insight for a sector based on recent news."""
+    sector = db.query(Sector).filter(Sector.id == sector_id).first()
+    if not sector:
+        raise HTTPException(status_code=404, detail="Sector not found")
+
+    # Check for cached insight (24h TTL)
+    cache_cutoff = datetime.utcnow() - timedelta(hours=24)
+    cached = (
+        db.query(SectorInsight)
+        .filter(
+            SectorInsight.sector_id == sector_id,
+            SectorInsight.created_at >= cache_cutoff,
+        )
+        .order_by(SectorInsight.created_at.desc())
+        .first()
+    )
+    if cached:
+        return {"content": cached.content, "created_at": str(cached.created_at), "cached": True}
+
+    # Collect recent news titles for this sector
+    stock_ids = [s.id for s in db.query(Stock).filter(Stock.sector_id == sector_id).all()]
+    since = datetime.utcnow() - timedelta(days=7)
+
+    news_ids_subq = (
+        db.query(NewsStockRelation.news_id)
+        .outerjoin(Stock, NewsStockRelation.stock_id == Stock.id)
+        .filter(
+            (NewsStockRelation.sector_id == sector_id)
+            | (Stock.sector_id == sector_id)
+        )
+        .distinct()
+        .subquery()
+    )
+
+    articles = (
+        db.query(NewsArticle)
+        .filter(
+            NewsArticle.id.in_(news_ids_subq.select()),
+            NewsArticle.published_at >= since,
+        )
+        .order_by(NewsArticle.published_at.desc())
+        .limit(50)
+        .all()
+    )
+
+    if not articles:
+        return {"content": "최근 7일간 관련 뉴스가 없어 인사이트를 생성할 수 없습니다.", "cached": False}
+
+    # Build prompt
+    news_list = "\n".join(
+        f"- [{a.sentiment or '중립'}] {a.title}" for a in articles
+    )
+
+    prompt = f"""다음은 "{sector.name}" 업종의 최근 7일간 뉴스 제목 목록입니다.
+
+{news_list}
+
+이 업종의 최근 동향을 투자자 관점에서 3-5줄로 요약해주세요.
+다음 내용을 포함해주세요:
+1. 업종의 전반적인 분위기 (호재/악재 비율)
+2. 주요 이슈나 트렌드
+3. 투자자가 주목해야 할 포인트
+
+한국어로, 마크다운 없이 일반 텍스트로 작성해주세요."""
+
+    if not settings.GEMINI_API_KEY:
+        return {"content": "AI API 키가 설정되지 않았습니다.", "cached": False}
+
+    try:
+        from google import genai
+        import asyncio
+
+        client = genai.Client(api_key=settings.GEMINI_API_KEY)
+
+        max_retries = 3
+        content = None
+        for attempt in range(max_retries):
+            try:
+                response = client.models.generate_content(
+                    model="gemini-2.0-flash",
+                    contents=prompt,
+                )
+                content = response.text.strip()
+                break
+            except Exception as e:
+                if ("429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)) and attempt < max_retries - 1:
+                    await asyncio.sleep(5 * (2 ** attempt))
+                else:
+                    raise
+
+        if not content:
+            return {"content": "인사이트 생성에 실패했습니다.", "cached": False}
+
+        # Cache to DB
+        insight = SectorInsight(sector_id=sector_id, content=content)
+        db.add(insight)
+        db.commit()
+
+        return {"content": content, "created_at": str(insight.created_at), "cached": False}
+
+    except Exception as e:
+        logger.error(f"Failed to generate sector insight: {e}")
+        return {"content": "인사이트 생성 중 오류가 발생했습니다.", "cached": False}

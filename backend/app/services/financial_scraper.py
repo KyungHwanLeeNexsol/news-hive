@@ -187,8 +187,14 @@ _financial_cache = _FinancialCache()
 def _parse_financial_table(soup: BeautifulSoup) -> dict:
     """Parse WiseReport financial table — returns {"annual": [...], "quarter": [...]}.
 
-    The cF1001.aspx page contains ONE table with both annual (cols 0-3) and
-    quarterly (cols 4-7) data.  Header row 1 has period labels like "2021/12".
+    The cF1001.aspx page has ONE table with both annual and quarterly data.
+    Header row 0 has "연간" (colspan=N) and "분기" (colspan=N) — typically N=4.
+    Header row 1 has period labels in 4 groups of 5: annual-consolidated,
+    annual-individual, quarterly-consolidated, quarterly-individual.
+    But data rows only have 8 TD cells: 4 annual + 4 quarterly.
+
+    We use the first N period headers for annual and the headers at offset
+    2*N+1 (skipping individual group) for quarterly, where N = annual colspan.
     """
     result: dict[str, list[FinancialPeriod]] = {"annual": [], "quarter": []}
 
@@ -204,26 +210,59 @@ def _parse_financial_table(soup: BeautifulSoup) -> dict:
     if not table:
         return result
 
-    # Parse period headers from second header row (row index 1)
-    all_headers: list[str] = []
     thead = table.select_one("thead")
     header_rows = thead.select("tr") if thead else table.select("tr")[:2]
-    if len(header_rows) >= 2:
-        for th in header_rows[1].select("th, td"):
-            text = th.get_text(strip=True)
-            if text and re.search(r"\d{4}", text):
-                # Normalize: "2024/12(E)" → "2024/12"
-                clean = re.sub(r"\(.*?\)", "", text).strip()
-                all_headers.append(clean)
+    if len(header_rows) < 2:
+        return result
+
+    # Determine annual/quarterly column counts from header row 0's colspan
+    # Row 0 has cells like: "주요재무정보" (rowspan=2), "연간" (colspan=4), "분기" (colspan=4)
+    annual_cols = 4  # default
+    quarter_cols = 4
+    for cell in header_rows[0].select("th, td"):
+        text = cell.get_text(strip=True)
+        colspan = int(cell.get("colspan", 1))
+        if "연간" in text:
+            annual_cols = colspan
+        elif "분기" in text:
+            quarter_cols = colspan
+
+    # Parse ALL period headers from header row 1
+    all_headers: list[str] = []
+    for th in header_rows[1].select("th, td"):
+        text = th.get_text(strip=True)
+        if text and re.search(r"\d{4}", text):
+            # Normalize: "2024/12(E)" → "2024/12"
+            clean = re.sub(r"\(.*?\)", "", text).strip()
+            all_headers.append(clean)
 
     if not all_headers:
         return result
 
-    # Split headers: first 4 = annual, last 4 = quarterly
-    # Some stocks may have fewer columns
-    mid = len(all_headers) // 2
-    annual_headers = all_headers[:mid] if mid > 0 else all_headers
-    quarter_headers = all_headers[mid:] if mid > 0 else []
+    # Header row 1 has 4 groups: each group has (annual_cols+1) or (quarter_cols+1) headers
+    # (extra 1 for estimate column). But some stocks may have fewer.
+    #
+    # Group A: annual consolidated   [0 .. annual_cols-1] (skip estimate at annual_cols)
+    # Group B: annual individual     (skip entirely)
+    # Group C: quarterly consolidated (skip Groups A+B)
+    # Group D: quarterly individual  (skip entirely)
+    #
+    # Group size = cols + 1 (one estimate column per group)
+    annual_group_size = annual_cols + 1  # typically 5
+    quarter_group_size = quarter_cols + 1
+
+    # Annual headers: first annual_cols from Group A (skip the estimate)
+    annual_headers = all_headers[:annual_cols]
+
+    # Quarterly headers: skip Groups A and B, take first quarter_cols from Group C
+    quarter_offset = annual_group_size * 2  # skip Group A + Group B
+    quarter_headers = all_headers[quarter_offset:quarter_offset + quarter_cols]
+
+    # Fallback: if we don't have enough headers, try simpler split
+    # (e.g., table has exactly 8 headers without group structure)
+    if len(annual_headers) < annual_cols and len(all_headers) == annual_cols + quarter_cols:
+        annual_headers = all_headers[:annual_cols]
+        quarter_headers = all_headers[annual_cols:]
 
     # Row label → key mapping (first match wins)
     label_map = [
@@ -256,13 +295,11 @@ def _parse_financial_table(soup: BeautifulSoup) -> dict:
                 key = k
                 break
 
-        if key and key not in row_map:  # First match only (e.g., skip 영업이익(발표기준))
+        if key and key not in row_map:  # First match only
             cells = [td.get_text(strip=True) for td in tr.select("td")]
             row_map[key] = cells
 
-    total_cols = len(all_headers)
-
-    # Build annual periods (cols 0..mid-1)
+    # Build annual periods (data cells 0..annual_cols-1)
     for i, period_label in enumerate(annual_headers):
         fp = FinancialPeriod(period=period_label, period_type="annual")
         for key, cells in row_map.items():
@@ -277,9 +314,9 @@ def _parse_financial_table(soup: BeautifulSoup) -> dict:
                 setattr(fp, key, _parse_int_kr(val_text))
         result["annual"].append(fp)
 
-    # Build quarterly periods (cols mid..total-1)
+    # Build quarterly periods (data cells annual_cols..annual_cols+quarter_cols-1)
     for qi, period_label in enumerate(quarter_headers):
-        col_idx = mid + qi
+        col_idx = annual_cols + qi  # data cell index (4, 5, 6, 7)
         fp = FinancialPeriod(period=period_label, period_type="quarter")
         for key, cells in row_map.items():
             if col_idx >= len(cells):

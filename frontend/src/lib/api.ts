@@ -1,4 +1,4 @@
-import type { Sector, Stock, StockListItem, NewsArticle, StockDetail, FinancialPeriod, PriceRecord } from "./types";
+import type { Sector, Stock, StockListItem, NewsArticle, StockDetail, FinancialPeriod, PriceRecord, SentimentTrendItem, SectorInsight, DisclosureItem } from "./types";
 
 const API_BASE = "/api";
 
@@ -150,12 +150,13 @@ export async function syncStocks(): Promise<{ message: string; added: number }> 
 }
 
 export async function fetchStocks(
-  params: { q?: string; market?: string; sector_id?: number; limit?: number; offset?: number } = {},
+  params: { q?: string; market?: string; sector_id?: number; ids?: string; limit?: number; offset?: number } = {},
 ): Promise<{ stocks: StockListItem[]; total: number }> {
   const sp = new URLSearchParams();
   if (params.q) sp.set("q", params.q);
   if (params.market) sp.set("market", params.market);
   if (params.sector_id) sp.set("sector_id", String(params.sector_id));
+  if (params.ids) sp.set("ids", params.ids);
   sp.set("limit", String(params.limit ?? 50));
   sp.set("offset", String(params.offset ?? 0));
   const res = await fetchWithRetry(`${API_BASE}/stocks?${sp}`);
@@ -183,4 +184,43 @@ export async function fetchStockPrices(id: number, months = 3): Promise<PriceRec
   const res = await fetchWithRetry(`${API_BASE}/stocks/${id}/prices?months=${months}`);
   if (!res.ok) throw new Error("Failed to fetch prices");
   return res.json();
+}
+
+export async function fetchSentimentTrend(id: number, days = 30): Promise<SentimentTrendItem[]> {
+  const res = await fetchWithRetry(`${API_BASE}/stocks/${id}/sentiment-trend?days=${days}`);
+  if (!res.ok) throw new Error("Failed to fetch sentiment trend");
+  return res.json();
+}
+
+export async function generateSectorInsight(id: number): Promise<SectorInsight> {
+  const res = await fetch(`${API_BASE}/sectors/${id}/insight`, { method: "POST" });
+  if (!res.ok) throw new Error("Failed to generate sector insight");
+  return res.json();
+}
+
+export async function fetchDisclosures(
+  params: { stock_id?: number; report_type?: string; limit?: number; offset?: number } = {},
+): Promise<{ disclosures: DisclosureItem[]; total: number }> {
+  const sp = new URLSearchParams();
+  if (params.stock_id) sp.set("stock_id", String(params.stock_id));
+  if (params.report_type) sp.set("report_type", params.report_type);
+  sp.set("limit", String(params.limit ?? 30));
+  sp.set("offset", String(params.offset ?? 0));
+  const res = await fetchWithRetry(`${API_BASE}/disclosures?${sp}`);
+  if (!res.ok) throw new Error("Failed to fetch disclosures");
+  const total = parseInt(res.headers.get("X-Total-Count") || "0", 10);
+  const disclosures = await res.json();
+  return { disclosures, total };
+}
+
+export async function fetchStockDisclosures(
+  stockId: number,
+  limit = 20,
+  offset = 0,
+): Promise<{ disclosures: DisclosureItem[]; total: number }> {
+  const res = await fetchWithRetry(`${API_BASE}/stocks/${stockId}/disclosures?limit=${limit}&offset=${offset}`);
+  if (!res.ok) throw new Error("Failed to fetch stock disclosures");
+  const total = parseInt(res.headers.get("X-Total-Count") || "0", 10);
+  const disclosures = await res.json();
+  return { disclosures, total };
 }

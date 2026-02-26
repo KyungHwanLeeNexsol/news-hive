@@ -395,6 +395,91 @@ async def fetch_stock_fundamentals(stock_code: str) -> Optional[StockFundamental
         return _fundamentals_cache.data.get(stock_code)
 
 
+def _parse_fundamentals_item(item: dict, stock_code: str) -> StockFundamentals:
+    """Parse a single item from the Naver polling API response."""
+    def _int(key: str) -> int:
+        try:
+            return int(float(item.get(key, 0) or 0))
+        except (ValueError, TypeError):
+            return 0
+
+    def _float(key: str) -> float:
+        try:
+            return float(item.get(key, 0) or 0)
+        except (ValueError, TypeError):
+            return 0.0
+
+    return StockFundamentals(
+        stock_code=stock_code,
+        current_price=_int("nv"),
+        price_change=_int("cv"),
+        change_rate=_float("cr"),
+        eps=_int("eps"),
+        bps=_int("bps"),
+        dividend=_int("dv"),
+        high_52w=0,
+        low_52w=0,
+        volume=_int("aq"),
+        trading_value=_int("aa"),
+    )
+
+
+BATCH_SIZE = 50  # Naver API max per request
+
+
+async def fetch_stock_fundamentals_batch(
+    stock_codes: list[str],
+) -> dict[str, StockFundamentals]:
+    """Batch fetch realtime fundamentals from Naver polling API.
+
+    Returns dict keyed by stock_code. Uses per-stock cache (5-min TTL).
+    Fetches up to 50 codes per HTTP request.
+    """
+    now = time.time()
+    result: dict[str, StockFundamentals] = {}
+    codes_to_fetch: list[str] = []
+
+    # Return cached entries, collect uncached
+    for code in stock_codes:
+        if (code in _fundamentals_cache.data
+                and (now - _fundamentals_cache.last_updated.get(code, 0)) < CACHE_TTL_SECONDS):
+            result[code] = _fundamentals_cache.data[code]
+        else:
+            codes_to_fetch.append(code)
+
+    if not codes_to_fetch:
+        return result
+
+    # Fetch in batches of BATCH_SIZE
+    for i in range(0, len(codes_to_fetch), BATCH_SIZE):
+        batch = codes_to_fetch[i:i + BATCH_SIZE]
+        query = ",".join(f"SERVICE_ITEM:{c}" for c in batch)
+        url = f"https://polling.finance.naver.com/api/realtime?query={query}"
+
+        try:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+                resp = await client.get(url, headers=HEADERS)
+                resp.raise_for_status()
+
+            text = resp.content.decode("euc-kr", errors="replace")
+            data = json.loads(text)
+
+            for area in data.get("result", {}).get("areas", []):
+                for item in area.get("datas", []):
+                    code = item.get("cd", "")
+                    if not code:
+                        continue
+                    fund = _parse_fundamentals_item(item, code)
+                    result[code] = fund
+                    _fundamentals_cache.data[code] = fund
+                    _fundamentals_cache.last_updated[code] = now
+
+        except Exception as e:
+            logger.error(f"Failed to batch fetch fundamentals: {e}")
+
+    return result
+
+
 @dataclass
 class PriceRecord:
     """Daily OHLCV price record."""

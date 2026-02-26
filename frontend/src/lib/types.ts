@@ -20,6 +20,15 @@ export interface StockListItem {
   sector_id: number;
   sector_name: string | null;
   market: string | null;
+  current_price: number | null;
+  price_change: number | null;
+  change_rate: number | null;
+  bid_price: number | null;
+  ask_price: number | null;
+  volume: number | null;
+  trading_value: number | null;
+  prev_volume: number | null;
+  news_count: number;
 }
 
 export interface Stock {
@@ -87,6 +96,34 @@ export interface PriceRecord {
   high: number;
   low: number;
   volume: number;
+}
+
+export interface SentimentTrendItem {
+  date: string;
+  positive: number;
+  negative: number;
+  neutral: number;
+}
+
+export interface SectorInsight {
+  content: string;
+  created_at?: string;
+  cached: boolean;
+}
+
+export interface DisclosureItem {
+  id: number;
+  corp_code: string;
+  corp_name: string;
+  stock_code: string | null;
+  stock_id: number | null;
+  stock_name?: string | null;
+  report_name: string;
+  report_type: string | null;
+  rcept_no: string;
+  rcept_dt: string;
+  url: string;
+  created_at: string;
 }
 
 export interface NewsRelation {

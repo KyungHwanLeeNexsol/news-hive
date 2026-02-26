@@ -71,6 +71,23 @@ def _cleanup_old_articles(db):
     logger.info(f"Cleaned up {len(old_ids)} articles older than 7 days")
 
 
+def _run_dart_crawl():
+    """Sync wrapper that runs the async DART disclosure crawl."""
+    from app.services.dart_crawler import fetch_dart_disclosures
+
+    if not settings.DART_API_KEY:
+        return
+
+    db = SessionLocal()
+    try:
+        count = asyncio.run(fetch_dart_disclosures(db))
+        logger.info(f"DART crawl completed: {count} new disclosures")
+    except Exception as e:
+        logger.error(f"DART crawl failed: {e}")
+    finally:
+        db.close()
+
+
 def _refresh_sector_performance():
     """Sync wrapper that refreshes Naver sector performance cache."""
     from app.services.naver_finance import fetch_sector_performances
@@ -100,8 +117,16 @@ def start_scheduler():
         id="sector_perf_refresh",
         replace_existing=True,
     )
+    # DART disclosure crawl every 30 minutes
+    scheduler.add_job(
+        _run_dart_crawl,
+        "interval",
+        minutes=30,
+        id="dart_crawl",
+        replace_existing=True,
+    )
     scheduler.start()
-    logger.info(f"Scheduler started: crawling every {interval} min, sector perf every 5 min")
+    logger.info(f"Scheduler started: crawling every {interval} min, sector perf every 5 min, DART every 30 min")
 
 
 def stop_scheduler():

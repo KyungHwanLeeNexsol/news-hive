@@ -1,10 +1,11 @@
 import asyncio
 import logging
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
-from sqlalchemy import func
+from sqlalchemy import func, cast, Date
 from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
@@ -20,7 +21,9 @@ from app.schemas.news import NewsArticleResponse
 from app.routers.utils import format_articles
 from app.seed.sectors import seed_sectors
 from app.seed.stocks import seed_all_stocks
-from app.services.naver_finance import fetch_stock_fundamentals, fetch_stock_price_history
+from app.services.naver_finance import (
+    fetch_stock_fundamentals, fetch_stock_fundamentals_batch, fetch_stock_price_history,
+)
 from app.services.financial_scraper import fetch_stock_valuation, fetch_stock_financials
 
 logger = logging.getLogger(__name__)
@@ -72,12 +75,18 @@ async def list_stocks(
     q: str = Query(default="", description="Search by name or stock code"),
     market: str = Query(default="", description="Filter by market: KOSPI or KOSDAQ"),
     sector_id: int = Query(default=0, description="Filter by sector ID"),
+    ids: str = Query(default="", description="Comma-separated stock IDs"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    """List all stocks with search, market filter, and pagination."""
+    """List all stocks with search, market filter, pagination, and realtime prices."""
     query = db.query(Stock).join(Sector, Stock.sector_id == Sector.id)
+
+    if ids:
+        id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
+        if id_list:
+            query = query.filter(Stock.id.in_(id_list))
 
     if q:
         search = f"%{q}%"
@@ -100,17 +109,42 @@ async def list_stocks(
         .all()
     )
 
-    items = [
-        StockListItem(
+    # News counts per stock (single query)
+    stock_ids = [s.id for s in stocks]
+    news_counts: dict[int, int] = {}
+    if stock_ids:
+        rows = (
+            db.query(NewsStockRelation.stock_id, func.count(func.distinct(NewsStockRelation.news_id)))
+            .filter(NewsStockRelation.stock_id.in_(stock_ids))
+            .group_by(NewsStockRelation.stock_id)
+            .all()
+        )
+        news_counts = {r[0]: r[1] for r in rows}
+
+    # Batch fetch realtime prices for all stocks in this page
+    stock_codes = [s.stock_code for s in stocks]
+    prices = await fetch_stock_fundamentals_batch(stock_codes) if stock_codes else {}
+
+    items = []
+    for s in stocks:
+        fund = prices.get(s.stock_code)
+        items.append(StockListItem(
             id=s.id,
             name=s.name,
             stock_code=s.stock_code,
             sector_id=s.sector_id,
             sector_name=s.sector.name if s.sector else None,
             market=s.market,
-        )
-        for s in stocks
-    ]
+            current_price=fund.current_price if fund else None,
+            price_change=fund.price_change if fund else None,
+            change_rate=fund.change_rate if fund else None,
+            volume=fund.volume if fund else None,
+            trading_value=fund.trading_value if fund else None,
+            news_count=news_counts.get(s.id, 0),
+        ))
+
+    # Sort by trading_value (거래대금) descending as market cap proxy
+    items.sort(key=lambda x: x.trading_value or 0, reverse=True)
 
     return JSONResponse(
         content=jsonable_encoder(items),
@@ -215,6 +249,49 @@ async def get_stock_financials(stock_id: int, db: Session = Depends(get_db)):
             for fp in data.get("quarter", [])
         ],
     )
+
+
+@router.get("/stocks/{stock_id}/sentiment-trend")
+async def get_stock_sentiment_trend(
+    stock_id: int,
+    days: int = Query(default=30, ge=7, le=90),
+    db: Session = Depends(get_db),
+):
+    """Daily sentiment distribution for a stock's news over the last N days."""
+    stock = db.query(Stock).filter(Stock.id == stock_id).first()
+    if not stock:
+        raise HTTPException(status_code=404, detail="Stock not found")
+
+    since = datetime.utcnow() - timedelta(days=days)
+
+    rows = (
+        db.query(
+            cast(NewsArticle.published_at, Date).label("date"),
+            NewsArticle.sentiment,
+            func.count().label("cnt"),
+        )
+        .join(NewsStockRelation, NewsStockRelation.news_id == NewsArticle.id)
+        .filter(
+            NewsStockRelation.stock_id == stock_id,
+            NewsArticle.published_at >= since,
+            NewsArticle.sentiment.isnot(None),
+        )
+        .group_by(cast(NewsArticle.published_at, Date), NewsArticle.sentiment)
+        .order_by(cast(NewsArticle.published_at, Date))
+        .all()
+    )
+
+    # Aggregate into {date: {positive, negative, neutral}}
+    trend: dict[str, dict[str, int]] = {}
+    for row in rows:
+        d = str(row.date)
+        if d not in trend:
+            trend[d] = {"date": d, "positive": 0, "negative": 0, "neutral": 0}
+        sentiment = row.sentiment or "neutral"
+        if sentiment in trend[d]:
+            trend[d][sentiment] = row.cnt
+
+    return list(trend.values())
 
 
 @router.delete("/stocks/{stock_id}", status_code=204)
