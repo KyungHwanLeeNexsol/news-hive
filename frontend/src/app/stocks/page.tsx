@@ -21,17 +21,10 @@ export default function StocksPage() {
   const [searchInput, setSearchInput] = useState('');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
-  const [watchlistOnly, setWatchlistOnly] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const { watchlist, toggleStock, isWatched } = useWatchlist();
+  const { toggleStock, isWatched } = useWatchlist();
 
   const load = useCallback((silent = false) => {
-    if (watchlistOnly && watchlist.length === 0) {
-      setStocks([]);
-      setTotal(0);
-      setLoading(false);
-      return;
-    }
     if (!silent) setLoading(true);
     const params: Parameters<typeof fetchStocks>[0] = {
       q: query,
@@ -39,9 +32,6 @@ export default function StocksPage() {
       limit: PAGE_SIZE,
       offset: (page - 1) * PAGE_SIZE,
     };
-    if (watchlistOnly) {
-      params.ids = watchlist.join(',');
-    }
     fetchStocks(params)
       .then((r) => {
         setStocks(r.stocks);
@@ -49,7 +39,7 @@ export default function StocksPage() {
       })
       .catch(() => {})
       .finally(() => { if (!silent) setLoading(false); });
-  }, [query, market, page, watchlistOnly, watchlist]);
+  }, [query, market, page]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -60,7 +50,7 @@ export default function StocksPage() {
   }, [load]);
 
   // Reset page when filters change
-  useEffect(() => { setPage(1); }, [query, market, watchlistOnly]);
+  useEffect(() => { setPage(1); }, [query, market]);
 
   // Debounced search
   const handleSearchChange = (value: string) => {
@@ -95,17 +85,13 @@ export default function StocksPage() {
               </button>
             ))}
 
-            <button
-              onClick={() => setWatchlistOnly(!watchlistOnly)}
-              className={`px-3 py-1 text-[12px] font-medium rounded transition-colors flex items-center gap-1 ${
-                watchlistOnly
-                  ? 'bg-[#ffa723] text-white'
-                  : 'bg-[#f5f5f5] text-[#666] hover:bg-[#e5e5e5]'
-              }`}
+            <Link
+              href="/watchlist"
+              className="px-3 py-1 text-[12px] font-medium rounded transition-colors flex items-center gap-1 bg-[#f5f5f5] text-[#666] hover:bg-[#e5e5e5]"
             >
-              <span className="text-[13px]">{watchlistOnly ? '★' : '☆'}</span>
+              <span className="text-[13px]">☆</span>
               관심종목
-            </button>
+            </Link>
           </div>
 
           <div className="flex-1" />
@@ -163,7 +149,7 @@ export default function StocksPage() {
             ) : stocks.length === 0 ? (
               <tr>
                 <td colSpan={9} className="text-center py-8 text-[#999]">
-                  {watchlistOnly ? '관심종목이 없습니다.' : query ? '검색 결과가 없습니다.' : '종목이 없습니다.'}
+                  {query ? '검색 결과가 없습니다.' : '종목이 없습니다.'}
                 </td>
               </tr>
             ) : (
