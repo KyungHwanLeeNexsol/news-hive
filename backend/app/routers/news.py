@@ -252,11 +252,18 @@ async def _classify_article_on_demand(article: NewsArticle, db: Session) -> None
 async def _run_crawl_background():
     """Run the crawl in background with a dedicated DB session."""
     from app.services.news_crawler import crawl_all_news
+    from app.services.dart_crawler import fetch_dart_disclosures
+    from app.config import settings
 
     db = SessionLocal()
     try:
         count = await crawl_all_news(db)
         logger.info(f"Background crawl completed: {count} new articles")
+
+        # Also fetch DART disclosures
+        if settings.DART_API_KEY:
+            dart_count = await fetch_dart_disclosures(db)
+            logger.info(f"DART crawl completed: {dart_count} new disclosures")
     except Exception as e:
         logger.error(f"Background crawl failed: {e}")
     finally:
