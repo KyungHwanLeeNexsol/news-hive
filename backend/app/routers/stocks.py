@@ -1,12 +1,13 @@
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, cast, Date
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.database import get_db
 from app.models.sector import Sector
@@ -31,6 +32,43 @@ from app.services.kis_api import fetch_kis_stock_price
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["stocks"])
+
+# --- Endpoint-level response cache ---
+_response_cache: dict[str, tuple[float, object, str]] = {}  # key -> (expires, data, total)
+_CACHE_TTL = 120  # 2 minutes
+
+
+def _cache_key(q: str, market: str, sector_id: int, ids: str, limit: int, offset: int) -> str:
+    return f"stocks:{q}:{market}:{sector_id}:{ids}:{limit}:{offset}"
+
+
+def _get_cached(key: str):
+    if key in _response_cache:
+        expires, data, total = _response_cache[key]
+        if time.time() < expires:
+            return data, total
+        del _response_cache[key]
+    return None
+
+
+def _set_cached(key: str, data, total: str):
+    _response_cache[key] = (time.time() + _CACHE_TTL, data, total)
+
+
+def _get_news_counts(db: Session, stock_ids: list[int]) -> dict[int, int]:
+    """Single query to get news counts for all stocks."""
+    if not stock_ids:
+        return {}
+    rows = (
+        db.query(
+            NewsStockRelation.stock_id,
+            func.count(func.distinct(NewsStockRelation.news_id)),
+        )
+        .filter(NewsStockRelation.stock_id.in_(stock_ids))
+        .group_by(NewsStockRelation.stock_id)
+        .all()
+    )
+    return {r[0]: r[1] for r in rows}
 
 
 @router.post("/sectors/{sector_id}/stocks", response_model=StockResponse, status_code=201)
@@ -82,14 +120,21 @@ async def list_stocks(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    """List stocks sorted by market cap with realtime prices.
+    """List stocks sorted by market cap with realtime prices."""
 
-    For watchlist (ids) or search (q) queries, uses polling API batch fetch.
-    Otherwise, uses Naver market cap ranking page for pre-sorted data.
-    """
-    # --- Watchlist or search mode: query DB + batch polling API ---
+    # --- Check response cache first ---
+    cache_key = _cache_key(q, market, sector_id, ids, limit, offset)
+    cached = _get_cached(cache_key)
+    if cached:
+        data, total_str = cached
+        return JSONResponse(
+            content=data,
+            headers={"X-Total-Count": total_str, "Access-Control-Expose-Headers": "X-Total-Count"},
+        )
+
+    # --- Watchlist or search mode ---
     if ids or q or sector_id:
-        query = db.query(Stock).join(Sector, Stock.sector_id == Sector.id)
+        query = db.query(Stock).options(joinedload(Stock.sector))
 
         if ids:
             id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
@@ -109,23 +154,14 @@ async def list_stocks(
             query = query.filter(Stock.sector_id == sector_id)
 
         total = query.count()
-        stocks = query.order_by(Stock.name).all()
+        stocks = query.order_by(Stock.name).limit(limit).offset(offset).all()
 
-        # Batch fetch prices
+        # Batch fetch prices only for this page's stocks
         stock_codes = [s.stock_code for s in stocks]
         prices = await fetch_stock_fundamentals_batch(stock_codes) if stock_codes else {}
 
-        # News counts
-        stock_ids = [s.id for s in stocks]
-        news_counts: dict[int, int] = {}
-        if stock_ids:
-            rows = (
-                db.query(NewsStockRelation.stock_id, func.count(func.distinct(NewsStockRelation.news_id)))
-                .filter(NewsStockRelation.stock_id.in_(stock_ids))
-                .group_by(NewsStockRelation.stock_id)
-                .all()
-            )
-            news_counts = {r[0]: r[1] for r in rows}
+        # Single news count query
+        news_counts = _get_news_counts(db, [s.id for s in stocks])
 
         items = []
         for s in stocks:
@@ -146,49 +182,35 @@ async def list_stocks(
                 news_count=news_counts.get(s.id, 0),
             ))
 
-        # Sort by trading_value descending
-        items.sort(key=lambda x: x.trading_value or 0, reverse=True)
-        # Apply pagination after sort
-        paginated = items[offset:offset + limit]
+        result = jsonable_encoder(items)
+        total_str = str(total)
+        _set_cached(cache_key, result, total_str)
 
         return JSONResponse(
-            content=jsonable_encoder(paginated),
-            headers={
-                "X-Total-Count": str(total),
-                "Access-Control-Expose-Headers": "X-Total-Count",
-            },
+            content=result,
+            headers={"X-Total-Count": total_str, "Access-Control-Expose-Headers": "X-Total-Count"},
         )
 
-    # --- Default mode: Naver market cap ranking (pre-sorted) ---
+    # --- Default mode: Naver market cap ranking (pre-sorted, cached) ---
     rankings = await fetch_market_cap_rankings()
 
-    # Filter by market
     if market:
         rankings = [r for r in rankings if r.market == market.upper()]
 
-    # Build stock_code → DB stock lookup
+    # Build stock_code → DB stock lookup (eager load sector)
     all_codes = [r.stock_code for r in rankings]
     db_stocks = (
         db.query(Stock)
-        .join(Sector, Stock.sector_id == Sector.id)
+        .options(joinedload(Stock.sector))
         .filter(Stock.stock_code.in_(all_codes))
         .all()
     )
     code_to_stock: dict[str, Stock] = {s.stock_code: s for s in db_stocks}
 
-    # News counts for matched stocks
-    matched_ids = [s.id for s in db_stocks]
-    news_counts = {}
-    if matched_ids:
-        rows = (
-            db.query(NewsStockRelation.stock_id, func.count(func.distinct(NewsStockRelation.news_id)))
-            .filter(NewsStockRelation.stock_id.in_(matched_ids))
-            .group_by(NewsStockRelation.stock_id)
-            .all()
-        )
-        news_counts = {r[0]: r[1] for r in rows}
+    # News counts — single query for all matched stocks
+    news_counts = _get_news_counts(db, [s.id for s in db_stocks])
 
-    # Build response — only stocks that exist in our DB
+    # Build response
     items = []
     for r in rankings:
         stock = code_to_stock.get(r.stock_code)
@@ -213,12 +235,13 @@ async def list_stocks(
     total = len(items)
     paginated = items[offset:offset + limit]
 
+    result = jsonable_encoder(paginated)
+    total_str = str(total)
+    _set_cached(cache_key, result, total_str)
+
     return JSONResponse(
-        content=jsonable_encoder(paginated),
-        headers={
-            "X-Total-Count": str(total),
-            "Access-Control-Expose-Headers": "X-Total-Count",
-        },
+        content=result,
+        headers={"X-Total-Count": total_str, "Access-Control-Expose-Headers": "X-Total-Count"},
     )
 
 

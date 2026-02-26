@@ -1,4 +1,5 @@
 import logging
+import time
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.encoders import jsonable_encoder
@@ -17,9 +18,28 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/news", tags=["news"])
 
+# --- News list response cache (2 min TTL) ---
+_news_cache: dict[str, tuple[float, object, str]] = {}
+_NEWS_CACHE_TTL = 120
+
+
+def _news_cache_key(limit: int, offset: int, q: str | None) -> str:
+    return f"news:{q or ''}:{limit}:{offset}"
+
 
 @router.get("")
 async def list_news(limit: int = 30, offset: int = 0, q: str | None = None, db: Session = Depends(get_db)):
+    # Check cache
+    ck = _news_cache_key(limit, offset, q)
+    if ck in _news_cache:
+        expires, data, total_str = _news_cache[ck]
+        if time.time() < expires:
+            return JSONResponse(
+                content=data,
+                headers={"X-Total-Count": total_str, "Access-Control-Expose-Headers": "X-Total-Count"},
+            )
+        del _news_cache[ck]
+
     base_query = db.query(NewsArticle)
     count_query = db.query(func.count(NewsArticle.id))
 
@@ -43,10 +63,13 @@ async def list_news(limit: int = 30, offset: int = 0, q: str | None = None, db: 
         .limit(limit)
         .all()
     )
-    data = format_articles(articles)
+    data = jsonable_encoder(format_articles(articles))
+    total_str = str(total)
+    _news_cache[ck] = (time.time() + _NEWS_CACHE_TTL, data, total_str)
+
     return JSONResponse(
-        content=jsonable_encoder(data),
-        headers={"X-Total-Count": str(total), "Access-Control-Expose-Headers": "X-Total-Count"},
+        content=data,
+        headers={"X-Total-Count": total_str, "Access-Control-Expose-Headers": "X-Total-Count"},
     )
 
 
@@ -264,6 +287,11 @@ async def _run_crawl_background():
         if settings.DART_API_KEY:
             dart_count = await fetch_dart_disclosures(db)
             logger.info(f"DART crawl completed: {dart_count} new disclosures")
+
+        # Invalidate caches after new data
+        _news_cache.clear()
+        from app.routers.stocks import _response_cache
+        _response_cache.clear()
     except Exception as e:
         logger.error(f"Background crawl failed: {e}")
     finally:
