@@ -231,6 +231,7 @@ async def get_stock_financials(stock_id: int, db: Session = Depends(get_db)):
         annual=[
             FinancialPeriodResponse(**{
                 "period": fp.period, "period_type": fp.period_type,
+                "is_estimate": fp.is_estimate,
                 "revenue": fp.revenue, "operating_profit": fp.operating_profit,
                 "operating_margin": fp.operating_margin, "net_income": fp.net_income,
                 "eps": fp.eps, "bps": fp.bps, "roe": fp.roe,
@@ -241,6 +242,7 @@ async def get_stock_financials(stock_id: int, db: Session = Depends(get_db)):
         quarter=[
             FinancialPeriodResponse(**{
                 "period": fp.period, "period_type": fp.period_type,
+                "is_estimate": fp.is_estimate,
                 "revenue": fp.revenue, "operating_profit": fp.operating_profit,
                 "operating_margin": fp.operating_margin, "net_income": fp.net_income,
                 "eps": fp.eps, "bps": fp.bps, "roe": fp.roe,

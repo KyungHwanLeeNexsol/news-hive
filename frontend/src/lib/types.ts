@@ -79,6 +79,7 @@ export interface StockDetail {
 export interface FinancialPeriod {
   period: string;
   period_type: "annual" | "quarter";
+  is_estimate?: boolean;
   revenue: number | null;           // 억원
   operating_profit: number | null;
   operating_margin: number | null;

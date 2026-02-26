@@ -254,6 +254,9 @@ function SentimentChart({ data }: { data: SentimentTrendItem[] }) {
 function FinancialTable({ data, type }: { data: FinancialPeriod[]; type: 'annual' | 'quarter' }) {
   if (data.length === 0) return <p className="text-[13px] text-[#999] py-8 text-center">재무 데이터가 없습니다.</p>;
 
+  // Exclude estimate rows from totals
+  const actualData = data.filter(d => !d.is_estimate);
+
   const sumOrAvg = (
     items: FinancialPeriod[],
     key: keyof FinancialPeriod,
@@ -282,8 +285,11 @@ function FinancialTable({ data, type }: { data: FinancialPeriod[]; type: 'annual
         </thead>
         <tbody>
           {data.map((fp) => (
-            <tr key={fp.period}>
-              <td className="font-medium">{fp.period}</td>
+            <tr key={fp.period} className={fp.is_estimate ? 'text-[#888]' : ''}>
+              <td className="font-medium">
+                {fp.period}
+                {fp.is_estimate && <span className="text-[10px] text-[#c57a20] ml-1">(E)</span>}
+              </td>
               <td className="text-right">{fp.revenue != null ? formatBillion(fp.revenue) : '-'}</td>
               <td className={`text-right ${fp.operating_profit != null && fp.operating_profit < 0 ? 'text-[#1261c4]' : ''}`}>
                 {fp.operating_profit != null ? formatBillion(fp.operating_profit) : '-'}
@@ -299,13 +305,13 @@ function FinancialTable({ data, type }: { data: FinancialPeriod[]; type: 'annual
           ))}
           <tr className="bg-[#f7f8fa] font-medium">
             <td>합계/평균</td>
-            <td className="text-right">{sumOrAvg(data, 'revenue', 'sum')}</td>
-            <td className="text-right">{sumOrAvg(data, 'operating_profit', 'sum')}</td>
-            <td className="text-right">{sumOrAvg(data, 'operating_margin', 'avg')}%</td>
-            <td className="text-right">{sumOrAvg(data, 'net_income', 'sum')}</td>
+            <td className="text-right">{sumOrAvg(actualData, 'revenue', 'sum')}</td>
+            <td className="text-right">{sumOrAvg(actualData, 'operating_profit', 'sum')}</td>
+            <td className="text-right">{sumOrAvg(actualData, 'operating_margin', 'avg')}%</td>
+            <td className="text-right">{sumOrAvg(actualData, 'net_income', 'sum')}</td>
             <td className="text-right">-</td>
             {type === 'annual' && <td className="text-right">-</td>}
-            {type === 'annual' && <td className="text-right">{sumOrAvg(data, 'roe', 'avg')}%</td>}
+            {type === 'annual' && <td className="text-right">{sumOrAvg(actualData, 'roe', 'avg')}%</td>}
           </tr>
         </tbody>
       </table>

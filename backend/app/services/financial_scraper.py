@@ -3,8 +3,10 @@
 Sources:
 - c1010001.aspx: PER, PBR, 시가총액, 배당수익률, 외국인비율 (static HTML)
 - cF1001.aspx: 연간/분기 재무제표 (AJAX HTML)
+- cF1002.aspx: 컨센서스 추정치 (연간 실적 + 추정)
 """
 
+import asyncio
 import logging
 import re
 import time
@@ -22,6 +24,10 @@ WISEREPORT_OVERVIEW_URL = (
 WISEREPORT_FINANCIAL_URL = (
     "https://navercomp.wisereport.co.kr/v2/company/cF1001.aspx"
     "?cmp_cd={code}&cn=&frq={freq}"  # freq=0 annual, freq=1 quarter
+)
+WISEREPORT_CONSENSUS_URL = (
+    "https://navercomp.wisereport.co.kr/v2/company/cF1002.aspx"
+    "?cmp_cd={code}&cn=&frq=0"
 )
 
 HEADERS = {
@@ -163,8 +169,9 @@ async def fetch_stock_valuation(stock_code: str) -> Optional[StockValuation]:
 @dataclass
 class FinancialPeriod:
     """One period of financial data (annual or quarterly)."""
-    period: str              # "2024" or "2024/09"
+    period: str              # "2024/12" or "2025/09"
     period_type: str         # "annual" | "quarter"
+    is_estimate: bool = False                # True for consensus estimates (E)
     revenue: Optional[int] = None            # 매출액 (억원)
     operating_profit: Optional[int] = None   # 영업이익
     operating_margin: Optional[float] = None # 영업이익률 (%)
@@ -333,11 +340,64 @@ def _parse_financial_table(soup: BeautifulSoup) -> dict:
     return result
 
 
+def _parse_consensus_table(soup: BeautifulSoup) -> list[FinancialPeriod]:
+    """Parse cF1002.aspx consensus table into FinancialPeriod list.
+
+    The table has 12 TD cells per row:
+    [0] 회계년도  [1] 매출액(억)  [2] 매출액 YoY%  [3] 영업이익(억)
+    [4] 당기순이익(억)  [5] EPS(원)  [6] PER(배)  [7] PBR(배)
+    [8] ROE(%)  [9] EV/EBITDA  [10] 부채비율  [11] 재무제표기준
+
+    Rows like: 2024(A), 2025(E), 2026(E) — we only take (E) estimate rows.
+    """
+    table = soup.select_one("table.gHead01")
+    if not table:
+        return []
+
+    results: list[FinancialPeriod] = []
+    for tr in table.select("tr"):
+        tds = tr.select("td")
+        if len(tds) < 9:
+            continue
+
+        year_text = tds[0].get_text(strip=True)
+        if "(E)" not in year_text:
+            continue
+
+        # Extract year: "2025(E)" → "2025/12"
+        year_match = re.search(r"(\d{4})", year_text)
+        if not year_match:
+            continue
+        period = f"{year_match.group(1)}/12"
+
+        revenue_text = tds[1].get_text(strip=True)
+        op_profit_text = tds[3].get_text(strip=True)
+        net_income_text = tds[4].get_text(strip=True)
+        eps_text = tds[5].get_text(strip=True)
+        roe_text = tds[8].get_text(strip=True) if len(tds) > 8 else ""
+
+        fp = FinancialPeriod(period=period, period_type="annual", is_estimate=True)
+        fp.revenue = _parse_int_kr(revenue_text) if revenue_text else None
+        fp.operating_profit = _parse_int_kr(op_profit_text) if op_profit_text else None
+        fp.net_income = _parse_int_kr(net_income_text) if net_income_text else None
+        fp.eps = _parse_int_kr(eps_text) if eps_text else None
+        fp.roe = _parse_float(roe_text) if roe_text else None
+
+        # Calculate operating margin if we have both
+        if fp.revenue and fp.operating_profit and fp.revenue != 0:
+            fp.operating_margin = round(fp.operating_profit / fp.revenue * 100, 1)
+
+        results.append(fp)
+
+    return results
+
+
 async def fetch_stock_financials(stock_code: str) -> dict:
     """Fetch annual + quarterly financials from WiseReport AJAX.
 
     Returns {"annual": list[FinancialPeriod], "quarter": list[FinancialPeriod]}.
     Both annual and quarterly are in the same HTML response (single table).
+    Consensus estimates (E) are fetched from cF1002.aspx and appended.
     24-hour cache.
     """
     now = time.time()
@@ -348,15 +408,31 @@ async def fetch_stock_financials(stock_code: str) -> dict:
     empty = {"annual": [], "quarter": []}
 
     try:
-        url = WISEREPORT_FINANCIAL_URL.format(code=stock_code, freq=0)
         async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-            resp = await client.get(url, headers=HEADERS)
+            # Fetch actual financials and consensus estimates in parallel
+            url_fin = WISEREPORT_FINANCIAL_URL.format(code=stock_code, freq=0)
+            url_est = WISEREPORT_CONSENSUS_URL.format(code=stock_code)
+            resp_fin, resp_est = await asyncio.gather(
+                client.get(url_fin, headers=HEADERS),
+                client.get(url_est, headers=HEADERS),
+                return_exceptions=True,
+            )
 
-        if resp.status_code != 200:
-            return _financial_cache.data.get(stock_code, empty)
+        result = empty
 
-        soup = BeautifulSoup(resp.text, "html.parser")
-        result = _parse_financial_table(soup)
+        # Parse actual financials
+        if not isinstance(resp_fin, Exception) and resp_fin.status_code == 200:
+            soup = BeautifulSoup(resp_fin.text, "html.parser")
+            result = _parse_financial_table(soup)
+
+        # Parse and append consensus estimates to annual data
+        if not isinstance(resp_est, Exception) and resp_est.status_code == 200:
+            est_soup = BeautifulSoup(resp_est.text, "html.parser")
+            estimates = _parse_consensus_table(est_soup)
+            existing_periods = {fp.period for fp in result["annual"]}
+            for est in estimates:
+                if est.period not in existing_periods and est.revenue is not None:
+                    result["annual"].append(est)
 
         if result["annual"] or result["quarter"]:
             _financial_cache.data[stock_code] = result

@@ -77,6 +77,7 @@ class PriceRecordResponse(BaseModel):
 class FinancialPeriodResponse(BaseModel):
     period: str
     period_type: str
+    is_estimate: bool = False
     revenue: int | None = None
     operating_profit: int | None = None
     operating_margin: float | None = None
