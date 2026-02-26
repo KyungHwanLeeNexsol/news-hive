@@ -66,6 +66,18 @@ async def lifespan(app: FastAPI):
     seed_thread = threading.Thread(target=_run_seed_and_backfill, daemon=True)
     seed_thread.start()
 
+    # Pre-warm market cap + sector caches so first /stocks request is instant
+    def _prewarm_caches():
+        import asyncio
+        from app.services.naver_finance import fetch_market_cap_rankings, fetch_sector_performances
+        try:
+            asyncio.run(fetch_market_cap_rankings())
+            asyncio.run(fetch_sector_performances(force=True))
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"Cache pre-warm failed: {e}")
+
+    threading.Thread(target=_prewarm_caches, daemon=True).start()
+
     start_scheduler()
     yield
     # Shutdown
