@@ -107,28 +107,56 @@ async def get_news_detail(news_id: int, db: Session = Depends(get_db)):
 
 @router.post("/refresh")
 async def refresh_news(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    # Quick synchronous reclassify (keyword-only, instant)
-    reclassified = await _reclassify_unlinked(db)
-
-    # Remove near-duplicate articles
-    deduped = _deduplicate_existing(db)
-
-    # Backfill sentiment for articles that don't have it yet
-    _backfill_sentiment(db)
-
-    # Backfill: translate existing English titles
-    await _backfill_translate(db)
-
-    # Launch crawl in background so the HTTP response returns immediately
-    background_tasks.add_task(_run_crawl_background)
-
+    # Return immediately — all heavy work happens in background
     total = db.query(NewsArticle).count()
+    background_tasks.add_task(_run_full_refresh)
     return {
-        "message": f"Reclassified {reclassified}, deduped {deduped}. Crawl started in background.",
-        "reclassified": reclassified,
-        "deduped": deduped,
+        "message": "Refresh started in background.",
         "total": total,
     }
+
+
+async def _run_full_refresh():
+    """Run crawl + cleanup in background with a dedicated DB session."""
+    from app.services.news_crawler import crawl_all_news
+    from app.services.dart_crawler import fetch_dart_disclosures
+    from app.config import settings
+
+    db = SessionLocal()
+    try:
+        # 1. Crawl new articles
+        count = await crawl_all_news(db)
+        logger.info(f"Background crawl completed: {count} new articles")
+
+        # 2. Reclassify unlinked articles
+        reclassified = await _reclassify_unlinked(db)
+        if reclassified:
+            logger.info(f"Reclassified {reclassified} articles")
+
+        # 3. Deduplicate
+        deduped = _deduplicate_existing(db)
+        if deduped:
+            logger.info(f"Deduped {deduped} articles")
+
+        # 4. Backfill sentiment
+        _backfill_sentiment(db)
+
+        # 5. Translate English titles
+        await _backfill_translate(db)
+
+        # 6. DART disclosures
+        if settings.DART_API_KEY:
+            dart_count = await fetch_dart_disclosures(db)
+            logger.info(f"DART crawl completed: {dart_count} new disclosures")
+
+        # Invalidate caches
+        _news_cache.clear()
+        from app.routers.stocks import _response_cache
+        _response_cache.clear()
+    except Exception as e:
+        logger.error(f"Background refresh failed: {e}")
+    finally:
+        db.close()
 
 
 @router.post("/{news_id}/summary", response_model=NewsArticleResponse)
@@ -271,31 +299,6 @@ async def _classify_article_on_demand(article: NewsArticle, db: Session) -> None
     except Exception as e:
         logger.warning(f"On-demand classify failed for article {article.id}: {e}")
 
-
-async def _run_crawl_background():
-    """Run the crawl in background with a dedicated DB session."""
-    from app.services.news_crawler import crawl_all_news
-    from app.services.dart_crawler import fetch_dart_disclosures
-    from app.config import settings
-
-    db = SessionLocal()
-    try:
-        count = await crawl_all_news(db)
-        logger.info(f"Background crawl completed: {count} new articles")
-
-        # Also fetch DART disclosures
-        if settings.DART_API_KEY:
-            dart_count = await fetch_dart_disclosures(db)
-            logger.info(f"DART crawl completed: {dart_count} new disclosures")
-
-        # Invalidate caches after new data
-        _news_cache.clear()
-        from app.routers.stocks import _response_cache
-        _response_cache.clear()
-    except Exception as e:
-        logger.error(f"Background crawl failed: {e}")
-    finally:
-        db.close()
 
 
 def _backfill_sentiment(db: Session) -> None:
