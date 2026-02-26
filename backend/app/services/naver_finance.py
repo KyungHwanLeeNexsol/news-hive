@@ -558,6 +558,127 @@ async def fetch_stock_price_history(stock_code: str, pages: int = 5) -> list[Pri
         return _price_cache.data.get(stock_code, [])
 
 
+MARKET_CAP_URL = "https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}"
+
+
+@dataclass
+class MarketCapItem:
+    """Stock info from Naver market cap ranking page."""
+    rank: int
+    stock_code: str
+    name: str
+    current_price: int = 0
+    price_change: int = 0
+    change_rate: float = 0.0
+    market_cap: int = 0            # 시가총액 (억원)
+    volume: int = 0
+    market: str = ""               # KOSPI or KOSDAQ
+
+
+@dataclass
+class _MarketCapCache:
+    data: list[MarketCapItem] = field(default_factory=list)
+    last_updated: float = 0.0
+
+
+_market_cap_cache = _MarketCapCache()
+
+
+async def fetch_market_cap_rankings(
+    max_pages_per_market: int = 6,
+) -> list[MarketCapItem]:
+    """Fetch stocks ranked by market cap from Naver Finance.
+
+    Scrapes sise_market_sum.naver for both KOSPI (sosok=0) and KOSDAQ (sosok=1).
+    Default 6 pages per market = top ~300 stocks per market (600 total).
+    Uses 5-min cache.
+    """
+    now = time.time()
+    if _market_cap_cache.data and (now - _market_cap_cache.last_updated) < CACHE_TTL_SECONDS:
+        return _market_cap_cache.data
+
+    results: list[MarketCapItem] = []
+
+    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+        for sosok, market_name in [(0, "KOSPI"), (1, "KOSDAQ")]:
+            for page in range(1, max_pages_per_market + 1):
+                try:
+                    url = MARKET_CAP_URL.format(sosok=sosok, page=page)
+                    resp = await client.get(url, headers=HEADERS)
+                    resp.raise_for_status()
+
+                    content = resp.content.decode("euc-kr", errors="replace")
+                    soup = BeautifulSoup(content, "html.parser")
+
+                    table = soup.select_one("table.type_2")
+                    if not table:
+                        break
+
+                    page_items = 0
+                    for row in table.select("tr"):
+                        cols = row.select("td")
+                        if len(cols) < 10:
+                            continue
+
+                        # Col 0: rank, Col 1: name (with link), Col 2: 현재가,
+                        # Col 3: 전일비, Col 4: 등락률, Col 5: 액면가,
+                        # Col 6: 시가총액, Col 7: 상장주식수, Col 8: 외국인비율,
+                        # Col 9: 거래량
+                        rank_text = cols[0].get_text(strip=True)
+                        if not rank_text.isdigit():
+                            continue
+
+                        link = cols[1].select_one("a[href*='code=']")
+                        if not link:
+                            continue
+                        name = link.get_text(strip=True)
+                        href = link.get("href", "")
+                        code = href.split("code=")[-1].split("&")[0].strip()
+                        if not code or len(code) != 6:
+                            continue
+
+                        current_price = _parse_int_safe(cols[2].get_text())
+
+                        # 전일비: contains direction text + number
+                        change_text = cols[3].get_text(strip=True)
+                        change_num = re.sub(r"[^\d]", "", change_text)
+                        change_abs = int(change_num) if change_num else 0
+
+                        change_rate = _parse_change_rate(cols[4].get_text(strip=True))
+                        if change_rate < 0:
+                            change_abs = -change_abs
+
+                        market_cap = _parse_int_safe(cols[6].get_text())
+                        volume = _parse_int_safe(cols[9].get_text())
+
+                        results.append(MarketCapItem(
+                            rank=int(rank_text),
+                            stock_code=code,
+                            name=name,
+                            current_price=current_price,
+                            price_change=change_abs,
+                            change_rate=change_rate,
+                            market_cap=market_cap,
+                            volume=volume,
+                            market=market_name,
+                        ))
+                        page_items += 1
+
+                    if page_items == 0:
+                        break  # no more pages
+
+                except Exception as e:
+                    logger.error(f"Failed to fetch market cap page {market_name} p{page}: {e}")
+                    break
+
+    if results:
+        _market_cap_cache.data = results
+        _market_cap_cache.last_updated = now
+        logger.info(f"Fetched market cap rankings: {len(results)} stocks")
+
+    return _market_cap_cache.data if _market_cap_cache.data else results
+
+
 async def fetch_sector_stock_codes(naver_code: str) -> list[str]:
     """Fetch stock codes belonging to a Naver sector (for stock-to-sector mapping).
 

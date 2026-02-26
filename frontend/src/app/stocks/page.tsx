@@ -135,19 +135,17 @@ export default function StocksPage() {
 
         {/* Stock table */}
         <div style={{ overflowX: 'auto' }}>
-        <table className="naver-table" style={{ minWidth: '1000px' }}>
+        <table className="naver-table" style={{ minWidth: '900px' }}>
           <thead>
             <tr>
               <th style={{ width: '3%' }}></th>
-              <th className="text-left" style={{ width: '14%' }}>종목명</th>
-              <th style={{ width: '9%' }}>현재가</th>
-              <th style={{ width: '9%' }}>전일비</th>
-              <th style={{ width: '8%' }}>등락률</th>
-              <th style={{ width: '9%' }}>매수호가</th>
-              <th style={{ width: '9%' }}>매도호가</th>
-              <th style={{ width: '10%' }}>거래량</th>
-              <th style={{ width: '10%' }}>거래대금</th>
-              <th style={{ width: '10%' }}>전일거래량</th>
+              <th className="text-left" style={{ width: '16%' }}>종목명</th>
+              <th style={{ width: '10%' }}>현재가</th>
+              <th style={{ width: '10%' }}>전일비</th>
+              <th style={{ width: '9%' }}>등락률</th>
+              <th style={{ width: '13%' }}>시가총액</th>
+              <th style={{ width: '12%' }}>거래량</th>
+              <th style={{ width: '7%' }}>시장</th>
               <th style={{ width: '5%' }}>뉴스</th>
             </tr>
           </thead>
@@ -157,14 +155,14 @@ export default function StocksPage() {
                 <tr key={`sk-${i}`}>
                   <td className="text-center text-[#ccc]">☆</td>
                   <td><div className="skeleton skeleton-text" style={{ width: `${50 + Math.random() * 30}%` }} /></td>
-                  {Array.from({ length: 9 }).map((_, j) => (
+                  {Array.from({ length: 7 }).map((_, j) => (
                     <td key={j} className="text-right"><div className="skeleton skeleton-text-sm" style={{ width: '70%', marginLeft: 'auto' }} /></td>
                   ))}
                 </tr>
               ))
             ) : stocks.length === 0 ? (
               <tr>
-                <td colSpan={11} className="text-center py-8 text-[#999]">
+                <td colSpan={9} className="text-center py-8 text-[#999]">
                   {watchlistOnly ? '관심종목이 없습니다.' : query ? '검색 결과가 없습니다.' : '종목이 없습니다.'}
                 </td>
               </tr>
@@ -176,6 +174,13 @@ export default function StocksPage() {
                 const rate = stock.change_rate ?? 0;
                 // Highlight ±5% or more
                 const rowBg = rate >= 5 ? 'bg-[#fff5f5]' : rate <= -5 ? 'bg-[#f5f5ff]' : '';
+
+                // Format market cap: 억원 → 조/억
+                const formatMarketCap = (v: number | null) => {
+                  if (v == null) return '-';
+                  if (v >= 10000) return `${(v / 10000).toFixed(1)}조`;
+                  return `${v.toLocaleString()}억`;
+                };
 
                 return (
                   <tr key={stock.id} className={`hover:bg-[#f7f8fa] ${rowBg}`}>
@@ -209,20 +214,22 @@ export default function StocksPage() {
                     <td className="text-right">
                       <ChangeRate value={stock.change_rate} />
                     </td>
-                    <td className="text-right">
-                      {stock.bid_price != null ? stock.bid_price.toLocaleString() : '-'}
-                    </td>
-                    <td className="text-right">
-                      {stock.ask_price != null ? stock.ask_price.toLocaleString() : '-'}
+                    <td className="text-right text-[#333]">
+                      {formatMarketCap(stock.market_cap)}
                     </td>
                     <td className="text-right">
                       {stock.volume != null ? stock.volume.toLocaleString() : '-'}
                     </td>
-                    <td className="text-right">
-                      {stock.trading_value != null ? stock.trading_value.toLocaleString() : '-'}
-                    </td>
-                    <td className="text-right">
-                      {stock.prev_volume != null ? stock.prev_volume.toLocaleString() : '-'}
+                    <td className="text-center">
+                      {stock.market ? (
+                        <span className={`text-[11px] px-1.5 py-0.5 rounded ${
+                          stock.market === 'KOSPI'
+                            ? 'bg-[#e8f4fd] text-[#1261c4]'
+                            : 'bg-[#fef3e2] text-[#c57a20]'
+                        }`}>
+                          {stock.market}
+                        </span>
+                      ) : '-'}
                     </td>
                     <td className="text-center">
                       {stock.news_count > 0 ? (

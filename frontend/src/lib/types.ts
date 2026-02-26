@@ -27,6 +27,7 @@ export interface StockListItem {
   ask_price: number | null;
   volume: number | null;
   trading_value: number | null;
+  market_cap: number | null;       // 시가총액 (억원)
   prev_volume: number | null;
   news_count: number;
 }

@@ -35,6 +35,7 @@ class StockListItem(BaseModel):
     ask_price: int | None = None
     volume: int | None = None
     trading_value: int | None = None
+    market_cap: int | None = None       # 시가총액 (억원)
     prev_volume: int | None = None
     news_count: int = 0
 

@@ -22,7 +22,8 @@ from app.routers.utils import format_articles
 from app.seed.sectors import seed_sectors
 from app.seed.stocks import seed_all_stocks
 from app.services.naver_finance import (
-    fetch_stock_fundamentals, fetch_stock_fundamentals_batch, fetch_stock_price_history,
+    fetch_stock_fundamentals, fetch_stock_fundamentals_batch,
+    fetch_stock_price_history, fetch_market_cap_rankings,
 )
 from app.services.financial_scraper import fetch_stock_valuation, fetch_stock_financials
 
@@ -80,74 +81,139 @@ async def list_stocks(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    """List all stocks with search, market filter, pagination, and realtime prices."""
-    query = db.query(Stock).join(Sector, Stock.sector_id == Sector.id)
+    """List stocks sorted by market cap with realtime prices.
 
-    if ids:
-        id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
-        if id_list:
-            query = query.filter(Stock.id.in_(id_list))
+    For watchlist (ids) or search (q) queries, uses polling API batch fetch.
+    Otherwise, uses Naver market cap ranking page for pre-sorted data.
+    """
+    # --- Watchlist or search mode: query DB + batch polling API ---
+    if ids or q or sector_id:
+        query = db.query(Stock).join(Sector, Stock.sector_id == Sector.id)
 
-    if q:
-        search = f"%{q}%"
-        query = query.filter(
-            (Stock.name.ilike(search)) | (Stock.stock_code.ilike(search))
+        if ids:
+            id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
+            if id_list:
+                query = query.filter(Stock.id.in_(id_list))
+
+        if q:
+            search = f"%{q}%"
+            query = query.filter(
+                (Stock.name.ilike(search)) | (Stock.stock_code.ilike(search))
+            )
+
+        if market:
+            query = query.filter(Stock.market == market.upper())
+
+        if sector_id:
+            query = query.filter(Stock.sector_id == sector_id)
+
+        total = query.count()
+        stocks = query.order_by(Stock.name).all()
+
+        # Batch fetch prices
+        stock_codes = [s.stock_code for s in stocks]
+        prices = await fetch_stock_fundamentals_batch(stock_codes) if stock_codes else {}
+
+        # News counts
+        stock_ids = [s.id for s in stocks]
+        news_counts: dict[int, int] = {}
+        if stock_ids:
+            rows = (
+                db.query(NewsStockRelation.stock_id, func.count(func.distinct(NewsStockRelation.news_id)))
+                .filter(NewsStockRelation.stock_id.in_(stock_ids))
+                .group_by(NewsStockRelation.stock_id)
+                .all()
+            )
+            news_counts = {r[0]: r[1] for r in rows}
+
+        items = []
+        for s in stocks:
+            fund = prices.get(s.stock_code)
+            items.append(StockListItem(
+                id=s.id,
+                name=s.name,
+                stock_code=s.stock_code,
+                sector_id=s.sector_id,
+                sector_name=s.sector.name if s.sector else None,
+                market=s.market,
+                current_price=fund.current_price if fund else None,
+                price_change=fund.price_change if fund else None,
+                change_rate=fund.change_rate if fund else None,
+                volume=fund.volume if fund else None,
+                trading_value=fund.trading_value if fund else None,
+                market_cap=None,
+                news_count=news_counts.get(s.id, 0),
+            ))
+
+        # Sort by trading_value descending
+        items.sort(key=lambda x: x.trading_value or 0, reverse=True)
+        # Apply pagination after sort
+        paginated = items[offset:offset + limit]
+
+        return JSONResponse(
+            content=jsonable_encoder(paginated),
+            headers={
+                "X-Total-Count": str(total),
+                "Access-Control-Expose-Headers": "X-Total-Count",
+            },
         )
 
+    # --- Default mode: Naver market cap ranking (pre-sorted) ---
+    rankings = await fetch_market_cap_rankings()
+
+    # Filter by market
     if market:
-        query = query.filter(Stock.market == market.upper())
+        rankings = [r for r in rankings if r.market == market.upper()]
 
-    if sector_id:
-        query = query.filter(Stock.sector_id == sector_id)
-
-    total = query.count()
-
-    stocks = (
-        query.order_by(Stock.name)
-        .offset(offset)
-        .limit(limit)
+    # Build stock_code → DB stock lookup
+    all_codes = [r.stock_code for r in rankings]
+    db_stocks = (
+        db.query(Stock)
+        .join(Sector, Stock.sector_id == Sector.id)
+        .filter(Stock.stock_code.in_(all_codes))
         .all()
     )
+    code_to_stock: dict[str, Stock] = {s.stock_code: s for s in db_stocks}
 
-    # News counts per stock (single query)
-    stock_ids = [s.id for s in stocks]
-    news_counts: dict[int, int] = {}
-    if stock_ids:
+    # News counts for matched stocks
+    matched_ids = [s.id for s in db_stocks]
+    news_counts = {}
+    if matched_ids:
         rows = (
             db.query(NewsStockRelation.stock_id, func.count(func.distinct(NewsStockRelation.news_id)))
-            .filter(NewsStockRelation.stock_id.in_(stock_ids))
+            .filter(NewsStockRelation.stock_id.in_(matched_ids))
             .group_by(NewsStockRelation.stock_id)
             .all()
         )
         news_counts = {r[0]: r[1] for r in rows}
 
-    # Batch fetch realtime prices for all stocks in this page
-    stock_codes = [s.stock_code for s in stocks]
-    prices = await fetch_stock_fundamentals_batch(stock_codes) if stock_codes else {}
-
+    # Build response — only stocks that exist in our DB
     items = []
-    for s in stocks:
-        fund = prices.get(s.stock_code)
+    for r in rankings:
+        stock = code_to_stock.get(r.stock_code)
+        if not stock:
+            continue
         items.append(StockListItem(
-            id=s.id,
-            name=s.name,
-            stock_code=s.stock_code,
-            sector_id=s.sector_id,
-            sector_name=s.sector.name if s.sector else None,
-            market=s.market,
-            current_price=fund.current_price if fund else None,
-            price_change=fund.price_change if fund else None,
-            change_rate=fund.change_rate if fund else None,
-            volume=fund.volume if fund else None,
-            trading_value=fund.trading_value if fund else None,
-            news_count=news_counts.get(s.id, 0),
+            id=stock.id,
+            name=stock.name,
+            stock_code=stock.stock_code,
+            sector_id=stock.sector_id,
+            sector_name=stock.sector.name if stock.sector else None,
+            market=r.market,
+            current_price=r.current_price or None,
+            price_change=r.price_change or None,
+            change_rate=r.change_rate or None,
+            volume=r.volume or None,
+            trading_value=None,
+            market_cap=r.market_cap or None,
+            news_count=news_counts.get(stock.id, 0),
         ))
 
-    # Sort by trading_value (거래대금) descending as market cap proxy
-    items.sort(key=lambda x: x.trading_value or 0, reverse=True)
+    total = len(items)
+    paginated = items[offset:offset + limit]
 
     return JSONResponse(
-        content=jsonable_encoder(items),
+        content=jsonable_encoder(paginated),
         headers={
             "X-Total-Count": str(total),
             "Access-Control-Expose-Headers": "X-Total-Count",
