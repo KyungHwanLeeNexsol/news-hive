@@ -81,80 +81,86 @@ async def fetch_dart_disclosures(
     end_de = end_date.strftime("%Y%m%d")
     logger.info(f"DART: fetching disclosures from {bgn_de} to {end_de}")
 
+    # Pre-load existing rcept_no set to avoid per-item DB queries
+    existing_rcepts: set[str] = set()
+    existing_rows = db.query(Disclosure.rcept_no).all()
+    for row in existing_rows:
+        existing_rcepts.add(row[0])
+    logger.info(f"DART: {len(existing_rcepts)} existing disclosures in DB")
+
     saved = 0
     matched = 0
     page_no = 1
-    max_pages = 10  # Safety limit
+    max_pages = 5  # 500 disclosures max per run
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        while page_no <= max_pages:
-            params = {
-                "crtfc_key": settings.DART_API_KEY,
-                "bgn_de": bgn_de,
-                "end_de": end_de,
-                "page_no": str(page_no),
-                "page_count": "100",
-            }
+        # Fetch listed companies only (Y=KOSPI, K=KOSDAQ)
+        for corp_cls in ["Y", "K"]:
+            page_no = 1
+            while page_no <= max_pages:
+                params = {
+                    "crtfc_key": settings.DART_API_KEY,
+                    "bgn_de": bgn_de,
+                    "end_de": end_de,
+                    "corp_cls": corp_cls,
+                    "page_no": str(page_no),
+                    "page_count": "100",
+                }
 
-            try:
-                resp = await client.get(f"{DART_API_BASE}/list.json", params=params)
-                resp.raise_for_status()
-                data = resp.json()
-            except Exception as e:
-                logger.error(f"DART API request failed (page {page_no}): {e}")
-                break
+                try:
+                    resp = await client.get(f"{DART_API_BASE}/list.json", params=params)
+                    resp.raise_for_status()
+                    data = resp.json()
+                except Exception as e:
+                    logger.error(f"DART API request failed (cls={corp_cls}, page {page_no}): {e}")
+                    break
 
-            status = data.get("status", "")
-            if status == "013":
-                logger.info("DART: no data (status 013)")
-                break
-            if status != "000":
-                logger.warning(f"DART API returned status {status}: {data.get('message', '')}")
-                break
+                status = data.get("status", "")
+                if status == "013":
+                    logger.info(f"DART: no data for corp_cls={corp_cls}")
+                    break
+                if status != "000":
+                    logger.warning(f"DART API status {status}: {data.get('message', '')}")
+                    break
 
-            items = data.get("list", [])
-            if not items:
-                break
+                items = data.get("list", [])
+                if not items:
+                    break
 
-            logger.info(f"DART: page {page_no}, {len(items)} items, total_page={data.get('total_page')}")
+                logger.info(f"DART: cls={corp_cls} page {page_no}, {len(items)} items, total_page={data.get('total_page')}")
 
-            for item in items:
-                rcept_no = item.get("rcept_no", "")
-                if not rcept_no:
-                    continue
+                for item in items:
+                    rcept_no = item.get("rcept_no", "")
+                    if not rcept_no or rcept_no in existing_rcepts:
+                        continue
 
-                # Check if already exists
-                existing = db.query(Disclosure).filter(Disclosure.rcept_no == rcept_no).first()
-                if existing:
-                    continue
+                    stock_code = item.get("stock_code", "").strip()
+                    stock_id = code_to_id.get(stock_code) if stock_code else None
+                    if stock_id:
+                        matched += 1
 
-                stock_code = item.get("stock_code", "").strip()
-                stock_id = code_to_id.get(stock_code) if stock_code else None
-                if stock_id:
-                    matched += 1
+                    report_name = item.get("report_nm", "")
+                    report_type = _classify_report_type(report_name)
 
-                report_name = item.get("report_nm", "")
-                report_type = _classify_report_type(report_name)
+                    disclosure = Disclosure(
+                        corp_code=item.get("corp_code", ""),
+                        corp_name=item.get("corp_name", ""),
+                        stock_code=stock_code or None,
+                        stock_id=stock_id,
+                        report_name=report_name,
+                        report_type=report_type,
+                        rcept_no=rcept_no,
+                        rcept_dt=item.get("rcept_dt", ""),
+                        url=f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}",
+                    )
+                    db.add(disclosure)
+                    existing_rcepts.add(rcept_no)
+                    saved += 1
 
-                disclosure = Disclosure(
-                    corp_code=item.get("corp_code", ""),
-                    corp_name=item.get("corp_name", ""),
-                    stock_code=stock_code or None,
-                    stock_id=stock_id,
-                    report_name=report_name,
-                    report_type=report_type,
-                    rcept_no=rcept_no,
-                    rcept_dt=item.get("rcept_dt", ""),
-                    url=f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}",
-                )
-                db.add(disclosure)
-                saved += 1
-
-            # Check if we've reached the last page
-            total_page = data.get("total_page", 1)
-            if page_no >= total_page:
-                break
-            page_no += 1
+                total_page = data.get("total_page", 1)
+                if page_no >= total_page:
+                    break
+                page_no += 1
 
     if saved:
         db.commit()
