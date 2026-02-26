@@ -64,9 +64,9 @@ async def list_disclosures(
 
 
 @router.post("/disclosures/refresh")
-async def refresh_disclosures(background_tasks: BackgroundTasks):
-    """Manually trigger DART disclosure crawl."""
-    import asyncio
+async def refresh_disclosures():
+    """Manually trigger DART disclosure crawl with debug info."""
+    import traceback
     from app.services.dart_crawler import fetch_dart_disclosures
     from app.config import settings
 
@@ -76,7 +76,17 @@ async def refresh_disclosures(background_tasks: BackgroundTasks):
     db = SessionLocal()
     try:
         count = await fetch_dart_disclosures(db, days=7)
-        return {"message": f"DART crawl completed", "saved": count}
+        # Count total disclosures in DB
+        total = db.query(Disclosure).count()
+        with_stock = db.query(Disclosure).filter(Disclosure.stock_id.isnot(None)).count()
+        return {
+            "message": "DART crawl completed",
+            "saved": count,
+            "total_in_db": total,
+            "matched_to_stock": with_stock,
+        }
+    except Exception as e:
+        return {"message": f"DART crawl failed: {e}", "traceback": traceback.format_exc(), "saved": 0}
     finally:
         db.close()
 
