@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -19,6 +19,7 @@ class Disclosure(Base):
     rcept_no: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
     rcept_dt: Mapped[str] = mapped_column(String(10), nullable=False)  # YYYYMMDD
     url: Mapped[str] = mapped_column(String(500), nullable=False)
+    ai_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

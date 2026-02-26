@@ -265,6 +265,53 @@ async def generate_ai_summary(title: str, description: str | None, relations: li
     return None
 
 
+async def generate_disclosure_summary(
+    report_name: str,
+    report_type: str | None,
+    corp_name: str,
+) -> str | None:
+    """Generate an AI summary for a DART disclosure aimed at beginner investors."""
+    if not settings.GEMINI_API_KEY:
+        return None
+
+    type_text = report_type if report_type else "미분류"
+
+    prompt = f"""다음 DART 전자공시를 투자 초보자도 이해할 수 있도록 쉽게 설명해주세요.
+
+회사: {corp_name}
+공시 제목: "{report_name}"
+공시 유형: {type_text}
+
+다음 내용을 포함하여 3-5문장으로 설명해주세요:
+1. 이 공시가 무엇인지 (전문용어 없이 쉬운 말로)
+2. 이 공시가 주가나 투자자에게 어떤 의미가 있는지
+3. 투자자가 주의해야 할 점이 있다면
+
+한국어로 작성해주세요. 마크다운 없이 일반 텍스트로 응답해주세요."""
+
+    import asyncio as _asyncio
+
+    client = genai.Client(api_key=settings.GEMINI_API_KEY)
+    max_retries = 5
+    for attempt in range(max_retries):
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt,
+            )
+            return response.text.strip()
+        except Exception as e:
+            is_rate_limit = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
+            if is_rate_limit and attempt < max_retries - 1:
+                wait = 5 * (2 ** attempt)
+                logger.info(f"Disclosure summary rate limited, retrying in {wait}s (attempt {attempt + 1}/{max_retries})")
+                await _asyncio.sleep(wait)
+            else:
+                logger.info(f"Disclosure summary skipped (rate limited)")
+                return None
+    return None
+
+
 def _is_english_title(title: str) -> bool:
     """Check if a title is predominantly English (non-Korean)."""
     korean_chars = sum(1 for c in title if "\uac00" <= c <= "\ud7a3")

@@ -1,4 +1,4 @@
-import type { Sector, Stock, StockListItem, NewsArticle, StockDetail, FinancialPeriod, PriceRecord, SentimentTrendItem, SectorInsight, DisclosureItem } from "./types";
+import type { Sector, Stock, StockListItem, NewsArticle, StockDetail, FinancialPeriod, PriceRecord, SentimentTrendItem, SectorInsight, DisclosureItem, DisclosureDetail } from "./types";
 
 const API_BASE = "/api";
 
@@ -223,4 +223,12 @@ export async function fetchStockDisclosures(
   const total = parseInt(res.headers.get("X-Total-Count") || "0", 10);
   const disclosures = await res.json();
   return { disclosures, total };
+}
+
+export async function fetchDisclosureSummary(disclosureId: number): Promise<DisclosureDetail> {
+  const res = await fetchWithRetry(`${API_BASE}/disclosures/${disclosureId}/summary`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error("Failed to fetch disclosure summary");
+  return res.json();
 }

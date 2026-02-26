@@ -1,4 +1,4 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy import func
@@ -61,6 +61,41 @@ async def list_disclosures(
             "Access-Control-Expose-Headers": "X-Total-Count",
         },
     )
+
+
+@router.post("/disclosures/{disclosure_id}/summary")
+async def generate_disclosure_summary_endpoint(
+    disclosure_id: int,
+    db: Session = Depends(get_db),
+):
+    """Generate AI summary for a disclosure (lazy, cached in DB)."""
+    disc = db.query(Disclosure).filter(Disclosure.id == disclosure_id).first()
+    if not disc:
+        raise HTTPException(status_code=404, detail="Disclosure not found")
+
+    if not disc.ai_summary:
+        from app.services.ai_classifier import generate_disclosure_summary
+
+        ai_summary = await generate_disclosure_summary(
+            report_name=disc.report_name,
+            report_type=disc.report_type,
+            corp_name=disc.corp_name,
+        )
+        if ai_summary:
+            disc.ai_summary = ai_summary
+            db.commit()
+            db.refresh(disc)
+
+    return {
+        "id": disc.id,
+        "corp_name": disc.corp_name,
+        "report_name": disc.report_name,
+        "report_type": disc.report_type,
+        "rcept_no": disc.rcept_no,
+        "rcept_dt": disc.rcept_dt,
+        "url": disc.url,
+        "ai_summary": disc.ai_summary,
+    }
 
 
 @router.post("/disclosures/refresh")

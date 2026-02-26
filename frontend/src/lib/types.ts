@@ -128,6 +128,17 @@ export interface DisclosureItem {
   created_at: string;
 }
 
+export interface DisclosureDetail {
+  id: number;
+  corp_name: string;
+  report_name: string;
+  report_type: string | null;
+  rcept_no: string;
+  rcept_dt: string;
+  url: string;
+  ai_summary: string | null;
+}
+
 export interface NewsRelation {
   stock_id: number | null;
   stock_name: string | null;

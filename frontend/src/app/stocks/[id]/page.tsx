@@ -7,6 +7,7 @@ import { fetchStockDetail, fetchStockNews, fetchStockPrices, fetchStockFinancial
 import { formatSectorName } from '@/lib/format';
 import type { StockDetail, NewsArticle, PriceRecord, FinancialPeriod, SentimentTrendItem, DisclosureItem } from '@/lib/types';
 import Pagination from '@/components/Pagination';
+import DisclosureModal from '@/components/DisclosureModal';
 import { useWatchlist } from '@/lib/watchlist';
 
 const PAGE_SIZE = 30;
@@ -357,6 +358,7 @@ export default function StockDetailPage() {
   const [disclosuresTotal, setDisclosuresTotal] = useState(0);
   const [disclosuresLoading, setDisclosuresLoading] = useState(false);
   const [disclosuresLoaded, setDisclosuresLoaded] = useState(false);
+  const [selectedDisclosure, setSelectedDisclosure] = useState<DisclosureItem | null>(null);
 
   // Load detail on mount
   useEffect(() => {
@@ -676,10 +678,9 @@ export default function StockDetailPage() {
               <table className="naver-table">
                 <thead>
                   <tr>
-                    <th className="text-left" style={{ width: '55%' }}>공시 제목</th>
-                    <th style={{ width: '12%' }}>유형</th>
-                    <th style={{ width: '15%' }}>날짜</th>
-                    <th style={{ width: '18%' }}>원문</th>
+                    <th className="text-left" style={{ width: '65%' }}>공시 제목</th>
+                    <th style={{ width: '15%' }}>유형</th>
+                    <th style={{ width: '20%' }}>날짜</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -689,19 +690,22 @@ export default function StockDetailPage() {
                         <td><div className="skeleton skeleton-text" style={{ width: `${55 + Math.random() * 35}%` }} /></td>
                         <td className="text-center"><div className="skeleton skeleton-badge mx-auto" /></td>
                         <td className="text-center"><div className="skeleton skeleton-text-sm mx-auto" style={{ width: '80%' }} /></td>
-                        <td className="text-center"><div className="skeleton skeleton-badge mx-auto" /></td>
                       </tr>
                     ))
                   ) : disclosures.length === 0 ? (
                     <tr>
-                      <td colSpan={4} className="text-center py-8 text-[#999]">
+                      <td colSpan={3} className="text-center py-8 text-[#999]">
                         공시 내역이 없습니다.
                       </td>
                     </tr>
                   ) : (
                     disclosures.map((disc) => (
-                      <tr key={disc.rcept_no}>
-                        <td className="text-[13px]">{disc.report_name}</td>
+                      <tr
+                        key={disc.rcept_no}
+                        className="cursor-pointer"
+                        onClick={() => setSelectedDisclosure(disc)}
+                      >
+                        <td className="text-[13px] text-[#1261c4]">{disc.report_name}</td>
                         <td className="text-center">
                           {disc.report_type && (
                             <span className="badge badge-neutral">{disc.report_type}</span>
@@ -710,21 +714,18 @@ export default function StockDetailPage() {
                         <td className="text-center text-[12px] text-[#999]">
                           {disc.rcept_dt ? `${disc.rcept_dt.slice(0, 4)}.${disc.rcept_dt.slice(4, 6)}.${disc.rcept_dt.slice(6, 8)}` : '-'}
                         </td>
-                        <td className="text-center">
-                          <a
-                            href={disc.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-[12px] text-[#1261c4] hover:underline"
-                          >
-                            DART 원문
-                          </a>
-                        </td>
                       </tr>
                     ))
                   )}
                 </tbody>
               </table>
+
+              {selectedDisclosure && (
+                <DisclosureModal
+                  disclosure={selectedDisclosure}
+                  onClose={() => setSelectedDisclosure(null)}
+                />
+              )}
             </div>
           )}
         </div>
