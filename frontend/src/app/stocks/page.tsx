@@ -21,10 +21,22 @@ export default function StocksPage() {
   const [searchInput, setSearchInput] = useState('');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
+  const [watchlistOnly, setWatchlistOnly] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const { toggleStock, isWatched } = useWatchlist();
+  const { watchlist, toggleStock, isWatched } = useWatchlist();
+
+  // Use ref so load() can read latest watchlist without re-creating
+  const watchlistRef = useRef(watchlist);
+  watchlistRef.current = watchlist;
 
   const load = useCallback((silent = false) => {
+    const wl = watchlistRef.current;
+    if (watchlistOnly && wl.length === 0) {
+      setStocks([]);
+      setTotal(0);
+      setLoading(false);
+      return;
+    }
     if (!silent) setLoading(true);
     const params: Parameters<typeof fetchStocks>[0] = {
       q: query,
@@ -32,6 +44,9 @@ export default function StocksPage() {
       limit: PAGE_SIZE,
       offset: (page - 1) * PAGE_SIZE,
     };
+    if (watchlistOnly) {
+      params.ids = wl.join(',');
+    }
     fetchStocks(params)
       .then((r) => {
         setStocks(r.stocks);
@@ -39,7 +54,7 @@ export default function StocksPage() {
       })
       .catch(() => {})
       .finally(() => { if (!silent) setLoading(false); });
-  }, [query, market, page]);
+  }, [query, market, page, watchlistOnly]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -50,7 +65,7 @@ export default function StocksPage() {
   }, [load]);
 
   // Reset page when filters change
-  useEffect(() => { setPage(1); }, [query, market]);
+  useEffect(() => { setPage(1); }, [query, market, watchlistOnly]);
 
   // Debounced search
   const handleSearchChange = (value: string) => {
@@ -60,6 +75,12 @@ export default function StocksPage() {
   };
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
+
+  const formatMarketCap = (v: number | null) => {
+    if (v == null) return '-';
+    if (v >= 10000) return `${(v / 10000).toFixed(1)}조`;
+    return `${v.toLocaleString()}억`;
+  };
 
   return (
     <div>
@@ -74,9 +95,9 @@ export default function StocksPage() {
             ]).map((t) => (
               <button
                 key={t.key}
-                onClick={() => setMarket(t.key)}
+                onClick={() => { setWatchlistOnly(false); setMarket(t.key); }}
                 className={`px-3 py-1 text-[12px] font-medium rounded transition-colors ${
-                  market === t.key
+                  !watchlistOnly && market === t.key
                     ? 'bg-[#1261c4] text-white'
                     : 'bg-[#f5f5f5] text-[#666] hover:bg-[#e5e5e5]'
                 }`}
@@ -85,13 +106,17 @@ export default function StocksPage() {
               </button>
             ))}
 
-            <Link
-              href="/watchlist"
-              className="px-3 py-1 text-[12px] font-medium rounded transition-colors flex items-center gap-1 bg-[#f5f5f5] text-[#666] hover:bg-[#e5e5e5]"
+            <button
+              onClick={() => setWatchlistOnly(!watchlistOnly)}
+              className={`px-3 py-1 text-[12px] font-medium rounded transition-colors flex items-center gap-1 ${
+                watchlistOnly
+                  ? 'bg-[#ffa723] text-white'
+                  : 'bg-[#f5f5f5] text-[#666] hover:bg-[#e5e5e5]'
+              }`}
             >
-              <span className="text-[13px]">☆</span>
+              <span className="text-[13px]">{watchlistOnly ? '★' : '☆'}</span>
               관심종목
-            </Link>
+            </button>
           </div>
 
           <div className="flex-1" />
@@ -149,7 +174,7 @@ export default function StocksPage() {
             ) : stocks.length === 0 ? (
               <tr>
                 <td colSpan={9} className="text-center py-8 text-[#999]">
-                  {query ? '검색 결과가 없습니다.' : '종목이 없습니다.'}
+                  {watchlistOnly ? '관심종목이 없습니다. ☆를 눌러 추가하세요.' : query ? '검색 결과가 없습니다.' : '종목이 없습니다.'}
                 </td>
               </tr>
             ) : (
@@ -158,21 +183,13 @@ export default function StocksPage() {
                 const priceColor = pc > 0 ? 'text-rise' : pc < 0 ? 'text-fall' : 'text-[#333]';
                 const arrow = pc > 0 ? '▲' : pc < 0 ? '▼' : '';
                 const rate = stock.change_rate ?? 0;
-                // Highlight ±5% or more
                 const rowBg = rate >= 5 ? 'bg-[#fff5f5]' : rate <= -5 ? 'bg-[#f5f5ff]' : '';
-
-                // Format market cap: 억원 → 조/억
-                const formatMarketCap = (v: number | null) => {
-                  if (v == null) return '-';
-                  if (v >= 10000) return `${(v / 10000).toFixed(1)}조`;
-                  return `${v.toLocaleString()}억`;
-                };
 
                 return (
                   <tr key={stock.id} className={`hover:bg-[#f7f8fa] ${rowBg}`}>
                     <td className="text-center">
                       <button
-                        onClick={(e) => { e.stopPropagation(); toggleStock(stock.id); }}
+                        onClick={() => toggleStock(stock.id)}
                         className={`text-[16px] leading-none transition-colors ${
                           isWatched(stock.id) ? 'text-[#ffa723]' : 'text-[#ccc] hover:text-[#ffa723]'
                         }`}

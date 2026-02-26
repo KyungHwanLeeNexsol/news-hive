@@ -6,7 +6,6 @@ import { usePathname } from 'next/navigation';
 const navItems = [
   { href: '/', label: '업종 현황' },
   { href: '/stocks', label: '종목' },
-  { href: '/watchlist', label: '관심종목' },
   { href: '/news', label: '뉴스' },
 ];
 
