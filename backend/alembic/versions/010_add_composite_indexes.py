@@ -8,6 +8,7 @@ Create Date: 2026-02-26
 from typing import Sequence, Union
 
 from alembic import op
+from sqlalchemy import text
 
 
 # revision identifiers, used by Alembic.
@@ -17,22 +18,26 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _create_index_if_not_exists(name: str, table: str, columns: list[str]):
+    """Create index only if it doesn't already exist."""
+    conn = op.get_bind()
+    result = conn.execute(
+        text("SELECT 1 FROM pg_indexes WHERE indexname = :name"),
+        {"name": name},
+    ).fetchone()
+    if not result:
+        op.create_index(name, table, columns)
+
+
 def upgrade() -> None:
-    # Composite index for news count queries (stock_id + news_id)
-    op.create_index(
+    _create_index_if_not_exists(
         "ix_news_stock_relations_stock_news",
         "news_stock_relations",
         ["stock_id", "news_id"],
     )
-
-    # Index on stocks.stock_code for fast lookups
-    op.create_index("ix_stocks_stock_code", "stocks", ["stock_code"])
-
-    # Index on stocks.market for filtering
-    op.create_index("ix_stocks_market", "stocks", ["market"])
-
-    # Composite index for news ordering (published_at DESC, id)
-    op.create_index(
+    _create_index_if_not_exists("ix_stocks_stock_code", "stocks", ["stock_code"])
+    _create_index_if_not_exists("ix_stocks_market", "stocks", ["market"])
+    _create_index_if_not_exists(
         "ix_news_articles_published_at_id",
         "news_articles",
         ["published_at", "id"],
