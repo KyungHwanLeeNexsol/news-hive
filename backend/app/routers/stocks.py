@@ -26,6 +26,7 @@ from app.services.naver_finance import (
     fetch_stock_price_history, fetch_market_cap_rankings,
 )
 from app.services.financial_scraper import fetch_stock_valuation, fetch_stock_financials
+from app.services.kis_api import fetch_kis_stock_price
 
 logger = logging.getLogger(__name__)
 
@@ -223,42 +224,52 @@ async def list_stocks(
 
 @router.get("/stocks/{stock_id}", response_model=StockDetailResponse)
 async def get_stock_detail(stock_id: int, db: Session = Depends(get_db)):
-    """Stock detail with realtime fundamentals + valuation metrics."""
+    """Stock detail with realtime fundamentals + valuation metrics.
+
+    Data sources (in priority order):
+    1. KIS API — 52w high/low, PER, PBR, foreign ratio, market cap
+    2. Naver polling API — realtime price, EPS, BPS, dividend
+    3. WiseReport scraper — valuation fallback, industry PER
+    """
     stock = db.query(Stock).filter(Stock.id == stock_id).first()
     if not stock:
         raise HTTPException(status_code=404, detail="Stock not found")
 
     sector_name = stock.sector.name if stock.sector else None
 
-    # Fetch fundamentals and valuation in parallel
-    fundamentals, valuation = await asyncio.gather(
+    # Fetch all data sources in parallel
+    fundamentals, valuation, kis = await asyncio.gather(
         fetch_stock_fundamentals(stock.stock_code),
         fetch_stock_valuation(stock.stock_code),
+        fetch_kis_stock_price(stock.stock_code),
     )
 
+    # KIS provides richer data — use it as primary for fields it covers
     return StockDetailResponse(
         id=stock.id,
         name=stock.name,
         stock_code=stock.stock_code,
         sector_id=stock.sector_id,
         sector_name=sector_name,
-        # Realtime
-        current_price=fundamentals.current_price if fundamentals else None,
-        price_change=fundamentals.price_change if fundamentals else None,
-        change_rate=fundamentals.change_rate if fundamentals else None,
-        eps=fundamentals.eps if fundamentals else None,
-        bps=fundamentals.bps if fundamentals else None,
+        # Realtime price (KIS primary, Naver fallback)
+        current_price=(kis.current_price if kis else None) or (fundamentals.current_price if fundamentals else None),
+        price_change=(kis.price_change if kis else None) or (fundamentals.price_change if fundamentals else None),
+        change_rate=(kis.change_rate if kis else None) or (fundamentals.change_rate if fundamentals else None),
+        volume=(kis.volume if kis else None) or (fundamentals.volume if fundamentals else None),
+        trading_value=(kis.trading_value if kis else None) or (fundamentals.trading_value if fundamentals else None),
+        # Fundamentals (KIS primary, Naver fallback)
+        eps=(kis.eps if kis and kis.eps else None) or (fundamentals.eps if fundamentals else None),
+        bps=(kis.bps if kis and kis.bps else None) or (fundamentals.bps if fundamentals else None),
         dividend=fundamentals.dividend if fundamentals else None,
-        high_52w=fundamentals.high_52w if fundamentals else None,
-        low_52w=fundamentals.low_52w if fundamentals else None,
-        volume=fundamentals.volume if fundamentals else None,
-        trading_value=fundamentals.trading_value if fundamentals else None,
-        # Valuation
-        per=valuation.per if valuation else None,
-        pbr=valuation.pbr if valuation else None,
-        market_cap=valuation.market_cap if valuation else None,
+        # 52w range (KIS only — Naver polling API doesn't provide this)
+        high_52w=kis.high_52w if kis and kis.high_52w else None,
+        low_52w=kis.low_52w if kis and kis.low_52w else None,
+        # Valuation (KIS primary, WiseReport fallback)
+        per=(kis.per if kis and kis.per else None) or (valuation.per if valuation else None),
+        pbr=(kis.pbr if kis and kis.pbr else None) or (valuation.pbr if valuation else None),
+        market_cap=(kis.market_cap if kis and kis.market_cap else None) or (valuation.market_cap if valuation else None),
+        foreign_ratio=(kis.foreign_ratio if kis and kis.foreign_ratio else None) or (valuation.foreign_ratio if valuation else None),
         dividend_yield=valuation.dividend_yield if valuation else None,
-        foreign_ratio=valuation.foreign_ratio if valuation else None,
         industry_per=valuation.industry_per if valuation else None,
     )
 
