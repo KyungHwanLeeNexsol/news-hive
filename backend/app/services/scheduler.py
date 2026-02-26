@@ -73,7 +73,7 @@ def _cleanup_old_articles(db):
 
 def _run_dart_crawl():
     """Sync wrapper that runs the async DART disclosure crawl."""
-    from app.services.dart_crawler import fetch_dart_disclosures
+    from app.services.dart_crawler import fetch_dart_disclosures, backfill_disclosure_stock_ids
 
     if not settings.DART_API_KEY:
         return
@@ -82,6 +82,8 @@ def _run_dart_crawl():
     try:
         count = asyncio.run(fetch_dart_disclosures(db))
         logger.info(f"DART crawl completed: {count} new disclosures")
+        # Re-link any previously unlinked disclosures
+        backfill_disclosure_stock_ids(db)
     except Exception as e:
         logger.error(f"DART crawl failed: {e}")
     finally:

@@ -70,10 +70,12 @@ async def fetch_dart_disclosures(
         logger.info("DART_API_KEY not set, skipping disclosure fetch")
         return 0
 
-    # Build stock_code → stock_id mapping from DB
+    # Build stock_code → stock_id mapping from DB (strip codes for safe matching)
     stocks = db.query(Stock).filter(Stock.stock_code.isnot(None)).all()
-    code_to_id: dict[str, int] = {s.stock_code: s.id for s in stocks}
-    logger.info(f"DART: {len(code_to_id)} stocks in DB for mapping")
+    code_to_id: dict[str, int] = {s.stock_code.strip(): s.id for s in stocks}
+    # Also build corp_name → stock_id fallback (DART always has corp_name)
+    name_to_id: dict[str, int] = {s.name: s.id for s in stocks}
+    logger.info(f"DART: {len(code_to_id)} stock codes, {len(name_to_id)} stock names for mapping")
 
     end_date = datetime.now()
     start_date = end_date - timedelta(days=days)
@@ -90,8 +92,9 @@ async def fetch_dart_disclosures(
 
     saved = 0
     matched = 0
+    name_matched = 0
     page_no = 1
-    max_pages = 5  # 500 disclosures max per run
+    max_pages = 10  # 1000 disclosures max per corp_cls
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         # Fetch listed companies only (Y=KOSPI, K=KOSDAQ)
@@ -136,7 +139,13 @@ async def fetch_dart_disclosures(
 
                     stock_code = item.get("stock_code", "").strip()
                     stock_id = code_to_id.get(stock_code) if stock_code else None
-                    if stock_id:
+                    # Fallback: match by corp_name if stock_code didn't match
+                    if not stock_id:
+                        corp_name = item.get("corp_name", "").strip()
+                        stock_id = name_to_id.get(corp_name)
+                        if stock_id:
+                            name_matched += 1
+                    else:
                         matched += 1
 
                     report_name = item.get("report_nm", "")
@@ -164,8 +173,42 @@ async def fetch_dart_disclosures(
 
     if saved:
         db.commit()
-        logger.info(f"Saved {saved} new DART disclosures ({matched} matched to stocks)")
+        logger.info(
+            f"Saved {saved} new DART disclosures "
+            f"({matched} code-matched, {name_matched} name-matched to stocks)"
+        )
     else:
         logger.info("No new DART disclosures found")
 
     return saved
+
+
+def backfill_disclosure_stock_ids(db: Session) -> int:
+    """Re-link existing disclosures that have NULL stock_id.
+
+    Useful after adding new stocks or fixing matching logic.
+    """
+    stocks = db.query(Stock).filter(Stock.stock_code.isnot(None)).all()
+    code_to_id = {s.stock_code.strip(): s.id for s in stocks}
+    name_to_id = {s.name: s.id for s in stocks}
+
+    unlinked = db.query(Disclosure).filter(Disclosure.stock_id.is_(None)).all()
+    if not unlinked:
+        return 0
+
+    fixed = 0
+    for d in unlinked:
+        stock_id = None
+        if d.stock_code:
+            stock_id = code_to_id.get(d.stock_code.strip())
+        if not stock_id and d.corp_name:
+            stock_id = name_to_id.get(d.corp_name.strip())
+        if stock_id:
+            d.stock_id = stock_id
+            fixed += 1
+
+    if fixed:
+        db.commit()
+        logger.info(f"Backfilled stock_id for {fixed}/{len(unlinked)} unlinked disclosures")
+
+    return fixed
