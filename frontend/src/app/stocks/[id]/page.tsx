@@ -314,7 +314,7 @@ export default function StockDetailPage() {
               { label: 'PER', value: d.per != null && d.per > 0 ? d.per.toFixed(2) : '-' },
               { label: 'PBR', value: d.pbr != null && d.pbr > 0 ? d.pbr.toFixed(2) : '-' },
               { label: '배당수익률', value: d.dividend_yield != null && d.dividend_yield > 0 ? `${d.dividend_yield.toFixed(2)}%` : '-' },
-              { label: '거래량', value: d.volume != null ? formatNumber(d.volume) : '-' },
+              { label: '거래량', value: d.volume != null && d.volume > 0 ? formatNumber(d.volume) : '-' },
               { label: '외국인비율', value: d.foreign_ratio != null && d.foreign_ratio > 0 ? `${d.foreign_ratio.toFixed(1)}%` : '-' },
             ].map((m) => (
               <div key={m.label} className="px-3 py-2.5 text-center border-r border-[#e5e5e5] last:border-r-0">
@@ -352,13 +352,12 @@ export default function StockDetailPage() {
           {tab === 'indicators' && (
             <div>
               {d && (
-                <div className="grid grid-cols-2 sm:grid-cols-5 border-b border-[#e5e5e5]">
+                <div className="grid grid-cols-2 sm:grid-cols-4 border-b border-[#e5e5e5]">
                   {[
-                    { label: 'EPS', value: d.eps != null ? `${formatNumber(d.eps)}원` : '-' },
-                    { label: 'BPS', value: d.bps != null ? `${formatNumber(d.bps)}원` : '-' },
-                    { label: '52주 최고', value: d.high_52w != null ? `${formatNumber(d.high_52w)}원` : '-' },
-                    { label: '52주 최저', value: d.low_52w != null ? `${formatNumber(d.low_52w)}원` : '-' },
+                    { label: 'EPS', value: d.eps != null && d.eps !== 0 ? `${formatNumber(d.eps)}원` : '-' },
+                    { label: 'BPS', value: d.bps != null && d.bps !== 0 ? `${formatNumber(d.bps)}원` : '-' },
                     { label: '배당금', value: d.dividend != null && d.dividend > 0 ? `${formatNumber(d.dividend)}원` : '-' },
+                    { label: '거래대금', value: d.trading_value != null && d.trading_value > 0 ? formatBillion(Math.round(d.trading_value / 1_0000_0000)) : '-' },
                   ].map((m) => (
                     <div key={m.label} className="px-3 py-2.5 text-center border-r border-[#e5e5e5] last:border-r-0">
                       <div className="text-[11px] text-[#999]">{m.label}</div>

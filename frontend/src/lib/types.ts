@@ -13,11 +13,21 @@ export interface Sector {
   falling_stocks?: number | null;
 }
 
+export interface StockListItem {
+  id: number;
+  name: string;
+  stock_code: string;
+  sector_id: number;
+  sector_name: string | null;
+  market: string | null;
+}
+
 export interface Stock {
   id: number;
   sector_id: number;
   name: string;
   stock_code: string;
+  market: string | null;
   keywords: string[] | null;
   created_at: string;
   current_price?: number | null;

@@ -346,17 +346,24 @@ def seed_all_stocks(db: Session, force: bool = False) -> int:
 
             if stock_data["code"] in existing_by_code:
                 stock = existing_by_code[stock_data["code"]]
+                changed = False
                 if stock.sector_id != sector_id:
                     old_sector = sector_names.get(stock.sector_id, "?")
                     new_sector = sector_names.get(sector_id, "?")
                     logger.info(f"Remapping {stock.name}: {old_sector} → {new_sector}")
                     stock.sector_id = sector_id
+                    changed = True
+                if stock.market != stock_data.get("market"):
+                    stock.market = stock_data.get("market")
+                    changed = True
+                if changed:
                     updated += 1
             else:
                 stock = Stock(
                     sector_id=sector_id,
                     name=stock_data["name"],
                     stock_code=stock_data["code"],
+                    market=stock_data.get("market"),
                     keywords=None,
                 )
                 db.add(stock)
@@ -389,6 +396,7 @@ def seed_all_stocks(db: Session, force: bool = False) -> int:
             sector_id=sector_id,
             name=stock_data["name"],
             stock_code=stock_data["code"],
+            market=stock_data.get("market"),
             keywords=None,
         )
         db.add(stock)

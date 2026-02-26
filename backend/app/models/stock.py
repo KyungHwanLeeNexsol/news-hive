@@ -13,6 +13,7 @@ class Stock(Base):
     sector_id: Mapped[int] = mapped_column(Integer, ForeignKey("sectors.id"), nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     stock_code: Mapped[str] = mapped_column(String(20), nullable=False)
+    market: Mapped[str | None] = mapped_column(String(10), nullable=True)  # KOSPI / KOSDAQ
     keywords: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

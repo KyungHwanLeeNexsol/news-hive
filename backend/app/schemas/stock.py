@@ -14,10 +14,20 @@ class StockResponse(BaseModel):
     sector_id: int
     name: str
     stock_code: str
+    market: str | None = None
     keywords: list[str] | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class StockListItem(BaseModel):
+    id: int
+    name: str
+    stock_code: str
+    sector_id: int
+    sector_name: str | None = None
+    market: str | None = None
 
 
 class StockDetailResponse(BaseModel):

@@ -184,90 +184,123 @@ class _FinancialCache:
 _financial_cache = _FinancialCache()
 
 
-def _parse_financial_table(soup: BeautifulSoup, period_type: str) -> list[FinancialPeriod]:
-    """Parse WiseReport financial AJAX table into FinancialPeriod list."""
-    results: list[FinancialPeriod] = []
+def _parse_financial_table(soup: BeautifulSoup) -> dict:
+    """Parse WiseReport financial table — returns {"annual": [...], "quarter": [...]}.
 
-    table = soup.select_one("table.gHead01")
+    The cF1001.aspx page contains ONE table with both annual (cols 0-3) and
+    quarterly (cols 4-7) data.  Header row 1 has period labels like "2021/12".
+    """
+    result: dict[str, list[FinancialPeriod]] = {"annual": [], "quarter": []}
+
+    # Table class is "gHead all-width" (not "gHead01")
+    table = soup.select_one("table.gHead")
     if not table:
-        return results
+        # Fallback: try any table with enough rows
+        tables = soup.select("table")
+        for t in tables:
+            if len(t.select("tr")) >= 10:
+                table = t
+                break
+    if not table:
+        return result
 
-    # Parse column headers to get period labels
-    headers: list[str] = []
+    # Parse period headers from second header row (row index 1)
+    all_headers: list[str] = []
     thead = table.select_one("thead")
-    if thead:
-        for th in thead.select("tr th"):
+    header_rows = thead.select("tr") if thead else table.select("tr")[:2]
+    if len(header_rows) >= 2:
+        for th in header_rows[1].select("th, td"):
             text = th.get_text(strip=True)
             if text and re.search(r"\d{4}", text):
-                # Normalize: "2024/12(E)" → "2024/12", "2024(E)" → "2024"
+                # Normalize: "2024/12(E)" → "2024/12"
                 clean = re.sub(r"\(.*?\)", "", text).strip()
-                headers.append(clean)
+                all_headers.append(clean)
 
-    if not headers:
-        return results
+    if not all_headers:
+        return result
 
-    # Parse row data
-    # Row labels we care about: 매출액, 영업이익, 영업이익률, 당기순이익, EPS, BPS, ROE, 배당성향
+    # Split headers: first 4 = annual, last 4 = quarterly
+    # Some stocks may have fewer columns
+    mid = len(all_headers) // 2
+    annual_headers = all_headers[:mid] if mid > 0 else all_headers
+    quarter_headers = all_headers[mid:] if mid > 0 else []
+
+    # Row label → key mapping (first match wins)
+    label_map = [
+        ("매출액", "revenue"),
+        ("영업이익률", "operating_margin"),
+        ("영업이익", "operating_profit"),  # Must come after 영업이익률
+        ("당기순이익", "net_income"),
+        ("EPS", "eps"),
+        ("BPS", "bps"),
+        ("ROE", "roe"),
+        ("배당성향", "dividend_payout"),
+    ]
+
+    # Parse data rows: each row has 8 <td> cells (4 annual + 4 quarterly)
     row_map: dict[str, list[str]] = {}
-    tbody = table.select_one("tbody")
-    if not tbody:
-        tbody = table
+    tbody = table.select_one("tbody") or table
 
     for tr in tbody.select("tr"):
         th = tr.select_one("th")
         if not th:
             continue
         label = th.get_text(strip=True)
-        # Normalize label
-        key = None
-        if "매출액" in label:
-            key = "revenue"
-        elif "영업이익률" in label:
-            key = "operating_margin"
-        elif "영업이익" in label and "률" not in label:
-            key = "operating_profit"
-        elif "당기순이익" in label or "순이익" in label:
-            key = "net_income"
-        elif label.strip() == "EPS" or "EPS(원)" in label:
-            key = "eps"
-        elif label.strip() == "BPS" or "BPS(원)" in label:
-            key = "bps"
-        elif "ROE" in label:
-            key = "roe"
-        elif "배당성향" in label:
-            key = "dividend_payout"
 
-        if key:
+        key = None
+        for keyword, k in label_map:
+            if keyword in label:
+                # Avoid 영업이익 matching 영업이익률
+                if k == "operating_profit" and "률" in label:
+                    continue
+                key = k
+                break
+
+        if key and key not in row_map:  # First match only (e.g., skip 영업이익(발표기준))
             cells = [td.get_text(strip=True) for td in tr.select("td")]
             row_map[key] = cells
 
-    # Build FinancialPeriod objects for each column
-    for i, period_label in enumerate(headers):
-        fp = FinancialPeriod(period=period_label, period_type=period_type)
+    total_cols = len(all_headers)
 
+    # Build annual periods (cols 0..mid-1)
+    for i, period_label in enumerate(annual_headers):
+        fp = FinancialPeriod(period=period_label, period_type="annual")
         for key, cells in row_map.items():
             if i >= len(cells):
                 continue
             val_text = cells[i]
-            if not val_text or val_text == "-":
+            if not val_text or val_text == "-" or val_text.strip() == "":
                 continue
-
             if key in ("operating_margin", "roe", "dividend_payout"):
                 setattr(fp, key, _parse_float(val_text))
-            elif key in ("eps", "bps"):
-                setattr(fp, key, _parse_int_kr(val_text))
             else:
                 setattr(fp, key, _parse_int_kr(val_text))
+        result["annual"].append(fp)
 
-        results.append(fp)
+    # Build quarterly periods (cols mid..total-1)
+    for qi, period_label in enumerate(quarter_headers):
+        col_idx = mid + qi
+        fp = FinancialPeriod(period=period_label, period_type="quarter")
+        for key, cells in row_map.items():
+            if col_idx >= len(cells):
+                continue
+            val_text = cells[col_idx]
+            if not val_text or val_text == "-" or val_text.strip() == "":
+                continue
+            if key in ("operating_margin", "roe", "dividend_payout"):
+                setattr(fp, key, _parse_float(val_text))
+            else:
+                setattr(fp, key, _parse_int_kr(val_text))
+        result["quarter"].append(fp)
 
-    return results
+    return result
 
 
 async def fetch_stock_financials(stock_code: str) -> dict:
     """Fetch annual + quarterly financials from WiseReport AJAX.
 
     Returns {"annual": list[FinancialPeriod], "quarter": list[FinancialPeriod]}.
+    Both annual and quarterly are in the same HTML response (single table).
     24-hour cache.
     """
     now = time.time()
@@ -275,24 +308,18 @@ async def fetch_stock_financials(stock_code: str) -> dict:
             and (now - _financial_cache.last_updated.get(stock_code, 0)) < FINANCIAL_CACHE_TTL):
         return _financial_cache.data[stock_code]
 
-    result = {"annual": [], "quarter": []}
+    empty = {"annual": [], "quarter": []}
 
     try:
+        url = WISEREPORT_FINANCIAL_URL.format(code=stock_code, freq=0)
         async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-            # Fetch annual (freq=0) and quarterly (freq=1) in parallel
-            annual_url = WISEREPORT_FINANCIAL_URL.format(code=stock_code, freq=0)
-            quarter_url = WISEREPORT_FINANCIAL_URL.format(code=stock_code, freq=1)
+            resp = await client.get(url, headers=HEADERS)
 
-            annual_resp, quarter_resp = await client.get(annual_url, headers=HEADERS), None
-            quarter_resp = await client.get(quarter_url, headers=HEADERS)
+        if resp.status_code != 200:
+            return _financial_cache.data.get(stock_code, empty)
 
-        if annual_resp.status_code == 200:
-            soup = BeautifulSoup(annual_resp.text, "html.parser")
-            result["annual"] = _parse_financial_table(soup, "annual")
-
-        if quarter_resp and quarter_resp.status_code == 200:
-            soup = BeautifulSoup(quarter_resp.text, "html.parser")
-            result["quarter"] = _parse_financial_table(soup, "quarter")
+        soup = BeautifulSoup(resp.text, "html.parser")
+        result = _parse_financial_table(soup)
 
         if result["annual"] or result["quarter"]:
             _financial_cache.data[stock_code] = result
@@ -306,4 +333,4 @@ async def fetch_stock_financials(stock_code: str) -> dict:
 
     except Exception as e:
         logger.error(f"Failed to fetch financials for {stock_code}: {e}")
-        return _financial_cache.data.get(stock_code, result)
+        return _financial_cache.data.get(stock_code, empty)

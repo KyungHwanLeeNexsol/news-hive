@@ -1,4 +1,4 @@
-import type { Sector, Stock, NewsArticle, StockDetail, FinancialPeriod, PriceRecord } from "./types";
+import type { Sector, Stock, StockListItem, NewsArticle, StockDetail, FinancialPeriod, PriceRecord } from "./types";
 
 const API_BASE = "/api";
 
@@ -147,6 +147,22 @@ export async function syncStocks(): Promise<{ message: string; added: number }> 
   const res = await fetch(`${API_BASE}/stocks/sync`, { method: "POST" });
   if (!res.ok) throw new Error("Failed to sync stocks");
   return res.json();
+}
+
+export async function fetchStocks(
+  params: { q?: string; market?: string; sector_id?: number; limit?: number; offset?: number } = {},
+): Promise<{ stocks: StockListItem[]; total: number }> {
+  const sp = new URLSearchParams();
+  if (params.q) sp.set("q", params.q);
+  if (params.market) sp.set("market", params.market);
+  if (params.sector_id) sp.set("sector_id", String(params.sector_id));
+  sp.set("limit", String(params.limit ?? 50));
+  sp.set("offset", String(params.offset ?? 0));
+  const res = await fetchWithRetry(`${API_BASE}/stocks?${sp}`);
+  if (!res.ok) throw new Error("Failed to fetch stocks");
+  const total = parseInt(res.headers.get("X-Total-Count") || "0", 10);
+  const stocks = await res.json();
+  return { stocks, total };
 }
 
 export async function fetchStockDetail(id: number): Promise<StockDetail> {

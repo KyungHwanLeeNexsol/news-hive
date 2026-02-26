@@ -13,7 +13,7 @@ from app.models.stock import Stock
 from app.models.news import NewsArticle
 from app.models.news_relation import NewsStockRelation
 from app.schemas.stock import (
-    StockCreate, StockResponse, StockDetailResponse,
+    StockCreate, StockResponse, StockListItem, StockDetailResponse,
     PriceRecordResponse, FinancialPeriodResponse, FinancialsResponse,
 )
 from app.schemas.news import NewsArticleResponse
@@ -65,6 +65,60 @@ async def sync_stocks(db: Session = Depends(get_db)):
         "stocks_synced": added,
         "stocks_previous": current_count,
     }
+
+
+@router.get("/stocks")
+async def list_stocks(
+    q: str = Query(default="", description="Search by name or stock code"),
+    market: str = Query(default="", description="Filter by market: KOSPI or KOSDAQ"),
+    sector_id: int = Query(default=0, description="Filter by sector ID"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """List all stocks with search, market filter, and pagination."""
+    query = db.query(Stock).join(Sector, Stock.sector_id == Sector.id)
+
+    if q:
+        search = f"%{q}%"
+        query = query.filter(
+            (Stock.name.ilike(search)) | (Stock.stock_code.ilike(search))
+        )
+
+    if market:
+        query = query.filter(Stock.market == market.upper())
+
+    if sector_id:
+        query = query.filter(Stock.sector_id == sector_id)
+
+    total = query.count()
+
+    stocks = (
+        query.order_by(Stock.name)
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+    items = [
+        StockListItem(
+            id=s.id,
+            name=s.name,
+            stock_code=s.stock_code,
+            sector_id=s.sector_id,
+            sector_name=s.sector.name if s.sector else None,
+            market=s.market,
+        )
+        for s in stocks
+    ]
+
+    return JSONResponse(
+        content=jsonable_encoder(items),
+        headers={
+            "X-Total-Count": str(total),
+            "Access-Control-Expose-Headers": "X-Total-Count",
+        },
+    )
 
 
 @router.get("/stocks/{stock_id}", response_model=StockDetailResponse)

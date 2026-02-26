@@ -5,6 +5,7 @@ Stock fundamentals: polling.finance.naver.com realtime JSON API.
 Price history: sise_day.naver daily OHLCV scraping.
 """
 
+import json
 import logging
 import re
 import time
@@ -346,7 +347,10 @@ async def fetch_stock_fundamentals(stock_code: str) -> Optional[StockFundamental
             resp = await client.get(url, headers=HEADERS)
             resp.raise_for_status()
 
-        data = resp.json()
+        # Response is EUC-KR encoded — decode before JSON parsing
+        text = resp.content.decode("euc-kr", errors="replace")
+        data = json.loads(text)
+
         # Navigate: result → areas[0] → datas[0]
         areas = data.get("result", {}).get("areas", [])
         if not areas or not areas[0].get("datas"):
@@ -356,16 +360,18 @@ async def fetch_stock_fundamentals(stock_code: str) -> Optional[StockFundamental
 
         def _int(key: str) -> int:
             try:
-                return int(item.get(key, 0))
+                return int(float(item.get(key, 0) or 0))
             except (ValueError, TypeError):
                 return 0
 
         def _float(key: str) -> float:
             try:
-                return float(item.get(key, 0))
+                return float(item.get(key, 0) or 0)
             except (ValueError, TypeError):
                 return 0.0
 
+        # Note: ul=상한가(upper limit), ll=하한가(lower limit), NOT 52-week high/low
+        # hv=당일고가, lv=당일저가, ov=시가, pcv=전일종가
         result = StockFundamentals(
             stock_code=stock_code,
             current_price=_int("nv"),
@@ -374,8 +380,8 @@ async def fetch_stock_fundamentals(stock_code: str) -> Optional[StockFundamental
             eps=_int("eps"),
             bps=_int("bps"),
             dividend=_int("dv"),
-            high_52w=_int("ul"),
-            low_52w=_int("ll"),
+            high_52w=0,   # Not available from polling API
+            low_52w=0,    # Not available from polling API
             volume=_int("aq"),
             trading_value=_int("aa"),
         )
