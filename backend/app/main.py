@@ -29,23 +29,41 @@ def _run_migrations():
         logging.getLogger(__name__).warning(f"Alembic migration failed (may already be applied): {e}")
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup: run migrations, create tables, and seed data
-    _run_migrations()
-    Base.metadata.create_all(bind=engine)
+def _run_seed_and_backfill():
+    """Run seed + backfill tasks in a background thread.
+
+    This runs after the app is already serving requests, so cold start
+    latency is not affected.
+    """
+    logger = logging.getLogger(__name__)
+    logger.info("Background seed/backfill starting...")
     db = SessionLocal()
     try:
         seed_sectors(db)
-        # seed_sectors does a clean rebuild when data mismatches,
-        # which deletes all stocks — so seed_all_stocks will always re-add them
         seed_all_stocks(db)
         _backfill_sentiment(db)
         _fix_html_entities(db)
         _backfill_relations(db)
         _reset_bad_scraped_content(db)
+    except Exception as e:
+        logger.warning(f"Background seed/backfill error: {e}")
     finally:
         db.close()
+    logger.info("Background seed/backfill complete")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    import threading
+
+    # Startup: run migrations synchronously (fast, required before serving)
+    _run_migrations()
+    Base.metadata.create_all(bind=engine)
+
+    # Run heavy seed/backfill in background so app starts serving immediately
+    seed_thread = threading.Thread(target=_run_seed_and_backfill, daemon=True)
+    seed_thread.start()
+
     start_scheduler()
     yield
     # Shutdown

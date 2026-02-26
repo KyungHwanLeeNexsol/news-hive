@@ -8,22 +8,20 @@ logger = logging.getLogger(__name__)
 
 
 def seed_sectors(db: Session) -> None:
-    """Seed sectors from Naver Finance (live fetch with static fallback).
+    """Seed sectors from static snapshot (fast, no network required).
 
     Uses a clean rebuild approach: deletes all non-custom sectors and recreates
     them from authoritative data to avoid stale cache / ID mismatch bugs.
+    Live Naver fetch is skipped on startup to avoid cold start delays.
     """
     from app.models.stock import Stock
     from app.models.news_relation import NewsStockRelation
 
-    # Get authoritative sector data (live or snapshot)
-    sectors_data = _try_fetch_live()
-    if not sectors_data:
-        logger.info("Live fetch failed, using static snapshot")
-        sectors_data = [
-            {"name": name, "code": code}
-            for name, code in _SNAPSHOT.items()
-        ]
+    # Use static snapshot directly (fast, no network latency)
+    sectors_data = [
+        {"name": name, "code": code}
+        for name, code in _SNAPSHOT.items()
+    ]
 
     if not sectors_data:
         logger.error("No sector data available")
