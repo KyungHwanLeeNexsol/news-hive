@@ -1,7 +1,8 @@
-"""Naver Finance sector scraper with in-memory caching.
+"""Naver Finance scraper with in-memory caching.
 
-Scrapes https://finance.naver.com/sise/sise_group.naver?type=upjong
-to get ~80 sector performance data (등락률, 상승/보합/하락 counts).
+Sector performance: scrapes sise_group.naver for ~80 sectors.
+Stock fundamentals: polling.finance.naver.com realtime JSON API.
+Price history: sise_day.naver daily OHLCV scraping.
 """
 
 import logging
@@ -297,6 +298,173 @@ async def fetch_sector_stock_performances(naver_code: str) -> list[StockPerforma
     except Exception as e:
         logger.error(f"Failed to fetch stock performances for sector {naver_code}: {e}")
         return _stock_perf_cache.data.get(naver_code, [])
+
+
+POLLING_API_URL = "https://polling.finance.naver.com/api/realtime?query=SERVICE_ITEM:{code}"
+SISE_DAY_URL = "https://finance.naver.com/item/sise_day.naver?code={code}&page={page}"
+PRICE_CACHE_TTL = 3600  # 1 hour for daily price data
+
+
+@dataclass
+class StockFundamentals:
+    """Realtime fundamentals from Naver polling API."""
+    stock_code: str
+    current_price: int = 0
+    price_change: int = 0
+    change_rate: float = 0.0
+    eps: int = 0                    # 주당순이익
+    bps: int = 0                    # 주당순자산
+    dividend: int = 0               # 주당배당금
+    high_52w: int = 0               # 52주 최고
+    low_52w: int = 0                # 52주 최저
+    volume: int = 0                 # 거래량
+    trading_value: int = 0          # 거래대금 (백만)
+
+
+@dataclass
+class _FundamentalsCache:
+    data: dict[str, StockFundamentals] = field(default_factory=dict)
+    last_updated: dict[str, float] = field(default_factory=dict)
+
+
+_fundamentals_cache = _FundamentalsCache()
+
+
+async def fetch_stock_fundamentals(stock_code: str) -> Optional[StockFundamentals]:
+    """Fetch realtime stock fundamentals from Naver polling API (JSON).
+
+    Returns StockFundamentals or None on failure. 5-min cache per stock.
+    """
+    now = time.time()
+    if (stock_code in _fundamentals_cache.data
+            and (now - _fundamentals_cache.last_updated.get(stock_code, 0)) < CACHE_TTL_SECONDS):
+        return _fundamentals_cache.data[stock_code]
+
+    url = POLLING_API_URL.format(code=stock_code)
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            resp = await client.get(url, headers=HEADERS)
+            resp.raise_for_status()
+
+        data = resp.json()
+        # Navigate: result → areas[0] → datas[0]
+        areas = data.get("result", {}).get("areas", [])
+        if not areas or not areas[0].get("datas"):
+            return _fundamentals_cache.data.get(stock_code)
+
+        item = areas[0]["datas"][0]
+
+        def _int(key: str) -> int:
+            try:
+                return int(item.get(key, 0))
+            except (ValueError, TypeError):
+                return 0
+
+        def _float(key: str) -> float:
+            try:
+                return float(item.get(key, 0))
+            except (ValueError, TypeError):
+                return 0.0
+
+        result = StockFundamentals(
+            stock_code=stock_code,
+            current_price=_int("nv"),
+            price_change=_int("cv"),
+            change_rate=_float("cr"),
+            eps=_int("eps"),
+            bps=_int("bps"),
+            dividend=_int("dv"),
+            high_52w=_int("ul"),
+            low_52w=_int("ll"),
+            volume=_int("aq"),
+            trading_value=_int("aa"),
+        )
+
+        _fundamentals_cache.data[stock_code] = result
+        _fundamentals_cache.last_updated[stock_code] = now
+        return result
+
+    except Exception as e:
+        logger.error(f"Failed to fetch fundamentals for {stock_code}: {e}")
+        return _fundamentals_cache.data.get(stock_code)
+
+
+@dataclass
+class PriceRecord:
+    """Daily OHLCV price record."""
+    date: str           # "2026.02.26"
+    close: int = 0
+    open: int = 0
+    high: int = 0
+    low: int = 0
+    volume: int = 0
+
+
+@dataclass
+class _PriceHistoryCache:
+    data: dict[str, list[PriceRecord]] = field(default_factory=dict)
+    last_updated: dict[str, float] = field(default_factory=dict)
+
+
+_price_cache = _PriceHistoryCache()
+
+
+async def fetch_stock_price_history(stock_code: str, pages: int = 5) -> list[PriceRecord]:
+    """Fetch daily OHLCV from Naver sise_day.naver (euc-kr HTML).
+
+    pages=5 → ~50 trading days (~2.5 months). Cache TTL = 1 hour.
+    """
+    now = time.time()
+    if (stock_code in _price_cache.data
+            and (now - _price_cache.last_updated.get(stock_code, 0)) < PRICE_CACHE_TTL):
+        return _price_cache.data[stock_code]
+
+    results: list[PriceRecord] = []
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            for pg in range(1, pages + 1):
+                url = SISE_DAY_URL.format(code=stock_code, page=pg)
+                resp = await client.get(url, headers=HEADERS)
+                resp.raise_for_status()
+
+                content = resp.content.decode("euc-kr", errors="replace")
+                soup = BeautifulSoup(content, "html.parser")
+
+                for row in soup.select("table.type2 tr"):
+                    cols = row.select("td")
+                    if len(cols) < 7:
+                        continue
+                    date_text = cols[0].get_text(strip=True)
+                    if not date_text or "." not in date_text:
+                        continue
+
+                    close = _parse_int_safe(cols[1].get_text())
+                    # cols[2] = 전일비 (skip, redundant)
+                    open_price = _parse_int_safe(cols[3].get_text())
+                    high = _parse_int_safe(cols[4].get_text())
+                    low = _parse_int_safe(cols[5].get_text())
+                    volume = _parse_int_safe(cols[6].get_text())
+
+                    if close > 0:
+                        results.append(PriceRecord(
+                            date=date_text,
+                            close=close,
+                            open=open_price,
+                            high=high,
+                            low=low,
+                            volume=volume,
+                        ))
+
+        if results:
+            _price_cache.data[stock_code] = results
+            _price_cache.last_updated[stock_code] = now
+            logger.info(f"Fetched {len(results)} daily prices for {stock_code}")
+
+        return results
+
+    except Exception as e:
+        logger.error(f"Failed to fetch price history for {stock_code}: {e}")
+        return _price_cache.data.get(stock_code, [])
 
 
 async def fetch_sector_stock_codes(naver_code: str) -> list[str]:

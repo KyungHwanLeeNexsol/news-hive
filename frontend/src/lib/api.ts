@@ -1,4 +1,4 @@
-import type { Sector, Stock, NewsArticle } from "./types";
+import type { Sector, Stock, NewsArticle, StockDetail, FinancialPeriod, PriceRecord } from "./types";
 
 const API_BASE = "/api";
 
@@ -146,5 +146,25 @@ export async function refreshNews(): Promise<{ message: string }> {
 export async function syncStocks(): Promise<{ message: string; added: number }> {
   const res = await fetch(`${API_BASE}/stocks/sync`, { method: "POST" });
   if (!res.ok) throw new Error("Failed to sync stocks");
+  return res.json();
+}
+
+export async function fetchStockDetail(id: number): Promise<StockDetail> {
+  const res = await fetchWithRetry(`${API_BASE}/stocks/${id}`);
+  if (!res.ok) throw new Error("Failed to fetch stock detail");
+  return res.json();
+}
+
+export async function fetchStockFinancials(
+  id: number,
+): Promise<{ annual: FinancialPeriod[]; quarter: FinancialPeriod[] }> {
+  const res = await fetchWithRetry(`${API_BASE}/stocks/${id}/financials`);
+  if (!res.ok) throw new Error("Failed to fetch financials");
+  return res.json();
+}
+
+export async function fetchStockPrices(id: number, months = 3): Promise<PriceRecord[]> {
+  const res = await fetchWithRetry(`${API_BASE}/stocks/${id}/prices?months=${months}`);
+  if (!res.ok) throw new Error("Failed to fetch prices");
   return res.json();
 }
