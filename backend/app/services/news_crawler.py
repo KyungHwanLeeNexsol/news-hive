@@ -51,12 +51,25 @@ def _title_bigrams(norm_title: str) -> set[str]:
 
 
 def _is_similar_title(bigrams_a: set[str], bigrams_b: set[str], threshold: float = 0.55) -> bool:
-    """Check if two titles are similar using Jaccard similarity on bigrams."""
+    """Check if two titles are similar using Jaccard + containment on bigrams.
+
+    Two-pass approach:
+    1. Jaccard similarity >= threshold (symmetric, strict)
+    2. Containment ratio >= 0.7 (catches cases where one title is a subset
+       of another with different surrounding text, e.g. same event reported
+       with different wording)
+    """
     if not bigrams_a or not bigrams_b:
         return False
     intersection = len(bigrams_a & bigrams_b)
     union = len(bigrams_a | bigrams_b)
-    return (intersection / union) >= threshold
+    if (intersection / union) >= threshold:
+        return True
+    # Containment: what fraction of the smaller title is found in the larger
+    smaller = min(len(bigrams_a), len(bigrams_b))
+    if smaller > 0 and (intersection / smaller) >= 0.7:
+        return True
+    return False
 
 # Round-robin index for stock selection (persists across cycles within same process)
 _stock_rr_index = 0
@@ -350,12 +363,12 @@ async def crawl_all_news(db: Session) -> int:
     from sqlalchemy import text as sa_text
 
     saved_count = 0
-    batch_size = 50
+    batch_size = 15
 
     for i in range(0, len(unique_articles), batch_size):
         batch = unique_articles[i : i + batch_size]
 
-        # Step 1: Bulk insert articles via raw SQL (single round-trip)
+        # Step 1: Bulk insert articles via raw SQL
         values_parts = []
         params: dict = {}
         for j, ad in enumerate(batch):
@@ -377,7 +390,7 @@ async def crawl_all_news(db: Session) -> int:
         )
 
         url_to_id: dict = {}
-        for attempt in range(2):
+        for attempt in range(3):
             try:
                 result = db.execute(sql, params)
                 url_to_id = {row[1]: row[0] for row in result.fetchall()}
@@ -385,9 +398,11 @@ async def crawl_all_news(db: Session) -> int:
                 break
             except Exception as e:
                 db.rollback()
-                if attempt == 0:
-                    logger.warning(f"Article batch insert failed (retrying): {e}")
-                    await asyncio.sleep(1)
+                if attempt < 2:
+                    logger.info(f"Article batch insert retry {attempt+1}: {type(e).__name__}")
+                    # Dispose stale connections and wait before retry
+                    db.get_bind().dispose()
+                    await asyncio.sleep(2)
                 else:
                     logger.warning(f"Article batch insert failed (giving up): {e}")
 
@@ -428,16 +443,17 @@ async def crawl_all_news(db: Session) -> int:
                 f"""INSERT INTO news_stock_relations (news_id, stock_id, sector_id, match_type, relevance)
                 VALUES {', '.join(rel_values)}"""
             )
-            for attempt in range(2):
+            for attempt in range(3):
                 try:
                     db.execute(rel_sql, rel_params)
                     db.commit()
                     break
                 except Exception as e:
                     db.rollback()
-                    if attempt == 0:
-                        logger.warning(f"Relations batch insert failed (retrying): {e}")
-                        await asyncio.sleep(1)
+                    if attempt < 2:
+                        logger.info(f"Relations batch insert retry {attempt+1}: {type(e).__name__}")
+                        db.get_bind().dispose()
+                        await asyncio.sleep(2)
                     else:
                         logger.warning(f"Relations batch insert failed (giving up): {e}")
 
