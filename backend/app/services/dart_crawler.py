@@ -94,13 +94,12 @@ async def fetch_dart_disclosures(
     matched = 0
     name_matched = 0
     page_no = 1
-    max_pages = 10  # 1000 disclosures max per corp_cls
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         # Fetch listed companies only (Y=KOSPI, K=KOSDAQ)
         for corp_cls in ["Y", "K"]:
             page_no = 1
-            while page_no <= max_pages:
+            while True:  # Fetch all pages (DART free: 10,000 calls/day)
                 params = {
                     "crtfc_key": settings.DART_API_KEY,
                     "bgn_de": bgn_de,
