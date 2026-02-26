@@ -1,10 +1,10 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.database import get_db, SessionLocal
 from app.models.disclosure import Disclosure
 from app.models.stock import Stock
 
@@ -61,6 +61,24 @@ async def list_disclosures(
             "Access-Control-Expose-Headers": "X-Total-Count",
         },
     )
+
+
+@router.post("/disclosures/refresh")
+async def refresh_disclosures(background_tasks: BackgroundTasks):
+    """Manually trigger DART disclosure crawl."""
+    import asyncio
+    from app.services.dart_crawler import fetch_dart_disclosures
+    from app.config import settings
+
+    if not settings.DART_API_KEY:
+        return {"message": "DART_API_KEY not set", "saved": 0}
+
+    db = SessionLocal()
+    try:
+        count = await fetch_dart_disclosures(db, days=7)
+        return {"message": f"DART crawl completed", "saved": count}
+    finally:
+        db.close()
 
 
 @router.get("/stocks/{stock_id}/disclosures")

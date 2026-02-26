@@ -73,13 +73,16 @@ async def fetch_dart_disclosures(
     # Build stock_code → stock_id mapping from DB
     stocks = db.query(Stock).filter(Stock.stock_code.isnot(None)).all()
     code_to_id: dict[str, int] = {s.stock_code: s.id for s in stocks}
+    logger.info(f"DART: {len(code_to_id)} stocks in DB for mapping")
 
     end_date = datetime.now()
     start_date = end_date - timedelta(days=days)
     bgn_de = start_date.strftime("%Y%m%d")
     end_de = end_date.strftime("%Y%m%d")
+    logger.info(f"DART: fetching disclosures from {bgn_de} to {end_de}")
 
     saved = 0
+    matched = 0
     page_no = 1
     max_pages = 10  # Safety limit
 
@@ -98,12 +101,12 @@ async def fetch_dart_disclosures(
                 resp.raise_for_status()
                 data = resp.json()
             except Exception as e:
-                logger.error(f"DART API request failed: {e}")
+                logger.error(f"DART API request failed (page {page_no}): {e}")
                 break
 
             status = data.get("status", "")
             if status == "013":
-                # No data
+                logger.info("DART: no data (status 013)")
                 break
             if status != "000":
                 logger.warning(f"DART API returned status {status}: {data.get('message', '')}")
@@ -112,6 +115,8 @@ async def fetch_dart_disclosures(
             items = data.get("list", [])
             if not items:
                 break
+
+            logger.info(f"DART: page {page_no}, {len(items)} items, total_page={data.get('total_page')}")
 
             for item in items:
                 rcept_no = item.get("rcept_no", "")
@@ -125,6 +130,8 @@ async def fetch_dart_disclosures(
 
                 stock_code = item.get("stock_code", "").strip()
                 stock_id = code_to_id.get(stock_code) if stock_code else None
+                if stock_id:
+                    matched += 1
 
                 report_name = item.get("report_nm", "")
                 report_type = _classify_report_type(report_name)
@@ -151,7 +158,7 @@ async def fetch_dart_disclosures(
 
     if saved:
         db.commit()
-        logger.info(f"Saved {saved} new DART disclosures")
+        logger.info(f"Saved {saved} new DART disclosures ({matched} matched to stocks)")
     else:
         logger.info("No new DART disclosures found")
 
