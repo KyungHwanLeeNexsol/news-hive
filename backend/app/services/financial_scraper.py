@@ -11,6 +11,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Optional
 
 import httpx
@@ -354,6 +355,8 @@ def _parse_consensus_table(soup: BeautifulSoup) -> list[FinancialPeriod]:
     if not table:
         return []
 
+    current_year = datetime.now().year
+
     results: list[FinancialPeriod] = []
     for tr in table.select("tr"):
         tds = tr.select("td")
@@ -368,7 +371,12 @@ def _parse_consensus_table(soup: BeautifulSoup) -> list[FinancialPeriod]:
         year_match = re.search(r"(\d{4})", year_text)
         if not year_match:
             continue
-        period = f"{year_match.group(1)}/12"
+
+        year = int(year_match.group(1))
+        if year > current_year:
+            continue
+
+        period = f"{year}/12"
 
         revenue_text = tds[1].get_text(strip=True)
         op_profit_text = tds[3].get_text(strip=True)
