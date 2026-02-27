@@ -12,8 +12,11 @@ const REPORT_TYPES = [
   { value: "", label: "전체" },
   { value: "정기공시", label: "정기공시" },
   { value: "주요사항보고", label: "주요사항보고" },
+  { value: "실적변동", label: "실적변동" },
   { value: "발행공시", label: "발행공시" },
   { value: "지분공시", label: "지분공시" },
+  { value: "기업지배구조", label: "기업지배구조" },
+  { value: "기업집단공시", label: "기업집단공시" },
   { value: "기타공시", label: "기타공시" },
 ];
 

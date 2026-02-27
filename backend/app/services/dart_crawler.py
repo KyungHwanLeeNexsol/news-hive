@@ -22,26 +22,48 @@ DART_API_BASE = "https://opendart.fss.or.kr/api"
 
 # Report type classification based on common report name patterns
 _REPORT_TYPE_PATTERNS: list[tuple[str, str]] = [
-    ("유상증자", "유상증자"),
-    ("무상증자", "무상증자"),
-    ("전환사채", "전환사채"),
-    ("신주인수권", "신주인수권"),
-    ("합병", "합병"),
-    ("분할", "분할"),
-    ("주식등의대량보유", "대량보유"),
-    ("임원ㆍ주요주주", "임원변동"),
-    ("사업보고서", "사업보고서"),
-    ("반기보고서", "반기보고서"),
-    ("분기보고서", "분기보고서"),
-    ("감사보고서", "감사보고서"),
+    # 정기공시
+    ("사업보고서", "정기공시"),
+    ("반기보고서", "정기공시"),
+    ("분기보고서", "정기공시"),
+    ("감사보고서", "정기공시"),
+    # 주요사항보고
+    ("주요사항보고서", "주요사항보고"),
     ("매출액또는손익구조", "실적변동"),
-    ("주요사항보고서", "주요사항"),
-    ("자기주식", "자사주"),
-    ("배당", "배당"),
-    ("소송", "소송"),
-    ("해외투자", "해외투자"),
-    ("타법인주식", "타법인투자"),
-    ("최대주주", "최대주주변경"),
+    ("소송", "주요사항보고"),
+    ("주식병합", "주요사항보고"),
+    ("주식분할", "주요사항보고"),
+    ("투자판단관련", "주요사항보고"),
+    # 발행공시
+    ("유상증자", "발행공시"),
+    ("무상증자", "발행공시"),
+    ("전환사채", "발행공시"),
+    ("신주인수권", "발행공시"),
+    ("교환사채", "발행공시"),
+    ("파생결합증권", "발행공시"),
+    ("파생결합사채", "발행공시"),
+    ("일괄신고추가서류", "발행공시"),
+    ("증권신고서", "발행공시"),
+    ("청정신고서", "발행공시"),
+    # 지분공시
+    ("주식등의대량보유", "지분공시"),
+    ("임원ㆍ주요주주", "지분공시"),
+    ("최대주주", "지분공시"),
+    ("자기주식", "지분공시"),
+    ("타법인주식", "지분공시"),
+    # 기업지배구조
+    ("합병", "기업지배구조"),
+    ("분할", "기업지배구조"),
+    ("주주총회", "기업지배구조"),
+    ("의결권", "기업지배구조"),
+    ("배당", "기업지배구조"),
+    # 기업집단공시
+    ("대규모기업집단", "기업집단공시"),
+    # 기타공시
+    ("해외투자", "기타공시"),
+    ("공개매수", "기타공시"),
+    ("자산양수도", "기타공시"),
+    ("영업양수도", "기타공시"),
 ]
 
 
@@ -209,5 +231,25 @@ def backfill_disclosure_stock_ids(db: Session) -> int:
     if fixed:
         db.commit()
         logger.info(f"Backfilled stock_id for {fixed}/{len(unlinked)} unlinked disclosures")
+
+    return fixed
+
+
+def backfill_disclosure_report_types(db: Session) -> int:
+    """Re-classify report_type for disclosures that have NULL report_type."""
+    untyped = db.query(Disclosure).filter(Disclosure.report_type.is_(None)).all()
+    if not untyped:
+        return 0
+
+    fixed = 0
+    for d in untyped:
+        report_type = _classify_report_type(d.report_name)
+        if report_type:
+            d.report_type = report_type
+            fixed += 1
+
+    if fixed:
+        db.commit()
+        logger.info(f"Backfilled report_type for {fixed}/{len(untyped)} disclosures")
 
     return fixed

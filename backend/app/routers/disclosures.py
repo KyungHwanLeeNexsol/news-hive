@@ -102,7 +102,7 @@ async def generate_disclosure_summary_endpoint(
 async def refresh_disclosures():
     """Manually trigger DART disclosure crawl + backfill with debug info."""
     import traceback
-    from app.services.dart_crawler import fetch_dart_disclosures, backfill_disclosure_stock_ids
+    from app.services.dart_crawler import fetch_dart_disclosures, backfill_disclosure_stock_ids, backfill_disclosure_report_types
     from app.config import settings
 
     if not settings.DART_API_KEY:
@@ -113,6 +113,8 @@ async def refresh_disclosures():
         count = await fetch_dart_disclosures(db, days=7)
         # Backfill any previously unlinked disclosures
         backfilled = backfill_disclosure_stock_ids(db)
+        # Backfill report_type for disclosures missing it
+        types_backfilled = backfill_disclosure_report_types(db)
         # Count total disclosures in DB
         total = db.query(Disclosure).count()
         with_stock = db.query(Disclosure).filter(Disclosure.stock_id.isnot(None)).count()
@@ -121,6 +123,7 @@ async def refresh_disclosures():
             "message": "DART crawl completed",
             "saved": count,
             "backfilled": backfilled,
+            "types_backfilled": types_backfilled,
             "total_in_db": total,
             "matched_to_stock": with_stock,
             "unmatched": without_stock,
