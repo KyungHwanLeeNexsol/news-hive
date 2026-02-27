@@ -321,7 +321,7 @@ async def crawl_all_news(db: Session) -> int:
 
     # Filter out non-financial articles (entertainment, sports, lifestyle)
     pre_filter_count = len(unique_articles)
-    unique_articles = [a for a in unique_articles if not is_non_financial_article(a.get("title", ""), a.get("url", ""))]
+    unique_articles = [a for a in unique_articles if not is_non_financial_article(a.get("title", ""), a.get("url", ""), a.get("description", ""))]
     filtered_count = pre_filter_count - len(unique_articles)
     if filtered_count:
         logger.info(f"Filtered {filtered_count} non-financial articles (entertainment/sports/lifestyle)")

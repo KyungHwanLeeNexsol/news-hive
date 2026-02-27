@@ -47,9 +47,10 @@ class KeywordIndex:
 # Patterns indicating non-financial content (entertainment, sports, lifestyle, etc.)
 _NON_FINANCIAL_PATTERNS: list[str] = [
     # TV/Entertainment
-    "동상이몽", "흑백요리사", "나는솔로", "솔로지옥", "런닝맨", "무한도전",
+    "동상이몽", "흑백요리사", "나는솔로", "나솔사제", "솔로지옥", "런닝맨", "무한도전",
     "놀면뭐하니", "전참시", "전지적참견시점", "라디오스타", "1박2일",
-    "예능", "드라마", "시청률", "방송", "출연", "MC",
+    "나혼자산다", "신서유기", "삼시세끼", "슈퍼맨이돌아왔다", "편스토랑",
+    "예능", "드라마", "시청률", "방영", "출연", "MC", "리얼리티",
     "아이돌", "걸그룹", "보이그룹", "컴백", "음원", "뮤직비디오",
     "K-POP", "K팝", "케이팝", "팬미팅", "콘서트",
     "배우", "연기", "영화", "개봉", "흥행", "박스오피스",
@@ -85,13 +86,16 @@ _FOREIGN_SOURCE_PATTERNS = re.compile(
 )
 
 
-def is_non_financial_article(title: str, url: str = "") -> bool:
-    """Check if an article title indicates non-financial content.
+def is_non_financial_article(title: str, url: str = "", description: str = "") -> bool:
+    """Check if an article title/description indicates non-financial content.
 
     Covers entertainment/sports/lifestyle keywords, photo-only articles,
     and foreign non-investment news sources.
     """
     if _NON_FINANCIAL_RE.search(title):
+        return True
+
+    if description and _NON_FINANCIAL_RE.search(description):
         return True
 
     # Foreign source detection (by title suffix or URL)
