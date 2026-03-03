@@ -71,6 +71,18 @@ def _cleanup_old_articles(db):
     logger.info(f"Cleaned up {len(old_ids)} articles older than 7 days")
 
 
+def _cleanup_old_disclosures(db):
+    """Delete disclosures older than 7 days based on rcept_dt (YYYYMMDD string)."""
+    from datetime import datetime, timedelta
+    from app.models.disclosure import Disclosure
+
+    cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y%m%d")
+    deleted = db.query(Disclosure).filter(Disclosure.rcept_dt < cutoff).delete(synchronize_session=False)
+    if deleted:
+        db.commit()
+        logger.info(f"Cleaned up {deleted} disclosures older than 7 days")
+
+
 def _run_dart_crawl():
     """Sync wrapper that runs the async DART disclosure crawl."""
     from app.services.dart_crawler import fetch_dart_disclosures, backfill_disclosure_stock_ids, backfill_disclosure_report_types
@@ -80,6 +92,7 @@ def _run_dart_crawl():
 
     db = SessionLocal()
     try:
+        _cleanup_old_disclosures(db)
         count = asyncio.run(fetch_dart_disclosures(db))
         logger.info(f"DART crawl completed: {count} new disclosures")
         # Re-link any previously unlinked disclosures

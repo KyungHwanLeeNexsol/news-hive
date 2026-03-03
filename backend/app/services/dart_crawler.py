@@ -59,20 +59,35 @@ _REPORT_TYPE_PATTERNS: list[tuple[str, str]] = [
     ("배당", "기업지배구조"),
     # 기업집단공시
     ("대규모기업집단", "기업집단공시"),
+    ("기업집단", "기업집단공시"),
+    # 기업지배구조 (추가)
+    ("사외이사", "기업지배구조"),
+    ("대표이사", "기업지배구조"),
+    ("임원", "기업지배구조"),
     # 기타공시
     ("해외투자", "기타공시"),
     ("공개매수", "기타공시"),
     ("자산양수도", "기타공시"),
     ("영업양수도", "기타공시"),
+    ("효력발생", "발행공시"),
+    ("투자설명서", "발행공시"),
+    ("증권발행실적", "발행공시"),
+    ("중대재해", "기타공시"),
+    ("생산중단", "주요사항보고"),
+    ("영업정지", "주요사항보고"),
+    ("기업가치제고", "기타공시"),
+    ("단일판매", "주요사항보고"),
+    ("단일공급", "주요사항보고"),
+    ("공급계약", "주요사항보고"),
 ]
 
 
-def _classify_report_type(report_name: str) -> str | None:
+def _classify_report_type(report_name: str) -> str:
     """Classify a DART report name into a short type label."""
     for pattern, label in _REPORT_TYPE_PATTERNS:
         if pattern in report_name:
             return label
-    return None
+    return "기타공시"
 
 
 async def fetch_dart_disclosures(

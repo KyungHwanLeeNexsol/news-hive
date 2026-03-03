@@ -122,8 +122,8 @@ export default function DisclosuresPage() {
               >
                 <td className="text-[13px] text-[#1261c4]">{disc.report_name}</td>
                 <td className="text-center">
-                  {disc.stock_name && (
-                    <span className="badge badge-stock">{disc.stock_name}</span>
+                  {(disc.stock_name || disc.corp_name) && (
+                    <span className="badge badge-stock">{disc.stock_name || disc.corp_name}</span>
                   )}
                 </td>
                 <td className="text-center">
