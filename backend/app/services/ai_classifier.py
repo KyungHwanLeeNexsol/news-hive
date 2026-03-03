@@ -2,8 +2,6 @@ import logging
 import re
 from dataclasses import dataclass, field
 
-from google import genai
-
 from app.config import settings
 from app.models.sector import Sector
 from app.models.stock import Stock
@@ -67,6 +65,13 @@ _NON_FINANCIAL_PATTERNS: list[str] = [
     # Photo / Video only articles (no real content)
     "[포토]", "[사진]", "[영상]", "[화보]", "[포토뉴스]",
     "[Photo]", "[VIDEO]",
+    # Politics / Government (non-business context)
+    "국회의원", "의원", "대통령", "총리", "장관", "청와대", "용산",
+    "여당", "야당", "정당", "국정감사", "국정조사", "탄핵", "선거", "공천", "당대표",
+    "자산공개", "재산공개", "슈퍼리치", "재산신고",
+    # Crime / Social (non-business context)
+    "검찰", "경찰", "구속", "기소", "체포", "재판", "판결", "혐의",
+    "사건", "사고", "사망", "범죄", "살인", "폭행", "피의자",
 ]
 
 # Compile regex for non-financial detection
@@ -154,6 +159,12 @@ def classify_news(title: str, index: KeywordIndex) -> list[dict]:
     # Match sector keywords
     for kw, sector_id in index.sector_keywords.items():
         if sector_id not in matched_sector_ids and kw in title_lower:
+            # Ambiguous short keywords need a second confirming keyword from the
+            # same sector to avoid false positives (e.g. "가구" in political news).
+            if kw in _AMBIGUOUS_SECTOR_KEYWORDS:
+                confirming = _AMBIGUOUS_SECTOR_KEYWORDS[kw]
+                if not any(ck in title_lower for ck in confirming):
+                    continue
             results.append({
                 "stock_id": None,
                 "sector_id": sector_id,
@@ -247,6 +258,7 @@ async def generate_ai_summary(title: str, description: str | None, relations: li
 한국어로 작성해주세요. 마크다운 없이 일반 텍스트로 응답해주세요."""
 
     import asyncio as _asyncio
+    from google import genai
 
     client = genai.Client(api_key=settings.GEMINI_API_KEY)
     max_retries = 5
@@ -294,6 +306,7 @@ async def generate_disclosure_summary(
 한국어로 작성해주세요. 마크다운 없이 일반 텍스트로 응답해주세요."""
 
     import asyncio as _asyncio
+    from google import genai
 
     client = genai.Client(api_key=settings.GEMINI_API_KEY)
     max_retries = 5
@@ -330,6 +343,7 @@ async def translate_articles_batch(articles: list[dict]) -> None:
     """
     import asyncio as _asyncio
     import json as _json
+    from google import genai
 
     if not settings.GEMINI_API_KEY:
         return
@@ -406,6 +420,20 @@ async def translate_articles_batch(articles: list[dict]) -> None:
     translated_count = sum(1 for _, a in en_articles if "original_title" in a)
     if translated_count:
         logger.info(f"Translated {translated_count}/{len(en_articles)} English articles to Korean")
+
+
+# Ambiguous sector keywords that are common everyday words.
+# Each maps to a list of confirming keywords — at least one must also
+# appear in the title for the sector match to count.
+_AMBIGUOUS_SECTOR_KEYWORDS: dict[str, list[str]] = {
+    "가구": ["가구업", "가구사", "가구제조", "인테리어", "소파", "침대", "매트리스", "가구산업", "리바트", "한샘", "에몬스"],
+    "부동산": ["아파트", "전세", "매매", "분양", "임대", "공시지가", "토지", "재개발", "재건축", "건설사", "시행사", "부동산시장", "주택"],
+    "건설": ["건설사", "시공", "착공", "준공", "분양", "건축", "재개발", "재건축", "도시정비"],
+    "교육": ["학원", "입시", "수능", "에듀테크", "교육업", "학교", "온라인교육"],
+    "식품": ["식품업", "가공식품", "식자재", "식품안전", "식품사"],
+    "화학": ["화학업", "석유화학", "정밀화학", "화학사", "소재"],
+    "기계": ["기계업", "공작기계", "산업용", "기계사", "로봇"],
+}
 
 
 # Extended keyword dictionary: sector name → additional topic keywords

@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import logging
 import re
 
@@ -264,13 +265,15 @@ async def crawl_all_news(db: Session) -> int:
     seen_titles: set[str] = set()
     seen_bigrams: list[set[str]] = []  # for fuzzy matching
     unique_articles: list[dict] = []
-    existing_urls = {row[0] for row in db.query(NewsArticle.url).all()}
+    existing_urls = set()
+    for row in db.query(NewsArticle.url).yield_per(500):
+        existing_urls.add(row[0])
 
     # Load recent titles from DB for cross-batch dedup (last 7 days worth)
     from datetime import datetime, timedelta, timezone
     recent_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
     existing_norm_titles = []
-    for row in db.query(NewsArticle.title).filter(NewsArticle.published_at >= recent_cutoff).all():
+    for row in db.query(NewsArticle.title).filter(NewsArticle.published_at >= recent_cutoff).yield_per(500):
         norm = _normalize_title(row[0])
         if norm:
             seen_titles.add(norm)
@@ -318,6 +321,10 @@ async def crawl_all_news(db: Session) -> int:
 
     if title_dedup_count or fuzzy_dedup_count:
         logger.info(f"Filtered {title_dedup_count} exact + {fuzzy_dedup_count} fuzzy duplicate articles by title")
+
+    # Free dedup structures no longer needed
+    del all_raw_articles, seen_urls, seen_titles, seen_bigrams, existing_urls, existing_norm_titles
+    gc.collect()
 
     # Filter out non-financial articles (entertainment, sports, lifestyle)
     pre_filter_count = len(unique_articles)
@@ -460,4 +467,5 @@ async def crawl_all_news(db: Session) -> int:
         logger.info(f"Batch {i // batch_size + 1}: {len(url_to_id)} articles ({saved_count} total)")
 
     logger.info(f"Saved {saved_count} new articles.")
+    gc.collect()
     return saved_count
