@@ -118,6 +118,7 @@ async def refresh_news(background_tasks: BackgroundTasks, db: Session = Depends(
 
 async def _run_full_refresh():
     """Run crawl + cleanup in background with a dedicated DB session."""
+    import gc
     from app.services.news_crawler import crawl_all_news
     from app.services.dart_crawler import fetch_dart_disclosures
     from app.config import settings
@@ -127,22 +128,26 @@ async def _run_full_refresh():
         # 1. Crawl new articles
         count = await crawl_all_news(db)
         logger.info(f"Background crawl completed: {count} new articles")
+        gc.collect()
 
         # 2. Reclassify unlinked articles
         reclassified = await _reclassify_unlinked(db)
         if reclassified:
             logger.info(f"Reclassified {reclassified} articles")
+        gc.collect()
 
         # 3. Deduplicate
         deduped = _deduplicate_existing(db)
         if deduped:
             logger.info(f"Deduped {deduped} articles")
+        gc.collect()
 
         # 4. Backfill sentiment
         _backfill_sentiment(db)
 
         # 5. Translate English titles
         await _backfill_translate(db)
+        gc.collect()
 
         # 6. DART disclosures
         if settings.DART_API_KEY:

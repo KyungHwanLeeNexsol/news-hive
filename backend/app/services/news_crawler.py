@@ -20,9 +20,9 @@ from app.services.ai_classifier import (
 
 logger = logging.getLogger(__name__)
 
-# Query budget for search-based crawlers
-MAX_TOTAL_QUERIES = 50
-MAX_STOCK_QUERIES = 15
+# Query budget for search-based crawlers (keep low for 512MB RAM)
+MAX_TOTAL_QUERIES = 30
+MAX_STOCK_QUERIES = 10
 
 # Regex to strip noise for title dedup (whitespace, punctuation, source suffixes)
 _TITLE_NOISE_RE = re.compile(r"[\s\-–—·:;,.\[\](){}「」『』<>《》\u200b]+")
@@ -341,6 +341,7 @@ async def crawl_all_news(db: Session) -> int:
 
     # Translate English titles to Korean before saving
     await translate_articles_batch(unique_articles)
+    gc.collect()
 
     # Pre-compute relations and discard articles with no sector/stock match
     for ad in unique_articles:
