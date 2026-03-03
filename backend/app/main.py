@@ -220,6 +220,6 @@ app.include_router(news.router)
 app.include_router(disclosures.router)
 
 
-@app.get("/api/health")
+@app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health():
     return {"status": "ok"}
