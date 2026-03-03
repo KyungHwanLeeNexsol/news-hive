@@ -118,12 +118,12 @@ async def _search_us_news_for_term(
         feed = feedparser.parse(resp.text)
         articles = []
         for entry in feed.entries[:num]:
-            pub_date = None
+            pub_date = datetime.now(timezone.utc)
             if hasattr(entry, "published_parsed") and entry.published_parsed:
                 try:
                     pub_date = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
                 except (TypeError, ValueError):
-                    pub_date = datetime.now(timezone.utc)
+                    pass
 
             url = entry.get("link", "")
             if not url:

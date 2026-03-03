@@ -28,12 +28,12 @@ def _parse_feed_entries(feed: feedparser.FeedParserDict, num: int) -> list[dict]
     """Parse feedparser entries into article dicts."""
     articles = []
     for entry in feed.entries[:num]:
-        pub_date = None
+        pub_date = datetime.now(timezone.utc)
         if hasattr(entry, "published_parsed") and entry.published_parsed:
             try:
                 pub_date = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
             except (TypeError, ValueError):
-                pub_date = datetime.now(timezone.utc)
+                pass
 
         url = entry.get("link", "")
         title = html.unescape(entry.get("title", ""))

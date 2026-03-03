@@ -1,7 +1,7 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.database import get_db, SessionLocal
@@ -15,6 +15,7 @@ router = APIRouter(prefix="/api", tags=["disclosures"])
 async def list_disclosures(
     stock_id: int = Query(default=0, description="Filter by stock ID"),
     report_type: str = Query(default="", description="Filter by report type"),
+    q: str = Query(default="", description="Search by report name or stock/corp name"),
     limit: int = Query(default=30, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -27,6 +28,16 @@ async def list_disclosures(
 
     if report_type:
         query = query.filter(Disclosure.report_type == report_type)
+
+    if q:
+        keyword = f"%{q}%"
+        query = query.filter(
+            or_(
+                Disclosure.report_name.ilike(keyword),
+                Disclosure.corp_name.ilike(keyword),
+                Stock.name.ilike(keyword),
+            )
+        )
 
     total = query.count()
 

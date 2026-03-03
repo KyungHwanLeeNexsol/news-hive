@@ -45,12 +45,12 @@ async def _fetch_single_feed(name: str, url: str) -> list[dict]:
     feed = feedparser.parse(resp.text)
     articles = []
     for entry in feed.entries:
-        pub_date = None
+        pub_date = datetime.now(timezone.utc)
         if hasattr(entry, "published_parsed") and entry.published_parsed:
             try:
                 pub_date = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
             except (TypeError, ValueError):
-                pub_date = datetime.now(timezone.utc)
+                pass
 
         title = html.unescape(entry.get("title", "")).strip()
         link = entry.get("link", "").strip()

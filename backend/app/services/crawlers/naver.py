@@ -63,14 +63,14 @@ async def search_naver_news(query: str, display: int = 10) -> list[dict]:
         title = _strip_html(item.get("title", ""))
         description = _strip_html(item.get("description", ""))
 
-        pub_date = None
+        pub_date = datetime.now(timezone.utc)
         if item.get("pubDate"):
             try:
                 pub_date = datetime.strptime(
                     item["pubDate"], "%a, %d %b %Y %H:%M:%S %z"
                 )
             except ValueError:
-                pub_date = datetime.now(timezone.utc)
+                pass
 
         articles.append(
             {

@@ -199,11 +199,12 @@ export async function generateSectorInsight(id: number): Promise<SectorInsight> 
 }
 
 export async function fetchDisclosures(
-  params: { stock_id?: number; report_type?: string; limit?: number; offset?: number } = {},
+  params: { stock_id?: number; report_type?: string; q?: string; limit?: number; offset?: number } = {},
 ): Promise<{ disclosures: DisclosureItem[]; total: number }> {
   const sp = new URLSearchParams();
   if (params.stock_id) sp.set("stock_id", String(params.stock_id));
   if (params.report_type) sp.set("report_type", params.report_type);
+  if (params.q) sp.set("q", params.q);
   sp.set("limit", String(params.limit ?? 30));
   sp.set("offset", String(params.offset ?? 0));
   const res = await fetchWithRetry(`${API_BASE}/disclosures?${sp}`);

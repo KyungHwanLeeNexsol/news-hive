@@ -45,16 +45,17 @@ def _run_crawl_job():
 def _cleanup_old_articles(db):
     """Delete news articles older than 7 days."""
     from datetime import datetime, timedelta, timezone
+    from sqlalchemy import or_
     from app.models.news import NewsArticle
     from app.models.news_relation import NewsStockRelation
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=7)
 
-    # Find old article IDs
+    # Find old article IDs (including those with NULL published_at)
     old_ids = [
         row[0] for row in
         db.query(NewsArticle.id)
-        .filter(NewsArticle.published_at < cutoff)
+        .filter(or_(NewsArticle.published_at < cutoff, NewsArticle.published_at.is_(None)))
         .all()
     ]
     if not old_ids:

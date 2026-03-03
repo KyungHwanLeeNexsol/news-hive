@@ -34,12 +34,16 @@ export default function DisclosuresPage() {
   const [selectedDisclosure, setSelectedDisclosure] = useState<DisclosureItem | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
+  // Search state
+  const [searchInput, setSearchInput] = useState("");
+  const [query, setQuery] = useState("");
+
   function handleRefresh() {
     setRefreshing(true);
     refreshDisclosures()
       .then(() => {
         setPage(1);
-        return fetchDisclosures({ report_type: reportType || undefined, limit: PAGE_SIZE, offset: 0 });
+        return fetchDisclosures({ report_type: reportType || undefined, q: query || undefined, limit: PAGE_SIZE, offset: 0 });
       })
       .then((r) => {
         setDisclosures(r.disclosures);
@@ -54,6 +58,7 @@ export default function DisclosuresPage() {
     window.scrollTo({ top: 0 });
     fetchDisclosures({
       report_type: reportType || undefined,
+      q: query || undefined,
       limit: PAGE_SIZE,
       offset: (page - 1) * PAGE_SIZE,
     })
@@ -63,7 +68,20 @@ export default function DisclosuresPage() {
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [page, reportType]);
+  }, [page, reportType, query]);
+
+  function handleSearch(e: React.FormEvent) {
+    e.preventDefault();
+    const trimmed = searchInput.trim();
+    setQuery(trimmed);
+    setPage(1);
+  }
+
+  function handleClearSearch() {
+    setSearchInput("");
+    setQuery("");
+    setPage(1);
+  }
 
   function handleTypeChange(value: string) {
     setReportType(value);
@@ -75,15 +93,41 @@ export default function DisclosuresPage() {
   return (
     <div className="section-box">
       <div className="section-title">
-        <span>전체 공시 ({total}건)</span>
+        <span>{query ? `"${query}" 검색 결과 (${total}건)` : `전체 공시 (${total}건)`}</span>
         <button
           onClick={handleRefresh}
           disabled={refreshing}
-          className="text-[12px] text-[#1261c4] hover:underline disabled:text-[#999]"
+          className="px-3 py-1 text-[12px] bg-[#1261c4] text-white rounded hover:bg-[#0f54a8] disabled:opacity-50"
         >
-          {refreshing ? "새로고침 중..." : "새로고침"}
+          {refreshing ? "수집 중..." : "공시 새로고침"}
         </button>
       </div>
+
+      {/* Search bar */}
+      <form onSubmit={handleSearch} className="flex gap-2 px-4 py-3 border-b border-[#e5e5e5]">
+        <input
+          type="text"
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          placeholder="공시 제목 또는 종목명 검색"
+          className="flex-1 px-3 py-1.5 border border-[#ddd] rounded text-[13px] focus:outline-none focus:border-[#1261c4]"
+        />
+        <button
+          type="submit"
+          className="px-4 py-1.5 bg-[#1261c4] text-white text-[13px] rounded hover:bg-[#0f54a8]"
+        >
+          검색
+        </button>
+        {query && (
+          <button
+            type="button"
+            onClick={handleClearSearch}
+            className="px-3 py-1.5 border border-[#ddd] text-[13px] text-[#666] rounded hover:bg-[#f5f5f5]"
+          >
+            초기화
+          </button>
+        )}
+      </form>
 
       {/* Report type filter */}
       <div className="flex gap-1.5 px-4 py-3 border-b border-[#e5e5e5]">
@@ -133,7 +177,7 @@ export default function DisclosuresPage() {
           ) : disclosures.length === 0 ? (
             <tr>
               <td colSpan={4} className="text-center py-8 text-[#999]">
-                공시 내역이 없습니다.
+                {query ? `"${query}"에 대한 검색 결과가 없습니다.` : "공시 내역이 없습니다."}
               </td>
             </tr>
           ) : (
