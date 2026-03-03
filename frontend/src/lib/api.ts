@@ -225,6 +225,12 @@ export async function fetchStockDisclosures(
   return { disclosures, total };
 }
 
+export async function refreshDisclosures(): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE}/disclosures/refresh`, { method: "POST" });
+  if (!res.ok) throw new Error("Failed to refresh disclosures");
+  return res.json();
+}
+
 export async function fetchDisclosureSummary(disclosureId: number): Promise<DisclosureDetail> {
   const res = await fetchWithRetry(`${API_BASE}/disclosures/${disclosureId}/summary`, {
     method: "POST",

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { fetchDisclosures } from "@/lib/api";
+import { fetchDisclosures, refreshDisclosures } from "@/lib/api";
 import type { DisclosureItem } from "@/lib/types";
 import Pagination from "@/components/Pagination";
 import DisclosureModal from "@/components/DisclosureModal";
@@ -32,6 +32,22 @@ export default function DisclosuresPage() {
   const [loading, setLoading] = useState(true);
   const [reportType, setReportType] = useState("");
   const [selectedDisclosure, setSelectedDisclosure] = useState<DisclosureItem | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  function handleRefresh() {
+    setRefreshing(true);
+    refreshDisclosures()
+      .then(() => {
+        setPage(1);
+        return fetchDisclosures({ report_type: reportType || undefined, limit: PAGE_SIZE, offset: 0 });
+      })
+      .then((r) => {
+        setDisclosures(r.disclosures);
+        setTotal(r.total);
+      })
+      .catch(() => {})
+      .finally(() => setRefreshing(false));
+  }
 
   useEffect(() => {
     setLoading(true);
@@ -60,6 +76,13 @@ export default function DisclosuresPage() {
     <div className="section-box">
       <div className="section-title">
         <span>전체 공시 ({total}건)</span>
+        <button
+          onClick={handleRefresh}
+          disabled={refreshing}
+          className="text-[12px] text-[#1261c4] hover:underline disabled:text-[#999]"
+        >
+          {refreshing ? "새로고침 중..." : "새로고침"}
+        </button>
       </div>
 
       {/* Report type filter */}
