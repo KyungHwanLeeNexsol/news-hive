@@ -165,7 +165,7 @@ def _resolve_query_relations(
     return results
 
 
-async def crawl_all_news(db: Session) -> int:
+async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
     """Main orchestrator: crawl news, classify by keyword, and save."""
     stocks = db.query(Stock).all()
     sectors = db.query(Sector).all()
@@ -208,8 +208,11 @@ async def crawl_all_news(db: Session) -> int:
             articles.extend(sector_articles)
         return ("us_news", articles)
 
+    phase1_tasks = [_fetch_korean_rss(), _fetch_yahoo_top()]
+    if not skip_us_news:
+        phase1_tasks.append(_fetch_us_news())
     phase1_results = await asyncio.gather(
-        _fetch_korean_rss(), _fetch_yahoo_top(), _fetch_us_news(),
+        *phase1_tasks,
         return_exceptions=True,
     )
     for result in phase1_results:

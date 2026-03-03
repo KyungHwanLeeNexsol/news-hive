@@ -125,8 +125,8 @@ async def _run_full_refresh():
 
     db = SessionLocal()
     try:
-        # 1. Crawl new articles
-        count = await crawl_all_news(db)
+        # 1. Crawl new articles (skip US news to stay within 512MB RAM)
+        count = await crawl_all_news(db, skip_us_news=True)
         logger.info(f"Background crawl completed: {count} new articles")
         gc.collect()
 
