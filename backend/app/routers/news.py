@@ -118,36 +118,31 @@ async def refresh_news(background_tasks: BackgroundTasks, db: Session = Depends(
 
 async def _run_full_refresh():
     """Run crawl + cleanup in background with a dedicated DB session."""
-    import gc
     from app.services.news_crawler import crawl_all_news
     from app.services.dart_crawler import fetch_dart_disclosures
     from app.config import settings
 
     db = SessionLocal()
     try:
-        # 1. Crawl new articles (skip US news to stay within 512MB RAM)
-        count = await crawl_all_news(db, skip_us_news=True)
+        # 1. Crawl new articles
+        count = await crawl_all_news(db, skip_us_news=False)
         logger.info(f"Background crawl completed: {count} new articles")
-        gc.collect()
 
         # 2. Reclassify unlinked articles
         reclassified = await _reclassify_unlinked(db)
         if reclassified:
             logger.info(f"Reclassified {reclassified} articles")
-        gc.collect()
 
         # 3. Deduplicate
         deduped = _deduplicate_existing(db)
         if deduped:
             logger.info(f"Deduped {deduped} articles")
-        gc.collect()
 
         # 4. Backfill sentiment
         _backfill_sentiment(db)
 
         # 5. Translate English titles
         await _backfill_translate(db)
-        gc.collect()
 
         # 6. DART disclosures
         if settings.DART_API_KEY:
@@ -273,15 +268,33 @@ async def _resolve_google_url(url: str) -> str:
     return url
 
 
-async def _classify_article_on_demand(article: NewsArticle, db: Session) -> None:
-    """Classify a single article on-demand when it has no sector tag."""
+# Cached KeywordIndex for on-demand classification (5 min TTL)
+_keyword_index_cache: tuple[float, object] | None = None
+_KEYWORD_INDEX_TTL = 300
+
+
+def _get_keyword_index(db: Session):
+    global _keyword_index_cache
     from app.models.sector import Sector
     from app.models.stock import Stock
-    from app.services.ai_classifier import KeywordIndex, classify_news
+    from app.services.ai_classifier import KeywordIndex
+
+    now = time.monotonic()
+    if _keyword_index_cache and (now - _keyword_index_cache[0]) < _KEYWORD_INDEX_TTL:
+        return _keyword_index_cache[1]
 
     sectors = db.query(Sector).all()
     stocks = db.query(Stock).all()
     index = KeywordIndex.build(sectors, stocks)
+    _keyword_index_cache = (now, index)
+    return index
+
+
+async def _classify_article_on_demand(article: NewsArticle, db: Session) -> None:
+    """Classify a single article on-demand when it has no sector tag."""
+    from app.services.ai_classifier import classify_news
+
+    index = _get_keyword_index(db)
 
     try:
         classifications = classify_news(article.title, index)

@@ -20,9 +20,9 @@ from app.services.ai_classifier import (
 
 logger = logging.getLogger(__name__)
 
-# Query budget for search-based crawlers (keep low for 512MB RAM)
-MAX_TOTAL_QUERIES = 30
-MAX_STOCK_QUERIES = 10
+# Query budget for search-based crawlers
+MAX_TOTAL_QUERIES = 60
+MAX_STOCK_QUERIES = 20
 
 # Regex to strip noise for title dedup (whitespace, punctuation, source suffixes)
 _TITLE_NOISE_RE = re.compile(r"[\s\-–—·:;,.\[\](){}「」『』<>《》\u200b]+")
@@ -228,7 +228,7 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
     if search_queries:
         logger.info(f"Crawling {len(search_queries)} queries (sample: {search_queries[:5]})")
 
-        semaphore = asyncio.Semaphore(5)
+        semaphore = asyncio.Semaphore(10)
         stock_code_by_name = {s.name: s.stock_code for s in stocks}
 
         async def _search_one(query: str):
@@ -344,7 +344,6 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
 
     # Translate English titles to Korean before saving
     await translate_articles_batch(unique_articles)
-    gc.collect()
 
     # Pre-compute relations and discard articles with no sector/stock match
     for ad in unique_articles:
@@ -374,7 +373,7 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
     from sqlalchemy import text as sa_text
 
     saved_count = 0
-    batch_size = 15
+    batch_size = 30
 
     for i in range(0, len(unique_articles), batch_size):
         batch = unique_articles[i : i + batch_size]
@@ -471,5 +470,4 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
         logger.info(f"Batch {i // batch_size + 1}: {len(url_to_id)} articles ({saved_count} total)")
 
     logger.info(f"Saved {saved_count} new articles.")
-    gc.collect()
     return saved_count

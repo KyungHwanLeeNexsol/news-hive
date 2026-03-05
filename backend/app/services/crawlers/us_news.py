@@ -97,8 +97,8 @@ SECTOR_EN_TERMS: dict[str, str] = {
     "카드": "credit card payment industry",
 }
 
-# Budget: limit the number of US news queries per cycle (keep low for 512MB RAM)
-MAX_US_QUERIES = 10
+# Budget: limit the number of US news queries per cycle
+MAX_US_QUERIES = 25
 
 
 async def _search_us_news_for_term(
@@ -163,7 +163,7 @@ async def fetch_us_industry_news(
         _us_rr_index = (_us_rr_index + MAX_US_QUERIES) % len(queries)
         queries = selected
 
-    semaphore = asyncio.Semaphore(3)
+    semaphore = asyncio.Semaphore(5)
     results: list[tuple[str, list[dict]]] = []
 
     async def _fetch_one(sector_name: str, en_term: str):
