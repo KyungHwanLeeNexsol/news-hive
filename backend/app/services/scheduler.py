@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -115,14 +116,16 @@ def start_scheduler():
         minutes=interval,
         id="news_crawl",
         replace_existing=True,
+        next_run_time=datetime.now(),
     )
-    # DART disclosure crawl every 30 minutes
+    # DART disclosure crawl every 30 minutes (run immediately on startup too)
     scheduler.add_job(
         _run_dart_crawl,
         "interval",
         minutes=30,
         id="dart_crawl",
         replace_existing=True,
+        next_run_time=datetime.now(),
     )
     scheduler.start()
     logger.info(f"Scheduler started: crawling every {interval} min, DART every 30 min")
