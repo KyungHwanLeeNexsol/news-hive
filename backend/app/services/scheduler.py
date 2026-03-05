@@ -105,27 +105,6 @@ def _run_dart_crawl():
         db.close()
 
 
-def _refresh_sector_performance():
-    """Sync wrapper that refreshes Naver sector performance cache."""
-    from app.services.naver_finance import fetch_sector_performances
-
-    try:
-        data = asyncio.run(fetch_sector_performances(force=True))
-        logger.info(f"Sector performance refreshed: {len(data)} sectors")
-    except Exception as e:
-        logger.error(f"Sector performance refresh failed: {e}")
-
-
-def _refresh_market_cap():
-    """Pre-warm market cap ranking cache so /stocks responds instantly."""
-    from app.services.naver_finance import fetch_market_cap_rankings
-
-    try:
-        data = asyncio.run(fetch_market_cap_rankings())
-        logger.info(f"Market cap cache refreshed: {len(data)} stocks")
-    except Exception as e:
-        logger.error(f"Market cap refresh failed: {e}")
-
 
 def start_scheduler():
     """Start the background news crawl scheduler."""
@@ -137,22 +116,6 @@ def start_scheduler():
         id="news_crawl",
         replace_existing=True,
     )
-    # Refresh Naver sector performance data every 5 minutes
-    scheduler.add_job(
-        _refresh_sector_performance,
-        "interval",
-        minutes=5,
-        id="sector_perf_refresh",
-        replace_existing=True,
-    )
-    # Pre-warm market cap cache every 5 minutes
-    scheduler.add_job(
-        _refresh_market_cap,
-        "interval",
-        minutes=5,
-        id="market_cap_refresh",
-        replace_existing=True,
-    )
     # DART disclosure crawl every 30 minutes
     scheduler.add_job(
         _run_dart_crawl,
@@ -162,7 +125,7 @@ def start_scheduler():
         replace_existing=True,
     )
     scheduler.start()
-    logger.info(f"Scheduler started: crawling every {interval} min, sector/market-cap every 5 min, DART every 30 min")
+    logger.info(f"Scheduler started: crawling every {interval} min, DART every 30 min")
 
 
 def stop_scheduler():
