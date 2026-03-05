@@ -1,0 +1,19 @@
+name: Deploy Backend to Oracle VM
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: 168.107.51.242
+          username: ubuntu
+          key: ${{ secrets.ORACLE_SSH_KEY }}
+          script: /home/ubuntu/news-hive/deploy.sh
