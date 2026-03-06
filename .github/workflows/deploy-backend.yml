@@ -23,3 +23,11 @@ jobs:
               echo 'DART_PUSH_SECRET=${{ secrets.DART_PUSH_SECRET }}' >> "$ENV_FILE"
             fi
             /home/ubuntu/news-hive/deploy.sh
+            # Wait for server to start, then check logs
+            sleep 5
+            echo "=== Server status ==="
+            systemctl is-active newshive 2>/dev/null || echo "Not a systemd service"
+            echo "=== Recent logs ==="
+            journalctl -u newshive --no-pager -n 30 2>/dev/null || tail -30 /home/ubuntu/news-hive/backend/nohup.out 2>/dev/null || tail -30 /home/ubuntu/news-hive/backend/server.log 2>/dev/null || echo "No logs found"
+            echo "=== Process check ==="
+            pgrep -af uvicorn || echo "uvicorn not running!"
