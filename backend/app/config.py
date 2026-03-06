@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     KIS_APP_SECRET: str = ""
 
     DART_API_KEY: str = ""
-    DART_PUSH_SECRET: str = ""  # Shared secret for GitHub Actions DART push
+    DART_PUSH_SECRET: str = ""  # Shared secret for GitHub Actions → server DART push
 
     NEWS_CRAWL_INTERVAL_MINUTES: int = 10
 
