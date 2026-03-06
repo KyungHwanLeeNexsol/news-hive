@@ -246,12 +246,12 @@ async def list_stocks(
             sector_id=stock.sector_id if stock else 0,
             sector_name=stock.sector.name if stock and stock.sector else None,
             market=n.market,
-            current_price=n.current_price or None,
-            price_change=n.price_change or None,
-            change_rate=n.change_rate or None,
-            volume=n.volume or None,
-            trading_value=n.trading_value or None,
-            market_cap=n.market_cap or None,
+            current_price=n.current_price,
+            price_change=n.price_change,
+            change_rate=n.change_rate,
+            volume=n.volume,
+            trading_value=n.trading_value,
+            market_cap=n.market_cap,
             news_count=news_counts.get(stock.id, 0) if stock else 0,
         ))
 
