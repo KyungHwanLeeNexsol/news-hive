@@ -25,7 +25,24 @@ HEADERS = {
                   "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 }
 
-CACHE_TTL_SECONDS = 300  # 5 minutes
+_CACHE_TTL_MARKET_OPEN = 10    # 10 seconds during market hours
+_CACHE_TTL_MARKET_CLOSED = 300  # 5 minutes outside market hours
+
+
+def _is_market_open() -> bool:
+    """Check if KRX market is currently open (weekdays 09:00~15:30 KST)."""
+    from datetime import datetime, timezone, timedelta
+    kst = timezone(timedelta(hours=9))
+    now = datetime.now(kst)
+    if now.weekday() >= 5:
+        return False
+    t = now.time()
+    from datetime import time as dt_time
+    return dt_time(9, 0) <= t <= dt_time(15, 30)
+
+
+def _cache_ttl() -> int:
+    return _CACHE_TTL_MARKET_OPEN if _is_market_open() else _CACHE_TTL_MARKET_CLOSED
 
 
 @dataclass
@@ -84,7 +101,7 @@ async def fetch_sector_performances(force: bool = False) -> dict[str, SectorPerf
     Only blocks when force=True (scheduler) or on first call with empty cache.
     """
     now = time.time()
-    cache_fresh = (now - _cache.last_updated) < CACHE_TTL_SECONDS
+    cache_fresh = (now - _cache.last_updated) < _cache_ttl()
 
     if not force:
         if _cache.data:
@@ -223,7 +240,7 @@ async def fetch_sector_stock_performances(naver_code: str) -> list[StockPerforma
     """
     now = time.time()
     if (naver_code in _stock_perf_cache.data
-            and (now - _stock_perf_cache.last_updated.get(naver_code, 0)) < CACHE_TTL_SECONDS):
+            and (now - _stock_perf_cache.last_updated.get(naver_code, 0)) < _cache_ttl()):
         return _stock_perf_cache.data[naver_code]
 
     url = SECTOR_DETAIL_URL.format(code=naver_code)
@@ -338,7 +355,7 @@ async def fetch_stock_fundamentals(stock_code: str) -> Optional[StockFundamental
     """
     now = time.time()
     if (stock_code in _fundamentals_cache.data
-            and (now - _fundamentals_cache.last_updated.get(stock_code, 0)) < CACHE_TTL_SECONDS):
+            and (now - _fundamentals_cache.last_updated.get(stock_code, 0)) < _cache_ttl()):
         return _fundamentals_cache.data[stock_code]
 
     url = POLLING_API_URL.format(code=stock_code)
@@ -442,7 +459,7 @@ async def fetch_stock_fundamentals_batch(
     # Return cached entries, collect uncached
     for code in stock_codes:
         if (code in _fundamentals_cache.data
-                and (now - _fundamentals_cache.last_updated.get(code, 0)) < CACHE_TTL_SECONDS):
+                and (now - _fundamentals_cache.last_updated.get(code, 0)) < _cache_ttl()):
             result[code] = _fundamentals_cache.data[code]
         else:
             codes_to_fetch.append(code)
@@ -664,7 +681,7 @@ async def fetch_market_cap_rankings(
     All pages fetched in parallel for speed. Uses 5-min cache.
     """
     now = time.time()
-    if _market_cap_cache.data and (now - _market_cap_cache.last_updated) < CACHE_TTL_SECONDS:
+    if _market_cap_cache.data and (now - _market_cap_cache.last_updated) < _cache_ttl():
         return _market_cap_cache.data
 
     import asyncio

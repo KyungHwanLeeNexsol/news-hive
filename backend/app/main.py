@@ -84,3 +84,10 @@ app.include_router(disclosures.router)
 @app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/api/market-status")
+async def market_status():
+    from app.services.naver_finance import _is_market_open
+    is_open = _is_market_open()
+    return {"market_open": is_open, "refresh_interval": 15 if is_open else 300}

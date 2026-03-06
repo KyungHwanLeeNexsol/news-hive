@@ -24,7 +24,9 @@ TOKEN_URL = f"{BASE_URL}/oauth2/tokenP"
 PRICE_URL = f"{BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-price"
 MARKET_CAP_RANK_URL = f"{BASE_URL}/uapi/domestic-stock/v1/ranking/market-cap"
 
-CACHE_TTL = 300  # 5 minutes per-stock cache
+def _kis_cache_ttl() -> int:
+    from app.services.naver_finance import _cache_ttl
+    return _cache_ttl()
 
 
 @dataclass
@@ -124,7 +126,7 @@ async def fetch_kis_stock_price(stock_code: str) -> Optional[KISStockPrice]:
 
     now = time.time()
     if (stock_code in _price_cache.data
-            and (now - _price_cache.last_updated.get(stock_code, 0)) < CACHE_TTL):
+            and (now - _price_cache.last_updated.get(stock_code, 0)) < _kis_cache_ttl()):
         return _price_cache.data[stock_code]
 
     try:

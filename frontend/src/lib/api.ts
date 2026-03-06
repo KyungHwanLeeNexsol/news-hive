@@ -232,6 +232,12 @@ export async function refreshDisclosures(): Promise<{ message: string }> {
   return res.json();
 }
 
+export async function fetchMarketStatus(): Promise<{ market_open: boolean; refresh_interval: number }> {
+  const res = await fetch(`${API_BASE}/market-status`);
+  if (!res.ok) return { market_open: false, refresh_interval: 300 };
+  return res.json();
+}
+
 export async function fetchDisclosureSummary(disclosureId: number): Promise<DisclosureDetail> {
   const res = await fetchWithRetry(`${API_BASE}/disclosures/${disclosureId}/summary`, {
     method: "POST",

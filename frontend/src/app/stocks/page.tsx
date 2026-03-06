@@ -7,9 +7,9 @@ import type { StockListItem } from '@/lib/types';
 import Pagination from '@/components/Pagination';
 import ChangeRate from '@/components/ChangeRate';
 import { useWatchlist } from '@/lib/watchlist';
+import { useMarketRefresh } from '@/lib/useMarketRefresh';
 
 const PAGE_SIZE = 50;
-const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
 type MarketTab = '' | 'KOSPI' | 'KOSDAQ';
 
@@ -58,11 +58,8 @@ export default function StocksPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Auto-refresh every 5 minutes (silent — no loading spinner)
-  useEffect(() => {
-    const interval = setInterval(() => load(true), REFRESH_INTERVAL);
-    return () => clearInterval(interval);
-  }, [load]);
+  // Auto-refresh: 15s during market hours, 5min otherwise
+  useMarketRefresh(() => load(true));
 
   // Reset page when filters change
   useEffect(() => { setPage(1); }, [query, market, watchlistOnly]);

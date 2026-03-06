@@ -9,6 +9,7 @@ import type { StockDetail, NewsArticle, PriceRecord, FinancialPeriod, SentimentT
 import Pagination from '@/components/Pagination';
 import DisclosureModal from '@/components/DisclosureModal';
 import { useWatchlist } from '@/lib/watchlist';
+import { useMarketRefresh } from '@/lib/useMarketRefresh';
 
 const PAGE_SIZE = 30;
 
@@ -369,6 +370,12 @@ export default function StockDetailPage() {
       .catch(() => {})
       .finally(() => setDetailLoading(false));
   }, [stockId]);
+
+  // Auto-refresh stock detail (price) during market hours
+  useMarketRefresh(() => {
+    if (!stockId) return;
+    fetchStockDetail(stockId).then(setDetail).catch(() => {});
+  });
 
   // Lazy load tab data
   useEffect(() => {

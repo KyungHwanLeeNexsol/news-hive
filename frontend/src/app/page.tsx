@@ -7,8 +7,7 @@ import type { Sector, NewsArticle, StockListItem, DisclosureItem } from '@/lib/t
 import { formatSectorName } from '@/lib/format';
 import ChangeRate from '@/components/ChangeRate';
 import { useWatchlist } from '@/lib/watchlist';
-
-const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes
+import { useMarketRefresh } from '@/lib/useMarketRefresh';
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return '';
@@ -72,13 +71,10 @@ export default function Dashboard() {
       .catch(() => {});
   }, [watchlist]);
 
-  useEffect(() => {
-    loadData();
+  useEffect(() => { loadData(); }, [loadData]);
 
-    // Auto-refresh both sectors and news every 5 minutes
-    const interval = setInterval(loadData, REFRESH_INTERVAL);
-    return () => clearInterval(interval);
-  }, [loadData]);
+  // Auto-refresh: 15s during market hours, 5min otherwise
+  useMarketRefresh(loadData);
 
   async function handleRefresh() {
     setRefreshing(true);

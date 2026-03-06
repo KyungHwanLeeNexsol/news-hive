@@ -8,6 +8,7 @@ import { formatSectorName } from "@/lib/format";
 import type { Sector, NewsArticle, SectorInsight } from "@/lib/types";
 import ChangeRate from "@/components/ChangeRate";
 import Pagination from "@/components/Pagination";
+import { useMarketRefresh } from "@/lib/useMarketRefresh";
 
 const PAGE_SIZE = 30;
 
@@ -52,11 +53,8 @@ export default function SectorDetail() {
 
   useEffect(() => { loadSector(); }, [loadSector]);
 
-  // Auto-refresh sector data (stock prices) every 5 minutes
-  useEffect(() => {
-    const interval = setInterval(() => loadSector(true), 5 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, [loadSector]);
+  // Auto-refresh: 15s during market hours, 5min otherwise
+  useMarketRefresh(() => loadSector(true));
 
   useEffect(() => {
     if (!sectorId) return;

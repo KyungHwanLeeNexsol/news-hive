@@ -35,7 +35,11 @@ router = APIRouter(prefix="/api", tags=["stocks"])
 
 # --- Endpoint-level response cache ---
 _response_cache: dict[str, tuple[float, object, str]] = {}  # key -> (expires, data, total)
-_CACHE_TTL = 120  # 2 minutes
+
+
+def _response_cache_ttl() -> int:
+    from app.services.naver_finance import _is_market_open
+    return 15 if _is_market_open() else 120
 
 
 def _cache_key(q: str, market: str, sector_id: int, ids: str, limit: int, offset: int) -> str:
@@ -52,7 +56,7 @@ def _get_cached(key: str):
 
 
 def _set_cached(key: str, data, total: str):
-    _response_cache[key] = (time.time() + _CACHE_TTL, data, total)
+    _response_cache[key] = (time.time() + _response_cache_ttl(), data, total)
 
 
 def _get_news_counts(db: Session, stock_ids: list[int]) -> dict[int, int]:

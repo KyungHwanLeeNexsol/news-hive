@@ -6,8 +6,7 @@ import { fetchStocks } from '@/lib/api';
 import type { StockListItem } from '@/lib/types';
 import ChangeRate from '@/components/ChangeRate';
 import { useWatchlist } from '@/lib/watchlist';
-
-const REFRESH_INTERVAL = 5 * 60 * 1000;
+import { useMarketRefresh } from '@/lib/useMarketRefresh';
 
 export default function WatchlistPage() {
   const [stocks, setStocks] = useState<StockListItem[]>([]);
@@ -29,10 +28,8 @@ export default function WatchlistPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  useEffect(() => {
-    const interval = setInterval(() => load(true), REFRESH_INTERVAL);
-    return () => clearInterval(interval);
-  }, [load]);
+  // Auto-refresh: 15s during market hours, 5min otherwise
+  useMarketRefresh(() => load(true));
 
   const formatMarketCap = (v: number | null) => {
     if (v == null) return '-';
