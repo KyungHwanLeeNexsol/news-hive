@@ -105,19 +105,27 @@ def _run_dart_crawl():
 
 
 def _update_market_caps():
-    """Fetch market cap rankings from Naver and update DB stocks."""
+    """Fetch market cap from Naver Mobile API and update DB stocks."""
     from app.models.stock import Stock
-    from app.services.naver_finance import fetch_market_cap_rankings
+    from app.services.naver_finance import fetch_naver_stock_list
 
     db = SessionLocal()
     try:
-        rankings = asyncio.run(fetch_market_cap_rankings(max_pages_per_market=6))
-        if not rankings:
+        cap_map: dict[str, int] = {}
+
+        # Fetch multiple pages from both markets (50 per page)
+        for mkt in ["KOSPI", "KOSDAQ"]:
+            for page in range(1, 11):  # 10 pages × 50 = top 500 per market
+                items, _total = asyncio.run(fetch_naver_stock_list(market=mkt, page=page, page_size=50))
+                if not items:
+                    break
+                for item in items:
+                    if item.market_cap:
+                        cap_map[item.stock_code] = item.market_cap
+
+        if not cap_map:
             logger.warning("No market cap data fetched")
             return
-
-        # Build code -> market_cap mapping
-        cap_map = {r.stock_code: r.market_cap for r in rankings if r.market_cap}
 
         # Batch update
         updated = 0
@@ -129,7 +137,7 @@ def _update_market_caps():
                 updated += 1
         if updated:
             db.commit()
-        logger.info(f"Updated market_cap for {updated}/{len(stocks)} stocks (from {len(rankings)} rankings)")
+        logger.info(f"Updated market_cap for {updated}/{len(stocks)} stocks (from {len(cap_map)} rankings)")
     except Exception as e:
         logger.error(f"Market cap update failed: {e}")
     finally:

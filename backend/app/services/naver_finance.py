@@ -708,6 +708,114 @@ async def fetch_market_cap_rankings(
     return _market_cap_cache.data if _market_cap_cache.data else results
 
 
+NAVER_MOBILE_API_URL = "https://m.stock.naver.com/api/stocks/marketValue/{market}?page={page}&pageSize={page_size}"
+
+
+@dataclass
+class NaverStockItem:
+    """Stock data from Naver Mobile API (real-time, JSON)."""
+    stock_code: str
+    name: str
+    current_price: int = 0
+    price_change: int = 0
+    change_rate: float = 0.0
+    market_cap: int = 0          # 시가총액 (억원)
+    volume: int = 0
+    trading_value: int = 0       # 거래대금 (백만원)
+    market: str = ""             # KOSPI or KOSDAQ
+
+
+@dataclass
+class _NaverStockListCache:
+    data: dict[str, list[NaverStockItem]] = field(default_factory=dict)  # key = "KOSPI:1:50"
+    last_updated: dict[str, float] = field(default_factory=dict)
+
+
+_naver_stock_list_cache = _NaverStockListCache()
+
+
+def _parse_comma_int(s: str) -> int:
+    """Parse comma-formatted number string like '187,400' to int."""
+    try:
+        return int(s.replace(",", ""))
+    except (ValueError, TypeError):
+        return 0
+
+
+async def fetch_naver_stock_list(
+    market: str = "KOSPI",
+    page: int = 1,
+    page_size: int = 50,
+) -> tuple[list[NaverStockItem], int]:
+    """Fetch stock list from Naver Mobile API (JSON, real-time).
+
+    Returns (items, total_count). Lightweight JSON endpoint, no HTML scraping.
+    Cache TTL adapts to market hours (10s open, 300s closed).
+    """
+    cache_key = f"{market}:{page}:{page_size}"
+    now = time.time()
+    if (cache_key in _naver_stock_list_cache.data
+            and (now - _naver_stock_list_cache.last_updated.get(cache_key, 0)) < _cache_ttl()):
+        # Return cached data; total_count is stored as first element's rank hack — just return len
+        cached = _naver_stock_list_cache.data[cache_key]
+        return cached, 0  # total_count not cached, but router caches full response anyway
+
+    url = NAVER_MOBILE_API_URL.format(market=market, page=page, page_size=page_size)
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            resp = await client.get(url, headers=HEADERS)
+            resp.raise_for_status()
+
+        data = resp.json()
+        total_count = data.get("totalCount", 0)
+        stocks = data.get("stocks", [])
+
+        items: list[NaverStockItem] = []
+        for s in stocks:
+            code = s.get("itemCode", "")
+            if not code:
+                continue
+
+            # Parse price change (compareToPreviousClosePrice is a signed string like "-5,000")
+            change_str = s.get("compareToPreviousClosePrice", "0")
+            price_change = _parse_comma_int(change_str)
+
+            # Parse change rate
+            try:
+                change_rate = float(s.get("fluctuationsRatio", 0) or 0)
+            except (ValueError, TypeError):
+                change_rate = 0.0
+
+            # compareToPreviousPrice.name: RISING/FALLING/FLAT
+            direction = s.get("compareToPreviousPrice", {})
+            if isinstance(direction, dict) and direction.get("name") == "FALLING":
+                if change_rate > 0:
+                    change_rate = -change_rate
+
+            items.append(NaverStockItem(
+                stock_code=code,
+                name=s.get("stockName", ""),
+                current_price=_parse_comma_int(s.get("closePrice", "0")),
+                price_change=price_change,
+                change_rate=change_rate,
+                market_cap=_parse_comma_int(s.get("marketValue", "0")),
+                volume=_parse_comma_int(s.get("accumulatedTradingVolume", "0")),
+                trading_value=_parse_comma_int(s.get("accumulatedTradingValue", "0")),
+                market=market,
+            ))
+
+        if items:
+            _naver_stock_list_cache.data[cache_key] = items
+            _naver_stock_list_cache.last_updated[cache_key] = now
+
+        return items, total_count
+
+    except Exception as e:
+        logger.error(f"Failed to fetch Naver stock list {market} p{page}: {e}")
+        cached = _naver_stock_list_cache.data.get(cache_key, [])
+        return cached, 0
+
+
 async def fetch_sector_stock_codes(naver_code: str) -> list[str]:
     """Fetch stock codes belonging to a Naver sector (for stock-to-sector mapping).
 

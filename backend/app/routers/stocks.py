@@ -24,7 +24,7 @@ from app.seed.sectors import seed_sectors
 from app.seed.stocks import seed_all_stocks
 from app.services.naver_finance import (
     fetch_stock_fundamentals, fetch_stock_fundamentals_batch,
-    fetch_stock_price_history,
+    fetch_stock_price_history, fetch_naver_stock_list,
 )
 from app.services.financial_scraper import fetch_stock_valuation, fetch_stock_financials
 from app.services.kis_api import fetch_kis_stock_price
@@ -195,42 +195,64 @@ async def list_stocks(
             headers={"X-Total-Count": total_str, "Access-Control-Expose-Headers": "X-Total-Count"},
         )
 
-    # --- Default mode: DB stocks sorted by market_cap + Polling API for live prices ---
-    query = db.query(Stock).options(joinedload(Stock.sector))
+    # --- Default mode: Naver Mobile API (JSON, real-time prices + market cap) ---
+    markets_to_fetch = [market.upper()] if market else ["KOSPI", "KOSDAQ"]
 
-    if market:
-        query = query.filter(Stock.market == market.upper())
+    # Naver API uses 1-based pages; map our offset/limit
+    naver_page = (offset // limit) + 1
 
-    # Sort by market_cap descending (NULLs last)
-    query = query.order_by(Stock.market_cap.desc().nullslast(), Stock.id)
+    all_naver_items = []
+    total = 0
 
-    total = query.count()
-    stocks = query.offset(offset).limit(limit).all()
+    if len(markets_to_fetch) == 1:
+        # Single market: straightforward pagination
+        naver_items, naver_total = await fetch_naver_stock_list(
+            market=markets_to_fetch[0], page=naver_page, page_size=limit,
+        )
+        all_naver_items = naver_items
+        total = naver_total
+    else:
+        # Combined: fetch same page from both, merge by market_cap, take `limit`
+        import asyncio as _aio
+        results = await _aio.gather(
+            fetch_naver_stock_list(market="KOSPI", page=naver_page, page_size=limit),
+            fetch_naver_stock_list(market="KOSDAQ", page=naver_page, page_size=limit),
+        )
+        for naver_items, naver_total in results:
+            all_naver_items.extend(naver_items)
+            total += naver_total
+        # Sort combined list by market_cap descending and take top `limit`
+        all_naver_items.sort(key=lambda x: x.market_cap, reverse=True)
+        all_naver_items = all_naver_items[:limit]
 
-    # Batch fetch live prices for this page only (lightweight Polling API)
-    stock_codes = [s.stock_code for s in stocks]
-    prices = await fetch_stock_fundamentals_batch(stock_codes) if stock_codes else {}
-
-    # News counts — single query for this page
-    news_counts = _get_news_counts(db, [s.id for s in stocks])
+    # Match Naver data with DB stocks for sector info + news counts
+    naver_codes = [n.stock_code for n in all_naver_items]
+    db_stocks = (
+        db.query(Stock)
+        .options(joinedload(Stock.sector))
+        .filter(Stock.stock_code.in_(naver_codes))
+        .all()
+    ) if naver_codes else []
+    code_to_stock: dict[str, Stock] = {s.stock_code: s for s in db_stocks}
+    news_counts = _get_news_counts(db, [s.id for s in db_stocks])
 
     items = []
-    for s in stocks:
-        fund = prices.get(s.stock_code)
+    for n in all_naver_items:
+        stock = code_to_stock.get(n.stock_code)
         items.append(StockListItem(
-            id=s.id,
-            name=s.name,
-            stock_code=s.stock_code,
-            sector_id=s.sector_id,
-            sector_name=s.sector.name if s.sector else None,
-            market=s.market,
-            current_price=fund.current_price if fund else None,
-            price_change=fund.price_change if fund else None,
-            change_rate=fund.change_rate if fund else None,
-            volume=fund.volume if fund else None,
-            trading_value=fund.trading_value if fund else None,
-            market_cap=s.market_cap,
-            news_count=news_counts.get(s.id, 0),
+            id=stock.id if stock else 0,
+            name=stock.name if stock else n.name,
+            stock_code=n.stock_code,
+            sector_id=stock.sector_id if stock else 0,
+            sector_name=stock.sector.name if stock and stock.sector else None,
+            market=n.market,
+            current_price=n.current_price or None,
+            price_change=n.price_change or None,
+            change_rate=n.change_rate or None,
+            volume=n.volume or None,
+            trading_value=n.trading_value or None,
+            market_cap=n.market_cap or None,
+            news_count=news_counts.get(stock.id, 0) if stock else 0,
         ))
 
     result = jsonable_encoder(items)
