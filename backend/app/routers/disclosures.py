@@ -119,6 +119,34 @@ async def refresh_disclosures():
     if not settings.DART_API_KEY:
         return {"message": "DART_API_KEY not set", "saved": 0}
 
+    # Quick DART API connectivity test
+    import httpx
+    from datetime import datetime, timedelta
+    dart_test = {}
+    try:
+        end_de = datetime.now().strftime("%Y%m%d")
+        bgn_de = (datetime.now() - timedelta(days=3)).strftime("%Y%m%d")
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                "https://opendart.fss.or.kr/api/list.json",
+                params={
+                    "crtfc_key": settings.DART_API_KEY,
+                    "bgn_de": bgn_de,
+                    "end_de": end_de,
+                    "corp_cls": "Y",
+                    "page_count": "3",
+                },
+            )
+            dart_test = {
+                "status_code": resp.status_code,
+                "api_status": resp.json().get("status"),
+                "api_message": resp.json().get("message"),
+                "total_count": resp.json().get("total_count"),
+                "sample_count": len(resp.json().get("list", [])),
+            }
+    except Exception as e:
+        dart_test = {"error": str(e)}
+
     db = SessionLocal()
     try:
         count = await fetch_dart_disclosures(db, days=7)
@@ -138,9 +166,11 @@ async def refresh_disclosures():
             "total_in_db": total,
             "matched_to_stock": with_stock,
             "unmatched": without_stock,
+            "dart_api_test": dart_test,
+            "dart_api_key_prefix": settings.DART_API_KEY[:8] + "..." if settings.DART_API_KEY else "NOT SET",
         }
     except Exception as e:
-        return {"message": f"DART crawl failed: {e}", "traceback": traceback.format_exc(), "saved": 0}
+        return {"message": f"DART crawl failed: {e}", "traceback": traceback.format_exc(), "saved": 0, "dart_api_test": dart_test}
     finally:
         db.close()
 
