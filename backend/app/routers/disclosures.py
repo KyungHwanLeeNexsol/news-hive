@@ -111,53 +111,17 @@ async def generate_disclosure_summary_endpoint(
 
 @router.post("/disclosures/refresh")
 async def refresh_disclosures():
-    """Manually trigger DART disclosure crawl + backfill with debug info."""
+    """Manually trigger DART disclosure crawl (web scraping) + backfill."""
     import traceback
     from app.services.dart_crawler import fetch_dart_disclosures, backfill_disclosure_stock_ids, backfill_disclosure_report_types
-    from app.config import settings
-
-    if not settings.DART_API_KEY:
-        return {"message": "DART_API_KEY not set", "saved": 0}
-
-    # Quick DART API connectivity test
-    import httpx
-    from datetime import datetime, timedelta
-    dart_test = {}
-    try:
-        end_de = datetime.now().strftime("%Y%m%d")
-        bgn_de = (datetime.now() - timedelta(days=3)).strftime("%Y%m%d")
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(
-                "https://opendart.fss.or.kr/api/list.json",
-                params={
-                    "crtfc_key": settings.DART_API_KEY,
-                    "bgn_de": bgn_de,
-                    "end_de": end_de,
-                    "corp_cls": "Y",
-                    "page_count": "3",
-                },
-            )
-            dart_test = {
-                "status_code": resp.status_code,
-                "api_status": resp.json().get("status"),
-                "api_message": resp.json().get("message"),
-                "total_count": resp.json().get("total_count"),
-                "sample_count": len(resp.json().get("list", [])),
-            }
-    except Exception as e:
-        dart_test = {"error": str(e)}
 
     db = SessionLocal()
     try:
         count = await fetch_dart_disclosures(db, days=7)
-        # Backfill any previously unlinked disclosures
         backfilled = backfill_disclosure_stock_ids(db)
-        # Backfill report_type for disclosures missing it
         types_backfilled = backfill_disclosure_report_types(db)
-        # Count total disclosures in DB
         total = db.query(Disclosure).count()
         with_stock = db.query(Disclosure).filter(Disclosure.stock_id.isnot(None)).count()
-        without_stock = total - with_stock
         return {
             "message": "DART crawl completed",
             "saved": count,
@@ -165,12 +129,10 @@ async def refresh_disclosures():
             "types_backfilled": types_backfilled,
             "total_in_db": total,
             "matched_to_stock": with_stock,
-            "unmatched": without_stock,
-            "dart_api_test": dart_test,
-            "dart_api_key_prefix": settings.DART_API_KEY[:8] + "..." if settings.DART_API_KEY else "NOT SET",
+            "unmatched": total - with_stock,
         }
     except Exception as e:
-        return {"message": f"DART crawl failed: {e}", "traceback": traceback.format_exc(), "saved": 0, "dart_api_test": dart_test}
+        return {"message": f"DART crawl failed: {e}", "traceback": traceback.format_exc(), "saved": 0}
     finally:
         db.close()
 

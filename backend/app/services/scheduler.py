@@ -89,9 +89,6 @@ def _run_dart_crawl():
     """Sync wrapper that runs the async DART disclosure crawl."""
     from app.services.dart_crawler import fetch_dart_disclosures, backfill_disclosure_stock_ids, backfill_disclosure_report_types
 
-    if not settings.DART_API_KEY:
-        return
-
     db = SessionLocal()
     try:
         _cleanup_old_disclosures(db)
