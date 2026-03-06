@@ -56,7 +56,7 @@ async def create_event(
     if not title:
         raise HTTPException(status_code=400, detail="title is required")
 
-    event_date_str = body.get("event_date", "")
+    event_date_str = body.get("event_date", "").replace("Z", "+00:00")
     try:
         event_date = datetime.fromisoformat(event_date_str)
         if event_date.tzinfo is None:
