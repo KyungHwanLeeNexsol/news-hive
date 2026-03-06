@@ -8,6 +8,7 @@ const navItems = [
   { href: '/stocks', label: '종목' },
   { href: '/news', label: '뉴스' },
   { href: '/disclosures', label: '공시' },
+  { href: '/calendar', label: '캘린더' },
 ];
 
 export default function Header() {

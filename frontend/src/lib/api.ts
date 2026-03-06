@@ -1,4 +1,4 @@
-import type { Sector, Stock, StockListItem, NewsArticle, StockDetail, FinancialPeriod, PriceRecord, SentimentTrendItem, SectorInsight, DisclosureItem, DisclosureDetail } from "./types";
+import type { Sector, Stock, StockListItem, NewsArticle, StockDetail, FinancialPeriod, PriceRecord, SentimentTrendItem, SectorInsight, DisclosureItem, DisclosureDetail, MacroAlert, EconomicEvent } from "./types";
 
 const API_BASE = "/api";
 
@@ -245,5 +245,58 @@ export async function fetchDisclosureSummary(disclosureId: number): Promise<Disc
     method: "POST",
   });
   if (!res.ok) throw new Error("Failed to fetch disclosure summary");
+  return res.json();
+}
+
+// ── Macro Alerts ──
+
+export async function fetchAlerts(activeOnly = true): Promise<MacroAlert[]> {
+  const res = await fetchWithRetry(`${API_BASE}/alerts?active_only=${activeOnly}`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function dismissAlert(alertId: number): Promise<void> {
+  await fetch(`${API_BASE}/alerts/${alertId}/dismiss`, { method: "POST" });
+}
+
+// ── Economic Events ──
+
+export async function fetchEvents(
+  params: { days?: number; past_days?: number; category?: string } = {},
+): Promise<EconomicEvent[]> {
+  const sp = new URLSearchParams();
+  if (params.days) sp.set("days", String(params.days));
+  if (params.past_days != null) sp.set("past_days", String(params.past_days));
+  if (params.category) sp.set("category", params.category);
+  const res = await fetchWithRetry(`${API_BASE}/events?${sp}`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function createEvent(data: {
+  title: string;
+  event_date: string;
+  category?: string;
+  importance?: string;
+  country?: string;
+  description?: string;
+}): Promise<EconomicEvent> {
+  const res = await fetch(`${API_BASE}/events`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Failed to create event");
+  return res.json();
+}
+
+export async function deleteEvent(eventId: number): Promise<void> {
+  await fetch(`${API_BASE}/events/${eventId}`, { method: "DELETE" });
+}
+
+export async function seedEvents(): Promise<{ seeded: number }> {
+  const res = await fetch(`${API_BASE}/events/seed`, { method: "POST" });
+  if (!res.ok) throw new Error("Failed to seed events");
   return res.json();
 }

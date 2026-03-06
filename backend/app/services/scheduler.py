@@ -30,6 +30,16 @@ def _run_crawl_job():
         count = asyncio.run(crawl_all_news(db))
         logger.info(f"Scheduled crawl completed: {count} new articles")
 
+        # Detect macro risks after crawling
+        from app.services.macro_risk import detect_macro_risks, deactivate_old_alerts
+        try:
+            alerts = detect_macro_risks(db)
+            if alerts:
+                logger.info(f"Created {len(alerts)} macro risk alerts")
+            deactivate_old_alerts(db)
+        except Exception as e:
+            logger.error(f"Macro risk detection failed: {e}")
+
         # Backfill sentiment for any articles missing it
         articles = db.query(NewsArticle).filter(NewsArticle.sentiment.is_(None)).all()
         if articles:

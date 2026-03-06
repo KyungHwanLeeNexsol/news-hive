@@ -139,6 +139,27 @@ export interface DisclosureDetail {
   ai_summary: string | null;
 }
 
+export interface MacroAlert {
+  id: number;
+  level: 'warning' | 'critical';
+  keyword: string;
+  title: string;
+  description: string | null;
+  article_count: number;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface EconomicEvent {
+  id: number;
+  title: string;
+  description: string | null;
+  event_date: string;
+  category: string;
+  importance: string;
+  country: string;
+}
+
 export interface NewsRelation {
   stock_id: number | null;
   stock_name: string | null;
