@@ -137,6 +137,57 @@ async def refresh_disclosures():
         db.close()
 
 
+@router.get("/disclosures/debug-dart")
+async def debug_dart():
+    """Debug: test raw DART scraping from this server."""
+    import httpx
+    from app.services.dart_crawler import DART_SEARCH_URL, DART_HEADERS, _parse_dart_html, _parse_total_pages
+    from datetime import datetime, timedelta
+
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=3)
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            # Step 1: get session cookie
+            main_resp = await client.get(
+                "https://dart.fss.or.kr/dsab007/main.do",
+                headers={"User-Agent": DART_HEADERS["User-Agent"]},
+            )
+            cookies = dict(client.cookies)
+
+            # Step 2: search
+            form_data = {
+                "currentPage": "1",
+                "maxResults": "15",
+                "maxLinks": "5",
+                "sort": "date",
+                "series": "desc",
+                "startDate": start_date.strftime("%Y%m%d"),
+                "endDate": end_date.strftime("%Y%m%d"),
+                "textCrpNm": "",
+                "textCrpCik": "",
+            }
+            resp = await client.post(DART_SEARCH_URL, data=form_data, headers=DART_HEADERS)
+
+            items = _parse_dart_html(resp.text)
+            pages = _parse_total_pages(resp.text)
+
+            return {
+                "main_status": main_resp.status_code,
+                "cookies": cookies,
+                "search_status": resp.status_code,
+                "response_length": len(resp.text),
+                "total_pages": pages,
+                "parsed_items": len(items),
+                "first_items": items[:3],
+                "raw_snippet": resp.text[:500],
+            }
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
+
+
 @router.get("/stocks/{stock_id}/disclosures")
 async def get_stock_disclosures(
     stock_id: int,
