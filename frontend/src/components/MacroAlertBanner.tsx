@@ -47,12 +47,12 @@ export default function MacroAlertBanner() {
               </span>
             )}
           </span>
-          <span className="text-[11px] opacity-60 shrink-0">
+          <span className="text-[11px] opacity-60 shrink-0 leading-none self-center">
             {new Date(alert.created_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}
           </span>
           <button
             onClick={() => handleDismiss(alert.id)}
-            className="text-[16px] opacity-50 hover:opacity-100 shrink-0 leading-none"
+            className="text-[16px] opacity-50 hover:opacity-100 shrink-0 leading-none self-center"
             title="닫기"
           >
             &times;

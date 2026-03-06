@@ -57,6 +57,12 @@ RISK_KEYWORD_GROUPS: list[dict] = [
     },
 ]
 
+# 긍정적 맥락 키워드 — 이 단어가 포함되면 리스크 뉴스에서 제외
+POSITIVE_CONTEXT = [
+    "반등", "회복", "안정", "진정", "완화", "해소", "반발 매수", "저가 매수",
+    "상승 전환", "낙폭 축소", "우려 해소", "협상 타결", "휴전", "종전",
+]
+
 # 임계치: 최근 N시간 내 뉴스 기사 수
 WINDOW_HOURS = 1  # 1시간 윈도우
 WARNING_THRESHOLD = 3  # 3건 이상 → warning
@@ -85,13 +91,16 @@ def detect_macro_risks(db: Session) -> list[MacroAlert]:
         group_name = group["name"]
         keywords = group["keywords"]
 
-        # 해당 그룹 키워드가 포함된 기사 찾기
+        # 해당 그룹 키워드가 포함된 기사 찾기 (긍정적 맥락 제외)
         matched_articles = []
         for article in recent_articles:
             title = article.title or ""
             summary = article.summary or ""
             text = f"{title} {summary}"
             if any(kw in text for kw in keywords):
+                # 긍정적 맥락이면 리스크 뉴스에서 제외
+                if any(pos in text for pos in POSITIVE_CONTEXT):
+                    continue
                 matched_articles.append(article)
 
         count = len(matched_articles)
