@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import ARRAY, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import ARRAY, BigInteger, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -14,6 +14,7 @@ class Stock(Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     stock_code: Mapped[str] = mapped_column(String(20), nullable=False)
     market: Mapped[str | None] = mapped_column(String(10), nullable=True)  # KOSPI / KOSDAQ
+    market_cap: Mapped[int | None] = mapped_column(BigInteger, nullable=True)  # 시가총액 (억원)
     keywords: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

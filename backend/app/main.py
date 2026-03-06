@@ -90,4 +90,4 @@ async def health():
 async def market_status():
     from app.services.naver_finance import _is_market_open
     is_open = _is_market_open()
-    return {"market_open": is_open, "refresh_interval": 15 if is_open else 0}
+    return {"market_open": is_open, "refresh_interval": 10 if is_open else 0}

@@ -104,6 +104,38 @@ def _run_dart_crawl():
 
 
 
+def _update_market_caps():
+    """Fetch market cap rankings from Naver and update DB stocks."""
+    from app.models.stock import Stock
+    from app.services.naver_finance import fetch_market_cap_rankings
+
+    db = SessionLocal()
+    try:
+        rankings = asyncio.run(fetch_market_cap_rankings(max_pages_per_market=6))
+        if not rankings:
+            logger.warning("No market cap data fetched")
+            return
+
+        # Build code -> market_cap mapping
+        cap_map = {r.stock_code: r.market_cap for r in rankings if r.market_cap}
+
+        # Batch update
+        updated = 0
+        stocks = db.query(Stock).filter(Stock.stock_code.in_(list(cap_map.keys()))).all()
+        for stock in stocks:
+            new_cap = cap_map.get(stock.stock_code)
+            if new_cap and stock.market_cap != new_cap:
+                stock.market_cap = new_cap
+                updated += 1
+        if updated:
+            db.commit()
+        logger.info(f"Updated market_cap for {updated}/{len(stocks)} stocks (from {len(rankings)} rankings)")
+    except Exception as e:
+        logger.error(f"Market cap update failed: {e}")
+    finally:
+        db.close()
+
+
 def start_scheduler():
     """Start the background news crawl scheduler."""
     interval = settings.NEWS_CRAWL_INTERVAL_MINUTES
@@ -124,8 +156,17 @@ def start_scheduler():
         replace_existing=True,
         next_run_time=datetime.now(),
     )
+    # Market cap update every 6 hours (for stock list sorting order)
+    scheduler.add_job(
+        _update_market_caps,
+        "interval",
+        hours=6,
+        id="market_cap_update",
+        replace_existing=True,
+        next_run_time=datetime.now(),
+    )
     scheduler.start()
-    logger.info(f"Scheduler started: crawling every {interval} min, DART every 30 min")
+    logger.info(f"Scheduler started: crawling every {interval} min, DART every 30 min, market cap every 6h")
 
 
 def stop_scheduler():

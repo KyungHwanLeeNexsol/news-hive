@@ -24,7 +24,7 @@ from app.seed.sectors import seed_sectors
 from app.seed.stocks import seed_all_stocks
 from app.services.naver_finance import (
     fetch_stock_fundamentals, fetch_stock_fundamentals_batch,
-    fetch_stock_price_history, fetch_market_cap_rankings,
+    fetch_stock_price_history,
 )
 from app.services.financial_scraper import fetch_stock_valuation, fetch_stock_financials
 from app.services.kis_api import fetch_kis_stock_price
@@ -39,7 +39,7 @@ _response_cache: dict[str, tuple[float, object, str]] = {}  # key -> (expires, d
 
 def _response_cache_ttl() -> int:
     from app.services.naver_finance import _is_market_open
-    return 15 if _is_market_open() else 120
+    return 10 if _is_market_open() else 120
 
 
 def _cache_key(q: str, market: str, sector_id: int, ids: str, limit: int, offset: int) -> str:
@@ -195,51 +195,45 @@ async def list_stocks(
             headers={"X-Total-Count": total_str, "Access-Control-Expose-Headers": "X-Total-Count"},
         )
 
-    # --- Default mode: Naver market cap ranking (pre-sorted, cached) ---
-    rankings = await fetch_market_cap_rankings()
+    # --- Default mode: DB stocks sorted by market_cap + Polling API for live prices ---
+    query = db.query(Stock).options(joinedload(Stock.sector))
 
     if market:
-        rankings = [r for r in rankings if r.market == market.upper()]
+        query = query.filter(Stock.market == market.upper())
 
-    # Build stock_code → DB stock lookup (eager load sector)
-    all_codes = [r.stock_code for r in rankings]
-    db_stocks = (
-        db.query(Stock)
-        .options(joinedload(Stock.sector))
-        .filter(Stock.stock_code.in_(all_codes))
-        .all()
-    )
-    code_to_stock: dict[str, Stock] = {s.stock_code: s for s in db_stocks}
+    # Sort by market_cap descending (NULLs last)
+    query = query.order_by(Stock.market_cap.desc().nullslast(), Stock.id)
 
-    # News counts — single query for all matched stocks
-    news_counts = _get_news_counts(db, [s.id for s in db_stocks])
+    total = query.count()
+    stocks = query.offset(offset).limit(limit).all()
 
-    # Build response
+    # Batch fetch live prices for this page only (lightweight Polling API)
+    stock_codes = [s.stock_code for s in stocks]
+    prices = await fetch_stock_fundamentals_batch(stock_codes) if stock_codes else {}
+
+    # News counts — single query for this page
+    news_counts = _get_news_counts(db, [s.id for s in stocks])
+
     items = []
-    for r in rankings:
-        stock = code_to_stock.get(r.stock_code)
-        if not stock:
-            continue
+    for s in stocks:
+        fund = prices.get(s.stock_code)
         items.append(StockListItem(
-            id=stock.id,
-            name=stock.name,
-            stock_code=stock.stock_code,
-            sector_id=stock.sector_id,
-            sector_name=stock.sector.name if stock.sector else None,
-            market=r.market,
-            current_price=r.current_price or None,
-            price_change=r.price_change or None,
-            change_rate=r.change_rate or None,
-            volume=r.volume or None,
-            trading_value=None,
-            market_cap=r.market_cap or None,
-            news_count=news_counts.get(stock.id, 0),
+            id=s.id,
+            name=s.name,
+            stock_code=s.stock_code,
+            sector_id=s.sector_id,
+            sector_name=s.sector.name if s.sector else None,
+            market=s.market,
+            current_price=fund.current_price if fund else None,
+            price_change=fund.price_change if fund else None,
+            change_rate=fund.change_rate if fund else None,
+            volume=fund.volume if fund else None,
+            trading_value=fund.trading_value if fund else None,
+            market_cap=s.market_cap,
+            news_count=news_counts.get(s.id, 0),
         ))
 
-    total = len(items)
-    paginated = items[offset:offset + limit]
-
-    result = jsonable_encoder(paginated)
+    result = jsonable_encoder(items)
     total_str = str(total)
     _set_cached(cache_key, result, total_str)
 
