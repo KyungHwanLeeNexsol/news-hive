@@ -25,6 +25,7 @@ DART_HEADERS = {
     ),
     "Content-Type": "application/x-www-form-urlencoded",
     "Referer": "https://dart.fss.or.kr/dsab007/main.do",
+    "X-Requested-With": "XMLHttpRequest",
 }
 
 # Report type classification based on common report name patterns
@@ -203,14 +204,24 @@ async def fetch_dart_disclosures(
     max_results = 100  # items per page
 
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        # Visit main page first to establish session cookies
+        try:
+            await client.get(
+                "https://dart.fss.or.kr/dsab007/main.do",
+                headers={"User-Agent": DART_HEADERS["User-Agent"]},
+            )
+        except Exception:
+            pass  # Non-critical, continue with search
+
         while True:
             form_data = {
                 "currentPage": str(page_no),
                 "maxResults": str(max_results),
                 "maxLinks": "5",
+                "sort": "date",
+                "series": "desc",
                 "startDate": bgn_de,
                 "endDate": end_de,
-                "publicType": "",
                 "textCrpNm": "",
                 "textCrpCik": "",
             }
