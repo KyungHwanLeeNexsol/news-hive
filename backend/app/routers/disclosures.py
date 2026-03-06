@@ -1,9 +1,10 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import get_db, SessionLocal
 from app.models.disclosure import Disclosure
 from app.models.stock import Stock
@@ -109,6 +110,69 @@ async def generate_disclosure_summary_endpoint(
     }
 
 
+@router.post("/disclosures/push")
+async def push_disclosures(
+    body: dict,
+    x_push_secret: str = Header(default=""),
+):
+    """Receive disclosure data pushed from GitHub Actions (DART is blocked on this server).
+
+    Expects: {"items": [{"corp_code", "corp_name", "report_name", "rcept_no", "rcept_dt", "market"}, ...]}
+    """
+    if not settings.DART_PUSH_SECRET or x_push_secret != settings.DART_PUSH_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid push secret")
+
+    from app.services.dart_crawler import _classify_report_type, backfill_disclosure_stock_ids
+
+    items = body.get("items", [])
+    if not items:
+        return {"saved": 0, "total": 0}
+
+    db = SessionLocal()
+    try:
+        # Pre-load existing rcept_no set
+        existing = {r[0] for r in db.query(Disclosure.rcept_no).all()}
+
+        # Build name -> stock_id mapping
+        stocks = db.query(Stock).filter(Stock.stock_code.isnot(None)).all()
+        name_to_id = {s.name: s.id for s in stocks}
+
+        saved = 0
+        for item in items:
+            rcept_no = item.get("rcept_no", "")
+            if not rcept_no or rcept_no in existing:
+                continue
+
+            corp_name = item.get("corp_name", "")
+            report_name = item.get("report_name", "")
+
+            disclosure = Disclosure(
+                corp_code=item.get("corp_code", ""),
+                corp_name=corp_name,
+                stock_code=None,
+                stock_id=name_to_id.get(corp_name),
+                report_name=report_name,
+                report_type=_classify_report_type(report_name),
+                rcept_no=rcept_no,
+                rcept_dt=item.get("rcept_dt", ""),
+                url=f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}",
+            )
+            db.add(disclosure)
+            existing.add(rcept_no)
+            saved += 1
+
+        if saved:
+            db.commit()
+
+        # Backfill any unlinked disclosures
+        backfill_disclosure_stock_ids(db)
+
+        total = db.query(Disclosure).count()
+        return {"saved": saved, "total": total}
+    finally:
+        db.close()
+
+
 @router.post("/disclosures/refresh")
 async def refresh_disclosures():
     """Manually trigger DART disclosure crawl (web scraping) + backfill."""
@@ -135,57 +199,6 @@ async def refresh_disclosures():
         return {"message": f"DART crawl failed: {e}", "traceback": traceback.format_exc(), "saved": 0}
     finally:
         db.close()
-
-
-@router.get("/disclosures/debug-dart")
-async def debug_dart():
-    """Debug: test raw DART scraping from this server."""
-    import httpx
-    from app.services.dart_crawler import DART_SEARCH_URL, DART_HEADERS, _parse_dart_html, _parse_total_pages
-    from datetime import datetime, timedelta
-
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=3)
-
-    try:
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            # Step 1: get session cookie
-            main_resp = await client.get(
-                "https://dart.fss.or.kr/dsab007/main.do",
-                headers={"User-Agent": DART_HEADERS["User-Agent"]},
-            )
-            cookies = dict(client.cookies)
-
-            # Step 2: search
-            form_data = {
-                "currentPage": "1",
-                "maxResults": "15",
-                "maxLinks": "5",
-                "sort": "date",
-                "series": "desc",
-                "startDate": start_date.strftime("%Y%m%d"),
-                "endDate": end_date.strftime("%Y%m%d"),
-                "textCrpNm": "",
-                "textCrpCik": "",
-            }
-            resp = await client.post(DART_SEARCH_URL, data=form_data, headers=DART_HEADERS)
-
-            items = _parse_dart_html(resp.text)
-            pages = _parse_total_pages(resp.text)
-
-            return {
-                "main_status": main_resp.status_code,
-                "cookies": cookies,
-                "search_status": resp.status_code,
-                "response_length": len(resp.text),
-                "total_pages": pages,
-                "parsed_items": len(items),
-                "first_items": items[:3],
-                "raw_snippet": resp.text[:500],
-            }
-    except Exception as e:
-        import traceback
-        return {"error": str(e), "traceback": traceback.format_exc()}
 
 
 @router.get("/stocks/{stock_id}/disclosures")

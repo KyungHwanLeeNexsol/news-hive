@@ -1,0 +1,28 @@
+name: DART Disclosure Crawl
+
+on:
+  schedule:
+    # Run every 30 minutes during KST business hours (Mon-Fri 08:30-18:00 KST = 23:30-09:00 UTC)
+    - cron: '*/30 0-9 * * 1-5'
+    # Also run at night (catch late filings)
+    - cron: '0 12 * * 1-5'
+  workflow_dispatch: # Manual trigger
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install httpx
+
+      - name: Crawl DART and push to server
+        env:
+          DART_PUSH_SECRET: ${{ secrets.DART_PUSH_SECRET }}
+          API_URL: http://168.107.51.242:8000
+        run: python scripts/dart_crawl_push.py
