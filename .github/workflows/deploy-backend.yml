@@ -16,4 +16,10 @@ jobs:
           host: 168.107.51.242
           username: ubuntu
           key: ${{ secrets.ORACLE_SSH_KEY }}
-          script: /home/ubuntu/news-hive/deploy.sh
+          script: |
+            # Ensure DART_PUSH_SECRET is in .env
+            ENV_FILE=/home/ubuntu/news-hive/backend/.env
+            if ! grep -q "DART_PUSH_SECRET" "$ENV_FILE" 2>/dev/null; then
+              echo 'DART_PUSH_SECRET=${{ secrets.DART_PUSH_SECRET }}' >> "$ENV_FILE"
+            fi
+            /home/ubuntu/news-hive/deploy.sh
