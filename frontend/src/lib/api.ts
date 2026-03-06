@@ -11,9 +11,11 @@ async function fetchWithRetry(
   init?: RequestInit,
   retries = 1,
 ): Promise<Response> {
+  // Prevent browser/Next.js fetch caching for real-time data
+  const opts: RequestInit = { cache: "no-store", ...init };
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const res = await fetch(input, init);
+      const res = await fetch(input, opts);
       if (res.ok || res.status < 500 || attempt === retries) return res;
       // 5xx — backend might be waking up, wait and retry
       await new Promise((r) => setTimeout(r, 3000));
@@ -23,7 +25,7 @@ async function fetchWithRetry(
     }
   }
   // Unreachable, but TypeScript needs it
-  return fetch(input, init);
+  return fetch(input, opts);
 }
 
 export async function fetchSectors(): Promise<Sector[]> {
