@@ -37,11 +37,12 @@ RISK_KEYWORD_GROUPS: list[dict] = [
     },
     {
         "name": "디폴트",
-        "keywords": ["디폴트", "채무불이행", "부도", "파산"],
+        "keywords": ["디폴트", "채무불이행", "국가부도", "국가 부도", "소버린 디폴트"],
     },
     {
         "name": "폭락",
-        "keywords": ["폭락", "급락", "서킷브레이커", "사이드카", "패닉셀", "투매", "블랙먼데이"],
+        "keywords": ["폭락", "증시 급락", "코스피 급락", "코스닥 급락", "지수 급락",
+                      "서킷브레이커", "사이드카", "패닉셀", "투매", "블랙먼데이"],
     },
     {
         "name": "지정학",
@@ -61,6 +62,14 @@ RISK_KEYWORD_GROUPS: list[dict] = [
 POSITIVE_CONTEXT = [
     "반등", "회복", "안정", "진정", "완화", "해소", "반발 매수", "저가 매수",
     "상승 전환", "낙폭 축소", "우려 해소", "협상 타결", "휴전", "종전",
+]
+
+# 개별 기업/비금융 뉴스 제외 패턴 — 시장 전체 리스크가 아닌 개별 이슈
+EXCLUDE_CONTEXT = [
+    "매장 폐쇄", "폐업", "점포", "체인", "프랜차이즈", "레스토랑", "가구",
+    "Chapter 11", "챕터 11", "개인파산", "개인 파산",
+    "소송", "재판", "판결", "혐의",
+    "게임", "드라마", "영화", "예능",
 ]
 
 # 임계치: 최근 N시간 내 뉴스 기사 수
@@ -100,6 +109,9 @@ def detect_macro_risks(db: Session) -> list[MacroAlert]:
             if any(kw in text for kw in keywords):
                 # 긍정적 맥락이면 리스크 뉴스에서 제외
                 if any(pos in text for pos in POSITIVE_CONTEXT):
+                    continue
+                # 개별 기업/비금융 뉴스 제외
+                if any(exc in text for exc in EXCLUDE_CONTEXT):
                     continue
                 matched_articles.append(article)
 

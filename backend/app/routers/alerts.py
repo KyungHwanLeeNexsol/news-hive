@@ -18,11 +18,27 @@ async def list_alerts(
     limit: int = Query(default=10, ge=1, le=50),
     db: Session = Depends(get_db),
 ):
-    """활성 매크로 리스크 알림 목록."""
+    """활성 매크로 리스크 알림 목록 (키워드별 최신 1개만)."""
+    from sqlalchemy import func
+
     query = db.query(MacroAlert)
     if active_only:
         query = query.filter(MacroAlert.is_active == True)  # noqa: E712
-    alerts = query.order_by(desc(MacroAlert.created_at)).limit(limit).all()
+
+    # Deduplicate: only show the latest alert per keyword
+    latest_ids = (
+        db.query(func.max(MacroAlert.id))
+        .filter(MacroAlert.is_active == True)  # noqa: E712
+        .group_by(MacroAlert.keyword)
+        .subquery()
+    )
+    alerts = (
+        db.query(MacroAlert)
+        .filter(MacroAlert.id.in_(latest_ids))
+        .order_by(desc(MacroAlert.created_at))
+        .limit(limit)
+        .all()
+    )
 
     items = []
     for a in alerts:
