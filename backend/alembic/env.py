@@ -15,7 +15,10 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 from app.database import Base
-from app.models import Sector, Stock, NewsArticle, NewsStockRelation  # noqa: F401
+from app.models import (  # noqa: F401
+    Sector, Stock, NewsArticle, NewsStockRelation,
+    FundSignal, DailyBriefing, PortfolioReport,
+)
 
 target_metadata = Base.metadata
 

@@ -154,6 +154,21 @@ def _update_market_caps():
         db.close()
 
 
+def _run_daily_briefing():
+    """매일 오전 데일리 브리핑 자동 생성."""
+    from app.services.fund_manager import generate_daily_briefing
+
+    db = SessionLocal()
+    try:
+        briefing = asyncio.run(generate_daily_briefing(db))
+        if briefing:
+            logger.info(f"Daily briefing auto-generated for {briefing.briefing_date}")
+    except Exception as e:
+        logger.error(f"Daily briefing generation failed: {e}")
+    finally:
+        db.close()
+
+
 def start_scheduler():
     """Start the background news crawl scheduler."""
     interval = settings.NEWS_CRAWL_INTERVAL_MINUTES
@@ -183,8 +198,18 @@ def start_scheduler():
         replace_existing=True,
         next_run_time=datetime.now(),
     )
+    # AI daily briefing every day at 08:30 KST
+    scheduler.add_job(
+        _run_daily_briefing,
+        "cron",
+        hour=8,
+        minute=30,
+        timezone="Asia/Seoul",
+        id="daily_briefing",
+        replace_existing=True,
+    )
     scheduler.start()
-    logger.info(f"Scheduler started: crawling every {interval} min, DART every 30 min, market cap every 6h")
+    logger.info(f"Scheduler started: crawling every {interval} min, DART every 30 min, market cap every 6h, briefing at 08:30 KST")
 
 
 def stop_scheduler():

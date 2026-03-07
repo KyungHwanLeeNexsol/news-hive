@@ -9,6 +9,7 @@ const navItems = [
   { href: '/news', label: '뉴스' },
   { href: '/disclosures', label: '공시' },
   { href: '/calendar', label: '캘린더' },
+  { href: '/fund', label: 'AI 펀드' },
 ];
 
 export default function Header() {

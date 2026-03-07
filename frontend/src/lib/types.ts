@@ -182,3 +182,43 @@ export interface NewsArticle {
   collected_at: string;
   relations: NewsRelation[];
 }
+
+// ── AI Fund Manager ──
+
+export interface FundSignal {
+  id: number;
+  stock_id: number;
+  stock_name: string | null;
+  stock_code: string | null;
+  sector_name: string | null;
+  signal: 'buy' | 'sell' | 'hold';
+  confidence: number;
+  target_price: number | null;
+  stop_loss: number | null;
+  reasoning: string;
+  news_summary: string | null;
+  financial_summary: string | null;
+  market_summary: string | null;
+  created_at: string;
+}
+
+export interface DailyBriefing {
+  id: number;
+  briefing_date: string;
+  market_overview: string;
+  sector_highlights: string | null;
+  stock_picks: string | null;
+  risk_assessment: string | null;
+  strategy: string | null;
+  created_at: string;
+}
+
+export interface PortfolioReport {
+  id: number;
+  stock_ids: string;
+  overall_assessment: string;
+  risk_analysis: string | null;
+  sector_balance: string | null;
+  rebalancing: string | null;
+  created_at: string;
+}
