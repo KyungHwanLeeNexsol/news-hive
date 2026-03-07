@@ -22,7 +22,9 @@ jobs:
             if ! grep -q "DART_PUSH_SECRET" "$ENV_FILE" 2>/dev/null; then
               echo 'DART_PUSH_SECRET=${{ secrets.DART_PUSH_SECRET }}' >> "$ENV_FILE"
             fi
-            if ! grep -q "GEMINI_API_KEY" "$ENV_FILE" 2>/dev/null; then
+            if grep -q "GEMINI_API_KEY" "$ENV_FILE" 2>/dev/null; then
+              sed -i 's|^GEMINI_API_KEY=.*|GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}|' "$ENV_FILE"
+            else
               echo 'GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}' >> "$ENV_FILE"
             fi
             /home/ubuntu/news-hive/deploy.sh
