@@ -17,10 +17,13 @@ jobs:
           username: ubuntu
           key: ${{ secrets.ORACLE_SSH_KEY }}
           script: |
-            # Ensure DART_PUSH_SECRET is in .env
             ENV_FILE=/home/ubuntu/news-hive/backend/.env
+            # Ensure secrets are in .env
             if ! grep -q "DART_PUSH_SECRET" "$ENV_FILE" 2>/dev/null; then
               echo 'DART_PUSH_SECRET=${{ secrets.DART_PUSH_SECRET }}' >> "$ENV_FILE"
+            fi
+            if ! grep -q "GEMINI_API_KEY" "$ENV_FILE" 2>/dev/null; then
+              echo 'GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}' >> "$ENV_FILE"
             fi
             /home/ubuntu/news-hive/deploy.sh
             # Wait for server to start, then check logs
