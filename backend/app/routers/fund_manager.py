@@ -123,11 +123,23 @@ async def get_daily_briefing(
 @router.post("/briefing/generate", response_model=DailyBriefingResponse)
 async def generate_briefing_endpoint(db: Session = Depends(get_db)):
     """오늘의 데일리 브리핑을 생성합니다."""
-    from app.services.fund_manager import generate_daily_briefing
-    briefing = await generate_daily_briefing(db)
-    if not briefing:
-        raise HTTPException(status_code=500, detail="브리핑 생성에 실패했습니다.")
-    return DailyBriefingResponse.model_validate(briefing)
+    from app.config import settings
+    if not settings.GEMINI_API_KEY or settings.GEMINI_API_KEY.startswith("your_"):
+        raise HTTPException(
+            status_code=500,
+            detail=f"GEMINI_API_KEY가 설정되지 않았습니다. (현재값: '{settings.GEMINI_API_KEY[:10]}...' len={len(settings.GEMINI_API_KEY)})",
+        )
+    try:
+        from app.services.fund_manager import generate_daily_briefing
+        briefing = await generate_daily_briefing(db)
+        if not briefing:
+            raise HTTPException(status_code=500, detail="브리핑 생성에 실패했습니다. Gemini 응답을 파싱할 수 없습니다.")
+        return DailyBriefingResponse.model_validate(briefing)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Briefing generation failed")
+        raise HTTPException(status_code=500, detail=f"브리핑 생성 오류: {type(e).__name__}: {e}")
 
 
 @router.get("/briefings", response_model=list[DailyBriefingResponse])
