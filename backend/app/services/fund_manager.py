@@ -478,13 +478,20 @@ async def generate_daily_briefing(db: Session) -> DailyBriefing | None:
     if not parsed:
         return None
 
+    def _to_str(val) -> str | None:
+        if val is None:
+            return None
+        if isinstance(val, str):
+            return val
+        return json.dumps(val, ensure_ascii=False)
+
     briefing = DailyBriefing(
         briefing_date=today,
-        market_overview=parsed.get("market_overview", "브리핑 생성 실패"),
-        sector_highlights=parsed.get("sector_highlights"),
-        stock_picks=parsed.get("stock_picks"),
-        risk_assessment=parsed.get("risk_assessment"),
-        strategy=parsed.get("strategy"),
+        market_overview=_to_str(parsed.get("market_overview")) or "브리핑 생성 실패",
+        sector_highlights=_to_str(parsed.get("sector_highlights")),
+        stock_picks=_to_str(parsed.get("stock_picks")),
+        risk_assessment=_to_str(parsed.get("risk_assessment")),
+        strategy=_to_str(parsed.get("strategy")),
     )
 
     db.add(briefing)
