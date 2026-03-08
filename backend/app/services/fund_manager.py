@@ -434,10 +434,10 @@ async def generate_daily_briefing(db: Session) -> DailyBriefing | None:
 
     response = await _ask_ai(prompt)
     if not response:
-        raise RuntimeError("Gemini API가 응답을 반환하지 않았습니다 (rate limit 또는 API 오류)")
+        raise RuntimeError("AI API가 응답을 반환하지 않았습니다 (rate limit 또는 API 오류)")
     parsed = _parse_json_response(response)
     if not parsed:
-        raise RuntimeError(f"Gemini 응답 JSON 파싱 실패. 원본 응답(앞 500자): {response[:500]}")
+        raise RuntimeError(f"AI 응답 JSON 파싱 실패. 원본 응답(앞 500자): {response[:500]}")
 
     def _to_str(val) -> str | None:
         if val is None:
