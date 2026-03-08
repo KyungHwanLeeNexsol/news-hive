@@ -9,7 +9,6 @@ calling Gemini directly.  This gives us:
 
 import asyncio
 import logging
-import re
 
 import httpx
 
@@ -31,16 +30,22 @@ async def _call_openrouter(prompt: str) -> str | None:
         "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
     }
+    model = settings.OPENROUTER_MODEL or OPENROUTER_DEFAULT_MODEL
     payload = {
-        "model": settings.OPENROUTER_MODEL or OPENROUTER_DEFAULT_MODEL,
+        "model": model,
         "messages": [{"role": "user", "content": prompt}],
     }
 
     async with httpx.AsyncClient(timeout=60) as client:
         response = await client.post(url, json=payload, headers=headers)
-        response.raise_for_status()
+        if response.status_code != 200:
+            body = response.text[:500]
+            raise RuntimeError(f"OpenRouter HTTP {response.status_code} (model={model}): {body}")
         data = response.json()
-        return data["choices"][0]["message"]["content"].strip()
+        choices = data.get("choices")
+        if not choices:
+            raise RuntimeError(f"OpenRouter empty choices: {data}")
+        return choices[0]["message"]["content"].strip()
 
 
 async def _call_gemini(prompt: str) -> str | None:
@@ -74,6 +79,8 @@ async def ask_ai(prompt: str, max_retries: int = 3) -> str | None:
         logger.warning("No AI API keys configured — skipping AI call")
         return None
 
+    errors = []
+
     for provider_name, call_fn in providers:
         for attempt in range(max_retries):
             try:
@@ -89,6 +96,9 @@ async def ask_ai(prompt: str, max_retries: int = 3) -> str | None:
                     await asyncio.sleep(wait)
                 else:
                     logger.warning(f"{provider_name} failed: {e}")
+                    errors.append(f"{provider_name}: {e}")
                     break  # Try next provider
 
+    if errors:
+        logger.error(f"All AI providers failed: {'; '.join(errors)}")
     return None

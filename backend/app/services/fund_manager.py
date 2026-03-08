@@ -434,7 +434,17 @@ async def generate_daily_briefing(db: Session) -> DailyBriefing | None:
 
     response = await _ask_ai(prompt)
     if not response:
-        raise RuntimeError("AI API가 응답을 반환하지 않았습니다 (rate limit 또는 API 오류)")
+        # Check which providers were configured
+        from app.config import settings as _s
+        configured = []
+        if _s.OPENROUTER_API_KEY:
+            configured.append(f"OpenRouter(key={_s.OPENROUTER_API_KEY[:8]}...)")
+        if _s.GEMINI_API_KEY:
+            configured.append(f"Gemini(key={_s.GEMINI_API_KEY[:8]}...)")
+        raise RuntimeError(
+            f"모든 AI 프로바이더가 실패했습니다. 설정된 프로바이더: {configured or '없음'}. "
+            "서버 로그에서 상세 에러를 확인하세요."
+        )
     parsed = _parse_json_response(response)
     if not parsed:
         raise RuntimeError(f"AI 응답 JSON 파싱 실패. 원본 응답(앞 500자): {response[:500]}")
