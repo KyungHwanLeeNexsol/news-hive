@@ -265,7 +265,7 @@ async def generate_ai_summary(title: str, description: str | None, relations: li
     for attempt in range(max_retries):
         try:
             response = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model=settings.GEMINI_MODEL,
                 contents=prompt,
             )
             return response.text.strip()
@@ -313,7 +313,7 @@ async def generate_disclosure_summary(
     for attempt in range(max_retries):
         try:
             response = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model=settings.GEMINI_MODEL,
                 contents=prompt,
             )
             return response.text.strip()
@@ -379,7 +379,7 @@ async def translate_articles_batch(articles: list[dict]) -> None:
         for attempt in range(max_retries):
             try:
                 response = client.models.generate_content(
-                    model="gemini-2.0-flash",
+                    model=settings.GEMINI_MODEL,
                     contents=prompt,
                 )
                 text = response.text.strip()

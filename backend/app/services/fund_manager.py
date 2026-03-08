@@ -41,7 +41,7 @@ async def _ask_gemini(prompt: str, max_retries: int = 3) -> str | None:
     for attempt in range(max_retries):
         try:
             response = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model=settings.GEMINI_MODEL,
                 contents=prompt,
             )
             return response.text.strip()
@@ -65,7 +65,7 @@ async def _test_gemini() -> tuple[bool, str | None]:
         from google import genai
         client = genai.Client(api_key=settings.GEMINI_API_KEY)
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model=settings.GEMINI_MODEL,
             contents="Say OK",
         )
         return True, None

@@ -269,7 +269,7 @@ async def generate_sector_insight(sector_id: int, db: Session = Depends(get_db))
         for attempt in range(max_retries):
             try:
                 response = client.models.generate_content(
-                    model="gemini-2.0-flash",
+                    model=settings.GEMINI_MODEL,
                     contents=prompt,
                 )
                 content = response.text.strip()
