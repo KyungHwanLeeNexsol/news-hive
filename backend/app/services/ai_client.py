@@ -17,7 +17,7 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 # OpenRouter free model — Gemini 2.0 Flash via OpenRouter has its own quota
-OPENROUTER_DEFAULT_MODEL = "google/gemini-2.0-flash-exp:free"
+OPENROUTER_DEFAULT_MODEL = "openrouter/free"
 
 
 async def _call_openrouter(prompt: str) -> str | None:
