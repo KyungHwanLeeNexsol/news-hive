@@ -57,6 +57,22 @@ async def _ask_gemini(prompt: str, max_retries: int = 3) -> str | None:
     return None
 
 
+async def _test_gemini() -> tuple[bool, str | None]:
+    """Test Gemini API connectivity. Returns (success, error_message)."""
+    if not settings.GEMINI_API_KEY:
+        return False, "GEMINI_API_KEY가 비어있습니다."
+    try:
+        from google import genai
+        client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents="Say OK",
+        )
+        return True, None
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+
+
 def _parse_json_response(text: str) -> dict | None:
     """Extract JSON from a Gemini response that may include markdown code blocks."""
     if not text:

@@ -130,13 +130,13 @@ async def generate_briefing_endpoint(db: Session = Depends(get_db)):
             detail=f"GEMINI_API_KEY가 설정되지 않았습니다. (현재값: '{settings.GEMINI_API_KEY[:10]}...' len={len(settings.GEMINI_API_KEY)})",
         )
     try:
-        from app.services.fund_manager import generate_daily_briefing, _ask_gemini
+        from app.services.fund_manager import generate_daily_briefing, _test_gemini
         # Quick test: can we reach Gemini at all?
-        test_resp = await _ask_gemini("Say OK")
-        if test_resp is None:
+        test_ok, test_err = await _test_gemini()
+        if not test_ok:
             raise HTTPException(
                 status_code=500,
-                detail="Gemini API 호출 실패. 서버 로그를 확인하세요. (API 키가 유효하지 않거나 네트워크 문제)",
+                detail=f"Gemini API 호출 실패: {test_err}",
             )
         briefing = await generate_daily_briefing(db)
         if not briefing:
