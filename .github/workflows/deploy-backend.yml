@@ -27,6 +27,11 @@ jobs:
             else
               echo 'GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}' >> "$ENV_FILE"
             fi
+            if grep -q "OPENROUTER_API_KEY" "$ENV_FILE" 2>/dev/null; then
+              sed -i 's|^OPENROUTER_API_KEY=.*|OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}|' "$ENV_FILE"
+            else
+              echo 'OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}' >> "$ENV_FILE"
+            fi
             /home/ubuntu/news-hive/deploy.sh
             # Wait for server to start, then check logs
             sleep 5

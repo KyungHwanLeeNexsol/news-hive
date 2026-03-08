@@ -269,11 +269,7 @@ def _extract_with_bs4(html: str) -> str | None:
 
 
 async def _extract_with_ai(html: str) -> str | None:
-    """Use Gemini AI to extract article content from HTML."""
-    from app.config import settings
-
-    if not settings.GEMINI_API_KEY:
-        return None
+    """Use AI to extract article content from HTML."""
 
     # Truncate HTML to avoid token limits (keep first ~30K chars)
     truncated = html[:30000]
@@ -291,14 +287,9 @@ HTML:
 {truncated}"""
 
     try:
-        from google import genai
+        from app.services.ai_client import ask_ai
 
-        client = genai.Client(api_key=settings.GEMINI_API_KEY)
-        response = client.models.generate_content(
-            model=settings.GEMINI_MODEL,
-            contents=prompt,
-        )
-        text = response.text.strip()
+        text = await ask_ai(prompt)
         if not text or text == "EMPTY" or len(text) < 50:
             return None
         return text

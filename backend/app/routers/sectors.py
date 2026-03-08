@@ -255,33 +255,12 @@ async def generate_sector_insight(sector_id: int, db: Session = Depends(get_db))
 
 한국어로, 마크다운 없이 일반 텍스트로 작성해주세요."""
 
-    if not settings.GEMINI_API_KEY:
-        return {"content": "AI API 키가 설정되지 않았습니다.", "cached": False}
-
     try:
-        from google import genai
-        import asyncio
+        from app.services.ai_client import ask_ai
 
-        client = genai.Client(api_key=settings.GEMINI_API_KEY)
-
-        max_retries = 3
-        content = None
-        for attempt in range(max_retries):
-            try:
-                response = client.models.generate_content(
-                    model=settings.GEMINI_MODEL,
-                    contents=prompt,
-                )
-                content = response.text.strip()
-                break
-            except Exception as e:
-                if ("429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)) and attempt < max_retries - 1:
-                    await asyncio.sleep(5 * (2 ** attempt))
-                else:
-                    raise
-
+        content = await ask_ai(prompt)
         if not content:
-            return {"content": "인사이트 생성에 실패했습니다.", "cached": False}
+            return {"content": "인사이트 생성에 실패했습니다. AI API 키를 확인하세요.", "cached": False}
 
         # Cache to DB
         insight = SectorInsight(sector_id=sector_id, content=content)

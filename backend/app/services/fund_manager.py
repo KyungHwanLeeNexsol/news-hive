@@ -26,51 +26,10 @@ from app.models.stock import Stock
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Gemini helper
+# AI helper (OpenRouter primary + Gemini fallback)
 # ---------------------------------------------------------------------------
 
-async def _ask_gemini(prompt: str, max_retries: int = 3) -> str | None:
-    """Send a prompt to Gemini and return the response text."""
-    if not settings.GEMINI_API_KEY:
-        logger.warning("GEMINI_API_KEY not configured — skipping AI analysis")
-        return None
-
-    from google import genai
-
-    client = genai.Client(api_key=settings.GEMINI_API_KEY)
-    for attempt in range(max_retries):
-        try:
-            response = client.models.generate_content(
-                model=settings.GEMINI_MODEL,
-                contents=prompt,
-            )
-            return response.text.strip()
-        except Exception as e:
-            is_rate_limit = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
-            if is_rate_limit and attempt < max_retries - 1:
-                wait = 5 * (2 ** attempt)
-                logger.info(f"Gemini rate limited, retrying in {wait}s (attempt {attempt + 1})")
-                await asyncio.sleep(wait)
-            else:
-                logger.error(f"Gemini API error: {e}")
-                return None
-    return None
-
-
-async def _test_gemini() -> tuple[bool, str | None]:
-    """Test Gemini API connectivity. Returns (success, error_message)."""
-    if not settings.GEMINI_API_KEY:
-        return False, "GEMINI_API_KEY가 비어있습니다."
-    try:
-        from google import genai
-        client = genai.Client(api_key=settings.GEMINI_API_KEY)
-        response = client.models.generate_content(
-            model=settings.GEMINI_MODEL,
-            contents="Say OK",
-        )
-        return True, None
-    except Exception as e:
-        return False, f"{type(e).__name__}: {e}"
+from app.services.ai_client import ask_ai as _ask_ai
 
 
 def _parse_json_response(text: str) -> dict | None:
@@ -364,7 +323,7 @@ async def analyze_stock(db: Session, stock_id: int) -> FundSignal | None:
 - 투자 판단 근거는 구체적인 데이터를 인용하여 전문적으로 작성하세요.
 """
 
-    response = await _ask_gemini(prompt)
+    response = await _ask_ai(prompt)
     parsed = _parse_json_response(response)
     if not parsed:
         return None
@@ -473,7 +432,7 @@ async def generate_daily_briefing(db: Session) -> DailyBriefing | None:
 }}
 """
 
-    response = await _ask_gemini(prompt)
+    response = await _ask_ai(prompt)
     if not response:
         raise RuntimeError("Gemini API가 응답을 반환하지 않았습니다 (rate limit 또는 API 오류)")
     parsed = _parse_json_response(response)
@@ -559,7 +518,7 @@ async def analyze_portfolio(db: Session, stock_ids: list[int]) -> PortfolioRepor
 }}
 """
 
-    response = await _ask_gemini(prompt)
+    response = await _ask_ai(prompt)
     parsed = _parse_json_response(response)
     if not parsed:
         return None

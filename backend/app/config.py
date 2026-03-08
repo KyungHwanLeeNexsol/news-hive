@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.0-flash-lite"
 
+    OPENROUTER_API_KEY: str = ""
+    OPENROUTER_MODEL: str = ""  # blank = use default free model
+
     KIS_APP_KEY: str = ""
     KIS_APP_SECRET: str = ""
 

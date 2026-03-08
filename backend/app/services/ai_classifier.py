@@ -257,28 +257,8 @@ async def generate_ai_summary(title: str, description: str | None, relations: li
 
 한국어로 작성해주세요. 마크다운 없이 일반 텍스트로 응답해주세요."""
 
-    import asyncio as _asyncio
-    from google import genai
-
-    client = genai.Client(api_key=settings.GEMINI_API_KEY)
-    max_retries = 5
-    for attempt in range(max_retries):
-        try:
-            response = client.models.generate_content(
-                model=settings.GEMINI_MODEL,
-                contents=prompt,
-            )
-            return response.text.strip()
-        except Exception as e:
-            is_rate_limit = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
-            if is_rate_limit and attempt < max_retries - 1:
-                wait = 5 * (2 ** attempt)  # 5s, 10s, 20s, 40s
-                logger.info(f"AI summary rate limited, retrying in {wait}s (attempt {attempt + 1}/{max_retries})")
-                await _asyncio.sleep(wait)
-            else:
-                logger.info(f"AI summary skipped (rate limited)")
-                return None
-    return None
+    from app.services.ai_client import ask_ai
+    return await ask_ai(prompt, max_retries=5)
 
 
 async def generate_disclosure_summary(
@@ -287,9 +267,6 @@ async def generate_disclosure_summary(
     corp_name: str,
 ) -> str | None:
     """Generate an AI summary for a DART disclosure aimed at beginner investors."""
-    if not settings.GEMINI_API_KEY:
-        return None
-
     type_text = report_type if report_type else "미분류"
 
     prompt = f"""다음 DART 전자공시를 투자 초보자도 이해할 수 있도록 쉽게 설명해주세요.
@@ -305,28 +282,8 @@ async def generate_disclosure_summary(
 
 한국어로 작성해주세요. 마크다운 없이 일반 텍스트로 응답해주세요."""
 
-    import asyncio as _asyncio
-    from google import genai
-
-    client = genai.Client(api_key=settings.GEMINI_API_KEY)
-    max_retries = 5
-    for attempt in range(max_retries):
-        try:
-            response = client.models.generate_content(
-                model=settings.GEMINI_MODEL,
-                contents=prompt,
-            )
-            return response.text.strip()
-        except Exception as e:
-            is_rate_limit = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
-            if is_rate_limit and attempt < max_retries - 1:
-                wait = 5 * (2 ** attempt)
-                logger.info(f"Disclosure summary rate limited, retrying in {wait}s (attempt {attempt + 1}/{max_retries})")
-                await _asyncio.sleep(wait)
-            else:
-                logger.info(f"Disclosure summary skipped (rate limited)")
-                return None
-    return None
+    from app.services.ai_client import ask_ai
+    return await ask_ai(prompt, max_retries=5)
 
 
 def _is_english_title(title: str) -> bool:
@@ -343,16 +300,11 @@ async def translate_articles_batch(articles: list[dict]) -> None:
     """
     import asyncio as _asyncio
     import json as _json
-    from google import genai
-
-    if not settings.GEMINI_API_KEY:
-        return
+    from app.services.ai_client import ask_ai
 
     en_articles = [(i, a) for i, a in enumerate(articles) if _is_english_title(a.get("title", ""))]
     if not en_articles:
         return
-
-    client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
     # Process in chunks of 5 (smaller chunks to avoid rate limits)
     chunk_size = 5
@@ -374,44 +326,31 @@ async def translate_articles_batch(articles: list[dict]) -> None:
 출력 형식:
 [{{"id": 1, "title": "번역된 제목", "desc": "번역된 요약"}}, ...]"""
 
-        # Retry with exponential backoff (max 5 attempts)
-        max_retries = 5
-        for attempt in range(max_retries):
-            try:
-                response = client.models.generate_content(
-                    model=settings.GEMINI_MODEL,
-                    contents=prompt,
-                )
-                text = response.text.strip()
-                # Strip markdown code block if present
-                if text.startswith("```"):
-                    text = re.sub(r"^```(?:json)?\s*", "", text)
-                    text = re.sub(r"\s*```$", "", text)
+        try:
+            text = await ask_ai(prompt, max_retries=5)
+            if not text:
+                continue
 
-                translated_items = _json.loads(text)
+            # Strip markdown code block if present
+            if text.startswith("```"):
+                text = re.sub(r"^```(?:json)?\s*", "", text)
+                text = re.sub(r"\s*```$", "", text)
 
-                for item in translated_items:
-                    idx = item.get("id", 0) - 1
-                    if 0 <= idx < len(chunk):
-                        _, article = chunk[idx]
-                        t = item.get("title", "").strip()
-                        d = item.get("desc", "").strip()
-                        if t and len(t) > 2:
-                            article["original_title"] = article["title"]
-                            article["title"] = t
-                        if d and len(d) > 2:
-                            article["description"] = d
-                break  # Success, exit retry loop
-            except Exception as e:
-                is_rate_limit = "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e)
-                if is_rate_limit and attempt < max_retries - 1:
-                    wait = 5 * (2 ** attempt)  # 5s, 10s, 20s, 40s
-                    logger.info(f"Translation rate limited, retrying in {wait}s (attempt {attempt + 1}/{max_retries})")
-                    await _asyncio.sleep(wait)
-                else:
-                    # Non-fatal: English titles are kept as-is
-                    logger.info(f"Translation skipped (rate limited), keeping English titles: chunk {chunk_start // chunk_size + 1}")
-                    break
+            translated_items = _json.loads(text)
+
+            for item in translated_items:
+                idx = item.get("id", 0) - 1
+                if 0 <= idx < len(chunk):
+                    _, article = chunk[idx]
+                    t = item.get("title", "").strip()
+                    d = item.get("desc", "").strip()
+                    if t and len(t) > 2:
+                        article["original_title"] = article["title"]
+                        article["title"] = t
+                    if d and len(d) > 2:
+                        article["description"] = d
+        except Exception as e:
+            logger.info(f"Translation skipped, keeping English titles: chunk {chunk_start // chunk_size + 1}: {e}")
 
         # Delay between chunks to avoid rate limits
         if chunk_start + chunk_size < len(en_articles):

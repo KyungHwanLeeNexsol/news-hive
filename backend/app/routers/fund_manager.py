@@ -124,10 +124,10 @@ async def get_daily_briefing(
 async def generate_briefing_endpoint(db: Session = Depends(get_db)):
     """오늘의 데일리 브리핑을 생성합니다."""
     from app.config import settings
-    if not settings.GEMINI_API_KEY or settings.GEMINI_API_KEY.startswith("your_"):
+    if not settings.OPENROUTER_API_KEY and not settings.GEMINI_API_KEY:
         raise HTTPException(
             status_code=500,
-            detail=f"GEMINI_API_KEY가 설정되지 않았습니다. (현재값: '{settings.GEMINI_API_KEY[:10]}...' len={len(settings.GEMINI_API_KEY)})",
+            detail="AI API 키가 설정되지 않았습니다. OPENROUTER_API_KEY 또는 GEMINI_API_KEY를 설정하세요.",
         )
     try:
         from app.services.fund_manager import generate_daily_briefing
