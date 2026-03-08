@@ -96,9 +96,11 @@ async def ask_ai(prompt: str, max_retries: int = 3) -> str | None:
                     await asyncio.sleep(wait)
                 else:
                     logger.warning(f"{provider_name} failed: {e}")
-                    errors.append(f"{provider_name}: {e}")
+                    errors.append(f"{provider_name}: {type(e).__name__}: {e}")
                     break  # Try next provider
 
     if errors:
-        logger.error(f"All AI providers failed: {'; '.join(errors)}")
+        detail = "; ".join(errors)
+        logger.error(f"All AI providers failed: {detail}")
+        raise RuntimeError(f"모든 AI 프로바이더 실패 — {detail}")
     return None
