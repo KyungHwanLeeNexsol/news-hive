@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     NAVER_CLIENT_SECRET: str = ""
 
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-2.0-flash"
+    GEMINI_MODEL: str = "gemini-2.5-flash"
 
     OPENROUTER_API_KEY: str = ""
     OPENROUTER_MODEL: str = ""  # blank = use default free model
