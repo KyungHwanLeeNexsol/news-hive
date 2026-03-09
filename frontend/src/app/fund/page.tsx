@@ -119,13 +119,26 @@ function BriefingTab() {
     );
   }
 
-  const sections = [
-    { title: '시장 전망', content: briefing.market_overview, icon: '\u{1F30D}' },
-    { title: '주목 섹터', content: briefing.sector_highlights, icon: '\u{1F3AF}' },
-    { title: '오늘의 픽', content: briefing.stock_picks, icon: '\u{2B50}' },
-    { title: '리스크 평가', content: briefing.risk_assessment, icon: '\u{26A0}\u{FE0F}' },
-    { title: '투자 전략', content: briefing.strategy, icon: '\u{1F4DD}' },
-  ];
+  // Parse JSON arrays from sector_highlights and stock_picks
+  function tryParseJson(value: string | null | undefined): unknown[] | null {
+    if (!value) return null;
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      // not JSON — ignore
+    }
+    return null;
+  }
+
+  const sectorItems = tryParseJson(briefing.sector_highlights);
+  const stockItems = tryParseJson(briefing.stock_picks);
+
+  const sentimentColor = (s: string) => {
+    if (s === 'positive') return { bg: 'bg-[#e8f5e9]', text: 'text-[#2e7d32]', label: '긍정' };
+    if (s === 'negative') return { bg: 'bg-[#fce4ec]', text: 'text-[#c62828]', label: '부정' };
+    return { bg: 'bg-[#f5f5f5]', text: 'text-[#616161]', label: '중립' };
+  };
 
   return (
     <div>
@@ -144,17 +157,86 @@ function BriefingTab() {
         </button>
       </div>
       <div className="space-y-3">
-        {sections.map((section) =>
-          section.content ? (
-            <div key={section.title} className="section-box">
-              <div className="section-title">
-                <span>{section.icon} {section.title}</span>
-              </div>
-              <div className="p-4 text-[13px] text-[#333] leading-relaxed whitespace-pre-wrap">
-                {section.content}
-              </div>
+        {/* 시장 전망 */}
+        {briefing.market_overview && (
+          <div className="section-box">
+            <div className="section-title"><span>{'\u{1F30D}'} 시장 전망</span></div>
+            <div className="p-4 text-[13px] text-[#333] leading-[1.8]">
+              {briefing.market_overview}
             </div>
-          ) : null
+          </div>
+        )}
+
+        {/* 주목 섹터 */}
+        {briefing.sector_highlights && (
+          <div className="section-box">
+            <div className="section-title"><span>{'\u{1F3AF}'} 주목 섹터</span></div>
+            <div className="p-4">
+              {sectorItems ? (
+                <div className="space-y-2.5">
+                  {sectorItems.map((item: Record<string, string>, i: number) => {
+                    const sc = sentimentColor(item.sentiment || 'neutral');
+                    return (
+                      <div key={i} className="border border-[#eee] rounded-lg p-3">
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <span className="text-[13px] font-semibold text-[#222]">{item.sector}</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${sc.bg} ${sc.text}`}>
+                            {sc.label}
+                          </span>
+                        </div>
+                        <p className="text-[12.5px] text-[#555] leading-[1.7]">{item.analysis}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="text-[13px] text-[#333] leading-[1.8]">{briefing.sector_highlights}</div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* 오늘의 픽 */}
+        {briefing.stock_picks && (
+          <div className="section-box">
+            <div className="section-title"><span>{'\u{2B50}'} 오늘의 픽</span></div>
+            <div className="p-4">
+              {stockItems ? (
+                <div className="space-y-2.5">
+                  {stockItems.map((item: Record<string, string>, i: number) => (
+                    <div key={i} className="border border-[#eee] rounded-lg p-3">
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <span className="text-[14px] font-semibold text-[#1261c4]">{item.stock}</span>
+                      </div>
+                      <p className="text-[12.5px] text-[#555] leading-[1.7]">{item.reason}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-[13px] text-[#333] leading-[1.8]">{briefing.stock_picks}</div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* 리스크 평가 */}
+        {briefing.risk_assessment && (
+          <div className="section-box">
+            <div className="section-title"><span>{'\u{26A0}\u{FE0F}'} 리스크 평가</span></div>
+            <div className="p-4 text-[13px] text-[#333] leading-[1.8]">
+              {briefing.risk_assessment}
+            </div>
+          </div>
+        )}
+
+        {/* 투자 전략 */}
+        {briefing.strategy && (
+          <div className="section-box">
+            <div className="section-title"><span>{'\u{1F4DD}'} 투자 전략</span></div>
+            <div className="p-4 text-[13px] text-[#333] leading-[1.8]">
+              {briefing.strategy}
+            </div>
+          </div>
         )}
       </div>
     </div>
