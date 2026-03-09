@@ -433,6 +433,11 @@ async def analyze_stock(db: Session, stock_id: int) -> FundSignal | None:
             f"평균 수익률: {accuracy['avg_return']}%"
         )
 
+    # Pre-compute values that would break f-string syntax
+    trend_label = {'improving': '개선 중', 'worsening': '악화 중', 'stable': '안정적'}.get(
+        sentiment_trend.get('trend', 'stable'), '안정적'
+    )
+
     # Build comprehensive prompt
     prompt = f"""당신은 하버드 MBA 출신의 20년 경력 전문 펀드매니저입니다.
 아래 데이터를 종합적으로 분석하여 투자 판단을 내려주세요.
@@ -453,7 +458,7 @@ async def analyze_stock(db: Session, stock_id: int) -> FundSignal | None:
 ## 1-1. 센티먼트 추이 (최근 3일 vs 이전 4일)
 - 최근 3일: 긍정 {sentiment_trend['recent_3d']['positive']}건, 부정 {sentiment_trend['recent_3d']['negative']}건, 중립 {sentiment_trend['recent_3d']['neutral']}건 (점수: {sentiment_trend['score_3d']})
 - 이전 4일: 긍정 {sentiment_trend['prev_4d']['positive']}건, 부정 {sentiment_trend['prev_4d']['negative']}건, 중립 {sentiment_trend['prev_4d']['neutral']}건 (점수: {sentiment_trend['score_prev']})
-- 추세: {{'improving': '개선 중', 'worsening': '악화 중', 'stable': '안정적'}[sentiment_trend['trend']]}
+- 추세: {trend_label}
 ※ 센티먼트가 악화되고 있다면 매수에 신중하고, 개선 중이라면 긍정적으로 평가하세요.
 
 ## 2. 섹터 뉴스 동향
@@ -600,6 +605,10 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
         for d in recent_disc
     ]
 
+    market_trend_label = {'improving': '개선 중 ↑', 'worsening': '악화 중 ↓', 'stable': '안정적 →'}.get(
+        market_sentiment.get('trend', 'stable'), '안정적 →'
+    )
+
     prompt = f"""당신은 국내 최고 자산운용사의 CIO(최고투자책임자)입니다.
 오늘 날짜: {today.strftime('%Y년 %m월 %d일')}
 
@@ -623,7 +632,7 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
 ## 시장 센티먼트 추이
 - 최근 3일: 긍정 {market_sentiment['recent_3d']['positive']}건, 부정 {market_sentiment['recent_3d']['negative']}건 (점수: {market_sentiment['score_3d']})
 - 이전 4일: 긍정 {market_sentiment['prev_4d']['positive']}건, 부정 {market_sentiment['prev_4d']['negative']}건 (점수: {market_sentiment['score_prev']})
-- 추세: {{'improving': '개선 중 ↑', 'worsening': '악화 중 ↓', 'stable': '안정적 →'}[market_sentiment['trend']]}
+- 추세: {market_trend_label}
 
 ## 매크로 리스크 현황
 {json.dumps(macro_alerts, ensure_ascii=False, indent=2) if macro_alerts else '현재 특이 리스크 없음'}
