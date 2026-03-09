@@ -15,7 +15,8 @@ from app.services.crawlers.yahoo import search_yahoo_finance_top, search_yahoo_s
 from app.services.crawlers.korean_rss import fetch_korean_rss_feeds
 from app.services.crawlers.content_scraper import scrape_articles_batch
 from app.services.ai_classifier import (
-    KeywordIndex, classify_news, classify_sentiment, _extract_sector_keywords,
+    KeywordIndex, classify_news, classify_news_with_ai, classify_sentiment,
+    classify_sentiment_with_ai, _extract_sector_keywords,
     translate_articles_batch, is_non_financial_article,
 )
 
@@ -361,6 +362,15 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
         relations.extend(classify_news(ad["title"], index))
         ad["_relations"] = relations
 
+    # AI 분류: 키워드 매칭이 안 된 기사에 대해 AI로 섹터 분류 시도
+    unmatched_count = sum(1 for a in unique_articles if not a.get("_relations"))
+    if unmatched_count > 0:
+        logger.info(f"Running AI classification on {unmatched_count} unmatched articles...")
+        try:
+            await classify_news_with_ai(unique_articles, index, sectors)
+        except Exception as e:
+            logger.warning(f"AI classification failed (continuing with keyword matches): {e}")
+
     pre_rel_count = len(unique_articles)
     unique_articles = [a for a in unique_articles if a.get("_relations")]
     no_rel_count = pre_rel_count - len(unique_articles)
@@ -371,8 +381,14 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
         logger.info("No articles with sector/stock relations to save.")
         return 0
 
+    # AI 감성분석: 키워드 분석이 neutral인 기사에 대해 AI로 정밀 분석
+    try:
+        await classify_sentiment_with_ai(unique_articles)
+    except Exception as e:
+        logger.warning(f"AI sentiment classification failed (using keyword-based): {e}")
+
     # Phase 3: Scrape article content (본문 스크래핑)
-    url_to_content = await scrape_articles_batch(unique_articles, max_articles=50)
+    url_to_content = await scrape_articles_batch(unique_articles)
     for ad in unique_articles:
         ad["_content"] = url_to_content.get(ad["url"])
 
@@ -396,7 +412,7 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
             params[f"u{j}"] = ad["url"][:1000]
             params[f"sr{j}"] = ad["source"]
             params[f"pa{j}"] = ad.get("published_at")
-            params[f"se{j}"] = classify_sentiment(ad["title"])
+            params[f"se{j}"] = ad.get("_ai_sentiment") or classify_sentiment(ad["title"])
             params[f"ct{j}"] = ad.get("_content")
 
         sql = sa_text(

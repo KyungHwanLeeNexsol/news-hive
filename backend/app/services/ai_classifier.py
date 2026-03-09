@@ -229,6 +229,75 @@ def classify_sentiment(title: str) -> str:
     return "neutral"
 
 
+async def classify_sentiment_with_ai(
+    articles: list[dict],
+) -> None:
+    """AI를 사용하여 기사의 감성을 정밀 분석한다.
+
+    키워드 기반 감성분석이 neutral인 기사에 대해 AI로 재분석.
+    articles를 in-place로 수정하여 _ai_sentiment 필드를 추가한다.
+    """
+    import json as _json
+    from app.services.ai_client import ask_ai
+
+    # neutral인 기사만 AI 분석 대상
+    neutral_articles = [
+        (i, a) for i, a in enumerate(articles)
+        if classify_sentiment(a.get("title", "")) == "neutral" and a.get("_relations")
+    ]
+    if not neutral_articles:
+        return
+
+    chunk_size = 15
+    reclassified = 0
+
+    for chunk_start in range(0, len(neutral_articles), chunk_size):
+        chunk = neutral_articles[chunk_start:chunk_start + chunk_size]
+
+        items = []
+        for j, (_, a) in enumerate(chunk):
+            title = a.get("title", "")
+            desc = (a.get("description") or "")[:150]
+            items.append({"id": j + 1, "title": title, "desc": desc})
+
+        prompt = f"""다음 투자 관련 뉴스 기사들의 감성을 분류해주세요.
+각 기사가 주가에 미치는 영향을 기준으로 positive/negative/neutral 중 하나로 판단하세요.
+
+기사 목록:
+{_json.dumps(items, ensure_ascii=False)}
+
+반드시 아래 JSON 배열 형식으로만 응답해주세요:
+[{{"id": 1, "sentiment": "positive"}}, ...]"""
+
+        try:
+            text = await ask_ai(prompt, max_retries=3)
+            if not text:
+                continue
+
+            if text.startswith("```"):
+                text = re.sub(r"^```(?:json)?\s*", "", text)
+                text = re.sub(r"\s*```$", "", text)
+
+            results = _json.loads(text)
+            for item in results:
+                idx = item.get("id", 0) - 1
+                if 0 <= idx < len(chunk):
+                    sentiment = item.get("sentiment", "neutral")
+                    if sentiment in ("positive", "negative"):
+                        orig_idx, article = chunk[idx]
+                        article["_ai_sentiment"] = sentiment
+                        reclassified += 1
+        except Exception as e:
+            logger.debug(f"AI sentiment classification chunk failed: {e}")
+
+        if chunk_start + chunk_size < len(neutral_articles):
+            import asyncio as _asyncio
+            await _asyncio.sleep(2)
+
+    if reclassified:
+        logger.info(f"AI sentiment: reclassified {reclassified}/{len(neutral_articles)} neutral articles")
+
+
 async def generate_ai_summary(title: str, description: str | None, relations: list[dict]) -> str | None:
     """Generate an AI investment analysis summary for a news article."""
     if not settings.GEMINI_API_KEY:
@@ -434,6 +503,95 @@ _SECTOR_EXTRA_KEYWORDS: dict[str, list[str]] = {
     "창업투자": ["벤처캐피탈", "스타트업", "벤처투자", "VC"],
     "상업서비스와공급품": ["인력파견", "시설관리", "보안서비스", "BPO"],
 }
+
+
+async def classify_news_with_ai(
+    articles: list[dict],
+    index: KeywordIndex,
+    sectors: list,
+) -> None:
+    """AI를 사용하여 키워드 매칭이 안 된 기사의 관련 섹터를 분류한다.
+
+    articles를 in-place로 수정하여 _relations 필드를 추가한다.
+    비용 절감을 위해 배치로 처리하고, 키워드 매칭이 이미 된 기사는 건너뛴다.
+    """
+    import json as _json
+    from app.services.ai_client import ask_ai
+
+    # 키워드 매칭이 안 된 기사만 필터
+    unmatched = [(i, a) for i, a in enumerate(articles) if not a.get("_relations")]
+    if not unmatched:
+        return
+
+    # 섹터 목록 생성
+    sector_map = {s.id: s.name for s in sectors}
+    sector_list = "\n".join(f"- ID:{sid} {sname}" for sid, sname in sector_map.items())
+
+    # 배치로 처리 (한 번에 10개씩)
+    chunk_size = 10
+    classified_count = 0
+
+    for chunk_start in range(0, len(unmatched), chunk_size):
+        chunk = unmatched[chunk_start:chunk_start + chunk_size]
+
+        items = []
+        for j, (_, a) in enumerate(chunk):
+            title = a.get("title", "")
+            desc = (a.get("description") or "")[:200]
+            items.append({"id": j + 1, "title": title, "desc": desc})
+
+        prompt = f"""다음 뉴스 기사들이 어떤 투자 섹터와 관련있는지 분류해주세요.
+
+등록된 섹터 목록:
+{sector_list}
+
+기사 목록:
+{_json.dumps(items, ensure_ascii=False)}
+
+각 기사에 대해 관련 섹터 ID를 판단해주세요.
+관련 없으면 빈 배열로 두세요.
+반드시 아래 JSON 배열 형식으로만 응답해주세요:
+[{{"id": 1, "sectors": [섹터ID1, 섹터ID2]}}, ...]"""
+
+        try:
+            text = await ask_ai(prompt, max_retries=3)
+            if not text:
+                continue
+
+            # Strip markdown code block
+            if text.startswith("```"):
+                text = re.sub(r"^```(?:json)?\s*", "", text)
+                text = re.sub(r"\s*```$", "", text)
+
+            results = _json.loads(text)
+            for item in results:
+                idx = item.get("id", 0) - 1
+                if 0 <= idx < len(chunk):
+                    sector_ids = item.get("sectors", [])
+                    if sector_ids:
+                        orig_idx, article = chunk[idx]
+                        relations = []
+                        for sid in sector_ids:
+                            if sid in sector_map:
+                                relations.append({
+                                    "stock_id": None,
+                                    "sector_id": sid,
+                                    "match_type": "ai_classified",
+                                    "relevance": "indirect",
+                                })
+                        if relations:
+                            article["_relations"] = relations
+                            classified_count += 1
+        except Exception as e:
+            logger.info(f"AI classification chunk {chunk_start // chunk_size + 1} failed: {e}")
+
+        # Rate limit 방지
+        if chunk_start + chunk_size < len(unmatched):
+            import asyncio as _asyncio
+            await _asyncio.sleep(2)
+
+    if classified_count:
+        logger.info(f"AI classified {classified_count}/{len(unmatched)} previously unmatched articles")
 
 
 def _extract_sector_keywords(sector_name: str) -> list[str]:

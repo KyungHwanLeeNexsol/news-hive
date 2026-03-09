@@ -324,15 +324,16 @@ def _gather_macro_alerts(db: Session) -> list[dict]:
 
 
 async def _gather_market_data(stock_code: str) -> dict:
-    """Gather market data from KIS API and Naver Finance."""
+    """Gather market data from KIS API and Naver Finance + technical indicators."""
     from app.services.kis_api import fetch_kis_stock_price
     from app.services.naver_finance import fetch_stock_fundamentals, fetch_stock_price_history, fetch_investor_trading
+    from app.services.technical_indicators import calculate_technical_indicators, format_technical_for_prompt
 
     kis_data, fundamentals, price_history, investor_data = await asyncio.gather(
         fetch_kis_stock_price(stock_code),
         fetch_stock_fundamentals(stock_code),
-        fetch_stock_price_history(stock_code, pages=3),
-        fetch_investor_trading(stock_code, days=5),
+        fetch_stock_price_history(stock_code, pages=10),  # 10페이지 = ~100일 (기술적 지표용)
+        fetch_investor_trading(stock_code, days=20),
         return_exceptions=True,
     )
 
@@ -356,38 +357,108 @@ async def _gather_market_data(stock_code: str) -> dict:
         result["eps"] = fundamentals.eps
         result["bps"] = fundamentals.bps
 
+    # 기술적 지표 계산
     if price_history and not isinstance(price_history, Exception) and len(price_history) >= 5:
-        # Recent 5-day and 20-day trend
+        price_dicts = [
+            {"close": p.close, "open": p.open, "high": p.high, "low": p.low, "volume": p.volume}
+            for p in price_history if p.close > 0
+        ]
+        current_price = result.get("current_price")
+        ta = calculate_technical_indicators(price_dicts, current_price)
+        result["technical_analysis"] = format_technical_for_prompt(ta, current_price)
+        result["technical_score"] = ta.technical_score
+        result["technical_summary"] = ta.summary
+
+        # 기존 호환성 유지
         prices = [p.close for p in price_history[:20] if p.close > 0]
         if len(prices) >= 5:
             result["price_5d_trend"] = round((prices[0] - prices[4]) / prices[4] * 100, 2)
         if len(prices) >= 20:
             result["price_20d_trend"] = round((prices[0] - prices[19]) / prices[19] * 100, 2)
             result["avg_volume_20d"] = sum(p.volume for p in price_history[:20]) // 20
-        # Volatility (standard deviation of daily returns)
-        if len(prices) >= 10:
-            returns = [(prices[i] - prices[i + 1]) / prices[i + 1] for i in range(min(len(prices) - 1, 19))]
-            avg_ret = sum(returns) / len(returns)
-            variance = sum((r - avg_ret) ** 2 for r in returns) / len(returns)
-            result["volatility"] = round(variance ** 0.5 * 100, 2)
+        if ta.volatility is not None:
+            result["volatility"] = round(ta.volatility, 2)
 
-    # 외국인/기관 수급 데이터
+    # 외국인/기관 수급 데이터 (20일 → 5일/10일/20일 분석)
     if investor_data and not isinstance(investor_data, Exception) and investor_data:
-        foreign_total = sum(t.foreign_net for t in investor_data)
-        institution_total = sum(t.institution_net for t in investor_data)
-        result["foreign_net_5d"] = foreign_total  # 최근 5일 외국인 순매수(주)
-        result["institution_net_5d"] = institution_total  # 최근 5일 기관 순매수(주)
-        # 수급 방향 요약
-        if foreign_total > 0 and institution_total > 0:
+        # 기간별 수급 합산
+        foreign_5d = sum(t.foreign_net for t in investor_data[:5])
+        foreign_10d = sum(t.foreign_net for t in investor_data[:10]) if len(investor_data) >= 10 else None
+        foreign_20d = sum(t.foreign_net for t in investor_data[:20]) if len(investor_data) >= 20 else None
+        institution_5d = sum(t.institution_net for t in investor_data[:5])
+        institution_10d = sum(t.institution_net for t in investor_data[:10]) if len(investor_data) >= 10 else None
+        institution_20d = sum(t.institution_net for t in investor_data[:20]) if len(investor_data) >= 20 else None
+
+        result["foreign_net_5d"] = foreign_5d
+        result["institution_net_5d"] = institution_5d
+        if foreign_10d is not None:
+            result["foreign_net_10d"] = foreign_10d
+            result["institution_net_10d"] = institution_10d
+        if foreign_20d is not None:
+            result["foreign_net_20d"] = foreign_20d
+            result["institution_net_20d"] = institution_20d
+
+        # 수급 모멘텀: 최근 3일 vs 이전 3일 비교
+        if len(investor_data) >= 6:
+            recent_3d_foreign = sum(t.foreign_net for t in investor_data[:3])
+            prev_3d_foreign = sum(t.foreign_net for t in investor_data[3:6])
+            recent_3d_inst = sum(t.institution_net for t in investor_data[:3])
+            prev_3d_inst = sum(t.institution_net for t in investor_data[3:6])
+
+            momentum_parts = []
+            if recent_3d_foreign > prev_3d_foreign and recent_3d_foreign > 0:
+                momentum_parts.append("외국인 매수 가속")
+            elif recent_3d_foreign < prev_3d_foreign and recent_3d_foreign > 0:
+                momentum_parts.append("외국인 매수 감속")
+            elif recent_3d_foreign < 0 and recent_3d_foreign < prev_3d_foreign:
+                momentum_parts.append("외국인 매도 가속")
+
+            if recent_3d_inst > prev_3d_inst and recent_3d_inst > 0:
+                momentum_parts.append("기관 매수 가속")
+            elif recent_3d_inst < prev_3d_inst and recent_3d_inst > 0:
+                momentum_parts.append("기관 매수 감속")
+            elif recent_3d_inst < 0 and recent_3d_inst < prev_3d_inst:
+                momentum_parts.append("기관 매도 가속")
+
+            result["supply_momentum"] = ", ".join(momentum_parts) if momentum_parts else "모멘텀 변화 없음"
+
+        # 수급 연속성 (연속 매수/매도 일수)
+        foreign_consecutive = 0
+        foreign_direction = None
+        for t in investor_data:
+            if foreign_direction is None:
+                foreign_direction = "buy" if t.foreign_net > 0 else "sell" if t.foreign_net < 0 else None
+            if foreign_direction == "buy" and t.foreign_net > 0:
+                foreign_consecutive += 1
+            elif foreign_direction == "sell" and t.foreign_net < 0:
+                foreign_consecutive += 1
+            else:
+                break
+        if foreign_consecutive >= 3:
+            result["foreign_streak"] = f"외국인 {foreign_consecutive}일 연속 {'순매수' if foreign_direction == 'buy' else '순매도'}"
+
+        # 수급 방향 종합 판단
+        if foreign_5d > 0 and institution_5d > 0:
             result["supply_demand"] = "외국인+기관 동반 매수 (강한 수급)"
-        elif foreign_total > 0:
+        elif foreign_5d > 0:
             result["supply_demand"] = "외국인 매수, 기관 매도"
-        elif institution_total > 0:
+        elif institution_5d > 0:
             result["supply_demand"] = "기관 매수, 외국인 매도"
-        elif foreign_total < 0 and institution_total < 0:
+        elif foreign_5d < 0 and institution_5d < 0:
             result["supply_demand"] = "외국인+기관 동반 매도 (수급 악화)"
         else:
             result["supply_demand"] = "수급 중립"
+
+        # 중장기 수급 방향 (5일 vs 20일 비교)
+        if foreign_20d is not None:
+            if foreign_5d > 0 and foreign_20d < 0:
+                result["supply_trend"] = "외국인 단기 매수 전환 (중장기 매도 기조)"
+            elif foreign_5d < 0 and foreign_20d > 0:
+                result["supply_trend"] = "외국인 단기 매도 전환 (중장기 매수 기조에서 이탈)"
+            elif foreign_5d > 0 and foreign_20d > 0:
+                result["supply_trend"] = "외국인 지속 매수 (안정적 수급)"
+            elif foreign_5d < 0 and foreign_20d < 0:
+                result["supply_trend"] = "외국인 지속 매도 (수급 부담)"
 
     return result
 
@@ -568,9 +639,22 @@ async def analyze_stock(db: Session, stock_id: int) -> FundSignal | None:
 {json.dumps(disclosures, ensure_ascii=False, indent=2) if disclosures else '최근 공시 없음'}
 
 ## 4. 시세 + 수급 데이터
-{json.dumps(market_data, ensure_ascii=False, indent=2) if market_data else '시세 데이터 없음'}
-※ supply_demand, foreign_net_5d, institution_net_5d 필드는 외국인/기관 수급 동향입니다.
-  외국인+기관 동반 매수는 강한 매수 시그널, 동반 매도는 경계 시그널로 반영하세요.
+{json.dumps({k: v for k, v in market_data.items() if k not in ('technical_analysis', 'technical_score', 'technical_summary')}, ensure_ascii=False, indent=2) if market_data else '시세 데이터 없음'}
+※ 수급 데이터 해석 가이드:
+  - supply_demand: 5일 기준 외국인/기관 수급 방향
+  - supply_momentum: 최근 3일 vs 이전 3일 비교 (가속/감속 판단)
+  - supply_trend: 단기(5일) vs 중장기(20일) 수급 방향 비교
+  - foreign_streak: 외국인 연속 순매수/순매도 일수
+  - 외국인+기관 동반 매수 가속 = 매우 강한 매수 시그널
+  - 외국인 연속 5일 이상 순매수 = 추세적 매수 가능성
+  - 단기 매수 전환이지만 중장기 매도 기조 = 반등 지속성에 의문
+
+## 4-1. 기술적 분석 (SMA/RSI/MACD/볼린저밴드)
+{market_data.get('technical_analysis', '기술적 분석 데이터 없음') if market_data else '기술적 분석 데이터 없음'}
+※ 기술적 점수가 +30 이상이면 강한 매수 신호, -30 이하면 강한 매도 신호입니다.
+  RSI 과매도 + MACD 골든크로스 조합은 강력한 반등 신호로 판단하세요.
+  RSI 과매수 + 볼린저 상단 돌파 조합은 조정 임박 가능성으로 판단하세요.
+  이동평균 정배열은 상승 추세 확인, 역배열은 하락 추세를 의미합니다.
 
 ## 5. 재무제표 데이터
 {json.dumps(financial_data, ensure_ascii=False, indent=2) if financial_data else '재무 데이터 없음'}
@@ -595,7 +679,7 @@ async def analyze_stock(db: Session, stock_id: int) -> FundSignal | None:
   "reasoning": "3-5문장의 종합적인 투자 판단 근거. 뉴스/공시/재무/시세 데이터를 구체적으로 인용하여 분석.",
   "news_summary": "뉴스 동향이 주가에 미칠 영향 요약 (2-3문장)",
   "financial_summary": "재무 상태 및 밸류에이션 평가 (2-3문장)",
-  "market_summary": "기술적 분석 및 수급 동향 (2-3문장)"
+  "market_summary": "기술적 분석(SMA/RSI/MACD/볼린저) 및 수급 동향 종합 (2-3문장)"
 }}
 
 주의사항:
