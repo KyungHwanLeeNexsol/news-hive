@@ -226,12 +226,13 @@ def _gather_macro_alerts(db: Session) -> list[dict]:
 async def _gather_market_data(stock_code: str) -> dict:
     """Gather market data from KIS API and Naver Finance."""
     from app.services.kis_api import fetch_kis_stock_price
-    from app.services.naver_finance import fetch_stock_fundamentals, fetch_stock_price_history
+    from app.services.naver_finance import fetch_stock_fundamentals, fetch_stock_price_history, fetch_investor_trading
 
-    kis_data, fundamentals, price_history = await asyncio.gather(
+    kis_data, fundamentals, price_history, investor_data = await asyncio.gather(
         fetch_kis_stock_price(stock_code),
         fetch_stock_fundamentals(stock_code),
         fetch_stock_price_history(stock_code, pages=3),
+        fetch_investor_trading(stock_code, days=5),
         return_exceptions=True,
     )
 
@@ -269,6 +270,24 @@ async def _gather_market_data(stock_code: str) -> dict:
             avg_ret = sum(returns) / len(returns)
             variance = sum((r - avg_ret) ** 2 for r in returns) / len(returns)
             result["volatility"] = round(variance ** 0.5 * 100, 2)
+
+    # 외국인/기관 수급 데이터
+    if investor_data and not isinstance(investor_data, Exception) and investor_data:
+        foreign_total = sum(t.foreign_net for t in investor_data)
+        institution_total = sum(t.institution_net for t in investor_data)
+        result["foreign_net_5d"] = foreign_total  # 최근 5일 외국인 순매수(주)
+        result["institution_net_5d"] = institution_total  # 최근 5일 기관 순매수(주)
+        # 수급 방향 요약
+        if foreign_total > 0 and institution_total > 0:
+            result["supply_demand"] = "외국인+기관 동반 매수 (강한 수급)"
+        elif foreign_total > 0:
+            result["supply_demand"] = "외국인 매수, 기관 매도"
+        elif institution_total > 0:
+            result["supply_demand"] = "기관 매수, 외국인 매도"
+        elif foreign_total < 0 and institution_total < 0:
+            result["supply_demand"] = "외국인+기관 동반 매도 (수급 악화)"
+        else:
+            result["supply_demand"] = "수급 중립"
 
     return result
 
@@ -395,8 +414,10 @@ async def analyze_stock(db: Session, stock_id: int) -> FundSignal | None:
 ## 3. DART 공시 (최근 7일)
 {json.dumps(disclosures, ensure_ascii=False, indent=2) if disclosures else '최근 공시 없음'}
 
-## 4. 시세 데이터
+## 4. 시세 + 수급 데이터
 {json.dumps(market_data, ensure_ascii=False, indent=2) if market_data else '시세 데이터 없음'}
+※ supply_demand, foreign_net_5d, institution_net_5d 필드는 외국인/기관 수급 동향입니다.
+  외국인+기관 동반 매수는 강한 매수 시그널, 동반 매도는 경계 시그널로 반영하세요.
 
 ## 5. 재무제표 데이터
 {json.dumps(financial_data, ensure_ascii=False, indent=2) if financial_data else '재무 데이터 없음'}

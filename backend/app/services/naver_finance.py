@@ -845,3 +845,80 @@ async def fetch_sector_stock_codes(naver_code: str) -> list[str]:
     except Exception as e:
         logger.error(f"Failed to fetch stocks for Naver sector {naver_code}: {e}")
         return []
+
+
+# ---------------------------------------------------------------------------
+# 투자자별 매매동향 (외국인/기관 순매수)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class InvestorTrading:
+    """일별 투자자 매매동향."""
+    date: str  # YYYY.MM.DD
+    foreign_net: int = 0  # 외국인 순매수 (주)
+    institution_net: int = 0  # 기관 순매수 (주)
+    individual_net: int = 0  # 개인 순매수 (주)
+
+
+async def fetch_investor_trading(stock_code: str, days: int = 5) -> list[InvestorTrading]:
+    """네이버 금융에서 종목의 투자자별 매매동향을 가져온다.
+
+    https://finance.naver.com/item/frgn.naver?code={stock_code}
+    """
+    url = f"https://finance.naver.com/item/frgn.naver?code={stock_code}&page=1"
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(url, headers=HEADERS)
+            if resp.status_code != 200:
+                return []
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # 매매동향 테이블 파싱
+        table = soup.select_one("table.type2")
+        if not table:
+            return []
+
+        results: list[InvestorTrading] = []
+        rows = table.select("tr")
+
+        for row in rows:
+            cols = row.select("td")
+            if len(cols) < 6:
+                continue
+
+            date_text = cols[0].get_text(strip=True)
+            if not date_text or "." not in date_text:
+                continue
+
+            def _parse_int(text: str) -> int:
+                text = text.strip().replace(",", "").replace("+", "")
+                if not text or text == "0":
+                    return 0
+                try:
+                    return int(text)
+                except ValueError:
+                    return 0
+
+            # 컬럼 순서: 날짜, 종가, 전일비, 거래량, 기관순매매, 외국인순매매
+            try:
+                trading = InvestorTrading(
+                    date=date_text,
+                    institution_net=_parse_int(cols[4].get_text()),
+                    foreign_net=_parse_int(cols[5].get_text()),
+                )
+                # 개인 = -(기관 + 외국인) 근사치
+                trading.individual_net = -(trading.institution_net + trading.foreign_net)
+                results.append(trading)
+
+                if len(results) >= days:
+                    break
+            except (IndexError, ValueError):
+                continue
+
+        return results
+
+    except Exception as e:
+        logger.debug(f"Investor trading fetch failed for {stock_code}: {e}")
+        return []
