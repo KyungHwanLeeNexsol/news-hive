@@ -1,12 +1,9 @@
 name: DART Disclosure Crawl
+# DISABLED: Now running via crontab on Oracle server directly.
+# See server crontab: */30 0-9 * * 1-5 (KST business hours)
 
 on:
-  schedule:
-    # Run every 30 minutes during KST business hours (Mon-Fri 08:30-18:00 KST = 23:30-09:00 UTC)
-    - cron: '*/30 0-9 * * 1-5'
-    # Also run at night (catch late filings)
-    - cron: '0 12 * * 1-5'
-  workflow_dispatch: # Manual trigger
+  workflow_dispatch: # Manual trigger only
 
 jobs:
   crawl:
