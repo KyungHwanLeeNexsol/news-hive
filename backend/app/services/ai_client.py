@@ -122,9 +122,14 @@ async def ask_ai(prompt: str, max_retries: int = 3) -> str | None:
             except Exception as e:
                 err_str = str(e)
                 is_rate_limit = any(k in err_str for k in ("429", "RESOURCE_EXHAUSTED", "rate_limit"))
-                if is_rate_limit and attempt < max_retries - 1:
-                    wait = 5 * (2 ** attempt)
-                    logger.info(f"{provider_name} rate limited, retrying in {wait}s (attempt {attempt + 1})")
+                if is_rate_limit:
+                    # Rate limited → skip to next provider immediately (no retry wait)
+                    logger.warning(f"{provider_name} rate limited, skipping to next provider")
+                    errors.append(f"{provider_name}: rate_limited")
+                    break
+                elif attempt < max_retries - 1:
+                    wait = 2 * (2 ** attempt)
+                    logger.info(f"{provider_name} error, retrying in {wait}s (attempt {attempt + 1})")
                     await asyncio.sleep(wait)
                 else:
                     logger.warning(f"{provider_name} failed: {e}")
