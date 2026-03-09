@@ -494,7 +494,64 @@ async def fetch_stock_fundamentals_batch(
         except Exception as e:
             logger.error(f"Failed to batch fetch fundamentals: {e}")
 
+    # Fallback: fetch missing stocks via Naver mobile API
+    missing_codes = [c for c in stock_codes if c not in result]
+    if missing_codes:
+        import asyncio as _aio
+        fallback_tasks = [_fetch_fundamentals_mobile(c) for c in missing_codes]
+        fallback_results = await _aio.gather(*fallback_tasks, return_exceptions=True)
+        for code, res in zip(missing_codes, fallback_results):
+            if isinstance(res, StockFundamentals):
+                result[code] = res
+                _fundamentals_cache.data[code] = res
+                _fundamentals_cache.last_updated[code] = now
+
     return result
+
+
+async def _fetch_fundamentals_mobile(stock_code: str) -> Optional[StockFundamentals]:
+    """Fallback: fetch stock fundamentals from Naver mobile price API.
+
+    Used when the polling API doesn't return data for a stock.
+    The /price endpoint returns daily OHLCV; we use the first entry (today).
+    """
+    url = f"https://m.stock.naver.com/api/stock/{stock_code}/price"
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            resp = await client.get(url, headers=HEADERS)
+            resp.raise_for_status()
+
+        entries = resp.json()
+        if not entries or not isinstance(entries, list):
+            return None
+
+        data = entries[0]  # Today's data
+
+        def _parse_int(val) -> int:
+            if val is None:
+                return 0
+            if isinstance(val, (int, float)):
+                return int(val)
+            return int(str(val).replace(",", "").strip() or 0)
+
+        def _parse_float(val) -> float:
+            if val is None:
+                return 0.0
+            if isinstance(val, (int, float)):
+                return float(val)
+            return float(str(val).replace(",", "").replace("%", "").strip() or 0)
+
+        return StockFundamentals(
+            stock_code=stock_code,
+            current_price=_parse_int(data.get("closePrice")),
+            price_change=_parse_int(data.get("compareToPreviousClosePrice")),
+            change_rate=_parse_float(data.get("fluctuationsRatio")),
+            volume=_parse_int(data.get("accumulatedTradingVolume")),
+            trading_value=0,
+        )
+    except Exception as e:
+        logger.error(f"Mobile API fallback failed for {stock_code}: {e}")
+        return None
 
 
 @dataclass
