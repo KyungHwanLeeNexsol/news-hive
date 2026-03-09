@@ -60,44 +60,13 @@ def _parse_json_response(text: str) -> dict | None:
 # ---------------------------------------------------------------------------
 
 def _gather_stock_news(db: Session, stock_id: int, days: int = 3) -> list[dict]:
-    """Gather recent news related to a stock (본문 포함)."""
+    """Gather recent news related to a stock (본문 포함, 토큰 절약)."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     relations = (
         db.query(NewsStockRelation, NewsArticle)
         .join(NewsArticle, NewsStockRelation.news_id == NewsArticle.id)
         .filter(
             NewsStockRelation.stock_id == stock_id,
-            NewsArticle.collected_at >= cutoff,
-        )
-        .order_by(NewsArticle.published_at.desc())
-        .limit(15)
-        .all()
-    )
-    results = []
-    for rel, article in relations:
-        entry = {
-            "title": article.title,
-            "sentiment": article.sentiment or "neutral",
-            "date": article.published_at.strftime("%m/%d") if article.published_at else "",
-            "relevance": rel.relevance or "direct",
-        }
-        # 본문 핵심 내용 포함 (AI가 제목만이 아닌 실질적 내용 기반 분석 가능)
-        if article.content:
-            entry["content"] = article.content[:500]
-        elif article.ai_summary:
-            entry["content"] = article.ai_summary[:300]
-        results.append(entry)
-    return results
-
-
-def _gather_sector_news(db: Session, sector_id: int, days: int = 3) -> list[dict]:
-    """Gather recent news related to a sector (본문 포함)."""
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    relations = (
-        db.query(NewsStockRelation, NewsArticle)
-        .join(NewsArticle, NewsStockRelation.news_id == NewsArticle.id)
-        .filter(
-            NewsStockRelation.sector_id == sector_id,
             NewsArticle.collected_at >= cutoff,
         )
         .order_by(NewsArticle.published_at.desc())
@@ -109,11 +78,42 @@ def _gather_sector_news(db: Session, sector_id: int, days: int = 3) -> list[dict
         entry = {
             "title": article.title,
             "sentiment": article.sentiment or "neutral",
+            "date": article.published_at.strftime("%m/%d") if article.published_at else "",
+            "relevance": rel.relevance or "direct",
+        }
+        # 본문 핵심 내용 포함 (토큰 절약: 200자로 제한)
+        if article.content:
+            entry["content"] = article.content[:200]
+        elif article.ai_summary:
+            entry["content"] = article.ai_summary[:150]
+        results.append(entry)
+    return results
+
+
+def _gather_sector_news(db: Session, sector_id: int, days: int = 3) -> list[dict]:
+    """Gather recent news related to a sector (본문 포함, 토큰 절약)."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    relations = (
+        db.query(NewsStockRelation, NewsArticle)
+        .join(NewsArticle, NewsStockRelation.news_id == NewsArticle.id)
+        .filter(
+            NewsStockRelation.sector_id == sector_id,
+            NewsArticle.collected_at >= cutoff,
+        )
+        .order_by(NewsArticle.published_at.desc())
+        .limit(5)
+        .all()
+    )
+    results = []
+    for rel, article in relations:
+        entry = {
+            "title": article.title,
+            "sentiment": article.sentiment or "neutral",
         }
         if article.content:
-            entry["content"] = article.content[:400]
+            entry["content"] = article.content[:200]
         elif article.ai_summary:
-            entry["content"] = article.ai_summary[:200]
+            entry["content"] = article.ai_summary[:150]
         results.append(entry)
     return results
 
@@ -389,21 +389,23 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
     )
 
     news_by_sentiment = {"positive": [], "negative": [], "neutral": []}
+    # 토큰 절약: 긍정/부정 각 5개(본문 200자), 중립 3개(제목만)
+    limits = {"positive": 5, "negative": 5, "neutral": 3}
     for article in recent_news:
         s = article.sentiment or "neutral"
-        if s in news_by_sentiment and len(news_by_sentiment[s]) < 10:
-            # 본문이 있으면 앞 500자를 포함하여 AI가 깊이 있는 분석 가능
-            content_snippet = ""
-            if article.content:
-                content_snippet = article.content[:500]
-            elif article.ai_summary:
-                content_snippet = article.ai_summary[:300]
-            elif article.summary:
-                content_snippet = article.summary[:300]
-
+        if s in news_by_sentiment and len(news_by_sentiment[s]) < limits[s]:
             entry = article.title
-            if content_snippet:
-                entry += f"\n  → 내용: {content_snippet}"
+            # 중립 뉴스는 제목만, 긍정/부정만 본문 스니펫 포함
+            if s != "neutral":
+                content_snippet = ""
+                if article.content:
+                    content_snippet = article.content[:200]
+                elif article.ai_summary:
+                    content_snippet = article.ai_summary[:150]
+                elif article.summary:
+                    content_snippet = article.summary[:150]
+                if content_snippet:
+                    entry += f"\n  → 내용: {content_snippet}"
             news_by_sentiment[s].append(entry)
 
     # Active macro alerts
@@ -438,13 +440,13 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
 
 ## 최근 24시간 주요 뉴스
 ### 긍정 뉴스:
-{chr(10).join(f'- {t}' for t in news_by_sentiment['positive'][:8]) or '없음'}
+{chr(10).join(f'- {t}' for t in news_by_sentiment['positive'][:5]) or '없음'}
 
 ### 부정 뉴스:
-{chr(10).join(f'- {t}' for t in news_by_sentiment['negative'][:8]) or '없음'}
+{chr(10).join(f'- {t}' for t in news_by_sentiment['negative'][:5]) or '없음'}
 
 ### 중립 뉴스:
-{chr(10).join(f'- {t}' for t in news_by_sentiment['neutral'][:5]) or '없음'}
+{chr(10).join(f'- {t}' for t in news_by_sentiment['neutral'][:3]) or '없음'}
 
 ## 매크로 리스크 현황
 {json.dumps(macro_alerts, ensure_ascii=False, indent=2) if macro_alerts else '현재 특이 리스크 없음'}
