@@ -556,14 +556,33 @@ async def _gather_peer_comparison(db: Session, stock_id: int, sector_id: int) ->
     return results
 
 
+def _format_briefing_hint(hint: dict | None) -> str:
+    """브리핑 힌트를 AI 프롬프트용 텍스트로 변환."""
+    if not hint:
+        return "(독립 분석)"
+    action = hint.get("action", "")
+    reasoning = hint.get("reasoning", "")
+    lines = [f"오늘 데일리 브리핑에서 이 종목의 판단: {action}"]
+    if reasoning:
+        lines.append(f"브리핑 근거: {reasoning}")
+    lines.append("※ 이 판단은 같은 데이터를 기반으로 한 것이므로, 명확한 반대 근거가 없다면 일관성을 유지하세요.")
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Core analysis functions
 # ---------------------------------------------------------------------------
 
-async def analyze_stock(db: Session, stock_id: int) -> FundSignal | None:
+async def analyze_stock(
+    db: Session, stock_id: int, briefing_hint: dict | None = None,
+) -> FundSignal | None:
     """종목 종합 분석 → 투자 시그널 생성.
 
     뉴스, 공시, 시세, 재무제표를 종합하여 AI가 펀드매니저처럼 판단한다.
+
+    Args:
+        briefing_hint: 브리핑에서 전달된 힌트 (action, reasoning 등).
+                       시그널과 브리핑 간 일관성을 위해 AI에게 참고 정보로 제공.
     """
     stock = db.query(Stock).filter(Stock.id == stock_id).first()
     if not stock:
@@ -667,6 +686,9 @@ async def analyze_stock(db: Session, stock_id: int) -> FundSignal | None:
 ※ 동종업계 대비 밸류에이션/센티먼트/주가 흐름을 비교하여 상대적 매력도를 평가하세요.
   섹터 전체가 하락 중인데 해당 종목만 상승하면 과열 경계, 섹터 반등 시 후발주자면 기회로 판단.
 
+## 8. 데일리 브리핑 판단 참고
+{_format_briefing_hint(briefing_hint) if briefing_hint else '(독립 분석 — 브리핑 참고 정보 없음)'}
+
 ## 분석 요청
 위 데이터를 기반으로 전문 펀드매니저의 관점에서 종합적으로 분석하고,
 반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트 없이 JSON만 출력하세요.
@@ -687,6 +709,8 @@ async def analyze_stock(db: Session, stock_id: int) -> FundSignal | None:
 - 데이터가 부족하면 그만큼 confidence를 낮추세요.
 - 목표가/손절가는 현재가 대비 합리적인 범위 내에서 설정하세요.
 - 투자 판단 근거는 구체적인 데이터를 인용하여 전문적으로 작성하세요.
+- 브리핑 판단 참고가 있다면, 동일한 데이터로 동일 시점에 분석한 결과이므로 특별한 반대 근거가 없는 한 브리핑의 방향성(매수/관망/회피)과 일관되게 판단하세요.
+  예: 브리핑에서 "관망"이면 시그널도 "hold"가 기본. "회피"면 "sell" 또는 "hold". "적극매수"/"매수"면 "buy".
 """
 
     response = await _ask_ai(prompt)
@@ -977,38 +1001,40 @@ async def _generate_signals_from_picks(db: Session, stock_picks) -> None:
     if not isinstance(picks, list):
         return
 
-    # 종목명 추출
-    stock_names = []
+    # 종목명 + 브리핑 힌트 추출
+    stock_hints: list[tuple[str, dict]] = []
     for pick in picks:
         if isinstance(pick, dict):
             name = pick.get("stock", "").strip()
             if name:
-                stock_names.append(name)
+                hint = {
+                    "action": pick.get("action", ""),
+                    "reasoning": pick.get("reasoning", ""),
+                }
+                stock_hints.append((name, hint))
 
-    if not stock_names:
+    if not stock_hints:
         return
 
+    stock_names = [name for name, _ in stock_hints]
     logger.info(f"브리핑 추천 종목 {len(stock_names)}개에 대해 시그널 자동 생성: {stock_names}")
 
     # DB에서 종목 매칭
-    matched_stocks = []
-    for name in stock_names:
+    matched: list[tuple] = []  # (stock, hint)
+    for name, hint in stock_hints:
         stock = db.query(Stock).filter(Stock.name == name).first()
-        if stock:
-            matched_stocks.append(stock)
-        else:
-            # 부분 매칭 시도
+        if not stock:
             stock = db.query(Stock).filter(Stock.name.ilike(f"%{name}%")).first()
-            if stock:
-                matched_stocks.append(stock)
-            else:
-                logger.warning(f"브리핑 추천 종목 '{name}'을 DB에서 찾을 수 없습니다")
+        if stock:
+            matched.append((stock, hint))
+        else:
+            logger.warning(f"브리핑 추천 종목 '{name}'을 DB에서 찾을 수 없습니다")
 
     # 각 종목에 대해 시그널 생성 (순차 실행 — AI API rate limit 고려)
     generated = 0
-    for stock in matched_stocks:
+    for stock, hint in matched:
         try:
-            signal = await analyze_stock(db, stock.id)
+            signal = await analyze_stock(db, stock.id, briefing_hint=hint)
             if signal:
                 generated += 1
                 logger.info(f"브리핑 추천 → 시그널 생성: {stock.name} → {signal.signal} ({signal.confidence})")
