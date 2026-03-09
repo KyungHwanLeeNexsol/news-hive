@@ -72,13 +72,13 @@ function BriefingTab() {
     fetchDailyBriefing().then(setBriefing).catch(() => {}).finally(() => setLoading(false));
   }, []);
 
-  async function handleGenerate() {
+  async function handleGenerate(regenerate = false) {
     setGenerating(true);
     try {
-      const b = await generateDailyBriefing();
+      const b = await generateDailyBriefing(regenerate);
       setBriefing(b);
     } catch {
-      alert('브리핑 생성에 실패했습니다. Gemini API 키를 확인하세요.');
+      alert('브리핑 생성에 실패했습니다. AI API 키를 확인하세요.');
     } finally {
       setGenerating(false);
     }
@@ -136,7 +136,7 @@ function BriefingTab() {
           </span>
         </div>
         <button
-          onClick={handleGenerate}
+          onClick={() => handleGenerate(true)}
           disabled={generating}
           className="text-[12px] text-[#1261c4] hover:underline disabled:text-[#999]"
         >

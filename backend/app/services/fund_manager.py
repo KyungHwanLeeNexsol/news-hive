@@ -347,7 +347,7 @@ async def analyze_stock(db: Session, stock_id: int) -> FundSignal | None:
     return signal
 
 
-async def generate_daily_briefing(db: Session) -> DailyBriefing | None:
+async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> DailyBriefing | None:
     """데일리 마켓 브리핑 생성.
 
     최근 뉴스, 섹터 동향, 매크로 리스크를 종합하여
@@ -358,7 +358,11 @@ async def generate_daily_briefing(db: Session) -> DailyBriefing | None:
     # Check if today's briefing already exists
     existing = db.query(DailyBriefing).filter(DailyBriefing.briefing_date == today).first()
     if existing:
-        return existing
+        if regenerate:
+            db.delete(existing)
+            db.flush()
+        else:
+            return existing
 
     # Gather data
     cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
@@ -401,7 +405,11 @@ async def generate_daily_briefing(db: Session) -> DailyBriefing | None:
     prompt = f"""당신은 국내 최고 자산운용사의 CIO(최고투자책임자)입니다.
 오늘 날짜: {today.strftime('%Y년 %m월 %d일')}
 
+**중요: 반드시 한국어로만 응답하세요. 영어 사용 금지.**
+
 아래 데이터를 기반으로 오늘의 시장 데일리 브리핑을 작성하세요.
+제공된 뉴스 제목과 공시 내용을 구체적으로 인용하며 분석하세요.
+일반론이 아닌, 실제 데이터에 근거한 구체적 분석을 작성하세요.
 
 ## 최근 24시간 주요 뉴스
 ### 긍정 뉴스:
@@ -423,12 +431,14 @@ async def generate_daily_briefing(db: Session) -> DailyBriefing | None:
 {', '.join(s['name'] for s in sector_info)}
 
 반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트 없이 JSON만 출력하세요.
+모든 내용은 반드시 한국어로 작성하세요.
+각 필드에 제공된 뉴스 제목을 구체적으로 언급하며 분석하세요.
 {{
-  "market_overview": "오늘 시장의 전반적인 분위기와 핵심 이슈를 5-7문장으로 요약. CIO답게 거시적 관점에서 시장을 해석.",
-  "sector_highlights": "오늘 주목해야 할 섹터 3-5개와 그 이유를 각 2-3문장으로 설명.",
-  "stock_picks": "뉴스/공시 기반으로 오늘 특히 주목할 종목 3-5개와 이유. 각 종목별 2-3문장.",
-  "risk_assessment": "현재 시장의 리스크 요인과 대응 전략을 3-5문장으로 평가.",
-  "strategy": "오늘의 투자 전략 제안을 3-5문장으로 작성. 구체적인 액션 아이템 포함."
+  "market_overview": "오늘 시장의 전반적인 분위기와 핵심 이슈를 5-7문장으로 요약. 위에 제공된 뉴스 중 핵심 뉴스를 구체적으로 언급하며 CIO답게 거시적 관점에서 시장을 해석.",
+  "sector_highlights": "위 뉴스와 공시를 기반으로 오늘 주목해야 할 섹터 3-5개. 각 섹터별 관련 뉴스를 인용하며 2-3문장으로 설명. 예: '반도체 섹터: [뉴스제목] 보도에 따르면...'",
+  "stock_picks": "위 뉴스/공시에서 직접 언급된 종목 중 주목할 3-5개. 각 종목별 해당 뉴스/공시를 인용하며 2-3문장으로 이유 설명.",
+  "risk_assessment": "위 부정 뉴스와 매크로 리스크를 구체적으로 인용하며 리스크 요인과 대응 전략을 3-5문장으로 평가.",
+  "strategy": "위 분석을 종합한 오늘의 투자 전략 제안을 3-5문장으로 작성. 구체적인 액션 아이템 포함."
 }}
 """
 

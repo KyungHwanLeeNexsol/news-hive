@@ -329,8 +329,11 @@ export async function fetchDailyBriefing(date?: string): Promise<DailyBriefing |
   return data || null;
 }
 
-export async function generateDailyBriefing(): Promise<DailyBriefing> {
-  const res = await fetch(`${API_BASE}/fund/briefing/generate`, { method: "POST" });
+export async function generateDailyBriefing(regenerate = false): Promise<DailyBriefing> {
+  const url = regenerate
+    ? `${API_BASE}/fund/briefing/generate?regenerate=true`
+    : `${API_BASE}/fund/briefing/generate`;
+  const res = await fetch(url, { method: "POST" });
   if (!res.ok) throw new Error("Failed to generate briefing");
   return res.json();
 }

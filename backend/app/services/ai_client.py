@@ -70,10 +70,10 @@ async def ask_ai(prompt: str, max_retries: int = 3) -> str | None:
     Includes retry with exponential backoff for rate-limit errors.
     """
     providers = []
-    if settings.OPENROUTER_API_KEY:
-        providers.append(("OpenRouter", _call_openrouter))
     if settings.GEMINI_API_KEY:
         providers.append(("Gemini", _call_gemini))
+    if settings.OPENROUTER_API_KEY:
+        providers.append(("OpenRouter", _call_openrouter))
 
     if not providers:
         logger.warning("No AI API keys configured — skipping AI call")

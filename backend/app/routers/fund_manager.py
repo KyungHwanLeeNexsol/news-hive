@@ -121,8 +121,11 @@ async def get_daily_briefing(
 
 
 @router.post("/briefing/generate", response_model=DailyBriefingResponse)
-async def generate_briefing_endpoint(db: Session = Depends(get_db)):
-    """오늘의 데일리 브리핑을 생성합니다."""
+async def generate_briefing_endpoint(
+    regenerate: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    """오늘의 데일리 브리핑을 생성합니다. regenerate=true면 기존 브리핑 삭제 후 재생성."""
     from app.config import settings
     if not settings.OPENROUTER_API_KEY and not settings.GEMINI_API_KEY:
         raise HTTPException(
@@ -131,9 +134,9 @@ async def generate_briefing_endpoint(db: Session = Depends(get_db)):
         )
     try:
         from app.services.fund_manager import generate_daily_briefing
-        briefing = await generate_daily_briefing(db)
+        briefing = await generate_daily_briefing(db, regenerate=regenerate)
         if not briefing:
-            raise HTTPException(status_code=500, detail="브리핑 생성에 실패했습니다. Gemini 응답을 파싱할 수 없습니다.")
+            raise HTTPException(status_code=500, detail="브리핑 생성에 실패했습니다. AI 응답을 파싱할 수 없습니다.")
         return DailyBriefingResponse.model_validate(briefing)
     except HTTPException:
         raise
