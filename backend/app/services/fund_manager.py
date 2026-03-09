@@ -738,21 +738,36 @@ async def analyze_portfolio(db: Session, stock_ids: list[int]) -> PortfolioRepor
 
     macro_alerts = _gather_macro_alerts(db)
 
-    prompt = f"""당신은 글로벌 자산운용사의 포트폴리오 매니저입니다.
-아래 포트폴리오를 전문적으로 분석하고 리밸런싱 전략을 제시하세요.
+    # Build sector summary
+    sector_counts: dict[str, list[str]] = {}
+    for pd_item in portfolio_data:
+        sec = pd_item["sector"]
+        sector_counts.setdefault(sec, []).append(pd_item["name"])
+    sector_summary = ", ".join(f"{s}({len(stocks)})" for s, stocks in sector_counts.items())
 
-## 포트폴리오 구성 ({len(portfolio_data)}종목)
+    prompt = f"""당신은 글로벌 자산운용사의 시니어 포트폴리오 매니저입니다.
+아래 포트폴리오를 전문적으로 분석하고, 각 종목에 대한 구체적 의견과 리밸런싱 전략을 제시하세요.
+
+## 포트폴리오 구성 ({len(portfolio_data)}종목, 섹터: {sector_summary})
 {json.dumps(portfolio_data, ensure_ascii=False, indent=2)}
 
 ## 매크로 리스크 현황
 {json.dumps(macro_alerts, ensure_ascii=False, indent=2) if macro_alerts else '없음'}
 
+**중요: 반드시 한국어로 응답하세요.**
+
 반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트 없이 JSON만 출력하세요.
+각 필드는 마크다운 형식으로 작성하되, 종목명은 **종목명** 형식으로 볼드 처리하세요.
+수치(PER, ROE, 등락률 등)는 반드시 포함하고, 추상적 표현 대신 데이터 기반으로 서술하세요.
+
 {{
-  "overall_assessment": "포트폴리오 전체 평가. 강점/약점을 5-7문장으로 분석. 각 종목의 역할과 포트폴리오 내 위치 평가.",
-  "risk_analysis": "집중 리스크, 매크로 리스크 노출도, 변동성 등을 4-6문장으로 분석.",
-  "sector_balance": "섹터 분산도 평가. 특정 섹터에 편중되어 있는지, 분산이 잘 되어 있는지 3-5문장으로 분석.",
-  "rebalancing": "구체적인 리밸런싱 제안. 비중을 늘릴 종목, 줄일 종목, 새로 편입할 섹터 등을 5-7문장으로 제안."
+  "overall_assessment": "## 포트폴리오 개요\\n전체 구성에 대한 한 줄 요약.\\n\\n## 종목별 평가\\n각 종목의 현재 상태와 포트폴리오 내 역할을 **종목명**: 설명 형식으로 종목별로 줄바꿈하여 작성. 현재가, 등락률, PER, ROE 등 핵심 지표를 반드시 포함.\\n\\n## 강점\\n- 포트폴리오의 강점을 bullet point로 2-3개\\n\\n## 약점\\n- 포트폴리오의 약점을 bullet point로 2-3개",
+
+  "risk_analysis": "## 집중 리스크\\n- 단일 종목/섹터 편중 위험을 bullet point로\\n\\n## 매크로 리스크\\n- 현재 매크로 환경이 포트폴리오에 미치는 영향을 bullet point로\\n\\n## 변동성 분석\\n- 각 종목의 최근 변동성을 수치와 함께 종목별로 bullet point로\\n\\n## 종합 리스크 등급\\n5단계(매우 낮음/낮음/보통/높음/매우 높음) 중 하나로 평가하고 근거 제시",
+
+  "sector_balance": "## 현재 섹터 구성\\n섹터별 종목 수와 비중을 표 형식 또는 bullet point로\\n\\n## 분산도 평가\\n현재 분산이 잘 되어있는지 점수(10점 만점)와 함께 평가\\n\\n## 취약 섹터\\n- 노출이 부족하거나 과다한 섹터를 bullet point로\\n\\n## 추천 섹터\\n- 편입을 고려할 섹터를 이유와 함께 bullet point로",
+
+  "rebalancing": "## 비중 축소 추천\\n- **종목명**: 축소 이유와 구체적 근거 (현재 지표 포함)\\n\\n## 비중 확대 추천\\n- **종목명**: 확대 이유와 구체적 근거\\n\\n## 신규 편입 고려\\n- 새로 편입할 섹터/종목 제안과 이유\\n\\n## 실행 우선순위\\n1. 가장 먼저 실행할 액션\\n2. 그 다음 액션\\n3. 중기적 액션"
 }}
 """
 

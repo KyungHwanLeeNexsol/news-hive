@@ -665,6 +665,71 @@ function AccuracyTab() {
 }
 
 // ── Portfolio Tab ──
+/** Lightweight markdown-like renderer for AI report content. */
+function RenderMarkdown({ text }: { text: string }) {
+  const lines = text.split('\n');
+  const elements: React.ReactNode[] = [];
+  let key = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    // Skip empty lines
+    if (!trimmed) {
+      elements.push(<div key={key++} className="h-2" />);
+      continue;
+    }
+
+    // ## Heading
+    if (trimmed.startsWith('## ')) {
+      elements.push(
+        <h3 key={key++} className="text-[13px] font-bold text-[#1261c4] mt-3 mb-1.5 pb-1 border-b border-[#e8e8e8]">
+          {trimmed.slice(3)}
+        </h3>
+      );
+      continue;
+    }
+
+    // Numbered list: 1. item
+    if (/^\d+\.\s/.test(trimmed)) {
+      const num = trimmed.match(/^(\d+)\./)?.[1] || '';
+      const content = trimmed.replace(/^\d+\.\s*/, '');
+      elements.push(
+        <div key={key++} className="flex gap-2 text-[13px] text-[#333] leading-relaxed pl-1 py-0.5">
+          <span className="text-[#1261c4] font-bold shrink-0">{num}.</span>
+          <span dangerouslySetInnerHTML={{ __html: boldify(content) }} />
+        </div>
+      );
+      continue;
+    }
+
+    // Bullet point: - item
+    if (trimmed.startsWith('- ')) {
+      const content = trimmed.slice(2);
+      elements.push(
+        <div key={key++} className="flex gap-2 text-[13px] text-[#333] leading-relaxed pl-1 py-0.5">
+          <span className="text-[#1261c4] shrink-0 mt-[2px]">&#x2022;</span>
+          <span dangerouslySetInnerHTML={{ __html: boldify(content) }} />
+        </div>
+      );
+      continue;
+    }
+
+    // Regular text
+    elements.push(
+      <p key={key++} className="text-[13px] text-[#333] leading-relaxed py-0.5" dangerouslySetInnerHTML={{ __html: boldify(trimmed) }} />
+    );
+  }
+
+  return <>{elements}</>;
+}
+
+/** Convert **bold** markers to <strong> tags. */
+function boldify(text: string): string {
+  return text.replace(/\*\*(.+?)\*\*/g, '<strong class="text-[#111] font-semibold">$1</strong>');
+}
+
 function PortfolioTab() {
   const [report, setReport] = useState<PortfolioReport | null>(null);
   const [loading, setLoading] = useState(true);
@@ -731,11 +796,11 @@ function PortfolioTab() {
     );
   }
 
-  const sections = [
-    { title: '종합 평가', content: report.overall_assessment, icon: '&#x1F4CA;' },
-    { title: '리스크 분석', content: report.risk_analysis, icon: '&#x26A0;&#xFE0F;' },
-    { title: '섹터 분산도', content: report.sector_balance, icon: '&#x1F3AF;' },
-    { title: '리밸런싱 제안', content: report.rebalancing, icon: '&#x1F504;' },
+  const sections: { title: string; content: string | null; icon: string; color: string }[] = [
+    { title: '종합 평가', content: report.overall_assessment, icon: '\uD83D\uDCCA', color: '#1261c4' },
+    { title: '리스크 분석', content: report.risk_analysis, icon: '\u26A0\uFE0F', color: '#e12343' },
+    { title: '섹터 분산도', content: report.sector_balance, icon: '\uD83C\uDFAF', color: '#0d9488' },
+    { title: '리밸런싱 제안', content: report.rebalancing, icon: '\uD83D\uDD04', color: '#7c3aed' },
   ];
 
   return (
@@ -755,12 +820,16 @@ function PortfolioTab() {
       <div className="space-y-3">
         {sections.map((section) =>
           section.content ? (
-            <div key={section.title} className="section-box">
-              <div className="section-title">
-                <span dangerouslySetInnerHTML={{ __html: section.icon }} /> {section.title}
+            <div key={section.title} className="section-box overflow-hidden">
+              <div
+                className="px-4 py-2.5 flex items-center gap-2 text-[14px] font-bold text-white"
+                style={{ backgroundColor: section.color }}
+              >
+                <span>{section.icon}</span>
+                <span>{section.title}</span>
               </div>
-              <div className="p-4 text-[13px] text-[#333] leading-relaxed whitespace-pre-wrap">
-                {section.content}
+              <div className="p-4">
+                <RenderMarkdown text={section.content} />
               </div>
             </div>
           ) : null
