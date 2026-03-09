@@ -59,6 +59,73 @@ def _parse_json_response(text: str) -> dict | None:
 # Data gathering helpers
 # ---------------------------------------------------------------------------
 
+def _gather_sentiment_trend(db: Session, stock_id: int | None = None, sector_id: int | None = None) -> dict:
+    """최근 7일 센티먼트 추이를 3일/7일 구간으로 비교한다.
+
+    Returns:
+        {"recent_3d": {"positive": N, "negative": N, "neutral": N},
+         "prev_4d": {"positive": N, "negative": N, "neutral": N},
+         "trend": "improving" | "worsening" | "stable",
+         "score_3d": float, "score_7d": float}
+    """
+    now = datetime.now(timezone.utc)
+    cutoff_3d = now - timedelta(days=3)
+    cutoff_7d = now - timedelta(days=7)
+
+    query = db.query(NewsArticle.sentiment, NewsArticle.published_at)
+    if stock_id:
+        query = (
+            query.join(NewsStockRelation, NewsStockRelation.news_id == NewsArticle.id)
+            .filter(NewsStockRelation.stock_id == stock_id)
+        )
+    elif sector_id:
+        query = (
+            query.join(NewsStockRelation, NewsStockRelation.news_id == NewsArticle.id)
+            .filter(NewsStockRelation.sector_id == sector_id)
+        )
+
+    articles = query.filter(NewsArticle.published_at >= cutoff_7d).all()
+
+    recent_3d = {"positive": 0, "negative": 0, "neutral": 0}
+    prev_4d = {"positive": 0, "negative": 0, "neutral": 0}
+
+    for sentiment, pub_at in articles:
+        s = sentiment or "neutral"
+        if s not in recent_3d:
+            continue
+        if pub_at and pub_at >= cutoff_3d:
+            recent_3d[s] += 1
+        else:
+            prev_4d[s] += 1
+
+    def _score(counts: dict) -> float:
+        total = sum(counts.values())
+        if total == 0:
+            return 0.0
+        return round((counts["positive"] - counts["negative"]) / total * 100, 1)
+
+    score_3d = _score(recent_3d)
+    score_7d = _score({k: recent_3d[k] + prev_4d[k] for k in recent_3d})
+    score_prev = _score(prev_4d)
+
+    # 추세 판단: 최근 3일 점수 vs 이전 4일 점수
+    diff = score_3d - score_prev
+    if diff > 10:
+        trend = "improving"
+    elif diff < -10:
+        trend = "worsening"
+    else:
+        trend = "stable"
+
+    return {
+        "recent_3d": recent_3d,
+        "prev_4d": prev_4d,
+        "trend": trend,
+        "score_3d": score_3d,
+        "score_prev": score_prev,
+    }
+
+
 def _gather_stock_news(db: Session, stock_id: int, days: int = 3) -> list[dict]:
     """Gather recent news related to a stock (본문 포함, 토큰 절약)."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
@@ -279,6 +346,7 @@ async def analyze_stock(db: Session, stock_id: int) -> FundSignal | None:
     sector_news = _gather_sector_news(db, stock.sector_id) if sector else []
     disclosures = _gather_disclosures(db, stock_id)
     macro_alerts = _gather_macro_alerts(db)
+    sentiment_trend = _gather_sentiment_trend(db, stock_id=stock_id)
 
     market_data, financial_data = await asyncio.gather(
         _gather_market_data(stock.stock_code),
@@ -314,6 +382,12 @@ async def analyze_stock(db: Session, stock_id: int) -> FundSignal | None:
 
 ## 1. 최근 뉴스 동향 (최근 3일)
 {json.dumps(news, ensure_ascii=False, indent=2) if news else '관련 뉴스 없음'}
+
+## 1-1. 센티먼트 추이 (최근 3일 vs 이전 4일)
+- 최근 3일: 긍정 {sentiment_trend['recent_3d']['positive']}건, 부정 {sentiment_trend['recent_3d']['negative']}건, 중립 {sentiment_trend['recent_3d']['neutral']}건 (점수: {sentiment_trend['score_3d']})
+- 이전 4일: 긍정 {sentiment_trend['prev_4d']['positive']}건, 부정 {sentiment_trend['prev_4d']['negative']}건, 중립 {sentiment_trend['prev_4d']['neutral']}건 (점수: {sentiment_trend['score_prev']})
+- 추세: {{'improving': '개선 중', 'worsening': '악화 중', 'stable': '안정적'}[sentiment_trend['trend']]}
+※ 센티먼트가 악화되고 있다면 매수에 신중하고, 개선 중이라면 긍정적으로 평가하세요.
 
 ## 2. 섹터 뉴스 동향
 {json.dumps(sector_news, ensure_ascii=False, indent=2) if sector_news else '섹터 뉴스 없음'}
@@ -429,6 +503,9 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
                     entry += f"\n  → 내용: {content_snippet}"
             news_by_sentiment[s].append(entry)
 
+    # 전체 시장 센티먼트 추이
+    market_sentiment = _gather_sentiment_trend(db)
+
     # Active macro alerts
     macro_alerts = _gather_macro_alerts(db)
 
@@ -468,6 +545,11 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
 
 ### 중립 뉴스:
 {chr(10).join(f'- {t}' for t in news_by_sentiment['neutral'][:3]) or '없음'}
+
+## 시장 센티먼트 추이
+- 최근 3일: 긍정 {market_sentiment['recent_3d']['positive']}건, 부정 {market_sentiment['recent_3d']['negative']}건 (점수: {market_sentiment['score_3d']})
+- 이전 4일: 긍정 {market_sentiment['prev_4d']['positive']}건, 부정 {market_sentiment['prev_4d']['negative']}건 (점수: {market_sentiment['score_prev']})
+- 추세: {{'improving': '개선 중 ↑', 'worsening': '악화 중 ↓', 'stable': '안정적 →'}[market_sentiment['trend']]}
 
 ## 매크로 리스크 현황
 {json.dumps(macro_alerts, ensure_ascii=False, indent=2) if macro_alerts else '현재 특이 리스크 없음'}
