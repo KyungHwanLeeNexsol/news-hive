@@ -170,7 +170,7 @@ function BriefingTab() {
     );
   }
 
-  if (!briefing) {
+  if (!briefing && !generating) {
     return (
       <div className="section-box p-8 text-center">
         <div className="text-[40px] mb-3">&#x1F4CA;</div>
@@ -181,10 +181,9 @@ function BriefingTab() {
         </p>
         <button
           onClick={() => handleGenerate()}
-          disabled={generating}
-          className="px-5 py-2 bg-[#1261c4] text-white text-[13px] font-medium rounded hover:bg-[#0d4e9e] disabled:bg-[#999]"
+          className="px-5 py-2 bg-[#1261c4] text-white text-[13px] font-medium rounded hover:bg-[#0d4e9e]"
         >
-          {generating ? 'AI 분석 중...' : '오늘의 브리핑 생성'}
+          오늘의 브리핑 생성
         </button>
       </div>
     );
@@ -213,6 +212,85 @@ function BriefingTab() {
     return { bg: 'bg-[#f5f5f5]', text: 'text-[#616161]', label: '중립' };
   };
 
+  if (generating) {
+    return (
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-[13px] text-[#999]">AI 브리핑 생성 중...</span>
+        </div>
+        <div className="space-y-3">
+          {/* 시장 전망 스켈레톤 */}
+          <div className="section-box">
+            <div className="section-title"><span>&#x1F30D; 시장 전망</span></div>
+            <div className="p-4 space-y-2">
+              <div className="skeleton skeleton-text" style={{ width: '95%' }} />
+              <div className="skeleton skeleton-text" style={{ width: '88%' }} />
+              <div className="skeleton skeleton-text" style={{ width: '92%' }} />
+              <div className="skeleton skeleton-text" style={{ width: '75%' }} />
+            </div>
+          </div>
+          {/* 주목 섹터 스켈레톤 */}
+          <div className="section-box">
+            <div className="section-title"><span>&#x1F3AF; 주목 섹터</span></div>
+            <div className="p-4 space-y-2.5">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="border border-[#eee] rounded-lg p-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="skeleton skeleton-text" style={{ width: '80px' }} />
+                    <div className="skeleton skeleton-badge" style={{ width: '40px' }} />
+                  </div>
+                  <div className="skeleton skeleton-text mb-1" style={{ width: '90%' }} />
+                  <div className="skeleton skeleton-text" style={{ width: '70%' }} />
+                </div>
+              ))}
+            </div>
+          </div>
+          {/* 매수 추천 스켈레톤 */}
+          <div className="section-box">
+            <div className="section-title"><span>&#x2B50; 오늘의 매수 추천</span></div>
+            <div className="p-4 space-y-2.5">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="border border-[#eee] rounded-lg p-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="skeleton skeleton-text" style={{ width: '100px' }} />
+                    <div className="skeleton skeleton-badge" style={{ width: '50px' }} />
+                  </div>
+                  <div className="skeleton skeleton-text mb-1" style={{ width: '95%' }} />
+                  <div className="skeleton skeleton-text mb-1" style={{ width: '85%' }} />
+                  <div className="skeleton skeleton-text" style={{ width: '60%' }} />
+                </div>
+              ))}
+            </div>
+          </div>
+          {/* 리스크 평가 스켈레톤 */}
+          <div className="section-box">
+            <div className="section-title"><span>&#x26A0;&#xFE0F; 리스크 평가</span></div>
+            <div className="p-4 space-y-2">
+              <div className="skeleton skeleton-text" style={{ width: '90%' }} />
+              <div className="skeleton skeleton-text" style={{ width: '80%' }} />
+              <div className="skeleton skeleton-text" style={{ width: '70%' }} />
+            </div>
+          </div>
+          {/* 투자 전략 스켈레톤 */}
+          <div className="section-box">
+            <div className="section-title"><span>&#x1F4DD; 투자 전략</span></div>
+            <div className="p-4 space-y-2">
+              <div className="skeleton skeleton-text" style={{ width: '92%' }} />
+              <div className="skeleton skeleton-text" style={{ width: '85%' }} />
+              <div className="skeleton skeleton-text" style={{ width: '78%' }} />
+            </div>
+          </div>
+        </div>
+        <div className="mt-4 text-center">
+          <div className="inline-flex items-center gap-2 px-4 py-2 bg-[#f7f8fa] rounded-lg">
+            <div className="w-4 h-4 border-2 border-[#1261c4] border-t-transparent rounded-full animate-spin" />
+            <span className="text-[13px] text-[#666]">AI가 뉴스, 공시, 시세, 수급 데이터를 분석하고 있습니다...</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div>
       <div className="flex items-center justify-between mb-3">
@@ -226,7 +304,7 @@ function BriefingTab() {
           disabled={generating}
           className="text-[12px] text-[#1261c4] hover:underline disabled:text-[#999]"
         >
-          {generating ? '생성 중...' : '다시 생성'}
+          다시 생성
         </button>
       </div>
       <div className="space-y-3">
