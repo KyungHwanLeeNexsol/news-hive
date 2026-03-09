@@ -191,7 +191,7 @@ function BriefingTab() {
   }
 
   interface SectorItem { sector: string; sentiment?: string; analysis: string }
-  interface StockItem { stock: string; reason: string }
+  interface StockItem { stock: string; action?: string; reason: string; target_price?: number; stop_loss?: number }
 
   function tryParseJson<T>(value: string | null | undefined): T[] | null {
     if (!value) return null;
@@ -267,18 +267,42 @@ function BriefingTab() {
         )}
         {briefing.stock_picks && (
           <div className="section-box">
-            <div className="section-title"><span>&#x2B50; 오늘의 픽</span></div>
+            <div className="section-title"><span>&#x2B50; 오늘의 매수 추천</span></div>
             <div className="p-4">
               {stockItems ? (
                 <div className="space-y-2.5">
-                  {stockItems.map((item, i) => (
-                    <div key={i} className="border border-[#eee] rounded-lg p-3">
-                      <div className="flex items-center gap-2 mb-1.5">
-                        <span className="text-[14px] font-semibold text-[#1261c4]">{item.stock}</span>
+                  {stockItems.map((item, i) => {
+                    const actionStyle = (a?: string) => {
+                      if (a === '적극매수') return { bg: 'bg-[#e12343]', text: 'text-white' };
+                      if (a === '매수') return { bg: 'bg-[#1261c4]', text: 'text-white' };
+                      if (a === '회피') return { bg: 'bg-[#666]', text: 'text-white' };
+                      return { bg: 'bg-[#f5f5f5]', text: 'text-[#666]' };
+                    };
+                    const as = actionStyle(item.action);
+                    return (
+                      <div key={i} className="border border-[#eee] rounded-lg p-3">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[14px] font-semibold text-[#1261c4]">{item.stock}</span>
+                            {item.action && (
+                              <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${as.bg} ${as.text}`}>
+                                {item.action}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-3 text-[11px] text-[#999]">
+                            {item.target_price != null && item.target_price > 0 && (
+                              <span>목표 <span className="text-[#e12343] font-medium">{item.target_price.toLocaleString()}</span></span>
+                            )}
+                            {item.stop_loss != null && item.stop_loss > 0 && (
+                              <span>손절 <span className="text-[#1261c4] font-medium">{item.stop_loss.toLocaleString()}</span></span>
+                            )}
+                          </div>
+                        </div>
+                        <p className="text-[12.5px] text-[#555] leading-[1.7]">{item.reason}</p>
                       </div>
-                      <p className="text-[12.5px] text-[#555] leading-[1.7]">{item.reason}</p>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : (
                 <div className="text-[13px] text-[#333] leading-[1.8]">{briefing.stock_picks}</div>

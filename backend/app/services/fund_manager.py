@@ -209,6 +209,106 @@ def _gather_disclosures(db: Session, stock_id: int, days: int = 7) -> list[dict]
     ]
 
 
+async def _gather_pick_candidates(db: Session, recent_news: list) -> list[dict]:
+    """뉴스에 언급된 종목들의 시세 + 밸류에이션 + 수급 + 재무 데이터를 수집.
+
+    브리핑의 stock_picks가 실제 데이터에 기반한 전문적 매수 추천이 되도록
+    후보 종목들의 종합 데이터를 AI에 제공한다.
+    """
+    from app.models.news_relation import NewsStockRelation
+
+    # 최근 뉴스와 연결된 종목 ID 수집 (최대 10개)
+    news_ids = [n.id for n in recent_news[:30]]
+    if not news_ids:
+        return []
+
+    relations = (
+        db.query(NewsStockRelation)
+        .filter(
+            NewsStockRelation.news_id.in_(news_ids),
+            NewsStockRelation.stock_id.isnot(None),
+        )
+        .all()
+    )
+
+    # 종목별 뉴스 카운트로 정렬하여 상위 종목 선정
+    stock_news_count: dict[int, int] = {}
+    for r in relations:
+        stock_news_count[r.stock_id] = stock_news_count.get(r.stock_id, 0) + 1
+
+    top_stock_ids = sorted(stock_news_count, key=stock_news_count.get, reverse=True)[:10]
+    if not top_stock_ids:
+        return []
+
+    stocks = db.query(Stock).filter(Stock.id.in_(top_stock_ids)).all()
+    stock_map = {s.id: s for s in stocks}
+
+    # 시세 + 재무 데이터 병렬 수집
+    candidates = []
+    for sid in top_stock_ids:
+        stock = stock_map.get(sid)
+        if not stock:
+            continue
+
+        try:
+            market_data, financial_data = await asyncio.gather(
+                _gather_market_data(stock.stock_code),
+                _gather_financial_data(stock.stock_code),
+                return_exceptions=True,
+            )
+
+            if isinstance(market_data, Exception):
+                market_data = {}
+            if isinstance(financial_data, Exception):
+                financial_data = {}
+
+            sector = db.query(Sector).filter(Sector.id == stock.sector_id).first()
+
+            candidate = {
+                "name": stock.name,
+                "code": stock.stock_code,
+                "sector": sector.name if sector else "미분류",
+                "news_count": stock_news_count.get(sid, 0),
+            }
+
+            # 시세 데이터
+            if market_data:
+                candidate["current_price"] = market_data.get("current_price")
+                candidate["change_rate"] = market_data.get("change_rate")
+                candidate["volume"] = market_data.get("volume")
+                candidate["price_5d_trend"] = market_data.get("price_5d_trend")
+                candidate["price_20d_trend"] = market_data.get("price_20d_trend")
+                candidate["volatility"] = market_data.get("volatility")
+                candidate["supply_demand"] = market_data.get("supply_demand")
+                candidate["foreign_net_5d"] = market_data.get("foreign_net_5d")
+                candidate["institution_net_5d"] = market_data.get("institution_net_5d")
+                # KIS 밸류에이션
+                candidate["per"] = market_data.get("per")
+                candidate["pbr"] = market_data.get("pbr")
+                candidate["market_cap"] = market_data.get("market_cap")
+                candidate["foreign_ratio"] = market_data.get("foreign_ratio")
+                candidate["high_52w"] = market_data.get("high_52w")
+                candidate["low_52w"] = market_data.get("low_52w")
+
+            # 재무 데이터
+            if financial_data:
+                candidate["roe"] = financial_data.get("roe")
+                candidate["operating_margin"] = financial_data.get("operating_margin")
+                candidate["revenue_growth"] = financial_data.get("revenue_growth")
+                candidate["op_profit_growth"] = financial_data.get("op_profit_growth")
+                candidate["dividend_yield"] = financial_data.get("dividend_yield")
+                candidate["industry_per"] = financial_data.get("industry_per")
+
+            # None 값 제거
+            candidate = {k: v for k, v in candidate.items() if v is not None}
+            candidates.append(candidate)
+
+        except Exception as e:
+            logger.warning(f"후보 종목 '{stock.name}' 데이터 수집 실패: {e}")
+
+    return candidates
+
+
 def _gather_macro_alerts(db: Session) -> list[dict]:
     """Gather active macro risk alerts."""
     alerts = db.query(MacroAlert).filter(MacroAlert.is_active == True).all()  # noqa: E712
@@ -609,7 +709,11 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
         market_sentiment.get('trend', 'stable'), '안정적 →'
     )
 
-    prompt = f"""당신은 국내 최고 자산운용사의 CIO(최고투자책임자)입니다.
+    # 뉴스에 언급된 종목들의 실시간 시세 + 밸류에이션 데이터 수집
+    candidate_data = await _gather_pick_candidates(db, recent_news)
+    candidate_text = json.dumps(candidate_data, ensure_ascii=False, indent=2) if candidate_data else '후보 종목 데이터 없음'
+
+    prompt = f"""당신은 국내 최고 자산운용사의 CIO(최고투자책임자)이자 20년 경력 펀드매니저입니다.
 오늘 날짜: {today.strftime('%Y년 %m월 %d일')}
 
 **중요: 반드시 한국어로만 응답하세요. 영어 사용 금지.**
@@ -617,7 +721,6 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
 아래 데이터를 기반으로 오늘의 시장 데일리 브리핑을 작성하세요.
 각 뉴스의 제목과 본문 내용(→ 내용:)을 반드시 읽고, 구체적 사실을 인용하며 분석하세요.
 제목만 보고 추측하지 말고, 본문에 담긴 수치/사실/발언을 근거로 전문적인 분석을 작성하세요.
-일반론이 아닌, 실제 데이터에 근거한 구체적 분석을 작성하세요.
 
 ## 최근 24시간 주요 뉴스
 ### 긍정 뉴스:
@@ -643,21 +746,38 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
 ## 추적 중인 섹터
 {', '.join(s['name'] for s in sector_info)}
 
+## 매수 후보 종목 데이터 (시세 + 밸류에이션 + 수급 + 재무)
+{candidate_text}
+
 반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트 없이 JSON만 출력하세요.
 모든 내용은 반드시 한국어로 작성하세요.
 각 필드에 제공된 뉴스 제목을 구체적으로 언급하며 분석하세요.
 {{
-  "market_overview": "오늘 시장의 전반적인 분위기와 핵심 이슈를 5-7문장으로 요약. 위에 제공된 뉴스 중 핵심 뉴스를 구체적으로 언급하며 CIO답게 거시적 관점에서 시장을 해석. 일반 텍스트로 작성.",
+  "market_overview": "오늘 시장의 전반적인 분위기와 핵심 이슈를 5-7문장으로 요약. 위에 제공된 뉴스 중 핵심 뉴스를 구체적으로 언급하며 CIO답게 거시적 관점에서 시장을 해석.",
   "sector_highlights": [
     {{"sector": "섹터명", "sentiment": "positive 또는 negative 또는 neutral", "analysis": "해당 섹터에 대한 2-3문장 분석. 관련 뉴스를 인용하며 설명."}}
   ],
   "stock_picks": [
-    {{"stock": "종목명", "reason": "해당 종목을 주목해야 하는 이유 2-3문장. 관련 뉴스/공시를 인용."}}
+    {{
+      "stock": "종목명 (반드시 위 후보 종목 데이터에 있는 종목명과 동일하게)",
+      "action": "적극매수 또는 매수 또는 관망 또는 회피",
+      "reason": "3-5문장. 매수 추천 근거를 구체적 수치로 제시. 반드시 다음을 포함: (1) 밸류에이션 매력도(PER/PBR/ROE와 업종 평균 비교), (2) 최근 주가 흐름과 수급(외국인/기관 동향), (3) 뉴스/공시 기반 카탈리스트, (4) 리스크 요인",
+      "target_price": 0,
+      "stop_loss": 0
+    }}
   ],
-  "risk_assessment": "위 부정 뉴스와 매크로 리스크를 구체적으로 인용하며 리스크 요인과 대응 전략을 3-5문장으로 평가. 일반 텍스트로 작성.",
-  "strategy": "위 분석을 종합한 오늘의 투자 전략 제안을 3-5문장으로 작성. 구체적인 액션 아이템 포함. 일반 텍스트로 작성."
+  "risk_assessment": "위 부정 뉴스와 매크로 리스크를 구체적으로 인용하며 리스크 요인과 대응 전략을 3-5문장으로 평가.",
+  "strategy": "위 분석을 종합한 오늘의 투자 전략 제안을 3-5문장으로 작성. 구체적인 액션 아이템 포함."
 }}
-sector_highlights는 3-5개 섹터 배열, stock_picks는 3-5개 종목 배열로 작성하세요.
+
+**stock_picks 작성 규칙 (매우 중요):**
+1. 반드시 위 '매수 후보 종목 데이터'의 시세/밸류에이션/수급/재무 데이터를 근거로 판단하세요.
+2. 뉴스에 언급됐다는 이유만으로 추천하지 마세요. 실제 밸류에이션 매력도를 최우선으로 평가하세요.
+3. PER이 업종 평균 대비 현저히 높거나, ROE가 낮거나, 외국인+기관이 동반 매도 중이면 추천하지 마세요.
+4. 하락장에서 함부로 매수 추천하지 마세요. 확신이 없으면 "관망"으로 설정하세요.
+5. target_price(목표가)와 stop_loss(손절가)는 현재가 기준 합리적 범위로 설정하세요.
+6. stock_picks는 3-5개 종목, 이 중 "적극매수"는 최대 1개만 가능합니다.
+sector_highlights는 3-5개 섹터 배열로 작성하세요.
 """
 
     response = await _ask_ai(prompt)
