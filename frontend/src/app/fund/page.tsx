@@ -109,7 +109,7 @@ function BriefingTab() {
           전문 펀드매니저 수준의 시장 브리핑을 생성합니다.
         </p>
         <button
-          onClick={handleGenerate}
+          onClick={() => handleGenerate()}
           disabled={generating}
           className="px-5 py-2 bg-[#1261c4] text-white text-[13px] font-medium rounded hover:bg-[#0d4e9e] disabled:bg-[#999]"
         >
