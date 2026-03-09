@@ -312,12 +312,12 @@ function adminHeaders(extra: Record<string, string> = {}): Record<string, string
   return headers;
 }
 
-export async function analyzeStock(stockId: number): Promise<FundSignal> {
-  const res = await fetch(`${API_BASE}/fund/analyze/${stockId}`, {
-    method: "POST",
+export async function resetSignals(): Promise<{ deleted: number; message: string }> {
+  const res = await fetch(`${API_BASE}/fund/signals/reset`, {
+    method: "DELETE",
     headers: adminHeaders(),
   });
-  if (!res.ok) throw new Error("Failed to analyze stock");
+  if (!res.ok) throw new Error("Failed to reset signals");
   return res.json();
 }
 

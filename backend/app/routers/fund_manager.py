@@ -76,20 +76,6 @@ def _enrich_signal(signal: FundSignal, db: Session) -> FundSignalResponse:
 
 # ---- 투자 시그널 ----
 
-@router.post("/analyze/{stock_id}", response_model=FundSignalResponse)
-async def analyze_stock_endpoint(stock_id: int, db: Session = Depends(get_db)):
-    """특정 종목에 대한 AI 투자 시그널을 생성합니다."""
-    stock = db.query(Stock).filter(Stock.id == stock_id).first()
-    if not stock:
-        raise HTTPException(status_code=404, detail="종목을 찾을 수 없습니다.")
-
-    from app.services.fund_manager import analyze_stock
-    signal = await analyze_stock(db, stock_id)
-    if not signal:
-        raise HTTPException(status_code=500, detail="AI 분석에 실패했습니다. Gemini API 키를 확인하세요.")
-
-    return _enrich_signal(signal, db)
-
 
 @router.get("/signals", response_model=list[FundSignalResponse])
 async def get_latest_signals(
@@ -149,6 +135,14 @@ async def verify_signals_endpoint(db: Session = Depends(get_db)):
     from app.services.signal_verifier import verify_signals
     stats = await verify_signals(db)
     return stats
+
+
+@router.delete("/signals/reset", response_model=dict)
+async def reset_signals(db: Session = Depends(get_db)):
+    """모든 시그널 데이터를 초기화합니다."""
+    count = db.query(FundSignal).delete()
+    db.commit()
+    return {"deleted": count, "message": f"시그널 {count}건 초기화 완료"}
 
 
 # ---- 데일리 브리핑 ----
