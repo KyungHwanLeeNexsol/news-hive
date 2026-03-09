@@ -3,7 +3,7 @@
 import logging
 from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -21,7 +21,25 @@ from app.schemas.fund_manager import (
 )
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/fund", tags=["fund-manager"])
+
+
+def _require_admin(request: Request):
+    """관리자 인증 의존성. Authorization 헤더의 Bearer 토큰을 검증."""
+    from app.routers.auth import _verify_admin_token
+
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="관리자 인증이 필요합니다.")
+    token = auth[7:]
+    if not _verify_admin_token(token):
+        raise HTTPException(status_code=401, detail="인증 토큰이 만료되었거나 유효하지 않습니다.")
+
+
+router = APIRouter(
+    prefix="/api/fund",
+    tags=["fund-manager"],
+    dependencies=[Depends(_require_admin)],
+)
 
 
 def _enrich_signal(signal: FundSignal, db: Session) -> FundSignalResponse:

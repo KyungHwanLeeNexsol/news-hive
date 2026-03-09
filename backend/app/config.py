@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     DART_API_KEY: str = ""
     DART_PUSH_SECRET: str = ""  # Shared secret for GitHub Actions → server DART push
     DEPLOY_SECRET: str = ""  # Shared secret for GitHub webhook auto-deploy
+    ADMIN_PASSWORD: str = ""  # Admin login password for AI Fund Manager access
 
     NEWS_CRAWL_INTERVAL_MINUTES: int = 10  # minutes between news crawl cycles
 

@@ -1,4 +1,4 @@
-import type { Sector, Stock, StockListItem, NewsArticle, StockDetail, FinancialPeriod, PriceRecord, SentimentTrendItem, SectorInsight, DisclosureItem, DisclosureDetail, MacroAlert, EconomicEvent, FundSignal, DailyBriefing, PortfolioReport } from "./types";
+import type { Sector, Stock, StockListItem, NewsArticle, StockDetail, FinancialPeriod, PriceRecord, SentimentTrendItem, SectorInsight, DisclosureItem, DisclosureDetail, MacroAlert, EconomicEvent, FundSignal, DailyBriefing, PortfolioReport, AccuracyStats } from "./types";
 
 const API_BASE = "/api";
 
@@ -301,29 +301,64 @@ export async function seedEvents(): Promise<{ seeded: number }> {
   return res.json();
 }
 
-// ── AI Fund Manager ──
+// ── AI Fund Manager (requires admin auth) ──
+
+import { getAdminToken } from "./useAdmin";
+
+function adminHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const token = getAdminToken();
+  const headers: Record<string, string> = { ...extra };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  return headers;
+}
 
 export async function analyzeStock(stockId: number): Promise<FundSignal> {
-  const res = await fetch(`${API_BASE}/fund/analyze/${stockId}`, { method: "POST" });
+  const res = await fetch(`${API_BASE}/fund/analyze/${stockId}`, {
+    method: "POST",
+    headers: adminHeaders(),
+  });
   if (!res.ok) throw new Error("Failed to analyze stock");
   return res.json();
 }
 
 export async function fetchFundSignals(limit = 20): Promise<FundSignal[]> {
-  const res = await fetchWithRetry(`${API_BASE}/fund/signals?limit=${limit}`);
+  const res = await fetchWithRetry(`${API_BASE}/fund/signals?limit=${limit}`, {
+    headers: adminHeaders(),
+  });
   if (!res.ok) return [];
   return res.json();
 }
 
 export async function fetchStockSignals(stockId: number, limit = 10): Promise<FundSignal[]> {
-  const res = await fetchWithRetry(`${API_BASE}/fund/signals/${stockId}?limit=${limit}`);
+  const res = await fetchWithRetry(`${API_BASE}/fund/signals/${stockId}?limit=${limit}`, {
+    headers: adminHeaders(),
+  });
   if (!res.ok) return [];
+  return res.json();
+}
+
+export async function fetchAccuracyStats(days = 30): Promise<AccuracyStats | null> {
+  const res = await fetchWithRetry(`${API_BASE}/fund/accuracy?days=${days}`, {
+    headers: adminHeaders(),
+  });
+  if (!res.ok) return null;
+  return res.json();
+}
+
+export async function verifySignals(): Promise<{ verified: number; updated: number }> {
+  const res = await fetch(`${API_BASE}/fund/verify`, {
+    method: "POST",
+    headers: adminHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to verify signals");
   return res.json();
 }
 
 export async function fetchDailyBriefing(date?: string): Promise<DailyBriefing | null> {
   const params = date ? `?target_date=${date}` : '';
-  const res = await fetchWithRetry(`${API_BASE}/fund/briefing${params}`);
+  const res = await fetchWithRetry(`${API_BASE}/fund/briefing${params}`, {
+    headers: adminHeaders(),
+  });
   if (!res.ok) return null;
   const data = await res.json();
   return data || null;
@@ -333,13 +368,15 @@ export async function generateDailyBriefing(regenerate = false): Promise<DailyBr
   const url = regenerate
     ? `${API_BASE}/fund/briefing/generate?regenerate=true`
     : `${API_BASE}/fund/briefing/generate`;
-  const res = await fetch(url, { method: "POST" });
+  const res = await fetch(url, { method: "POST", headers: adminHeaders() });
   if (!res.ok) throw new Error("Failed to generate briefing");
   return res.json();
 }
 
 export async function fetchBriefingHistory(limit = 7): Promise<DailyBriefing[]> {
-  const res = await fetchWithRetry(`${API_BASE}/fund/briefings?limit=${limit}`);
+  const res = await fetchWithRetry(`${API_BASE}/fund/briefings?limit=${limit}`, {
+    headers: adminHeaders(),
+  });
   if (!res.ok) return [];
   return res.json();
 }
@@ -347,7 +384,7 @@ export async function fetchBriefingHistory(limit = 7): Promise<DailyBriefing[]> 
 export async function analyzePortfolio(stockIds: number[]): Promise<PortfolioReport> {
   const res = await fetch(`${API_BASE}/fund/portfolio/analyze`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: adminHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ stock_ids: stockIds }),
   });
   if (!res.ok) throw new Error("Failed to analyze portfolio");
@@ -355,7 +392,9 @@ export async function analyzePortfolio(stockIds: number[]): Promise<PortfolioRep
 }
 
 export async function fetchLatestPortfolioReport(): Promise<PortfolioReport | null> {
-  const res = await fetchWithRetry(`${API_BASE}/fund/portfolio/latest`);
+  const res = await fetchWithRetry(`${API_BASE}/fund/portfolio/latest`, {
+    headers: adminHeaders(),
+  });
   if (!res.ok) return null;
   const data = await res.json();
   return data || null;

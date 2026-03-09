@@ -200,6 +200,28 @@ export interface FundSignal {
   financial_summary: string | null;
   market_summary: string | null;
   created_at: string;
+  price_at_signal: number | null;
+  price_after_1d: number | null;
+  price_after_3d: number | null;
+  price_after_5d: number | null;
+  is_correct: boolean | null;
+  return_pct: number | null;
+  verified_at: string | null;
+}
+
+export interface ConfidenceBucket {
+  total: number;
+  accuracy: number;
+}
+
+export interface AccuracyStats {
+  total: number;
+  correct: number;
+  accuracy: number;
+  avg_return: number;
+  buy_accuracy: number;
+  sell_accuracy: number;
+  by_confidence: Record<string, ConfidenceBucket>;
 }
 
 export interface DailyBriefing {
