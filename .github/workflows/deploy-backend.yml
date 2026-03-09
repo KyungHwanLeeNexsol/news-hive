@@ -8,36 +8,18 @@ on:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1
-        with:
-          host: 168.107.51.242
-          username: ubuntu
-          key: ${{ secrets.ORACLE_SSH_KEY }}
-          script: |
-            ENV_FILE=/home/ubuntu/news-hive/backend/.env
-            # Ensure secrets are in .env
-            if ! grep -q "DART_PUSH_SECRET" "$ENV_FILE" 2>/dev/null; then
-              echo 'DART_PUSH_SECRET=${{ secrets.DART_PUSH_SECRET }}' >> "$ENV_FILE"
-            fi
-            if grep -q "GEMINI_API_KEY" "$ENV_FILE" 2>/dev/null; then
-              sed -i 's|^GEMINI_API_KEY=.*|GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}|' "$ENV_FILE"
-            else
-              echo 'GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}' >> "$ENV_FILE"
-            fi
-            if grep -q "OPENROUTER_API_KEY" "$ENV_FILE" 2>/dev/null; then
-              sed -i 's|^OPENROUTER_API_KEY=.*|OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}|' "$ENV_FILE"
-            else
-              echo 'OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}' >> "$ENV_FILE"
-            fi
-            /home/ubuntu/news-hive/deploy.sh
-            # Wait for server to start, then check logs
-            sleep 5
-            echo "=== Server status ==="
-            systemctl is-active newshive 2>/dev/null || echo "Not a systemd service"
-            echo "=== Recent logs ==="
-            journalctl -u newshive --no-pager -n 30 2>/dev/null || tail -30 /home/ubuntu/news-hive/backend/nohup.out 2>/dev/null || tail -30 /home/ubuntu/news-hive/backend/server.log 2>/dev/null || echo "No logs found"
-            echo "=== Process check ==="
-            pgrep -af uvicorn || echo "uvicorn not running!"
+      - name: Deploy backend
+        run: |
+          cd /home/ubuntu/news-hive
+          git pull origin main
+          /home/ubuntu/news-hive/deploy.sh
+          # Wait for server to start, then check logs
+          sleep 5
+          echo "=== Server status ==="
+          systemctl is-active newshive 2>/dev/null || echo "Not a systemd service"
+          echo "=== Recent logs ==="
+          journalctl -u newshive --no-pager -n 30 2>/dev/null || tail -30 /home/ubuntu/news-hive/backend/nohup.out 2>/dev/null || tail -30 /home/ubuntu/news-hive/backend/server.log 2>/dev/null || echo "No logs found"
+          echo "=== Process check ==="
+          pgrep -af uvicorn || echo "uvicorn not running!"
