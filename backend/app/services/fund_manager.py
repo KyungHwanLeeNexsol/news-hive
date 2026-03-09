@@ -60,7 +60,7 @@ def _parse_json_response(text: str) -> dict | None:
 # ---------------------------------------------------------------------------
 
 def _gather_stock_news(db: Session, stock_id: int, days: int = 3) -> list[dict]:
-    """Gather recent news related to a stock."""
+    """Gather recent news related to a stock (본문 포함)."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     relations = (
         db.query(NewsStockRelation, NewsArticle)
@@ -73,19 +73,25 @@ def _gather_stock_news(db: Session, stock_id: int, days: int = 3) -> list[dict]:
         .limit(15)
         .all()
     )
-    return [
-        {
+    results = []
+    for rel, article in relations:
+        entry = {
             "title": article.title,
             "sentiment": article.sentiment or "neutral",
             "date": article.published_at.strftime("%m/%d") if article.published_at else "",
             "relevance": rel.relevance or "direct",
         }
-        for rel, article in relations
-    ]
+        # 본문 핵심 내용 포함 (AI가 제목만이 아닌 실질적 내용 기반 분석 가능)
+        if article.content:
+            entry["content"] = article.content[:500]
+        elif article.ai_summary:
+            entry["content"] = article.ai_summary[:300]
+        results.append(entry)
+    return results
 
 
 def _gather_sector_news(db: Session, sector_id: int, days: int = 3) -> list[dict]:
-    """Gather recent news related to a sector."""
+    """Gather recent news related to a sector (본문 포함)."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     relations = (
         db.query(NewsStockRelation, NewsArticle)
@@ -98,13 +104,18 @@ def _gather_sector_news(db: Session, sector_id: int, days: int = 3) -> list[dict
         .limit(10)
         .all()
     )
-    return [
-        {
+    results = []
+    for rel, article in relations:
+        entry = {
             "title": article.title,
             "sentiment": article.sentiment or "neutral",
         }
-        for rel, article in relations
-    ]
+        if article.content:
+            entry["content"] = article.content[:400]
+        elif article.ai_summary:
+            entry["content"] = article.ai_summary[:200]
+        results.append(entry)
+    return results
 
 
 def _gather_disclosures(db: Session, stock_id: int, days: int = 7) -> list[dict]:
@@ -277,6 +288,7 @@ async def analyze_stock(db: Session, stock_id: int) -> FundSignal | None:
     # Build comprehensive prompt
     prompt = f"""당신은 하버드 MBA 출신의 20년 경력 전문 펀드매니저입니다.
 아래 데이터를 종합적으로 분석하여 투자 판단을 내려주세요.
+뉴스의 본문 내용(content 필드)이 제공된 경우, 제목만이 아닌 본문의 구체적 수치/사실/발언을 근거로 분석하세요.
 
 ## 분석 대상
 - 종목명: {stock.name}
@@ -367,7 +379,7 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
     # Gather data
     cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
 
-    # Recent news grouped by sentiment
+    # Recent news grouped by sentiment (본문 포함)
     recent_news = (
         db.query(NewsArticle)
         .filter(NewsArticle.collected_at >= cutoff)
@@ -380,7 +392,19 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
     for article in recent_news:
         s = article.sentiment or "neutral"
         if s in news_by_sentiment and len(news_by_sentiment[s]) < 10:
-            news_by_sentiment[s].append(article.title)
+            # 본문이 있으면 앞 500자를 포함하여 AI가 깊이 있는 분석 가능
+            content_snippet = ""
+            if article.content:
+                content_snippet = article.content[:500]
+            elif article.ai_summary:
+                content_snippet = article.ai_summary[:300]
+            elif article.summary:
+                content_snippet = article.summary[:300]
+
+            entry = article.title
+            if content_snippet:
+                entry += f"\n  → 내용: {content_snippet}"
+            news_by_sentiment[s].append(entry)
 
     # Active macro alerts
     macro_alerts = _gather_macro_alerts(db)
@@ -408,7 +432,8 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
 **중요: 반드시 한국어로만 응답하세요. 영어 사용 금지.**
 
 아래 데이터를 기반으로 오늘의 시장 데일리 브리핑을 작성하세요.
-제공된 뉴스 제목과 공시 내용을 구체적으로 인용하며 분석하세요.
+각 뉴스의 제목과 본문 내용(→ 내용:)을 반드시 읽고, 구체적 사실을 인용하며 분석하세요.
+제목만 보고 추측하지 말고, 본문에 담긴 수치/사실/발언을 근거로 전문적인 분석을 작성하세요.
 일반론이 아닌, 실제 데이터에 근거한 구체적 분석을 작성하세요.
 
 ## 최근 24시간 주요 뉴스

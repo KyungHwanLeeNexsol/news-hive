@@ -13,6 +13,7 @@ from app.services.crawlers.naver import search_naver_news
 from app.services.crawlers.google import search_google_news
 from app.services.crawlers.yahoo import search_yahoo_finance_top, search_yahoo_stock_news
 from app.services.crawlers.korean_rss import fetch_korean_rss_feeds
+from app.services.crawlers.content_scraper import scrape_articles_batch
 from app.services.ai_classifier import (
     KeywordIndex, classify_news, classify_sentiment, _extract_sector_keywords,
     translate_articles_batch, is_non_financial_article,
@@ -370,6 +371,11 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
         logger.info("No articles with sector/stock relations to save.")
         return 0
 
+    # Phase 3: Scrape article content (본문 스크래핑)
+    url_to_content = await scrape_articles_batch(unique_articles, max_articles=50)
+    for ad in unique_articles:
+        ad["_content"] = url_to_content.get(ad["url"])
+
     from sqlalchemy import text as sa_text
 
     saved_count = 0
@@ -383,7 +389,7 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
         params: dict = {}
         for j, ad in enumerate(batch):
             values_parts.append(
-                f"(:t{j}, :sm{j}, :u{j}, :sr{j}, :pa{j}, :se{j})"
+                f"(:t{j}, :sm{j}, :u{j}, :sr{j}, :pa{j}, :se{j}, :ct{j})"
             )
             params[f"t{j}"] = ad["title"][:500]
             params[f"sm{j}"] = (ad.get("description") or "")[:2000]
@@ -391,9 +397,10 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
             params[f"sr{j}"] = ad["source"]
             params[f"pa{j}"] = ad.get("published_at")
             params[f"se{j}"] = classify_sentiment(ad["title"])
+            params[f"ct{j}"] = ad.get("_content")
 
         sql = sa_text(
-            f"""INSERT INTO news_articles (title, summary, url, source, published_at, sentiment)
+            f"""INSERT INTO news_articles (title, summary, url, source, published_at, sentiment, content)
             VALUES {', '.join(values_parts)}
             ON CONFLICT (url) DO NOTHING
             RETURNING id, url"""
