@@ -6,14 +6,12 @@ import {
   fetchFundSignals,
   fetchDailyBriefing,
   generateDailyBriefing,
-  analyzeStock,
   analyzePortfolio,
   fetchLatestPortfolioReport,
-  fetchStocks,
   fetchAccuracyStats,
   verifySignals,
 } from '@/lib/api';
-import type { FundSignal, DailyBriefing, PortfolioReport, StockListItem, AccuracyStats } from '@/lib/types';
+import type { FundSignal, DailyBriefing, PortfolioReport, AccuracyStats } from '@/lib/types';
 import { useWatchlist } from '@/lib/watchlist';
 import { useAdmin } from '@/lib/useAdmin';
 
@@ -313,39 +311,11 @@ function BriefingTab() {
 function SignalsTab() {
   const [signals, setSignals] = useState<FundSignal[]>([]);
   const [loading, setLoading] = useState(true);
-  const [analyzing, setAnalyzing] = useState<number | null>(null);
   const [expanded, setExpanded] = useState<number | null>(null);
-  const { watchlist } = useWatchlist();
-  const [watchedStocks, setWatchedStocks] = useState<StockListItem[]>([]);
 
   useEffect(() => {
     fetchFundSignals().then(setSignals).catch(() => {}).finally(() => setLoading(false));
   }, []);
-
-  useEffect(() => {
-    if (watchlist.length === 0) {
-      setWatchedStocks([]);
-      return;
-    }
-    fetchStocks({ ids: watchlist.join(','), limit: watchlist.length })
-      .then((r) => setWatchedStocks(r.stocks))
-      .catch(() => {});
-  }, [watchlist]);
-
-  async function handleAnalyze(stockId: number) {
-    setAnalyzing(stockId);
-    try {
-      const signal = await analyzeStock(stockId);
-      setSignals((prev) => {
-        const filtered = prev.filter((s) => s.stock_id !== stockId);
-        return [signal, ...filtered];
-      });
-    } catch {
-      alert('분석에 실패했습니다.');
-    } finally {
-      setAnalyzing(null);
-    }
-  }
 
   if (loading) {
     return (
@@ -364,31 +334,11 @@ function SignalsTab() {
 
   return (
     <div>
-      {watchedStocks.length > 0 && (
-        <div className="section-box mb-3">
-          <div className="section-title">
-            <span>관심종목 분석</span>
-          </div>
-          <div className="p-3 flex flex-wrap gap-2">
-            {watchedStocks.map((stock) => (
-              <button
-                key={stock.id}
-                onClick={() => handleAnalyze(stock.id)}
-                disabled={analyzing === stock.id}
-                className="px-3 py-1.5 text-[12px] border border-[#ddd] rounded hover:border-[#1261c4] hover:text-[#1261c4] disabled:text-[#999] disabled:border-[#eee] transition-colors"
-              >
-                {analyzing === stock.id ? '분석 중...' : stock.name}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
       {signals.length === 0 ? (
         <div className="section-box p-8 text-center">
           <p className="text-[15px] text-[#333] font-medium mb-1">생성된 투자 시그널이 없습니다</p>
           <p className="text-[13px] text-[#999]">
-            위 관심종목을 클릭하거나, 종목 상세 페이지에서 AI 분석을 요청하세요.
+            데일리 브리핑 생성 시 추천 종목의 시그널이 자동 생성됩니다.
           </p>
         </div>
       ) : (
@@ -478,15 +428,6 @@ function SignalsTab() {
                       <p className="text-[12px] text-[#555] leading-relaxed">{signal.market_summary}</p>
                     </div>
                   )}
-                  <div className="flex justify-end">
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleAnalyze(signal.stock_id); }}
-                      disabled={analyzing === signal.stock_id}
-                      className="text-[12px] text-[#1261c4] hover:underline disabled:text-[#999]"
-                    >
-                      {analyzing === signal.stock_id ? '재분석 중...' : '재분석'}
-                    </button>
-                  </div>
                 </div>
               )}
             </div>
