@@ -345,6 +345,46 @@ async def _gather_financial_data(stock_code: str) -> dict:
     return result
 
 
+async def _gather_peer_comparison(db: Session, stock_id: int, sector_id: int) -> list[dict]:
+    """같은 섹터 내 다른 종목들과의 비교 데이터 (최대 5개).
+
+    시가총액 상위 종목 기준으로 현재가/등락률/PER 등을 수집한다.
+    """
+    peers = (
+        db.query(Stock)
+        .filter(Stock.sector_id == sector_id, Stock.id != stock_id)
+        .order_by(Stock.market_cap.desc().nullslast())
+        .limit(5)
+        .all()
+    )
+
+    if not peers:
+        return []
+
+    from app.services.naver_finance import fetch_stock_fundamentals
+
+    results = []
+    for peer in peers:
+        entry = {"name": peer.name, "code": peer.stock_code}
+        try:
+            fund = await fetch_stock_fundamentals(peer.stock_code)
+            if fund:
+                entry["price"] = fund.current_price
+                entry["change_rate"] = fund.change_rate
+                if hasattr(fund, "eps") and fund.eps:
+                    entry["eps"] = fund.eps
+        except Exception:
+            pass
+
+        # 센티먼트 요약 (최근 3일)
+        st = _gather_sentiment_trend(db, stock_id=peer.id)
+        entry["sentiment_score"] = st["score_3d"]
+        entry["sentiment_trend"] = st["trend"]
+        results.append(entry)
+
+    return results
+
+
 # ---------------------------------------------------------------------------
 # Core analysis functions
 # ---------------------------------------------------------------------------
@@ -367,10 +407,18 @@ async def analyze_stock(db: Session, stock_id: int) -> FundSignal | None:
     macro_alerts = _gather_macro_alerts(db)
     sentiment_trend = _gather_sentiment_trend(db, stock_id=stock_id)
 
-    market_data, financial_data = await asyncio.gather(
+    # Gather async data in parallel (market, financial, peer comparison)
+    coros = [
         _gather_market_data(stock.stock_code),
         _gather_financial_data(stock.stock_code),
-    )
+    ]
+    if sector:
+        coros.append(_gather_peer_comparison(db, stock_id, stock.sector_id))
+
+    results = await asyncio.gather(*coros)
+    market_data = results[0]
+    financial_data = results[1]
+    peers = results[2] if sector else []
 
     # 과거 시그널 적중률 조회
     from app.services.signal_verifier import get_accuracy_stats
@@ -424,6 +472,11 @@ async def analyze_stock(db: Session, stock_id: int) -> FundSignal | None:
 
 ## 6. 매크로 리스크
 {json.dumps(macro_alerts, ensure_ascii=False, indent=2) if macro_alerts else '현재 매크로 리스크 없음'}
+
+## 7. 동종업계 비교
+{json.dumps(peers, ensure_ascii=False, indent=2) if peers else '동종업계 비교 데이터 없음'}
+※ 동종업계 대비 밸류에이션/센티먼트/주가 흐름을 비교하여 상대적 매력도를 평가하세요.
+  섹터 전체가 하락 중인데 해당 종목만 상승하면 과열 경계, 섹터 반등 시 후발주자면 기회로 판단.
 
 ## 분석 요청
 위 데이터를 기반으로 전문 펀드매니저의 관점에서 종합적으로 분석하고,
