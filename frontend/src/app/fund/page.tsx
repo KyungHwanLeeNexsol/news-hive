@@ -189,29 +189,6 @@ function BriefingTab() {
     );
   }
 
-  interface SectorItem { sector: string; sentiment?: string; analysis: string }
-  interface StockItem { stock: string; action?: string; reason: string; target_price?: number; stop_loss?: number }
-
-  function tryParseJson<T>(value: string | null | undefined): T[] | null {
-    if (!value) return null;
-    try {
-      const parsed = JSON.parse(value);
-      if (Array.isArray(parsed)) return parsed as T[];
-    } catch {
-      // not JSON
-    }
-    return null;
-  }
-
-  const sectorItems = tryParseJson<SectorItem>(briefing.sector_highlights);
-  const stockItems = tryParseJson<StockItem>(briefing.stock_picks);
-
-  const sentimentColor = (s: string) => {
-    if (s === 'positive') return { bg: 'bg-[#e8f5e9]', text: 'text-[#2e7d32]', label: '긍정' };
-    if (s === 'negative') return { bg: 'bg-[#fce4ec]', text: 'text-[#c62828]', label: '부정' };
-    return { bg: 'bg-[#f5f5f5]', text: 'text-[#616161]', label: '중립' };
-  };
-
   if (generating) {
     return (
       <div>
@@ -291,12 +268,36 @@ function BriefingTab() {
     );
   }
 
+  interface SectorItem { sector: string; sentiment?: string; analysis: string }
+  interface StockItem { stock: string; action?: string; reason: string; target_price?: number; stop_loss?: number }
+
+  function tryParseJson<T>(value: string | null | undefined): T[] | null {
+    if (!value) return null;
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed as T[];
+    } catch {
+      // not JSON
+    }
+    return null;
+  }
+
+  const b = briefing!;
+  const sectorItems = tryParseJson<SectorItem>(b.sector_highlights);
+  const stockItems = tryParseJson<StockItem>(b.stock_picks);
+
+  const sentimentColor = (s: string) => {
+    if (s === 'positive') return { bg: 'bg-[#e8f5e9]', text: 'text-[#2e7d32]', label: '긍정' };
+    if (s === 'negative') return { bg: 'bg-[#fce4ec]', text: 'text-[#c62828]', label: '부정' };
+    return { bg: 'bg-[#f5f5f5]', text: 'text-[#616161]', label: '중립' };
+  };
+
   return (
     <div>
       <div className="flex items-center justify-between mb-3">
         <div>
           <span className="text-[13px] text-[#999]">
-            {briefing.briefing_date} 브리핑
+            {b.briefing_date} 브리핑
           </span>
         </div>
         <button
@@ -308,15 +309,15 @@ function BriefingTab() {
         </button>
       </div>
       <div className="space-y-3">
-        {briefing.market_overview && (
+        {b.market_overview && (
           <div className="section-box">
             <div className="section-title"><span>&#x1F30D; 시장 전망</span></div>
             <div className="p-4 text-[13px] text-[#333] leading-[1.8]">
-              {briefing.market_overview}
+              {b.market_overview}
             </div>
           </div>
         )}
-        {briefing.sector_highlights && (
+        {b.sector_highlights && (
           <div className="section-box">
             <div className="section-title"><span>&#x1F3AF; 주목 섹터</span></div>
             <div className="p-4">
@@ -338,12 +339,12 @@ function BriefingTab() {
                   })}
                 </div>
               ) : (
-                <div className="text-[13px] text-[#333] leading-[1.8]">{briefing.sector_highlights}</div>
+                <div className="text-[13px] text-[#333] leading-[1.8]">{b.sector_highlights}</div>
               )}
             </div>
           </div>
         )}
-        {briefing.stock_picks && (
+        {b.stock_picks && (
           <div className="section-box">
             <div className="section-title"><span>&#x2B50; 오늘의 매수 추천</span></div>
             <div className="p-4">
@@ -383,24 +384,24 @@ function BriefingTab() {
                   })}
                 </div>
               ) : (
-                <div className="text-[13px] text-[#333] leading-[1.8]">{briefing.stock_picks}</div>
+                <div className="text-[13px] text-[#333] leading-[1.8]">{b.stock_picks}</div>
               )}
             </div>
           </div>
         )}
-        {briefing.risk_assessment && (
+        {b.risk_assessment && (
           <div className="section-box">
             <div className="section-title"><span>&#x26A0;&#xFE0F; 리스크 평가</span></div>
             <div className="p-4 text-[13px] text-[#333] leading-[1.8]">
-              {briefing.risk_assessment}
+              {b.risk_assessment}
             </div>
           </div>
         )}
-        {briefing.strategy && (
+        {b.strategy && (
           <div className="section-box">
             <div className="section-title"><span>&#x1F4DD; 투자 전략</span></div>
             <div className="p-4 text-[13px] text-[#333] leading-[1.8]">
-              {briefing.strategy}
+              {b.strategy}
             </div>
           </div>
         )}
