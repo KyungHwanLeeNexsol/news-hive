@@ -13,6 +13,7 @@ from app.models.portfolio_report import PortfolioReport
 from app.models.stock import Stock
 from app.models.sector import Sector
 from app.schemas.fund_manager import (
+    AccuracyStatsResponse,
     AnalyzeRequest,
     DailyBriefingResponse,
     FundSignalResponse,
@@ -45,6 +46,13 @@ def _enrich_signal(signal: FundSignal, db: Session) -> FundSignalResponse:
         financial_summary=signal.financial_summary,
         market_summary=signal.market_summary,
         created_at=signal.created_at,
+        price_at_signal=signal.price_at_signal,
+        price_after_1d=signal.price_after_1d,
+        price_after_3d=signal.price_after_3d,
+        price_after_5d=signal.price_after_5d,
+        is_correct=signal.is_correct,
+        return_pct=signal.return_pct,
+        verified_at=signal.verified_at,
     )
 
 
@@ -103,6 +111,26 @@ async def get_stock_signals(
         .all()
     )
     return [_enrich_signal(s, db) for s in signals]
+
+
+# ---- 적중률 통계 ----
+
+@router.get("/accuracy", response_model=AccuracyStatsResponse)
+async def get_accuracy_stats_endpoint(
+    days: int = Query(30, ge=7, le=90),
+    db: Session = Depends(get_db),
+):
+    """최근 N일간 시그널 적중률 통계를 조회합니다."""
+    from app.services.signal_verifier import get_accuracy_stats
+    return get_accuracy_stats(db, days=days)
+
+
+@router.post("/verify", response_model=dict)
+async def verify_signals_endpoint(db: Session = Depends(get_db)):
+    """미검증 시그널의 적중 여부를 수동으로 검증합니다."""
+    from app.services.signal_verifier import verify_signals
+    stats = await verify_signals(db)
+    return stats
 
 
 # ---- 데일리 브리핑 ----

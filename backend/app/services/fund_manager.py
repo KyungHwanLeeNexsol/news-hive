@@ -285,6 +285,19 @@ async def analyze_stock(db: Session, stock_id: int) -> FundSignal | None:
         _gather_financial_data(stock.stock_code),
     )
 
+    # 과거 시그널 적중률 조회
+    from app.services.signal_verifier import get_accuracy_stats
+    accuracy = get_accuracy_stats(db, days=30)
+    accuracy_text = "아직 검증된 시그널 없음"
+    if accuracy["total"] > 0:
+        accuracy_text = (
+            f"최근 30일 적중률: {accuracy['accuracy']}% "
+            f"({accuracy['correct']}/{accuracy['total']}건), "
+            f"매수 적중률: {accuracy['buy_accuracy']}%, "
+            f"매도 적중률: {accuracy['sell_accuracy']}%, "
+            f"평균 수익률: {accuracy['avg_return']}%"
+        )
+
     # Build comprehensive prompt
     prompt = f"""당신은 하버드 MBA 출신의 20년 경력 전문 펀드매니저입니다.
 아래 데이터를 종합적으로 분석하여 투자 판단을 내려주세요.
@@ -294,6 +307,10 @@ async def analyze_stock(db: Session, stock_id: int) -> FundSignal | None:
 - 종목명: {stock.name}
 - 종목코드: {stock.stock_code}
 - 섹터: {sector.name if sector else '미분류'}
+
+## 0. 과거 시그널 성과 (자기 피드백)
+{accuracy_text}
+※ 적중률이 낮다면 더 보수적으로, 높다면 현재 전략을 유지하세요.
 
 ## 1. 최근 뉴스 동향 (최근 3일)
 {json.dumps(news, ensure_ascii=False, indent=2) if news else '관련 뉴스 없음'}
@@ -340,6 +357,9 @@ async def analyze_stock(db: Session, stock_id: int) -> FundSignal | None:
     if not parsed:
         return None
 
+    # 시그널 발행 시점 주가 기록 (적중률 추적용)
+    price_at_signal = market_data.get("current_price") if market_data else None
+
     signal = FundSignal(
         stock_id=stock_id,
         signal=parsed.get("signal", "hold"),
@@ -350,6 +370,7 @@ async def analyze_stock(db: Session, stock_id: int) -> FundSignal | None:
         news_summary=parsed.get("news_summary"),
         financial_summary=parsed.get("financial_summary"),
         market_summary=parsed.get("market_summary"),
+        price_at_signal=price_at_signal,
     )
 
     db.add(signal)

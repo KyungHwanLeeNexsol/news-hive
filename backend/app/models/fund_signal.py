@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -23,5 +23,14 @@ class FundSignal(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+    # 적중률 추적 필드
+    price_at_signal: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 시그널 발행 시점 주가
+    price_after_1d: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 1일 후 주가
+    price_after_3d: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 3일 후 주가
+    price_after_5d: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 5일 후 주가
+    is_correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)  # 시그널 방향 적중 여부
+    return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)  # 5일 수익률 (%)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # 검증 완료 시점
 
     stock = relationship("Stock")

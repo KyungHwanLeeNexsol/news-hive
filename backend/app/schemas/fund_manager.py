@@ -18,8 +18,31 @@ class FundSignalResponse(BaseModel):
     financial_summary: str | None = None
     market_summary: str | None = None
     created_at: datetime
+    # 적중률 추적 필드
+    price_at_signal: int | None = None
+    price_after_1d: int | None = None
+    price_after_3d: int | None = None
+    price_after_5d: int | None = None
+    is_correct: bool | None = None
+    return_pct: float | None = None
+    verified_at: datetime | None = None
 
     model_config = {"from_attributes": True}
+
+
+class ConfidenceBucket(BaseModel):
+    total: int
+    accuracy: float
+
+
+class AccuracyStatsResponse(BaseModel):
+    total: int
+    correct: int
+    accuracy: float
+    avg_return: float
+    buy_accuracy: float
+    sell_accuracy: float
+    by_confidence: dict[str, ConfidenceBucket] = {}
 
 
 class DailyBriefingResponse(BaseModel):

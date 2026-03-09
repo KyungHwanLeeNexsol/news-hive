@@ -169,6 +169,21 @@ def _run_daily_briefing():
         db.close()
 
 
+def _run_signal_verification():
+    """과거 시그널의 적중 여부를 검증한다."""
+    from app.services.signal_verifier import verify_signals
+
+    db = SessionLocal()
+    try:
+        stats = asyncio.run(verify_signals(db))
+        if stats["verified"] or stats["updated"]:
+            logger.info(f"Signal verification: {stats['verified']} verified, {stats['updated']} updated")
+    except Exception as e:
+        logger.error(f"Signal verification failed: {e}")
+    finally:
+        db.close()
+
+
 def start_scheduler():
     """Start the background news crawl scheduler."""
     interval = settings.NEWS_CRAWL_INTERVAL_MINUTES
@@ -208,8 +223,18 @@ def start_scheduler():
         id="daily_briefing",
         replace_existing=True,
     )
+    # 시그널 적중률 검증: 매일 18:00 KST (장 마감 후)
+    scheduler.add_job(
+        _run_signal_verification,
+        "cron",
+        hour=18,
+        minute=0,
+        timezone="Asia/Seoul",
+        id="signal_verification",
+        replace_existing=True,
+    )
     scheduler.start()
-    logger.info(f"Scheduler started: crawling every {interval} min, DART every 30 min, market cap every 6h, briefing at 08:30 KST")
+    logger.info(f"Scheduler started: crawling every {interval} min, DART every 30 min, market cap every 6h, briefing at 08:30 KST, signal verify at 18:00 KST")
 
 
 def stop_scheduler():
