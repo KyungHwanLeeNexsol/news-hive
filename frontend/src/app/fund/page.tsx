@@ -120,19 +120,22 @@ function BriefingTab() {
   }
 
   // Parse JSON arrays from sector_highlights and stock_picks
-  function tryParseJson(value: string | null | undefined): unknown[] | null {
+  interface SectorItem { sector: string; sentiment?: string; analysis: string }
+  interface StockItem { stock: string; reason: string }
+
+  function tryParseJson<T>(value: string | null | undefined): T[] | null {
     if (!value) return null;
     try {
       const parsed = JSON.parse(value);
-      if (Array.isArray(parsed)) return parsed;
+      if (Array.isArray(parsed)) return parsed as T[];
     } catch {
       // not JSON — ignore
     }
     return null;
   }
 
-  const sectorItems = tryParseJson(briefing.sector_highlights);
-  const stockItems = tryParseJson(briefing.stock_picks);
+  const sectorItems = tryParseJson<SectorItem>(briefing.sector_highlights);
+  const stockItems = tryParseJson<StockItem>(briefing.stock_picks);
 
   const sentimentColor = (s: string) => {
     if (s === 'positive') return { bg: 'bg-[#e8f5e9]', text: 'text-[#2e7d32]', label: '긍정' };
@@ -174,7 +177,7 @@ function BriefingTab() {
             <div className="p-4">
               {sectorItems ? (
                 <div className="space-y-2.5">
-                  {sectorItems.map((item: Record<string, string>, i: number) => {
+                  {sectorItems.map((item, i) => {
                     const sc = sentimentColor(item.sentiment || 'neutral');
                     return (
                       <div key={i} className="border border-[#eee] rounded-lg p-3">
@@ -203,7 +206,7 @@ function BriefingTab() {
             <div className="p-4">
               {stockItems ? (
                 <div className="space-y-2.5">
-                  {stockItems.map((item: Record<string, string>, i: number) => (
+                  {stockItems.map((item, i) => (
                     <div key={i} className="border border-[#eee] rounded-lg p-3">
                       <div className="flex items-center gap-2 mb-1.5">
                         <span className="text-[14px] font-semibold text-[#1261c4]">{item.stock}</span>
