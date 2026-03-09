@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     OPENROUTER_API_KEY: str = ""
     OPENROUTER_MODEL: str = ""  # blank = use default free model
 
+    GROQ_API_KEY: str = ""
+    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+
     KIS_APP_KEY: str = ""
     KIS_APP_SECRET: str = ""
 
