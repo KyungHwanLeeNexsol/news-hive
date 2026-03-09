@@ -1,7 +1,8 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.database import SessionLocal, engine, Base  # noqa: F401
 from app.models import Sector, Stock, NewsArticle, NewsStockRelation  # noqa: F401
@@ -91,6 +92,34 @@ app.include_router(fund_manager.router)
 @app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health():
     return {"status": "ok"}
+
+
+@app.post("/api/deploy")
+async def deploy_webhook(request: Request):
+    """GitHub webhook → auto deploy. Validates HMAC-SHA256 signature."""
+    import hashlib
+    import hmac
+    import subprocess
+
+    secret = app_settings.DEPLOY_SECRET
+    if not secret:
+        return JSONResponse({"error": "DEPLOY_SECRET not configured"}, status_code=500)
+
+    body = await request.body()
+    sig_header = request.headers.get("X-Hub-Signature-256", "")
+    expected = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+    if not hmac.compare_digest(sig_header, expected):
+        return JSONResponse({"error": "invalid signature"}, status_code=403)
+
+    # Run deploy in background
+    subprocess.Popen(
+        ["/bin/bash", "/home/ubuntu/news-hive/deploy.sh"],
+        cwd="/home/ubuntu/news-hive",
+        stdout=open("/tmp/deploy.log", "w"),
+        stderr=subprocess.STDOUT,
+    )
+    return {"status": "deploy triggered"}
 
 
 @app.get("/api/market-status")
