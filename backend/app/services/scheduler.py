@@ -184,6 +184,36 @@ def _run_signal_verification():
         db.close()
 
 
+def _run_news_impact_backfill():
+    """뉴스-가격 반응 1일/5일 backfill (REQ-NPI-006~009)."""
+    from app.services.news_price_impact_service import backfill_prices
+
+    db = SessionLocal()
+    try:
+        stats = asyncio.run(backfill_prices(db))
+        if stats["updated_1d"] or stats["updated_5d"]:
+            logger.info(f"News impact backfill: 1d={stats['updated_1d']}, 5d={stats['updated_5d']}")
+    except Exception as e:
+        logger.error(f"News impact backfill failed: {e}")
+    finally:
+        db.close()
+
+
+def _run_news_impact_cleanup():
+    """90일 초과 뉴스-가격 반응 레코드 정리 (REQ-NPI-016)."""
+    from app.services.news_price_impact_service import cleanup_old_impacts
+
+    db = SessionLocal()
+    try:
+        deleted = asyncio.run(cleanup_old_impacts(db))
+        if deleted:
+            logger.info(f"News impact cleanup: {deleted} records deleted")
+    except Exception as e:
+        logger.error(f"News impact cleanup failed: {e}")
+    finally:
+        db.close()
+
+
 def start_scheduler():
     """Start the background news crawl scheduler."""
     interval = settings.NEWS_CRAWL_INTERVAL_MINUTES
@@ -233,8 +263,32 @@ def start_scheduler():
         id="signal_verification",
         replace_existing=True,
     )
+    # 뉴스-가격 반응 backfill: 매일 18:30 KST (시그널 검증 이후)
+    scheduler.add_job(
+        _run_news_impact_backfill,
+        "cron",
+        hour=18,
+        minute=30,
+        timezone="Asia/Seoul",
+        id="news_impact_backfill",
+        replace_existing=True,
+    )
+    # 뉴스-가격 반응 레코드 정리: 매일 03:00 KST
+    scheduler.add_job(
+        _run_news_impact_cleanup,
+        "cron",
+        hour=3,
+        minute=0,
+        timezone="Asia/Seoul",
+        id="news_impact_cleanup",
+        replace_existing=True,
+    )
     scheduler.start()
-    logger.info(f"Scheduler started: crawling every {interval} min, DART every 30 min, market cap every 6h, briefing at 08:30 KST, signal verify at 18:00 KST")
+    logger.info(
+        f"Scheduler started: crawling every {interval} min, DART every 30 min, "
+        f"market cap every 6h, briefing at 08:30 KST, signal verify at 18:00 KST, "
+        f"impact backfill at 18:30 KST, impact cleanup at 03:00 KST"
+    )
 
 
 def stop_scheduler():

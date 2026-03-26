@@ -373,6 +373,24 @@ async def get_stock_financials(stock_id: int, db: Session = Depends(get_db)):
     )
 
 
+@router.get("/stocks/{stock_id}/news-impact-stats")
+async def get_stock_news_impact_stats(
+    stock_id: int,
+    days: int = Query(default=30, ge=7, le=90),
+    db: Session = Depends(get_db),
+):
+    """종목의 뉴스-가격 반응 통계 (REQ-NPI-011, 012, 013)."""
+    from app.services.news_price_impact_service import get_stock_impact_stats
+    from app.schemas.news_price_impact import StockNewsImpactStatsResponse
+
+    stock = db.query(Stock).filter(Stock.id == stock_id).first()
+    if not stock:
+        raise HTTPException(status_code=404, detail="Stock not found")
+
+    stats = await get_stock_impact_stats(db, stock_id, days)
+    return StockNewsImpactStatsResponse(stock_id=stock_id, **stats)
+
+
 @router.get("/stocks/{stock_id}/sentiment-trend")
 async def get_stock_sentiment_trend(
     stock_id: int,

@@ -490,6 +490,28 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
                     else:
                         logger.warning(f"Relations batch insert failed (giving up): {e}")
 
+        # @MX:WARN: [AUTO] 가격 캡처 실패가 뉴스 수집을 중단하면 안 됨
+        # @MX:REASON: REQ-NPI-001~004 - 뉴스 저장 후 가격 스냅샷 캡처, 실패 시 무시
+        if rel_values:
+            try:
+                from app.services.news_price_impact_service import capture_price_snapshots
+
+                # relations에서 stock_id가 있는 (news_id, stock_id, relation_id) 쌍 수집
+                article_stock_pairs: list[tuple[int, int, int | None]] = []
+                for ad in batch:
+                    article_id = url_to_id.get(ad["url"])
+                    if not article_id:
+                        continue
+                    for rel in ad.get("_relations", []):
+                        stock_id = rel.get("stock_id")
+                        if stock_id:  # REQ-NPI-005: stock_id가 있는 관계만
+                            article_stock_pairs.append((article_id, stock_id, None))
+
+                if article_stock_pairs:
+                    await capture_price_snapshots(db, article_stock_pairs)
+            except Exception as e:
+                logger.error(f"가격 스냅샷 캡처 실패 (뉴스 수집은 정상 진행): {e}")
+
         logger.info(f"Batch {i // batch_size + 1}: {len(url_to_id)} articles ({saved_count} total)")
 
     logger.info(f"Saved {saved_count} new articles.")

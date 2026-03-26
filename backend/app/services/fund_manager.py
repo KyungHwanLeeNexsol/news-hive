@@ -821,6 +821,31 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
     candidate_data = await _gather_pick_candidates(db, recent_news)
     candidate_text = json.dumps(candidate_data, ensure_ascii=False, indent=2) if candidate_data else '후보 종목 데이터 없음'
 
+    # REQ-NPI-014~015: 후보 종목별 뉴스-가격 반응 통계 주입
+    news_impact_text = ""
+    try:
+        from app.services.news_price_impact_service import get_stock_impact_stats
+        from app.models.stock import Stock as StockModel
+
+        impact_lines = []
+        # candidate_data에서 종목명 추출하여 stock_id 조회
+        if candidate_data:
+            candidate_names = [c.get("name") or c.get("stock") for c in candidate_data if isinstance(c, dict)]
+            candidate_stocks = db.query(StockModel).filter(StockModel.name.in_(candidate_names)).all() if candidate_names else []
+            for stock in candidate_stocks:
+                stats = await get_stock_impact_stats(db, stock.id, days=30)
+                if stats.get("status") == "sufficient" and stats.get("count", 0) > 0:
+                    impact_lines.append(
+                        f"- {stock.name}: 평균 1일 수익률 {stats['avg_1d']}%, "
+                        f"평균 5일 수익률 {stats['avg_5d']}%, "
+                        f"승률(5일) {stats['win_rate_5d']}% "
+                        f"(샘플 {stats['count']}건)"
+                    )
+        if impact_lines:
+            news_impact_text = "\n## 뉴스 반응 통계 (30일)\n" + "\n".join(impact_lines) + "\n"
+    except Exception as e:
+        logger.warning(f"뉴스 반응 통계 수집 실패 (브리핑 계속 진행): {e}")
+
     prompt = f"""당신은 국내 최고 자산운용사의 CIO(최고투자책임자)이자 20년 경력 전문 펀드매니저입니다.
 오늘 날짜: {today.strftime('%Y년 %m월 %d일')}
 
@@ -869,7 +894,7 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
 - dividend_yield: 배당수익률(%)
 
 {candidate_text}
-
+{news_impact_text}
 반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트 없이 JSON만 출력하세요.
 {{
   "market_overview": "오늘 시장의 핵심 이슈를 7-10문장으로 상세 분석. (1) 글로벌 매크로 환경(금리, 환율, 유가, 지정학 리스크), (2) 국내 시장 흐름(코스피/코스닥 동향, 거래대금, 외국인/기관 동향), (3) 핵심 뉴스 2-3개를 구체적으로 인용하며 시장 영향 분석, (4) 당일 시장 전망. 일반 텍스트로 작성.",

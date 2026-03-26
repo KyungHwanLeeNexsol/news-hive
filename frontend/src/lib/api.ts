@@ -1,4 +1,4 @@
-import type { Sector, Stock, StockListItem, NewsArticle, StockDetail, FinancialPeriod, PriceRecord, SentimentTrendItem, SectorInsight, DisclosureItem, DisclosureDetail, MacroAlert, EconomicEvent, FundSignal, DailyBriefing, PortfolioReport, AccuracyStats } from "./types";
+import type { Sector, Stock, StockListItem, NewsArticle, StockDetail, FinancialPeriod, PriceRecord, SentimentTrendItem, SectorInsight, DisclosureItem, DisclosureDetail, MacroAlert, EconomicEvent, FundSignal, DailyBriefing, PortfolioReport, AccuracyStats, StockNewsImpactStats } from "./types";
 
 const API_BASE = "/api";
 
@@ -191,6 +191,12 @@ export async function fetchStockPrices(id: number, months = 3): Promise<PriceRec
 export async function fetchSentimentTrend(id: number, days = 30): Promise<SentimentTrendItem[]> {
   const res = await fetchWithRetry(`${API_BASE}/stocks/${id}/sentiment-trend?days=${days}`);
   if (!res.ok) throw new Error("Failed to fetch sentiment trend");
+  return res.json();
+}
+
+export async function fetchStockNewsImpactStats(id: number, days = 30): Promise<StockNewsImpactStats> {
+  const res = await fetchWithRetry(`${API_BASE}/stocks/${id}/news-impact-stats?days=${days}`);
+  if (!res.ok) throw new Error("Failed to fetch news impact stats");
   return res.json();
 }
 

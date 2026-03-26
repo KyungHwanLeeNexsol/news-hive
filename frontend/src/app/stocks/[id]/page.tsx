@@ -3,9 +3,9 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { fetchStockDetail, fetchStockNews, fetchStockPrices, fetchStockFinancials, fetchSentimentTrend, fetchStockDisclosures } from '@/lib/api';
+import { fetchStockDetail, fetchStockNews, fetchStockPrices, fetchStockFinancials, fetchSentimentTrend, fetchStockDisclosures, fetchStockNewsImpactStats } from '@/lib/api';
 import { formatSectorName } from '@/lib/format';
-import type { StockDetail, NewsArticle, PriceRecord, FinancialPeriod, SentimentTrendItem, DisclosureItem } from '@/lib/types';
+import type { StockDetail, NewsArticle, PriceRecord, FinancialPeriod, SentimentTrendItem, DisclosureItem, StockNewsImpactStats } from '@/lib/types';
 import Pagination from '@/components/Pagination';
 import DisclosureModal from '@/components/DisclosureModal';
 import { useWatchlist } from '@/lib/watchlist';
@@ -341,6 +341,8 @@ export default function StockDetailPage() {
   const [pricesLoaded, setPricesLoaded] = useState(false);
   const [sentimentTrend, setSentimentTrend] = useState<SentimentTrendItem[]>([]);
   const [sentimentLoaded, setSentimentLoaded] = useState(false);
+  const [impactStats, setImpactStats] = useState<StockNewsImpactStats | null>(null);
+  const [impactStatsLoaded, setImpactStatsLoaded] = useState(false);
 
   // Financials tab
   const [financials, setFinancials] = useState<{ annual: FinancialPeriod[]; quarter: FinancialPeriod[] } | null>(null);
@@ -395,6 +397,12 @@ export default function StockDetailPage() {
         .catch(() => {});
     }
 
+    if (tab === 'indicators' && !impactStatsLoaded) {
+      fetchStockNewsImpactStats(stockId)
+        .then((s) => { setImpactStats(s); setImpactStatsLoaded(true); })
+        .catch(() => {});
+    }
+
     if (tab === 'financials' && !financialsLoaded) {
       setFinancialsLoading(true);
       fetchStockFinancials(stockId)
@@ -418,7 +426,7 @@ export default function StockDetailPage() {
         .catch(() => {})
         .finally(() => setDisclosuresLoading(false));
     }
-  }, [stockId, tab, pricesLoaded, sentimentLoaded, financialsLoaded, newsLoaded, disclosuresLoaded]);
+  }, [stockId, tab, pricesLoaded, sentimentLoaded, impactStatsLoaded, financialsLoaded, newsLoaded, disclosuresLoaded]);
 
   // News pagination
   useEffect(() => {
@@ -568,6 +576,39 @@ export default function StockDetailPage() {
               {sentimentLoaded && (
                 <div className="border-t border-[#e5e5e5]">
                   <SentimentChart data={sentimentTrend} />
+                </div>
+              )}
+              {impactStatsLoaded && impactStats && (
+                <div className="border-t border-[#e5e5e5] px-4 py-3">
+                  <div className="text-[12px] font-bold text-[#333] mb-2">뉴스 반응 통계 (30일)</div>
+                  {impactStats.status === 'insufficient' ? (
+                    <p className="text-[13px] text-[#999] py-2">데이터 수집 중...</p>
+                  ) : (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <div className="bg-[#f8f9fa] rounded-lg p-3 text-center">
+                        <div className="text-[11px] text-[#999]">평균 1일 수익률</div>
+                        <div className={`text-[15px] font-bold mt-1 ${(impactStats.avg_1d ?? 0) >= 0 ? 'text-[#e12343]' : 'text-[#1261c4]'}`}>
+                          {impactStats.avg_1d != null ? `${impactStats.avg_1d >= 0 ? '+' : ''}${impactStats.avg_1d}%` : '-'}
+                        </div>
+                      </div>
+                      <div className="bg-[#f8f9fa] rounded-lg p-3 text-center">
+                        <div className="text-[11px] text-[#999]">평균 5일 수익률</div>
+                        <div className={`text-[15px] font-bold mt-1 ${(impactStats.avg_5d ?? 0) >= 0 ? 'text-[#e12343]' : 'text-[#1261c4]'}`}>
+                          {impactStats.avg_5d != null ? `${impactStats.avg_5d >= 0 ? '+' : ''}${impactStats.avg_5d}%` : '-'}
+                        </div>
+                      </div>
+                      <div className="bg-[#f8f9fa] rounded-lg p-3 text-center">
+                        <div className="text-[11px] text-[#999]">승률 (5일)</div>
+                        <div className="text-[15px] font-bold mt-1 text-[#333]">
+                          {impactStats.win_rate_5d != null ? `${impactStats.win_rate_5d}%` : '-'}
+                        </div>
+                      </div>
+                      <div className="bg-[#f8f9fa] rounded-lg p-3 text-center">
+                        <div className="text-[11px] text-[#999]">샘플 수</div>
+                        <div className="text-[15px] font-bold mt-1 text-[#333]">{impactStats.count}건</div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

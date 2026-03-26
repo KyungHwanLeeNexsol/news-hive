@@ -235,6 +235,18 @@ export interface DailyBriefing {
   created_at: string;
 }
 
+export interface StockNewsImpactStats {
+  stock_id: number;
+  status: "sufficient" | "insufficient";
+  count: number;
+  avg_1d: number | null;
+  avg_5d: number | null;
+  win_rate_1d: number | null;
+  win_rate_5d: number | null;
+  max_return_5d: number | null;
+  min_return_5d: number | null;
+}
+
 export interface PortfolioReport {
   id: number;
   stock_ids: string;

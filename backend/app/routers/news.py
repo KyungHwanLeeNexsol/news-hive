@@ -159,6 +159,23 @@ async def _run_full_refresh():
         db.close()
 
 
+@router.get("/{news_id}/impact")
+async def get_news_impact(news_id: int, db: Session = Depends(get_db)):
+    """특정 뉴스 기사의 가격 반응 데이터를 조회한다 (REQ-NPI-010)."""
+    from app.services.news_price_impact_service import get_news_impact as _get_impact
+    from app.schemas.news_price_impact import NewsImpactResponse, NewsPriceImpactItem
+
+    article = db.query(NewsArticle).filter(NewsArticle.id == news_id).first()
+    if not article:
+        raise HTTPException(status_code=404, detail="News article not found")
+
+    impacts = await _get_impact(db, news_id)
+    return NewsImpactResponse(
+        news_id=news_id,
+        impacts=[NewsPriceImpactItem(**imp) for imp in impacts],
+    )
+
+
 @router.post("/{news_id}/summary", response_model=NewsArticleResponse)
 async def generate_summary(news_id: int, db: Session = Depends(get_db)):
     """Generate AI summary for a news article (lazy, cached in DB)."""
