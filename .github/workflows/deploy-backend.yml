@@ -5,24 +5,22 @@ on:
     branches: [main]
     paths:
       - "backend/**"
-      - "docker-compose.prod.yml"
+      - "scripts/deploy.sh"
+      - "scripts/newshive.service"
       - ".github/workflows/deploy-backend.yml"
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.OCI_HOST }}
           username: ubuntu
           key: ${{ secrets.OCI_SSH_KEY }}
+          script_stop: true
           script: |
-            set -e
-            cd /home/ubuntu/news-hive
-            git fetch origin
-            git reset --hard origin/main
-            docker compose -f docker-compose.prod.yml up -d --build
-            docker compose -f docker-compose.prod.yml exec -T backend alembic upgrade head
-            echo "Deploy complete at $(date)"
+            bash /home/ubuntu/news-hive/scripts/deploy.sh

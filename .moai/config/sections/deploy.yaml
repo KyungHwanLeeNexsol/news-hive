@@ -1,0 +1,17 @@
+# 배포 환경 설정
+deploy:
+  backend:
+    provider: oci
+    shape: VM.Standard.E2.1.Micro
+    host: 140.245.76.242
+    user: ubuntu
+    ssh_key: "~/Downloads/ssh-key-*.key"  # 로컬 키 경로 (Git에 커밋 안 됨)
+    port: 8000
+    path: /home/ubuntu/news-hive
+
+  frontend:
+    provider: vercel
+    env_vars:
+      BACKEND_INTERNAL_URL: "http://140.245.76.242:8000"
+
+  ssh_connect: "ssh -i ~/Downloads/ssh-key-*.key ubuntu@140.245.76.242"

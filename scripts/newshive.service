@@ -1,0 +1,18 @@
+[Unit]
+Description=NewsHive FastAPI Backend
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/news-hive/backend
+EnvironmentFile=/home/ubuntu/news-hive/backend/.env
+ExecStart=/home/ubuntu/news-hive/backend/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
