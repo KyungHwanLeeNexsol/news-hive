@@ -412,7 +412,7 @@ export async function fetchCommodities(): Promise<Commodity[]> {
   const res = await fetchWithRetry(`${API_BASE}/commodities`);
   if (!res.ok) return [];
   const data = await res.json();
-  return data.commodities ?? [];
+  return Array.isArray(data) ? data : data.commodities ?? [];
 }
 
 export async function fetchCommodityHistory(
@@ -428,7 +428,7 @@ export async function fetchSectorCommodities(sectorId: number): Promise<SectorCo
   const res = await fetchWithRetry(`${API_BASE}/sectors/${sectorId}/commodities`);
   if (!res.ok) return [];
   const data = await res.json();
-  return data.commodities ?? [];
+  return Array.isArray(data) ? data : data.commodities ?? [];
 }
 
 export async function refreshCommodityPrices(): Promise<{ message: string }> {
