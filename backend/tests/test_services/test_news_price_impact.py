@@ -40,7 +40,7 @@ def _run(coro):
 class TestCapturePriceSnapshots:
     """capture_price_snapshots 함수 검증."""
 
-    @patch("app.services.news_price_impact_service.fetch_stock_fundamentals_batch")
+    @patch("app.services.naver_finance.fetch_stock_fundamentals_batch")
     def test_captures_snapshot_for_valid_stock(
         self, mock_fetch, db: Session, make_stock, make_news,
     ) -> None:
@@ -59,7 +59,7 @@ class TestCapturePriceSnapshots:
         assert impact.stock_id == stock.id
         assert impact.price_at_news == 50000.0
 
-    @patch("app.services.news_price_impact_service.fetch_stock_fundamentals_batch")
+    @patch("app.services.naver_finance.fetch_stock_fundamentals_batch")
     def test_skips_pairs_without_stock_id(
         self, mock_fetch, db: Session, make_news,
     ) -> None:
@@ -71,7 +71,7 @@ class TestCapturePriceSnapshots:
         assert count == 0
         mock_fetch.assert_not_called()
 
-    @patch("app.services.news_price_impact_service.fetch_stock_fundamentals_batch")
+    @patch("app.services.naver_finance.fetch_stock_fundamentals_batch")
     def test_returns_zero_on_empty_pairs(
         self, mock_fetch, db: Session,
     ) -> None:
@@ -80,7 +80,7 @@ class TestCapturePriceSnapshots:
         assert count == 0
         mock_fetch.assert_not_called()
 
-    @patch("app.services.news_price_impact_service.fetch_stock_fundamentals_batch")
+    @patch("app.services.naver_finance.fetch_stock_fundamentals_batch")
     def test_skips_stock_with_no_price(
         self, mock_fetch, db: Session, make_stock, make_news,
     ) -> None:
@@ -95,7 +95,7 @@ class TestCapturePriceSnapshots:
         assert count == 0
         assert db.query(NewsPriceImpact).count() == 0
 
-    @patch("app.services.news_price_impact_service.fetch_stock_fundamentals_batch")
+    @patch("app.services.naver_finance.fetch_stock_fundamentals_batch")
     def test_returns_zero_on_fetch_exception(
         self, mock_fetch, db: Session, make_stock, make_news,
     ) -> None:
@@ -109,7 +109,7 @@ class TestCapturePriceSnapshots:
 
         assert count == 0
 
-    @patch("app.services.news_price_impact_service.fetch_stock_fundamentals_batch")
+    @patch("app.services.naver_finance.fetch_stock_fundamentals_batch")
     def test_captures_multiple_stocks(
         self, mock_fetch, db: Session, make_stock, make_news, make_sector,
     ) -> None:
@@ -156,7 +156,7 @@ class TestBackfillPrices:
             db.flush()
         return impact
 
-    @patch("app.services.news_price_impact_service.fetch_stock_fundamentals_batch")
+    @patch("app.services.naver_finance.fetch_stock_fundamentals_batch")
     def test_backfill_1d_updates_record(
         self, mock_fetch, db: Session, make_stock, make_news,
     ) -> None:
@@ -179,7 +179,7 @@ class TestBackfillPrices:
         assert impact.price_after_1d == 10500.0
         assert impact.return_1d_pct == 5.0
 
-    @patch("app.services.news_price_impact_service.fetch_stock_fundamentals_batch")
+    @patch("app.services.naver_finance.fetch_stock_fundamentals_batch")
     def test_backfill_5d_updates_record(
         self, mock_fetch, db: Session, make_stock, make_news,
     ) -> None:
@@ -206,7 +206,7 @@ class TestBackfillPrices:
         assert impact.price_after_5d == 11000.0
         assert impact.return_5d_pct == 10.0
 
-    @patch("app.services.news_price_impact_service.fetch_stock_fundamentals_batch")
+    @patch("app.services.naver_finance.fetch_stock_fundamentals_batch")
     def test_backfill_no_pending_records(
         self, mock_fetch, db: Session,
     ) -> None:
@@ -215,7 +215,7 @@ class TestBackfillPrices:
         assert stats == {"updated_1d": 0, "updated_5d": 0}
         mock_fetch.assert_not_called()
 
-    @patch("app.services.news_price_impact_service.fetch_stock_fundamentals_batch")
+    @patch("app.services.naver_finance.fetch_stock_fundamentals_batch")
     def test_backfill_retries_on_failure(
         self, mock_fetch, db: Session, make_stock, make_news,
     ) -> None:
