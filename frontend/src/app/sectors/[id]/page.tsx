@@ -160,7 +160,9 @@ export default function SectorDetail() {
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4">
             {sectorCommodities.map((sc) => {
               const c = sc.commodity;
-              const changePct = c.latest_price?.change_pct ?? 0;
+              const lp = c.latest_price;
+              const priceVal = lp == null ? null : typeof lp === "number" ? lp : lp.price;
+              const changePct = c.change_pct ?? (lp != null && typeof lp === "object" ? lp.change_pct : null) ?? 0;
               const priceColor =
                 changePct > 0 ? "text-rise" : changePct < 0 ? "text-fall" : "text-[#333]";
               const correlationLabel =
@@ -184,14 +186,14 @@ export default function SectorDetail() {
                     <span className="text-[13px] font-medium text-[#333]">{c.name_ko}</span>
                     <span className={`badge ${correlationClass}`}>{correlationLabel}</span>
                   </div>
-                  {c.latest_price ? (
+                  {priceVal != null ? (
                     <div className="flex items-center gap-2 mt-1">
                       <span className={`text-[14px] font-bold ${priceColor}`}>
                         {c.currency === "USD"
-                          ? `$${c.latest_price.price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                          : c.latest_price.price.toLocaleString()}
+                          ? `$${priceVal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                          : priceVal.toLocaleString()}
                       </span>
-                      <ChangeRate value={c.latest_price.change_pct} />
+                      <ChangeRate value={changePct} />
                     </div>
                   ) : (
                     <div className="text-[13px] text-[#999] mt-1">-</div>

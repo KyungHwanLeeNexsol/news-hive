@@ -277,7 +277,8 @@ export interface Commodity {
   category: string;
   unit: string;
   currency: string;
-  latest_price: CommodityPrice | null;
+  latest_price: number | CommodityPrice | null;
+  change_pct?: number | null;
 }
 
 export interface CommodityHistoryPoint {

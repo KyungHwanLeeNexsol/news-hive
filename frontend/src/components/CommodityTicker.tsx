@@ -86,12 +86,12 @@ export default function CommodityTicker() {
                   className="flex items-center gap-1.5 px-3 py-2 border-r border-[#f0f0f0] hover:bg-[#f7f8fa] transition-colors whitespace-nowrap"
                 >
                   <span className="text-[12px] font-medium text-[#333]">{c.name_ko}</span>
-                  {c.latest_price ? (
+                  {c.latest_price != null ? (
                     <>
                       <span className="text-[12px] text-[#333]">
-                        {formatPrice(c.latest_price.price, c.currency)}
+                        {formatPrice(typeof c.latest_price === "number" ? c.latest_price : c.latest_price.price, c.currency)}
                       </span>
-                      <ChangeRate value={c.latest_price.change_pct} />
+                      <ChangeRate value={c.change_pct ?? (typeof c.latest_price === "object" ? c.latest_price.change_pct : null)} />
                     </>
                   ) : (
                     <span className="text-[11px] text-[#999]">-</span>

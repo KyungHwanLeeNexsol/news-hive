@@ -19,6 +19,18 @@ import {
   CartesianGrid,
 } from "recharts";
 
+function getPrice(c: Commodity): number | null {
+  if (c.latest_price == null) return null;
+  if (typeof c.latest_price === "number") return c.latest_price;
+  return c.latest_price.price ?? null;
+}
+
+function getChangePct(c: Commodity): number | null {
+  if (c.change_pct != null) return c.change_pct;
+  if (c.latest_price != null && typeof c.latest_price === "object") return c.latest_price.change_pct;
+  return null;
+}
+
 const CATEGORY_LABELS: Record<string, string> = {
   all: "전체",
   energy: "에너지",
@@ -251,7 +263,7 @@ function CommoditiesContent() {
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
                 {filteredCommodities.map((c) => {
                   const isSelected = c.id === selectedId;
-                  const changePct = c.latest_price?.change_pct ?? 0;
+                  const changePct = getChangePct(c) ?? 0;
                   const priceColor =
                     changePct > 0 ? "text-rise" : changePct < 0 ? "text-fall" : "text-[#333]";
                   return (
@@ -266,13 +278,13 @@ function CommoditiesContent() {
                         <span className="text-[13px] font-medium text-[#333]">{c.name_ko}</span>
                         <span className="text-[10px] text-[#999]">{c.symbol}</span>
                       </div>
-                      {c.latest_price ? (
+                      {getPrice(c) != null ? (
                         <>
                           <div className={`text-[15px] font-bold mt-0.5 ${priceColor}`}>
-                            {formatPrice(c.latest_price.price, c.currency)}
+                            {formatPrice(getPrice(c)!, c.currency)}
                           </div>
                           <div className="text-[12px] mt-0.5">
-                            <ChangeRate value={c.latest_price.change_pct} />
+                            <ChangeRate value={getChangePct(c)} />
                           </div>
                         </>
                       ) : (
@@ -299,13 +311,13 @@ function CommoditiesContent() {
                   <span className="text-[12px] text-[#999]">
                     {selectedCommodity.symbol} ({selectedCommodity.unit})
                   </span>
-                  {selectedCommodity.latest_price && (
+                  {getPrice(selectedCommodity) != null && (
                     <span className="text-[13px] font-bold ml-2">
-                      {formatPrice(selectedCommodity.latest_price.price, selectedCommodity.currency)}
+                      {formatPrice(getPrice(selectedCommodity)!, selectedCommodity.currency)}
                     </span>
                   )}
-                  {selectedCommodity.latest_price && (
-                    <ChangeRate value={selectedCommodity.latest_price.change_pct} />
+                  {getChangePct(selectedCommodity) != null && (
+                    <ChangeRate value={getChangePct(selectedCommodity)} />
                   )}
                 </div>
                 <div className="flex gap-1">
