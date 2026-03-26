@@ -199,6 +199,38 @@ def _run_news_impact_backfill():
         db.close()
 
 
+def _run_commodity_price_fetch():
+    """원자재 가격 수집 + 급변 알림 생성."""
+    from app.services.commodity_service import fetch_commodity_prices, check_commodity_alerts
+
+    db = SessionLocal()
+    try:
+        updated = fetch_commodity_prices(db)
+        if updated:
+            alerts = check_commodity_alerts(db)
+            if alerts:
+                logger.info(f"원자재 급변 알림: {len(alerts)}개 생성")
+    except Exception as e:
+        logger.error(f"원자재 가격 수집 실패: {e}")
+    finally:
+        db.close()
+
+
+def _run_commodity_news_crawl():
+    """원자재 뉴스 크롤링 (기존 크롤러 재사용)."""
+    from app.services.commodity_news_service import crawl_commodity_news
+
+    db = SessionLocal()
+    try:
+        count = asyncio.run(crawl_commodity_news(db))
+        if count:
+            logger.info(f"원자재 뉴스 크롤링 완료: {count}개 기사")
+    except Exception as e:
+        logger.error(f"원자재 뉴스 크롤링 실패: {e}")
+    finally:
+        db.close()
+
+
 def _run_news_impact_cleanup():
     """90일 초과 뉴스-가격 반응 레코드 정리 (REQ-NPI-016)."""
     from app.services.news_price_impact_service import cleanup_old_impacts
@@ -273,6 +305,23 @@ def start_scheduler():
         id="news_impact_backfill",
         replace_existing=True,
     )
+    # 원자재 가격 수집: 10분 간격
+    scheduler.add_job(
+        _run_commodity_price_fetch,
+        "interval",
+        minutes=10,
+        id="commodity_price_fetch",
+        replace_existing=True,
+        next_run_time=datetime.now(),
+    )
+    # 원자재 뉴스 크롤링: 30분 간격 (뉴스 크롤링 직후)
+    scheduler.add_job(
+        _run_commodity_news_crawl,
+        "interval",
+        minutes=30,
+        id="commodity_news_crawl",
+        replace_existing=True,
+    )
     # 뉴스-가격 반응 레코드 정리: 매일 03:00 KST
     scheduler.add_job(
         _run_news_impact_cleanup,
@@ -286,7 +335,8 @@ def start_scheduler():
     scheduler.start()
     logger.info(
         f"Scheduler started: crawling every {interval} min, DART every 30 min, "
-        f"market cap every 6h, briefing at 08:30 KST, signal verify at 18:00 KST, "
+        f"market cap every 6h, commodity price every 10 min, commodity news every 30 min, "
+        f"briefing at 08:30 KST, signal verify at 18:00 KST, "
         f"impact backfill at 18:30 KST, impact cleanup at 03:00 KST"
     )
 

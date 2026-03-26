@@ -1066,7 +1066,7 @@ async def _generate_signals_from_picks(db: Session, stock_picks) -> None:
         except Exception as e:
             logger.error(f"브리핑 추천 종목 '{stock.name}' 시그널 생성 실패: {e}")
 
-    logger.info(f"브리핑 추천 종목 시그널 생성 완료: {generated}/{len(matched_stocks)}건")
+    logger.info(f"브리핑 추천 종목 시그널 생성 완료: {generated}/{len(matched)}건")
 
 
 async def analyze_portfolio(db: Session, stock_ids: list[int]) -> PortfolioReport | None:

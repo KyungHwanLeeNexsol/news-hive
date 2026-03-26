@@ -3,9 +3,9 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { fetchSector, fetchSectorNews, generateSectorInsight } from "@/lib/api";
+import { fetchSector, fetchSectorNews, generateSectorInsight, fetchSectorCommodities, fetchSectorCommodityNews } from "@/lib/api";
 import { formatSectorName } from "@/lib/format";
-import type { Sector, NewsArticle, SectorInsight } from "@/lib/types";
+import type { Sector, NewsArticle, SectorInsight, SectorCommodity } from "@/lib/types";
 import ChangeRate from "@/components/ChangeRate";
 import Pagination from "@/components/Pagination";
 import { useMarketRefresh } from "@/lib/useMarketRefresh";
@@ -39,11 +39,16 @@ export default function SectorDetail() {
   const [news, setNews] = useState<NewsArticle[]>([]);
   const [newsTotal, setNewsTotal] = useState(0);
   const [newsPage, setNewsPage] = useState(1);
-  const [tab, setTab] = useState<"stocks" | "news">("news");
+  const [tab, setTab] = useState<"stocks" | "news" | "commodity-news">("news");
   const [sectorLoading, setSectorLoading] = useState(true);
   const [newsLoading, setNewsLoading] = useState(true);
   const [insight, setInsight] = useState<SectorInsight | null>(null);
   const [insightLoading, setInsightLoading] = useState(false);
+  const [sectorCommodities, setSectorCommodities] = useState<SectorCommodity[]>([]);
+  const [commodityNews, setCommodityNews] = useState<NewsArticle[]>([]);
+  const [commodityNewsTotal, setCommodityNewsTotal] = useState(0);
+  const [commodityNewsPage, setCommodityNewsPage] = useState(1);
+  const [commodityNewsLoading, setCommodityNewsLoading] = useState(false);
 
   const loadSector = useCallback((silent = false) => {
     if (!sectorId) return;
@@ -52,6 +57,14 @@ export default function SectorDetail() {
   }, [sectorId]);
 
   useEffect(() => { loadSector(); }, [loadSector]);
+
+  // 관련 원자재 로드
+  useEffect(() => {
+    if (!sectorId) return;
+    fetchSectorCommodities(sectorId)
+      .then(setSectorCommodities)
+      .catch(() => {});
+  }, [sectorId]);
 
   // Auto-refresh: 15s during market hours, 5min otherwise
   useMarketRefresh(() => loadSector(true));
@@ -66,7 +79,19 @@ export default function SectorDetail() {
       .finally(() => setNewsLoading(false));
   }, [sectorId, newsPage]);
 
+  // 원자재 뉴스 로드
+  useEffect(() => {
+    if (!sectorId || tab !== "commodity-news") return;
+    setCommodityNewsLoading(true);
+    window.scrollTo({ top: 0 });
+    fetchSectorCommodityNews(sectorId, (commodityNewsPage - 1) * PAGE_SIZE, PAGE_SIZE)
+      .then((r) => { setCommodityNews(r.articles); setCommodityNewsTotal(r.total); })
+      .catch(() => { setCommodityNews([]); setCommodityNewsTotal(0); })
+      .finally(() => setCommodityNewsLoading(false));
+  }, [sectorId, commodityNewsPage, tab]);
+
   const newsTotalPages = Math.ceil(newsTotal / PAGE_SIZE);
+  const commodityNewsTotalPages = Math.ceil(commodityNewsTotal / PAGE_SIZE);
 
   return (
     <div>
@@ -126,6 +151,61 @@ export default function SectorDetail() {
         </div>
       </div>
 
+      {/* 관련 원자재 */}
+      {sectorCommodities.length > 0 && (
+        <div className="section-box mb-3">
+          <div className="px-4 py-2.5 border-b border-[#e5e5e5]">
+            <span className="text-[13px] font-bold text-[#333]">관련 원자재</span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4">
+            {sectorCommodities.map((sc) => {
+              const c = sc.commodity;
+              const changePct = c.latest_price?.change_pct ?? 0;
+              const priceColor =
+                changePct > 0 ? "text-rise" : changePct < 0 ? "text-fall" : "text-[#333]";
+              const correlationLabel =
+                sc.correlation_type === "positive"
+                  ? "양의 상관"
+                  : sc.correlation_type === "negative"
+                    ? "음의 상관"
+                    : "중립";
+              const correlationClass =
+                sc.correlation_type === "positive"
+                  ? "badge-positive"
+                  : sc.correlation_type === "negative"
+                    ? "badge-negative"
+                    : "badge-neutral";
+              return (
+                <div
+                  key={c.id}
+                  className="px-4 py-3 border-r border-b border-[#e5e5e5] last:border-r-0"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[13px] font-medium text-[#333]">{c.name_ko}</span>
+                    <span className={`badge ${correlationClass}`}>{correlationLabel}</span>
+                  </div>
+                  {c.latest_price ? (
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className={`text-[14px] font-bold ${priceColor}`}>
+                        {c.currency === "USD"
+                          ? `$${c.latest_price.price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                          : c.latest_price.price.toLocaleString()}
+                      </span>
+                      <ChangeRate value={c.latest_price.change_pct} />
+                    </div>
+                  ) : (
+                    <div className="text-[13px] text-[#999] mt-1">-</div>
+                  )}
+                  {sc.description && (
+                    <div className="text-[11px] text-[#999] mt-1">{sc.description}</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Tab nav */}
       <div className="tab-nav">
         <button
@@ -140,6 +220,14 @@ export default function SectorDetail() {
         >
           종목 {!sectorLoading && `(${sector?.stocks?.length ?? 0})`}
         </button>
+        {sectorCommodities.length > 0 && (
+          <button
+            className={`tab-item ${tab === "commodity-news" ? "active" : ""}`}
+            onClick={() => setTab("commodity-news")}
+          >
+            원자재 뉴스 {commodityNewsTotal > 0 && `(${commodityNewsTotal})`}
+          </button>
+        )}
       </div>
 
       {/* Tab content */}
@@ -240,7 +328,7 @@ export default function SectorDetail() {
             </tbody>
           </table>
         </div>
-      ) : (
+      ) : tab === "news" ? (
         <div className="section-box" style={{ borderTop: "none" }}>
           <table className="naver-table">
             <thead>
@@ -317,6 +405,89 @@ export default function SectorDetail() {
           </table>
           {!newsLoading && news.length > 0 && (
             <Pagination currentPage={newsPage} totalPages={newsTotalPages} onPageChange={setNewsPage} />
+          )}
+        </div>
+      ) : (
+        /* 원자재 뉴스 탭 */
+        <div className="section-box" style={{ borderTop: "none" }}>
+          <table className="naver-table">
+            <thead>
+              <tr>
+                <th className="text-left" style={{ width: "52%" }}>제목</th>
+                <th style={{ width: "8%" }}>구분</th>
+                <th style={{ width: "18%" }}>관련</th>
+                <th style={{ width: "22%" }}>날짜</th>
+              </tr>
+            </thead>
+            <tbody>
+              {commodityNewsLoading ? (
+                Array.from({ length: 10 }).map((_, i) => (
+                  <tr key={`csk-${i}`}>
+                    <td><div className="skeleton skeleton-text" style={{ width: `${55 + Math.random() * 35}%` }} /></td>
+                    <td className="text-center"><div className="skeleton skeleton-badge mx-auto" /></td>
+                    <td className="text-center">
+                      <div className="flex gap-1 justify-center">
+                        <div className="skeleton skeleton-badge" />
+                      </div>
+                    </td>
+                    <td className="text-center"><div className="skeleton skeleton-text-sm mx-auto" style={{ width: "80%" }} /></td>
+                  </tr>
+                ))
+              ) : commodityNews.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="text-center py-8 text-[#999]">
+                    관련 원자재 뉴스가 없습니다.
+                  </td>
+                </tr>
+              ) : (
+                commodityNews.map((article) => {
+                  const sentiment = sentimentLabel(article.sentiment);
+                  return (
+                    <tr key={article.id}>
+                      <td>
+                        <Link
+                          href={`/news/${article.id}`}
+                          className="text-[#333] hover:text-[#1261c4] hover:underline"
+                        >
+                          {article.title}
+                        </Link>
+                      </td>
+                      <td className="text-center">
+                        <span className={`badge ${sentiment.className}`}>
+                          {sentiment.text}
+                        </span>
+                      </td>
+                      <td className="text-center">
+                        {(() => {
+                          const sectors = new Map<number, string>();
+                          const stocks = new Map<number, string>();
+                          for (const rel of article.relations) {
+                            if (rel.sector_id && rel.sector_name) sectors.set(rel.sector_id, rel.sector_name);
+                            if (rel.stock_id && rel.stock_name) stocks.set(rel.stock_id, rel.stock_name);
+                          }
+                          const tags: { key: string; label: string; cls: string }[] = [];
+                          for (const [id, name] of sectors) tags.push({ key: `s${id}`, label: formatSectorName(name), cls: "badge-sector" });
+                          for (const [id, name] of stocks) tags.push({ key: `t${id}`, label: name, cls: "badge-stock" });
+                          return tags.slice(0, 3).map((t) => (
+                            <span key={t.key} className={`badge ${t.cls} mr-1`}>{t.label}</span>
+                          ));
+                        })()}
+                      </td>
+                      <td className="text-center text-[12px] text-[#999]">
+                        {formatDate(article.published_at)}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+          {!commodityNewsLoading && commodityNews.length > 0 && (
+            <Pagination
+              currentPage={commodityNewsPage}
+              totalPages={commodityNewsTotalPages}
+              onPageChange={setCommodityNewsPage}
+            />
           )}
         </div>
       )}

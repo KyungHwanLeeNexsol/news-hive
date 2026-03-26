@@ -6,6 +6,7 @@ import { fetchSectors, fetchNews, fetchStocks, fetchDisclosures, refreshNews } f
 import type { Sector, NewsArticle, StockListItem, DisclosureItem } from '@/lib/types';
 import { formatSectorName } from '@/lib/format';
 import ChangeRate from '@/components/ChangeRate';
+import CommodityTicker from '@/components/CommodityTicker';
 import { useWatchlist } from '@/lib/watchlist';
 import { useMarketRefresh } from '@/lib/useMarketRefresh';
 
@@ -95,6 +96,9 @@ export default function Dashboard() {
 
   return (
     <div>
+      {/* 원자재 시세 티커 */}
+      <CommodityTicker />
+
       {/* Watchlist widget — only show when there are watched stocks */}
       {watchedStocks.length > 0 && (
         <div className="section-box mb-3">

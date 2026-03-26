@@ -188,6 +188,68 @@ async def get_sector_news(sector_id: int, limit: int = 30, offset: int = 0, db: 
     )
 
 
+@router.get("/{sector_id}/commodity-news")
+async def get_sector_commodity_news(
+    sector_id: int,
+    limit: int = 30,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
+    """섹터에 연관된 원자재 뉴스 조회.
+
+    SectorCommodityRelation을 통해 해당 섹터와 관련된 원자재를 찾고,
+    NewsCommodityRelation을 통해 원자재 관련 뉴스를 반환한다.
+    """
+    from app.models.commodity import SectorCommodityRelation
+    from app.models.news_commodity_relation import NewsCommodityRelation
+
+    sector = db.query(Sector).filter(Sector.id == sector_id).first()
+    if not sector:
+        raise HTTPException(status_code=404, detail="Sector not found")
+
+    # 섹터와 관련된 원자재 ID 조회
+    commodity_ids = [
+        r[0] for r in
+        db.query(SectorCommodityRelation.commodity_id)
+        .filter(SectorCommodityRelation.sector_id == sector_id)
+        .all()
+    ]
+    if not commodity_ids:
+        return JSONResponse(
+            content=[],
+            headers={"X-Total-Count": "0", "Access-Control-Expose-Headers": "X-Total-Count"},
+        )
+
+    # 해당 원자재와 관련된 뉴스 ID 조회
+    news_ids_subq = (
+        db.query(NewsCommodityRelation.news_id)
+        .filter(NewsCommodityRelation.commodity_id.in_(commodity_ids))
+        .distinct()
+        .subquery()
+    )
+
+    total = db.query(func.count()).select_from(news_ids_subq).scalar()
+
+    articles = (
+        db.query(NewsArticle)
+        .options(
+            selectinload(NewsArticle.relations).selectinload(NewsStockRelation.stock),
+            selectinload(NewsArticle.relations).selectinload(NewsStockRelation.sector),
+        )
+        .filter(NewsArticle.id.in_(news_ids_subq.select()))
+        .order_by(NewsArticle.published_at.desc().nullslast())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+    data = format_articles(articles)
+    return JSONResponse(
+        content=jsonable_encoder(data),
+        headers={"X-Total-Count": str(total), "Access-Control-Expose-Headers": "X-Total-Count"},
+    )
+
+
 @router.post("/{sector_id}/insight")
 async def generate_sector_insight(sector_id: int, db: Session = Depends(get_db)):
     """Generate or return cached AI insight for a sector based on recent news."""

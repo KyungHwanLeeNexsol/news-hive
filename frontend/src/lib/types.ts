@@ -256,3 +256,56 @@ export interface PortfolioReport {
   rebalancing: string | null;
   created_at: string;
 }
+
+// ── 원자재 (Commodity) ──
+
+export interface CommodityPrice {
+  price: number;
+  change_pct: number | null;
+  open_price: number | null;
+  high_price: number | null;
+  low_price: number | null;
+  volume: number | null;
+  recorded_at: string;
+}
+
+export interface Commodity {
+  id: number;
+  symbol: string;
+  name_ko: string;
+  name_en: string;
+  category: string;
+  unit: string;
+  currency: string;
+  latest_price: CommodityPrice | null;
+}
+
+export interface CommodityHistoryPoint {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface SectorCommodity {
+  commodity: Commodity;
+  correlation_type: string;
+  description: string | null;
+}
+
+// ── 원자재 뉴스 (Commodity News) ──
+
+export interface CommodityNewsRelation {
+  commodity_id: number;
+  name_ko: string;
+  symbol: string;
+  relevance: string;
+  impact_direction: string | null;
+}
+
+// 원자재 뉴스 = 기존 NewsArticle + commodity_relations 필드
+export interface CommodityNewsArticle extends NewsArticle {
+  commodity_relations: CommodityNewsRelation[];
+}

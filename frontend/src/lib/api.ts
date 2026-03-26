@@ -1,4 +1,4 @@
-import type { Sector, Stock, StockListItem, NewsArticle, StockDetail, FinancialPeriod, PriceRecord, SentimentTrendItem, SectorInsight, DisclosureItem, DisclosureDetail, MacroAlert, EconomicEvent, FundSignal, DailyBriefing, PortfolioReport, AccuracyStats, StockNewsImpactStats } from "./types";
+import type { Sector, Stock, StockListItem, NewsArticle, StockDetail, FinancialPeriod, PriceRecord, SentimentTrendItem, SectorInsight, DisclosureItem, DisclosureDetail, MacroAlert, EconomicEvent, FundSignal, DailyBriefing, PortfolioReport, AccuracyStats, StockNewsImpactStats, Commodity, CommodityHistoryPoint, SectorCommodity, CommodityNewsArticle } from "./types";
 
 const API_BASE = "/api";
 
@@ -404,4 +404,72 @@ export async function fetchLatestPortfolioReport(): Promise<PortfolioReport | nu
   if (!res.ok) return null;
   const data = await res.json();
   return data || null;
+}
+
+// ── 원자재 (Commodities) ──
+
+export async function fetchCommodities(): Promise<Commodity[]> {
+  const res = await fetchWithRetry(`${API_BASE}/commodities`);
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.commodities ?? [];
+}
+
+export async function fetchCommodityHistory(
+  id: number,
+  period = "1mo",
+): Promise<{ commodity: Commodity; history: CommodityHistoryPoint[]; period: string }> {
+  const res = await fetchWithRetry(`${API_BASE}/commodities/${id}/history?period=${period}`);
+  if (!res.ok) throw new Error("Failed to fetch commodity history");
+  return res.json();
+}
+
+export async function fetchSectorCommodities(sectorId: number): Promise<SectorCommodity[]> {
+  const res = await fetchWithRetry(`${API_BASE}/sectors/${sectorId}/commodities`);
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.commodities ?? [];
+}
+
+export async function refreshCommodityPrices(): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE}/commodities/refresh`, { method: "POST" });
+  if (!res.ok) throw new Error("Failed to refresh commodity prices");
+  return res.json();
+}
+
+// ── 원자재 뉴스 (Commodity News) ──
+
+export async function fetchCommodityNews(
+  offset = 0,
+  limit = 30,
+): Promise<{ articles: CommodityNewsArticle[]; total: number }> {
+  const res = await fetchWithRetry(`${API_BASE}/commodities/news?limit=${limit}&offset=${offset}`);
+  if (!res.ok) throw new Error("Failed to fetch commodity news");
+  const total = parseInt(res.headers.get("X-Total-Count") || "0", 10);
+  const articles = await res.json();
+  return { articles, total };
+}
+
+export async function fetchCommodityNewsById(
+  commodityId: number,
+  offset = 0,
+  limit = 30,
+): Promise<{ articles: NewsArticle[]; total: number }> {
+  const res = await fetchWithRetry(`${API_BASE}/commodities/${commodityId}/news?limit=${limit}&offset=${offset}`);
+  if (!res.ok) throw new Error("Failed to fetch commodity news by id");
+  const total = parseInt(res.headers.get("X-Total-Count") || "0", 10);
+  const articles = await res.json();
+  return { articles, total };
+}
+
+export async function fetchSectorCommodityNews(
+  sectorId: number,
+  offset = 0,
+  limit = 30,
+): Promise<{ articles: NewsArticle[]; total: number }> {
+  const res = await fetchWithRetry(`${API_BASE}/sectors/${sectorId}/commodity-news?limit=${limit}&offset=${offset}`);
+  if (!res.ok) throw new Error("Failed to fetch sector commodity news");
+  const total = parseInt(res.headers.get("X-Total-Count") || "0", 10);
+  const articles = await res.json();
+  return { articles, total };
 }

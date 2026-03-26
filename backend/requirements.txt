@@ -22,3 +22,11 @@ google-genai==1.14.0
 # Utils
 python-dotenv==1.0.1
 pydantic-settings==2.7.1
+
+# Commodity Price Tracking
+yfinance==0.2.51
+
+# Testing
+pytest==8.3.4
+pytest-cov==6.0.0
+freezegun==1.4.0
