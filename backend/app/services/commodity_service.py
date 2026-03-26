@@ -37,26 +37,39 @@ def fetch_commodity_prices(db: Session) -> int:
     updated = 0
     try:
         # yfinance 배치 다운로드 (1일 데이터)
-        data = yf.download(symbols, period="1d", group_by="ticker", progress=False)
+        data = yf.download(symbols, period="1d", progress=False)
+
+        if data.empty:
+            logger.warning("yfinance 다운로드 결과 없음")
+            return 0
 
         for symbol in symbols:
             commodity = symbol_map[symbol]
             try:
+                # yfinance 1.x: MultiIndex columns (Price, Ticker)
                 if len(symbols) == 1:
-                    ticker_data = data
+                    # 단일 심볼: columns = ['Close', 'High', ...]
+                    close_price = float(data["Close"].iloc[-1])
+                    open_price = float(data["Open"].iloc[-1])
+                    high_price = float(data["High"].iloc[-1])
+                    low_price = float(data["Low"].iloc[-1])
+                    vol = data["Volume"].iloc[-1]
                 else:
-                    ticker_data = data[symbol]
+                    # 다중 심볼: columns = MultiIndex (Price, Ticker)
+                    if symbol not in data["Close"].columns:
+                        logger.debug(f"{symbol}: 데이터 없음")
+                        continue
+                    col = data["Close"][symbol]
+                    if col.dropna().empty:
+                        logger.debug(f"{symbol}: 데이터 없음 (거래일 아닌 경우)")
+                        continue
+                    close_price = float(col.iloc[-1])
+                    open_price = float(data["Open"][symbol].iloc[-1])
+                    high_price = float(data["High"][symbol].iloc[-1])
+                    low_price = float(data["Low"][symbol].iloc[-1])
+                    vol = data["Volume"][symbol].iloc[-1]
 
-                if ticker_data.empty:
-                    logger.debug(f"{symbol}: 데이터 없음 (거래일 아닌 경우)")
-                    continue
-
-                row = ticker_data.iloc[-1]
-                close_price = float(row["Close"])
-                open_price = float(row["Open"]) if "Open" in row else None
-                high_price = float(row["High"]) if "High" in row else None
-                low_price = float(row["Low"]) if "Low" in row else None
-                volume = int(row["Volume"]) if "Volume" in row and row["Volume"] > 0 else None
+                volume = int(vol) if vol and vol > 0 else None
 
                 # 전일 대비 변동률 계산
                 change_pct = None
