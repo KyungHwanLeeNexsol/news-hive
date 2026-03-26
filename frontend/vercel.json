@@ -1,8 +1,5 @@
 {
   "buildCommand": "npm run build",
   "installCommand": "npm install",
-  "framework": "nextjs",
-  "env": {
-    "BACKEND_INTERNAL_URL": "@backend_internal_url"
-  }
+  "framework": "nextjs"
 }
