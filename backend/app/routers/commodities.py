@@ -144,7 +144,7 @@ async def list_commodity_news(
         article_dict["commodity_relations"] = commodity_info
         result.append(article_dict)
 
-    data = jsonable_encoder(result)
+    data = jsonable_encoder({"articles": result, "total": total})
     return JSONResponse(
         content=data,
         headers={
@@ -188,7 +188,7 @@ async def get_commodity_news(
         .all()
     )
 
-    data = jsonable_encoder(format_articles(articles))
+    data = jsonable_encoder({"articles": format_articles(articles), "total": total})
     return JSONResponse(
         content=data,
         headers={

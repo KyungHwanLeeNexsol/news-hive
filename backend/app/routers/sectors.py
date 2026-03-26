@@ -216,7 +216,7 @@ async def get_sector_commodity_news(
     ]
     if not commodity_ids:
         return JSONResponse(
-            content=[],
+            content={"articles": [], "total": 0},
             headers={"X-Total-Count": "0", "Access-Control-Expose-Headers": "X-Total-Count"},
         )
 
@@ -245,7 +245,7 @@ async def get_sector_commodity_news(
 
     data = format_articles(articles)
     return JSONResponse(
-        content=jsonable_encoder(data),
+        content=jsonable_encoder({"articles": data, "total": total}),
         headers={"X-Total-Count": str(total), "Access-Control-Expose-Headers": "X-Total-Count"},
     )
 

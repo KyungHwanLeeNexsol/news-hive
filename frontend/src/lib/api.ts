@@ -447,10 +447,12 @@ export async function fetchCommodityNews(
 ): Promise<{ articles: CommodityNewsArticle[]; total: number }> {
   const res = await fetchWithRetry(`${API_BASE}/commodities/news?limit=${limit}&offset=${offset}`);
   if (!res.ok) return { articles: [], total: 0 };
-  const total = parseInt(res.headers.get("X-Total-Count") || "0", 10);
   const data = await res.json();
-  const articles = Array.isArray(data) ? data : data.articles ?? [];
-  return { articles, total };
+  if (Array.isArray(data)) {
+    const total = parseInt(res.headers.get("X-Total-Count") || "0", 10);
+    return { articles: data, total };
+  }
+  return { articles: data.articles ?? [], total: data.total ?? 0 };
 }
 
 export async function fetchCommodityNewsById(
@@ -460,10 +462,12 @@ export async function fetchCommodityNewsById(
 ): Promise<{ articles: NewsArticle[]; total: number }> {
   const res = await fetchWithRetry(`${API_BASE}/commodities/${commodityId}/news?limit=${limit}&offset=${offset}`);
   if (!res.ok) return { articles: [], total: 0 };
-  const total = parseInt(res.headers.get("X-Total-Count") || "0", 10);
   const data = await res.json();
-  const articles = Array.isArray(data) ? data : data.articles ?? [];
-  return { articles, total };
+  if (Array.isArray(data)) {
+    const total = parseInt(res.headers.get("X-Total-Count") || "0", 10);
+    return { articles: data, total };
+  }
+  return { articles: data.articles ?? [], total: data.total ?? 0 };
 }
 
 export async function fetchSectorCommodityNews(
@@ -473,8 +477,10 @@ export async function fetchSectorCommodityNews(
 ): Promise<{ articles: NewsArticle[]; total: number }> {
   const res = await fetchWithRetry(`${API_BASE}/sectors/${sectorId}/commodity-news?limit=${limit}&offset=${offset}`);
   if (!res.ok) return { articles: [], total: 0 };
-  const total = parseInt(res.headers.get("X-Total-Count") || "0", 10);
   const data = await res.json();
-  const articles = Array.isArray(data) ? data : data.articles ?? [];
-  return { articles, total };
+  if (Array.isArray(data)) {
+    const total = parseInt(res.headers.get("X-Total-Count") || "0", 10);
+    return { articles: data, total };
+  }
+  return { articles: data.articles ?? [], total: data.total ?? 0 };
 }
