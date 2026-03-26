@@ -418,10 +418,12 @@ export async function fetchCommodities(): Promise<Commodity[]> {
 export async function fetchCommodityHistory(
   id: number,
   period = "1mo",
-): Promise<{ commodity: Commodity; history: CommodityHistoryPoint[]; period: string }> {
+): Promise<{ history: CommodityHistoryPoint[] }> {
   const res = await fetchWithRetry(`${API_BASE}/commodities/${id}/history?period=${period}`);
-  if (!res.ok) throw new Error("Failed to fetch commodity history");
-  return res.json();
+  if (!res.ok) return { history: [] };
+  const data = await res.json();
+  if (Array.isArray(data)) return { history: data };
+  return { history: data.history ?? [] };
 }
 
 export async function fetchSectorCommodities(sectorId: number): Promise<SectorCommodity[]> {
@@ -444,9 +446,10 @@ export async function fetchCommodityNews(
   limit = 30,
 ): Promise<{ articles: CommodityNewsArticle[]; total: number }> {
   const res = await fetchWithRetry(`${API_BASE}/commodities/news?limit=${limit}&offset=${offset}`);
-  if (!res.ok) throw new Error("Failed to fetch commodity news");
+  if (!res.ok) return { articles: [], total: 0 };
   const total = parseInt(res.headers.get("X-Total-Count") || "0", 10);
-  const articles = await res.json();
+  const data = await res.json();
+  const articles = Array.isArray(data) ? data : data.articles ?? [];
   return { articles, total };
 }
 
@@ -456,9 +459,10 @@ export async function fetchCommodityNewsById(
   limit = 30,
 ): Promise<{ articles: NewsArticle[]; total: number }> {
   const res = await fetchWithRetry(`${API_BASE}/commodities/${commodityId}/news?limit=${limit}&offset=${offset}`);
-  if (!res.ok) throw new Error("Failed to fetch commodity news by id");
+  if (!res.ok) return { articles: [], total: 0 };
   const total = parseInt(res.headers.get("X-Total-Count") || "0", 10);
-  const articles = await res.json();
+  const data = await res.json();
+  const articles = Array.isArray(data) ? data : data.articles ?? [];
   return { articles, total };
 }
 
@@ -468,8 +472,9 @@ export async function fetchSectorCommodityNews(
   limit = 30,
 ): Promise<{ articles: NewsArticle[]; total: number }> {
   const res = await fetchWithRetry(`${API_BASE}/sectors/${sectorId}/commodity-news?limit=${limit}&offset=${offset}`);
-  if (!res.ok) throw new Error("Failed to fetch sector commodity news");
+  if (!res.ok) return { articles: [], total: 0 };
   const total = parseInt(res.headers.get("X-Total-Count") || "0", 10);
-  const articles = await res.json();
+  const data = await res.json();
+  const articles = Array.isArray(data) ? data : data.articles ?? [];
   return { articles, total };
 }
