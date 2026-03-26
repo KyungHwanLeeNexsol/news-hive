@@ -50,7 +50,7 @@ sudo apt-get install -y python3.12 python3.12-venv python3-pip git
 # 6. 프로젝트 클론
 if [ ! -d /home/ubuntu/news-hive ]; then
     echo ">>> 프로젝트 클론..."
-    git clone https://github.com/YOUR_GITHUB_USERNAME/news-hive.git /home/ubuntu/news-hive
+    git clone https://github.com/KyungHwanLeeNexsol/news-hive.git /home/ubuntu/news-hive
 fi
 
 # 7. Python 가상환경 + 의존성 설치
