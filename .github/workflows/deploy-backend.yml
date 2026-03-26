@@ -1,18 +1,28 @@
-name: Deploy Backend to Oracle VM
-# DISABLED: Deployment now handled by GitHub webhook → /api/deploy endpoint
-# See backend/app/main.py deploy_webhook()
+name: Deploy Backend to OCI
 
 on:
-  workflow_dispatch: # Manual trigger only, if ever needed
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "docker-compose.prod.yml"
+      - ".github/workflows/deploy-backend.yml"
 
 jobs:
   deploy:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
-      - name: Deploy backend
-        run: |
-          cd /home/ubuntu/news-hive
-          git pull origin main
-          /home/ubuntu/news-hive/deploy.sh
-          sleep 5
-          pgrep -af uvicorn || echo "uvicorn not running!"
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.OCI_HOST }}
+          username: ubuntu
+          key: ${{ secrets.OCI_SSH_KEY }}
+          script: |
+            set -e
+            cd /home/ubuntu/news-hive
+            git fetch origin
+            git reset --hard origin/main
+            docker compose -f docker-compose.prod.yml up -d --build
+            docker compose -f docker-compose.prod.yml exec -T backend alembic upgrade head
+            echo "Deploy complete at $(date)"

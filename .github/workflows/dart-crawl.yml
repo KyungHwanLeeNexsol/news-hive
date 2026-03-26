@@ -1,13 +1,13 @@
 name: DART Disclosure Crawl
-# DISABLED: Now running via crontab on Oracle server directly.
-# See server crontab: */30 0-9 * * 1-5 (KST business hours)
+# OCI 서버 crontab으로 직접 실행 중 (KST 평일 장중 30분 간격)
+# 수동 트리거만 활성화 (긴급 시 사용)
 
 on:
-  workflow_dispatch: # Manual trigger only
+  workflow_dispatch:
 
 jobs:
   crawl:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -17,5 +17,5 @@ jobs:
       - name: Crawl DART and push to server
         env:
           DART_PUSH_SECRET: ${{ secrets.DART_PUSH_SECRET }}
-          API_URL: http://168.107.51.242:8000
+          API_URL: http://${{ secrets.OCI_HOST }}:8000
         run: python scripts/dart_crawl_push.py
