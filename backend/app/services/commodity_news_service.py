@@ -14,6 +14,7 @@ from app.models.news import NewsArticle
 from app.models.news_commodity_relation import NewsCommodityRelation
 from app.models.news_relation import NewsStockRelation
 from app.models.stock import Stock
+from app.services.ai_classifier import is_non_financial_article
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +128,11 @@ def classify_commodity_news(
     Returns:
         생성된 NewsCommodityRelation 레코드 목록
     """
+    # 정치/연예 등 비금융 기사 사전 차단
+    if is_non_financial_article(title):
+        logger.debug(f"원자재 분류 스킵 (비금융 기사): {title[:60]}")
+        return []
+
     commodities = db.query(Commodity).all()
     if not commodities:
         return []
