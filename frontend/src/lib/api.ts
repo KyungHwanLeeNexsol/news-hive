@@ -3,8 +3,20 @@ import type { Sector, Stock, StockListItem, NewsArticle, NewsRelation, StockDeta
 const API_BASE = "/api";
 
 /**
- * Fetch with automatic retry — handles Render free-tier cold starts
- * where the first request may time out (502/504) while the backend wakes up.
+ * 502/503 응답 시 점검 페이지로 리디렉션 (배포 중 백엔드 재시작 감지)
+ */
+function _redirectToMaintenance(): void {
+  if (
+    typeof window !== "undefined" &&
+    !window.location.pathname.startsWith("/maintenance")
+  ) {
+    window.location.href = "/maintenance";
+  }
+}
+
+/**
+ * Fetch with automatic retry — handles backend cold starts / restarts.
+ * 502/503 after all retries → redirects to /maintenance (server down during deploy).
  */
 async function fetchWithRetry(
   input: RequestInfo | URL,
@@ -16,11 +28,21 @@ async function fetchWithRetry(
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const res = await fetch(input, opts);
-      if (res.ok || res.status < 500 || attempt === retries) return res;
-      // 5xx — backend might be waking up, wait and retry
+      if (res.ok || res.status < 500 || attempt === retries) {
+        // 최종 재시도 후에도 502/503이면 점검 페이지로
+        if (attempt === retries && (res.status === 502 || res.status === 503)) {
+          _redirectToMaintenance();
+        }
+        return res;
+      }
+      // 5xx — wait and retry
       await new Promise((r) => setTimeout(r, 3000));
     } catch (e) {
-      if (attempt === retries) throw e;
+      if (attempt === retries) {
+        // 네트워크 오류(connection refused 등)도 점검 페이지로
+        _redirectToMaintenance();
+        throw e;
+      }
       await new Promise((r) => setTimeout(r, 3000));
     }
   }
