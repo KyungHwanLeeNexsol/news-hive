@@ -43,11 +43,24 @@
 - **Alembic 연동**: 모델 변경 시 `alembic revision --autogenerate`로 마이그레이션 자동 생성
 - **선언적 매핑**: Python 클래스로 테이블 구조를 명확하게 표현
 
+### asyncio.to_thread() 패턴 (CPU-bound 오프로딩)
+
+- **용도**: 동기 함수(특히 DB 집합 연산, 번역 배치 등)를 FastAPI 비동기 엔드포인트 내에서 실행할 때 이벤트 루프 블로킹 방지
+- **적용 위치**: `backend/app/routers/news.py`의 `_run_full_refresh` — `_deduplicate_existing`, `_backfill_sentiment` 호출 시 사용
+- **원칙**: I/O bound 작업은 `await` 비동기 함수를 직접 사용하고, CPU/메모리 집약적인 동기 함수는 `asyncio.to_thread(fn, *args)`로 스레드풀에 오프로딩
+
 ### Next.js App Router (프론트엔드)
 
 - **API 프록시**: `next.config.ts`의 `rewrites`로 `/api/*`를 FastAPI로 투명하게 프록시하여 CORS 문제 없이 운영
 - **서버 컴포넌트**: 초기 렌더링 성능 최적화
 - **파일 기반 라우팅**: 페이지 추가 시 디렉토리 생성만으로 처리
+
+### Next.js Middleware (Edge Runtime)
+
+- **위치**: `frontend/src/middleware.ts`
+- **역할**: 모든 페이지 네비게이션 시 백엔드 헬스체크(`/api/health`) 수행, 응답 없음 또는 오류 시 `/maintenance`로 리디렉션
+- **Edge Runtime 호환**: `AbortController` + `setTimeout` 조합으로 타임아웃 구현 (Node.js API 미사용)
+- **적용 범위**: `/maintenance` 및 `/_next/*`, `/favicon.ico` 등 정적 경로 제외한 모든 경로
 
 ### Tailwind CSS v4
 

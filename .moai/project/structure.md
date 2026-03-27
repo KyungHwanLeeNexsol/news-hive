@@ -63,9 +63,12 @@ news-hive/
 │   └── .env.example                  # 환경변수 템플릿
 ├── frontend/                         # Next.js 프론트엔드
 │   ├── src/
+│   │   ├── middleware.ts              # Next.js Edge 미들웨어: 헬스체크 기반 점검 페이지 리디렉션
 │   │   ├── app/                      # Next.js App Router 페이지
 │   │   │   ├── page.tsx              # 대시보드 (섹터 카드 목록)
 │   │   │   ├── layout.tsx            # 루트 레이아웃
+│   │   │   ├── maintenance/
+│   │   │   │   └── page.tsx          # 시스템 점검 페이지 (10초 자동 재시도, 복구 시 홈 이동)
 │   │   │   ├── stocks/
 │   │   │   │   ├── page.tsx          # 전체 종목 목록
 │   │   │   │   └── [id]/page.tsx     # 종목 상세 (뉴스 피드 + 시그널)

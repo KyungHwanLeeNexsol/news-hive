@@ -4,6 +4,25 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Added (배포/점검 중 시스템 점검 페이지 및 미들웨어)
+
+- 시스템 점검 페이지 (`/maintenance`): "시스템 점검 중" 안내, 10초 자동 재시도, 백엔드 복구 시 자동 홈 이동 (`frontend/src/app/maintenance/page.tsx`)
+- Next.js 미들웨어 (`frontend/src/middleware.ts`): 페이지 접근 시 헬스체크 수행, 백엔드 다운 감지 시 `/maintenance`로 리디렉션, Edge Runtime 호환 AbortController 적용
+- `fetchWithRetry` 강화 (`frontend/src/lib/api.ts`): 최종 502/503 또는 네트워크 오류 발생 시 `/maintenance`로 자동 이동
+
+### Fixed (뉴스 새로고침 안정성)
+
+- 뉴스 새로고침 후 서버 응답 없음 수정 (`backend/app/routers/news.py`): `_deduplicate_existing` 및 `_backfill_sentiment`을 `asyncio.to_thread()`로 실행하여 이벤트 루프 블로킹 해소, `_backfill_translate`를 최근 200건 / 회당 최대 20건으로 제한
+- 뉴스 갱신 안 됨 수정 (`backend/app/services/news_crawler.py`): `del` 이후 참조된 변수(`all_raw_articles`, `existing_urls`)에 의한 NameError 수정
+
+### Deployment Notes (점검 페이지 / 뉴스 새로고침 수정)
+
+- DB 마이그레이션 없음
+- 신규 환경변수 없음
+- 하위 호환성: 기존 API 엔드포인트 변경 없음
+
+---
+
 ### Fixed (원자재 시세 + 뉴스 정확도)
 
 #### 원자재 실시간 가격 수집 (`commodity_service.py`)
