@@ -44,6 +44,8 @@ news-hive/
 │   │       ├── naver_finance.py      # Naver Finance 실시간 주가
 │   │       ├── technical_indicators.py # RSI, MACD, 볼린저 밴드 계산
 │   │       ├── news_price_impact_service.py  # 뉴스-가격 반응 추적 (스냅샷/백필/통계)
+│   │       ├── commodity_service.py  # 원자재 가격 수집 (yfinance, 장 중/장 외 fallback)
+│   │       └── commodity_news_service.py # 원자재 뉴스 매칭 (제목 기반 키워드 매칭)
 │   │       └── crawlers/             # 개별 뉴스 소스 크롤러
 │   │           ├── naver.py          # Naver 뉴스 검색 API
 │   │           ├── google.py         # Google News RSS 파싱
@@ -51,11 +53,12 @@ news-hive/
 │   │           ├── korean_rss.py     # 한국 경제 미디어 RSS
 │   │           ├── us_news.py        # 미국 뉴스 소스
 │   │           └── content_scraper.py # 기사 본문 스크래핑
-│   ├── alembic/                      # DB 마이그레이션 (16개 버전)
+│   ├── alembic/                      # DB 마이그레이션 (24개 버전)
 │   │   ├── versions/                 # 마이그레이션 파일들
 │   │   └── env.py                    # Alembic 환경 설정
 │   ├── seed/
-│   │   └── sectors.py               # 한국 증시 업종 초기 데이터
+│   │   ├── sectors.py               # 한국 증시 업종 초기 데이터
+│   │   └── commodities.py           # 원자재 마스터 + 섹터-원자재 관계 초기 데이터
 │   ├── requirements.txt              # Python 패키지 의존성
 │   └── .env.example                  # 환경변수 템플릿
 ├── frontend/                         # Next.js 프론트엔드

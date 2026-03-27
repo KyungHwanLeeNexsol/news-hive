@@ -19,6 +19,7 @@
 | AI (폴백2) | OpenRouter | - | 다양한 모델 폴백 |
 | 주가 데이터 | Naver Finance | - | 실시간 시세 크롤링 |
 | 주가 데이터 | KIS Open API | - | 한국투자증권 API |
+| 원자재 가격 | yfinance | - | 글로벌 원자재 선물/ETF 가격 수집 |
 | 공시 | DART API | - | 금융감독원 공시 |
 | 컨테이너 | Docker / Compose | - | 로컬 DB 실행 |
 | 배포 (백엔드) | Oracle Cloud VM | - | Ubuntu + systemd |
@@ -105,7 +106,31 @@
 
 PostgreSQL의 TEXT[] 배열 타입을 활용하여 종목별 검색 키워드를 유연하게 관리합니다. 종목명 외에 부서명, 브랜드명 등 추가 검색어를 지정할 수 있습니다.
 
-### 테이블 목록 (16개 Alembic 마이그레이션)
+### 원자재 가격 수집 전략 (yfinance)
+
+원자재 가격 수집은 yfinance를 사용하며 심볼 유형과 시장 상황에 따라 두 가지 방법을 사용합니다.
+
+**심볼 전략: 선물 vs ETF 프록시**
+
+| 유형 | 예시 심볼 | 설명 |
+|------|-----------|------|
+| 선물 (=F suffix) | CL=F, GC=F, SI=F | yfinance 지원 원자재 선물 (WTI, 금, 은 등) |
+| ETF 프록시 | COAL, LIT, REMX | 선물 미지원 품목 대용 (석탄, 리튬, 희토류) |
+
+ETF 프록시를 사용하는 이유: Newcastle Coal 선물(MTF=F)은 yfinance에서 데이터가 반환되지 않아 Range Global Coal ETF(COAL)를 대용합니다. 리튬(LIT)·희토류(REMX)도 선물 시장이 없어 ETF로 추적합니다.
+
+**가격 수집 로직 (`_download_with_fallback`)**
+
+1. 1차 시도 — 1분봉 당일 데이터 (`period="1d", interval="1m"`): 장 중에는 15분 지연된 실시간 가격 반환
+2. 2차 시도 (fallback) — 5일 일봉 데이터 (`period="5d"`): 장 외 시간이나 1차가 비어있으면 최근 거래일 종가 사용
+
+이 방식으로 단일 코드에서 장 중/장 외 모두 최신 가격을 제공합니다.
+
+**경합 조건 방지**: 앱 시작(lifespan) 시 시드 완료 직후 `fetch_commodity_prices()`를 즉시 실행하여, 스케줄러 첫 실행 전에 새 심볼의 가격이 DB에 적재됩니다.
+
+---
+
+### 테이블 목록 (24개 Alembic 마이그레이션)
 
 | 테이블 | 용도 |
 |--------|------|
@@ -120,6 +145,11 @@ PostgreSQL의 TEXT[] 배열 타입을 활용하여 종목별 검색 키워드를
 | daily_briefings | 일일 AI 브리핑 |
 | portfolio_reports | 포트폴리오 보고서 |
 | news_price_impact | 뉴스-가격 반응 추적 (SPEC-NEWS-001) |
+| commodities | 원자재 마스터 (심볼, 카테고리) |
+| commodity_prices | 원자재 가격 히스토리 |
+| sector_commodity_relations | 섹터-원자재 상관관계 매핑 |
+| news_commodity_relations | 뉴스-원자재 연관 매핑 |
+| stock_relations | 종목 간 관계 그래프 (SPEC-RELATION-001) |
 
 #### news_price_impact 테이블 (migration 016)
 
@@ -264,6 +294,7 @@ npm run build                     # 프로덕션 빌드
 | groq | Groq AI SDK |
 | psycopg2-binary | PostgreSQL 드라이버 |
 | python-jose | JWT 인증 |
+| yfinance | 원자재/주식 시세 수집 |
 
 ## 주요 npm 패키지
 

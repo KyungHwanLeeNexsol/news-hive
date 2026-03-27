@@ -4,6 +4,29 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fixed (원자재 시세 + 뉴스 정확도)
+
+#### 원자재 실시간 가격 수집 (`commodity_service.py`)
+- `_download_with_fallback()` 추가: 장 중에는 1분봉(`period="1d", interval="1m"`) 15분 지연 실시간 가격, 장 외 또는 데이터 없을 때는 5일 일봉(`period="5d"`) 종가로 자동 fallback
+- 앱 시작 시(lifespan) 시드 완료 직후 `fetch_commodity_prices()` 즉시 실행 — 스케줄러 첫 실행 전 경합 조건 방지 (`main.py`)
+
+#### 석탄 심볼 표준화 (`seed/commodities.py`, `migration 024`)
+- 석탄 심볼 `MTF=F` / `BTU` → `COAL` (Range Global Coal ETF 프록시)로 표준화
+- `024_ensure_coal_symbol.py` 마이그레이션: BTU와 COAL이 동시 존재하는 unique violation 방지 — BTU 관련 레코드 삭제 후 COAL 보장
+- ETF 프록시 사용 이유: Newcastle Coal 선물(MTF=F)은 yfinance 미지원, BTU도 거래 중단으로 `COAL` ETF를 대용
+
+#### 원자재 뉴스 오탐 수정 (`commodity_news_service.py`)
+- 키워드 매칭 범위를 기사 **제목만**으로 제한 (기존: 제목 + 본문 500자)
+- `귀금속` 키워드를 은(SI=F)의 extra keywords에서 제거 — 금 기사에 은 뱃지가 함께 붙는 오탐 방지
+
+### Deployment Notes
+
+- DB 마이그레이션 필요: `alembic upgrade head` (024_ensure_coal_symbol)
+- 신규 환경변수 없음
+- 하위 호환성: 기존 API 엔드포인트 변경 없음
+
+---
+
 ### Added (SPEC-RELATION-001: 종목 간 관계 기반 간접 영향 뉴스 전파)
 
 - **stock_relations 테이블**: AI 추론 종목/섹터 간 방향성 관계 저장 (공급망, 경쟁사, 장비, 소재, 고객사)
