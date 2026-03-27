@@ -1,31 +1,27 @@
 """DART (전자공시) disclosure crawler.
 
-Scrapes the DART website (dart.fss.or.kr) to fetch recent corporate
-disclosures and map them to stocks in the database.
-No API key required — uses the public search page.
+Uses DART Open API (opendart.fss.or.kr) to fetch recent corporate disclosures
+and map them to stocks in the database.
 """
 
 import logging
-import re
 from datetime import datetime, timedelta
 
 import httpx
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models.disclosure import Disclosure
 from app.models.stock import Stock
 
 logger = logging.getLogger(__name__)
 
-DART_SEARCH_URL = "https://dart.fss.or.kr/dsab007/detailSearch.ax"
-DART_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "Content-Type": "application/x-www-form-urlencoded",
-    "Referer": "https://dart.fss.or.kr/dsab007/main.do",
-    "X-Requested-With": "XMLHttpRequest",
+DART_OPEN_API_URL = "https://opendart.fss.or.kr/api/list.json"
+
+# DART corp_cls → market label
+_CORP_CLS_MAP = {
+    "Y": "KOSPI",   # 유가증권시장
+    "K": "KOSDAQ",  # 코스닥시장
 }
 
 # Report type classification based on common report name patterns
@@ -89,12 +85,6 @@ _REPORT_TYPE_PATTERNS: list[tuple[str, str]] = [
     ("공급계약", "주요사항보고"),
 ]
 
-# Market type CSS class → readable label
-_MARKET_MAP = {
-    "kospi": "KOSPI",
-    "kosdaq": "KOSDAQ",
-}
-
 
 def _classify_report_type(report_name: str) -> str:
     """Classify a DART report name into a short type label."""
@@ -104,75 +94,11 @@ def _classify_report_type(report_name: str) -> str:
     return "기타공시"
 
 
-def _parse_dart_html(html: str) -> list[dict]:
-    """Parse DART search result HTML into disclosure dicts."""
-    items = []
-    rows = re.findall(r"<tr>(.*?)</tr>", html, re.DOTALL)
-
-    for row in rows:
-        tds = re.findall(r"<td[^>]*>(.*?)</td>", row, re.DOTALL)
-        if len(tds) < 5:
-            continue
-
-        # Market type (kospi/kosdaq/etc)
-        market_match = re.search(r'class="tagCom_(\w+)"', tds[1])
-        market_cls = market_match.group(1) if market_match else ""
-        # Only keep KOSPI and KOSDAQ
-        if market_cls not in _MARKET_MAP:
-            continue
-
-        # Corp code
-        corp_code_match = re.search(r"openCorpInfoNew\('(\d+)'", tds[1])
-        corp_code = corp_code_match.group(1) if corp_code_match else ""
-
-        # Corp name
-        corp_name_match = re.search(
-            r"openCorpInfoNew.*?>\s*([^<]+?)\s*</a>", tds[1], re.DOTALL
-        )
-        corp_name = corp_name_match.group(1).strip() if corp_name_match else ""
-
-        # Report name + rcept_no
-        report_match = re.search(
-            r'rcpNo=(\d+).*?>\s*(.+?)\s*</a>', tds[2], re.DOTALL
-        )
-        if not report_match:
-            continue
-        rcept_no = report_match.group(1)
-        # Clean report name (remove extra whitespace, newlines)
-        report_name = re.sub(r"\s+", " ", report_match.group(2)).strip()
-
-        # Date (2026.03.06 → 20260306)
-        date_match = re.search(r"(\d{4})\.(\d{2})\.(\d{2})", tds[4])
-        rcept_dt = (
-            f"{date_match.group(1)}{date_match.group(2)}{date_match.group(3)}"
-            if date_match
-            else ""
-        )
-
-        items.append({
-            "corp_code": corp_code,
-            "corp_name": corp_name,
-            "report_name": report_name,
-            "rcept_no": rcept_no,
-            "rcept_dt": rcept_dt,
-            "market": _MARKET_MAP.get(market_cls, ""),
-        })
-
-    return items
-
-
-def _parse_total_pages(html: str) -> int:
-    """Extract total page count from DART pagination."""
-    # Pattern: [1/271] [총 4,060건]
-    m = re.search(r"\[\d+/(\d+)\]", html)
-    return int(m.group(1)) if m else 1
-
-
 async def fetch_dart_disclosures(
     db: Session,
     days: int = 3,
 ) -> int:
-    """Fetch recent DART disclosures via web scraping and save to database.
+    """Fetch recent DART disclosures via DART Open API and save to database.
 
     Args:
         db: Database session
@@ -181,104 +107,108 @@ async def fetch_dart_disclosures(
     Returns:
         Number of new disclosures saved
     """
-    # Build corp_name → stock_id mapping from DB
+    if not settings.DART_API_KEY:
+        logger.warning("DART_API_KEY not set, skipping disclosure fetch")
+        return 0
+
+    # Build corp_name / stock_code → stock_id mapping
     stocks = db.query(Stock).filter(Stock.stock_code.isnot(None)).all()
     name_to_id: dict[str, int] = {s.name: s.id for s in stocks}
+    code_to_id: dict[str, int] = {s.stock_code.strip(): s.id for s in stocks}
     logger.info(f"DART: {len(name_to_id)} stock names for mapping")
 
     end_date = datetime.now()
     start_date = end_date - timedelta(days=days)
     bgn_de = start_date.strftime("%Y%m%d")
     end_de = end_date.strftime("%Y%m%d")
-    logger.info(f"DART: scraping disclosures from {bgn_de} to {end_de}")
+    logger.info(f"DART: fetching disclosures from {bgn_de} to {end_de}")
 
-    # Pre-load existing rcept_no set
-    existing_rcepts: set[str] = set()
-    for row in db.query(Disclosure.rcept_no).all():
-        existing_rcepts.add(row[0])
+    # Pre-load existing rcept_no set to skip duplicates
+    existing_rcepts: set[str] = {row[0] for row in db.query(Disclosure.rcept_no).all()}
     logger.info(f"DART: {len(existing_rcepts)} existing disclosures in DB")
 
     saved = 0
     name_matched = 0
     page_no = 1
-    max_results = 100  # items per page
+    page_count = 100
 
-    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-        # Visit main page first to establish session cookies
-        try:
-            await client.get(
-                "https://dart.fss.or.kr/dsab007/main.do",
-                headers={"User-Agent": DART_HEADERS["User-Agent"]},
-            )
-        except Exception:
-            pass  # Non-critical, continue with search
-
+    async with httpx.AsyncClient(timeout=30.0) as client:
         while True:
-            form_data = {
-                "currentPage": str(page_no),
-                "maxResults": str(max_results),
-                "maxLinks": "5",
+            params = {
+                "crtfc_key": settings.DART_API_KEY,
+                "bgn_de": bgn_de,
+                "end_de": end_de,
                 "sort": "date",
-                "series": "desc",
-                "startDate": bgn_de,
-                "endDate": end_de,
-                "textCrpNm": "",
-                "textCrpCik": "",
+                "sort_mth": "desc",
+                "page_no": str(page_no),
+                "page_count": str(page_count),
             }
 
             try:
-                resp = await client.post(
-                    DART_SEARCH_URL,
-                    data=form_data,
-                    headers=DART_HEADERS,
-                )
+                resp = await client.get(DART_OPEN_API_URL, params=params)
                 resp.raise_for_status()
-                html = resp.text
+                data = resp.json()
             except Exception as e:
-                logger.error(f"DART scrape failed (page {page_no}): {e}")
+                logger.error(f"DART API request failed (page {page_no}): {e}")
                 break
 
-            items = _parse_dart_html(html)
+            status = data.get("status", "")
+            if status == "013":
+                # No more data (정상 종료)
+                break
+            if status != "000":
+                logger.warning(
+                    f"DART API error: status={status}, "
+                    f"message={data.get('message', '')}"
+                )
+                break
+
+            items = data.get("list", [])
             if not items:
-                if page_no == 1:
-                    logger.info("DART: no disclosures found")
                 break
 
-            total_pages = _parse_total_pages(html)
-            logger.info(
-                f"DART: page {page_no}/{total_pages}, "
-                f"{len(items)} items (KOSPI+KOSDAQ only)"
-            )
+            total_page = data.get("total_page", 1)
+            logger.info(f"DART: page {page_no}/{total_page}, {len(items)} items")
 
             for item in items:
-                rcept_no = item["rcept_no"]
-                if rcept_no in existing_rcepts:
+                # KOSPI/KOSDAQ만 처리
+                corp_cls = item.get("corp_cls", "")
+                if corp_cls not in _CORP_CLS_MAP:
                     continue
 
-                corp_name = item["corp_name"]
-                stock_id = name_to_id.get(corp_name)
+                rcept_no = item.get("rcept_no", "")
+                if not rcept_no or rcept_no in existing_rcepts:
+                    continue
+
+                corp_name = item.get("corp_name", "")
+                stock_code = (item.get("stock_code") or "").strip()
+                report_name = item.get("report_nm", "")
+                rcept_dt = item.get("rcept_dt", "")
+                corp_code = item.get("corp_code", "")
+
+                # stock_id 매핑: 종목코드 우선, 없으면 회사명
+                stock_id = code_to_id.get(stock_code) or name_to_id.get(corp_name)
                 if stock_id:
                     name_matched += 1
 
-                report_name = item["report_name"]
                 report_type = _classify_report_type(report_name)
 
                 disclosure = Disclosure(
-                    corp_code=item["corp_code"],
+                    corp_code=corp_code,
                     corp_name=corp_name,
-                    stock_code=None,  # web scraping doesn't provide stock_code
+                    stock_code=stock_code or None,
                     stock_id=stock_id,
                     report_name=report_name,
                     report_type=report_type,
                     rcept_no=rcept_no,
-                    rcept_dt=item["rcept_dt"],
+                    rcept_dt=rcept_dt,
                     url=f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}",
                 )
                 db.add(disclosure)
                 existing_rcepts.add(rcept_no)
                 saved += 1
 
-            if page_no >= total_pages:
+            if page_no >= total_page:
                 break
             page_no += 1
 
@@ -286,7 +216,7 @@ async def fetch_dart_disclosures(
         db.commit()
         logger.info(
             f"Saved {saved} new DART disclosures "
-            f"({name_matched} name-matched to stocks)"
+            f"({name_matched} matched to stocks)"
         )
     else:
         logger.info("No new DART disclosures found")
