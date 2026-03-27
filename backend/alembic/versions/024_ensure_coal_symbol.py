@@ -1,8 +1,8 @@
 """ensure coal symbol is COAL (not BTU or MTF=F)
 
-migration 023이 두 번 배포(MTF=F→BTU, BTU→COAL)로 인해
-첫 번째 실행에서만 적용되어 BTU가 남아있을 수 있음.
-이 migration이 BTU/MTF=F를 COAL로 확실히 통일.
+DB에 BTU와 COAL이 동시에 존재하는 경우:
+- UPDATE BTU→COAL은 unique violation 발생
+- 대신 BTU 관련 레코드를 삭제 (COAL이 이미 대체)
 
 Revision ID: 024
 Revises: 023
@@ -17,23 +17,47 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # BTU(Peabody) → COAL (Range Global Coal ETF)
+    # BTU와 COAL이 둘 다 있으면 BTU 관련 데이터 삭제 (COAL이 대체)
     op.execute("""
-        UPDATE commodities
-        SET symbol = 'COAL',
-            name_en = 'Coal (ETF proxy)',
-            unit = 'USD'
+        DELETE FROM sector_commodity_relations
+        WHERE commodity_id = (
+            SELECT id FROM commodities WHERE symbol = 'BTU' AND name_ko = '석탄'
+        )
+    """)
+    op.execute("""
+        DELETE FROM commodity_prices
+        WHERE commodity_id = (
+            SELECT id FROM commodities WHERE symbol = 'BTU' AND name_ko = '석탄'
+        )
+    """)
+    op.execute("""
+        DELETE FROM news_commodity_relations
+        WHERE commodity_id = (
+            SELECT id FROM commodities WHERE symbol = 'BTU' AND name_ko = '석탄'
+        )
+    """)
+    op.execute("""
+        DELETE FROM commodities
         WHERE symbol = 'BTU'
           AND name_ko = '석탄'
     """)
 
-    # 혹시 MTF=F가 남아있다면 COAL로 변경
+    # MTF=F가 남아있고 COAL이 없으면 UPDATE, 둘 다 있으면 MTF=F 삭제
     op.execute("""
-        UPDATE commodities
-        SET symbol = 'COAL',
-            name_en = 'Coal (ETF proxy)',
-            unit = 'USD'
-        WHERE symbol = 'MTF=F'
+        DO $$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM commodities WHERE symbol = 'COAL') THEN
+                DELETE FROM sector_commodity_relations
+                WHERE commodity_id = (SELECT id FROM commodities WHERE symbol = 'MTF=F');
+                DELETE FROM commodity_prices
+                WHERE commodity_id = (SELECT id FROM commodities WHERE symbol = 'MTF=F');
+                DELETE FROM commodities WHERE symbol = 'MTF=F';
+            ELSE
+                UPDATE commodities
+                SET symbol = 'COAL', name_en = 'Coal (ETF proxy)', unit = 'USD'
+                WHERE symbol = 'MTF=F';
+            END IF;
+        END $$;
     """)
 
 
