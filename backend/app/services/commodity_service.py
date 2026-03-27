@@ -25,8 +25,32 @@ _CACHE_TTL_SHORT = 600   # 10분 (1y 이하)
 _CACHE_TTL_LONG = 3600   # 1시간 (2y 이상)
 
 
+def _download_with_fallback(symbols: list[str], import_yf) -> tuple:
+    """yfinance 배치 다운로드 — 장 중이면 1분봉(15분 지연 실시간), 장 외면 일봉 fallback.
+
+    Returns:
+        (data, is_intraday) tuple.
+    """
+    # 1차: 1분봉 당일 데이터 (장 중 15분 지연 실시간)
+    data = import_yf.download(symbols, period="1d", interval="1m", progress=False)
+    if not data.empty:
+        # 단일 심볼일 때 Close가 Series, 다중일 때 DataFrame
+        close = data["Close"] if len(symbols) == 1 else data["Close"]
+        if not (close.dropna().empty if hasattr(close, "dropna") else close.dropna().empty):
+            logger.debug("인트라데이 1분봉 사용 (15분 지연 실시간)")
+            return data, True
+
+    # 2차: 5일 일봉 fallback (최근 거래일 종가)
+    data = import_yf.download(symbols, period="5d", progress=False)
+    logger.debug("일봉 5d fallback 사용 (최근 거래일 종가)")
+    return data, False
+
+
 def fetch_commodity_prices(db: Session) -> int:
     """모든 원자재의 최신 가격을 수집하여 DB에 저장.
+
+    장 중: 1분봉 15분 지연 실시간 가격 사용
+    장 외: 5일 일봉에서 최근 거래일 종가 사용
 
     Returns:
         업데이트된 원자재 수.
@@ -43,9 +67,7 @@ def fetch_commodity_prices(db: Session) -> int:
 
     updated = 0
     try:
-        # yfinance 배치 다운로드 — 5일치로 조회해 최근 유효 종가 확보
-        # (ETF는 미국 장 시간에만 거래되므로 period="1d"는 비장중 시간에 NaN 반환)
-        data = yf.download(symbols, period="5d", progress=False)
+        data, is_intraday = _download_with_fallback(symbols, yf)
 
         if data.empty:
             logger.warning("yfinance 다운로드 결과 없음")
@@ -54,9 +76,7 @@ def fetch_commodity_prices(db: Session) -> int:
         for symbol in symbols:
             commodity = symbol_map[symbol]
             try:
-                # yfinance 1.x: MultiIndex columns (Price, Ticker)
                 if len(symbols) == 1:
-                    # 단일 심볼: columns = ['Close', 'High', ...]
                     close_col = data["Close"].dropna()
                     if close_col.empty:
                         logger.debug(f"{symbol}: 데이터 없음")
@@ -65,9 +85,9 @@ def fetch_commodity_prices(db: Session) -> int:
                     open_price = float(data["Open"].dropna().iloc[-1])
                     high_price = float(data["High"].dropna().iloc[-1])
                     low_price = float(data["Low"].dropna().iloc[-1])
-                    vol = data["Volume"].dropna().iloc[-1]
+                    vol_col = data["Volume"].dropna()
+                    vol = vol_col.iloc[-1] if not vol_col.empty else None
                 else:
-                    # 다중 심볼: columns = MultiIndex (Price, Ticker)
                     if symbol not in data["Close"].columns:
                         logger.debug(f"{symbol}: 데이터 없음")
                         continue
@@ -84,7 +104,7 @@ def fetch_commodity_prices(db: Session) -> int:
 
                 volume = int(vol) if vol and vol > 0 else None
 
-                # 전일 대비 변동률 계산
+                # 변동률: 인트라데이면 당일 첫봉 대비, 일봉이면 당일 시가 대비
                 change_pct = None
                 if open_price and open_price > 0:
                     change_pct = round((close_price - open_price) / open_price * 100, 2)
@@ -97,7 +117,7 @@ def fetch_commodity_prices(db: Session) -> int:
                     high_price=round(high_price, 4) if high_price else None,
                     low_price=round(low_price, 4) if low_price else None,
                     volume=volume,
-                    source="yfinance",
+                    source="yfinance_rt" if is_intraday else "yfinance",
                 )
                 db.add(price_record)
                 updated += 1
@@ -108,7 +128,8 @@ def fetch_commodity_prices(db: Session) -> int:
 
         if updated:
             db.commit()
-            logger.info(f"원자재 가격 수집 완료: {updated}/{len(symbols)}개 업데이트")
+            mode = "실시간(15분지연)" if is_intraday else "종가"
+            logger.info(f"원자재 가격 수집 완료 [{mode}]: {updated}/{len(symbols)}개 업데이트")
 
     except Exception as e:
         logger.error(f"원자재 가격 일괄 수집 실패: {e}")
