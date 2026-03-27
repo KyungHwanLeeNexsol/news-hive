@@ -108,6 +108,7 @@ function CommoditiesContent() {
 
   // ── 시세 탭 상태 ──
   const [commodities, setCommodities] = useState<Commodity[]>([]);
+  const commoditiesRef = useRef<Commodity[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [category, setCategory] = useState("all");
@@ -128,6 +129,7 @@ function CommoditiesContent() {
   const loadCommodities = useCallback(() => {
     fetchCommodities()
       .then((data) => {
+        commoditiesRef.current = data;
         setCommodities(data);
         if (!preselectedId && data.length > 0 && selectedId === null) {
           setSelectedId(data[0].id);
@@ -151,6 +153,8 @@ function CommoditiesContent() {
   }, [selectedId, period, mainTab]);
 
   // 뉴스룸 데이터 로드
+  // commodities는 ref로 읽어 의존성 제거 — useMarketRefresh의 주기적 setCommodities 호출로
+  // 인한 news 무한 재요청 방지
   useEffect(() => {
     if (mainTab !== "news") return;
     let cancelled = false;
@@ -162,7 +166,7 @@ function CommoditiesContent() {
       fetchCommodityNewsById(newsFilterCommodity, offset, NEWS_PAGE_SIZE)
         .then((r) => {
           if (cancelled) return;
-          const filtered = commodities.find((c) => c.id === newsFilterCommodity);
+          const filtered = commoditiesRef.current.find((c) => c.id === newsFilterCommodity);
           const mapped: CommodityNewsArticle[] = r.articles.map((a: NewsArticle) => ({
             ...a,
             commodity_relations: filtered ? [{
@@ -186,7 +190,8 @@ function CommoditiesContent() {
         .finally(() => { if (!cancelled) setNewsLoading(false); });
     }
     return () => { cancelled = true; };
-  }, [mainTab, newsPage, newsFilterCommodity, commodities]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mainTab, newsPage, newsFilterCommodity]);
 
   const filteredCommodities =
     category === "all"
