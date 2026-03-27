@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 
@@ -133,13 +134,13 @@ async def _run_full_refresh():
         if reclassified:
             logger.info(f"Reclassified {reclassified} articles")
 
-        # 3. Deduplicate
-        deduped = _deduplicate_existing(db)
+        # 3. Deduplicate — 이벤트 루프 블로킹 방지: to_thread로 실행
+        deduped = await asyncio.to_thread(_deduplicate_existing, db)
         if deduped:
             logger.info(f"Deduped {deduped} articles")
 
-        # 4. Backfill sentiment
-        _backfill_sentiment(db)
+        # 4. Backfill sentiment — 이벤트 루프 블로킹 방지: to_thread로 실행
+        await asyncio.to_thread(_backfill_sentiment, db)
 
         # 5. Translate English titles
         await _backfill_translate(db)
@@ -523,14 +524,14 @@ async def _backfill_translate(db: Session) -> None:
 
     articles = db.query(NewsArticle).filter(
         NewsArticle.source.in_(["us_news", "yahoo"]),
-    ).all()
+    ).order_by(NewsArticle.collected_at.desc()).limit(200).all()
 
-    # Filter to ones still in English
-    en_articles = [a for a in articles if _is_english_title(a.title)]
+    # Filter to ones still in English — cap at 20 per run (Gemini free tier: 20 req/day)
+    en_articles = [a for a in articles if _is_english_title(a.title)][:20]
     if not en_articles:
         return
 
-    logger.info(f"Backfill translating {len(en_articles)} English articles")
+    logger.info(f"Backfill translating {len(en_articles)} English articles (capped at 20/run)")
 
     # Convert to dicts for translate_articles_batch
     article_dicts = [{"title": a.title, "description": a.summary or ""} for a in en_articles]
