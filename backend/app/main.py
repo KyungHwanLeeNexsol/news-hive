@@ -61,6 +61,19 @@ async def lifespan(app: FastAPI):
             db.close()
         _logger.info("Seed complete")
 
+        # 시드 완료 직후 원자재 가격 즉시 수집
+        # (스케줄러의 첫 실행이 시드 완료 전에 동작하면 새 심볼을 놓칠 수 있음)
+        try:
+            from app.services.commodity_service import fetch_commodity_prices
+            db2 = SessionLocal()
+            try:
+                count = fetch_commodity_prices(db2)
+                _logger.info(f"시드 후 즉시 원자재 가격 수집: {count}개")
+            finally:
+                db2.close()
+        except Exception as e:
+            _logger.warning(f"시드 후 원자재 가격 수집 실패: {e}")
+
     threading.Thread(target=_run_seed, daemon=True).start()
 
     # 종목/섹터 관계 AI 추론 (stock_relations 테이블이 비어있을 때만 실행)
