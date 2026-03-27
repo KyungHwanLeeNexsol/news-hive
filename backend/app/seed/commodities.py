@@ -21,6 +21,11 @@ COMMODITIES_DATA = [
     {"symbol": "ZC=F", "name_ko": "옥수수", "name_en": "Corn", "category": "agriculture", "unit": "bushel"},
     {"symbol": "ZW=F", "name_ko": "밀", "name_en": "Wheat", "category": "agriculture", "unit": "bushel"},
     {"symbol": "ZS=F", "name_ko": "대두", "name_en": "Soybean", "category": "agriculture", "unit": "bushel"},
+    # 에너지 — 석탄
+    {"symbol": "MTF=F", "name_ko": "석탄", "name_en": "Newcastle Coal", "category": "energy", "unit": "metric ton"},
+    # 금속 — 리튬/희토류 (ETF 대용; 선물 미상장)
+    {"symbol": "LIT", "name_ko": "리튬", "name_en": "Lithium (ETF proxy)", "category": "metal", "unit": "USD"},
+    {"symbol": "REMX", "name_ko": "희토류", "name_en": "Rare Earth (ETF proxy)", "category": "metal", "unit": "USD"},
 ]
 
 # 섹터명 → 관련 원자재 매핑 (sector name은 seed/sectors.py _SNAPSHOT 기준)
@@ -66,6 +71,19 @@ SECTOR_COMMODITY_RELATIONS = [
     # 전기/유틸리티
     {"sector_name": "전기유틸리티", "symbol": "NG=F", "correlation_type": "negative", "description": "천연가스 발전 연료비 증가"},
     {"sector_name": "전기유틸리티", "symbol": "CL=F", "correlation_type": "negative", "description": "유가 상승 → 발전 원가 상승"},
+    # 석탄
+    {"sector_name": "전기유틸리티", "symbol": "MTF=F", "correlation_type": "negative", "description": "석탄 발전 연료비 증가"},
+    {"sector_name": "철강", "symbol": "MTF=F", "correlation_type": "negative", "description": "코킹탄 원가 상승 → 철강 제조원가 증가"},
+    {"sector_name": "석유와가스", "symbol": "MTF=F", "correlation_type": "positive", "description": "석탄 가격 상승 → 에너지 대체재 수요 증가"},
+    # 리튬
+    {"sector_name": "자동차", "symbol": "LIT", "correlation_type": "negative", "description": "리튬 가격 상승 → EV 배터리 원가 증가"},
+    {"sector_name": "자동차부품", "symbol": "LIT", "correlation_type": "negative", "description": "리튬 원재료 비용 증가"},
+    {"sector_name": "비철금속", "symbol": "LIT", "correlation_type": "positive", "description": "리튬 수요·가격 증가 → 비철금속 섹터 호재"},
+    # 희토류
+    {"sector_name": "반도체와반도체장비", "symbol": "REMX", "correlation_type": "negative", "description": "희토류 공급 차질 → 반도체 생산 원가 증가"},
+    {"sector_name": "전자장비와기기", "symbol": "REMX", "correlation_type": "negative", "description": "희토류 원재료 비용 증가"},
+    {"sector_name": "자동차", "symbol": "REMX", "correlation_type": "negative", "description": "희토류 가격 상승 → EV 모터 원가 증가"},
+    {"sector_name": "비철금속", "symbol": "REMX", "correlation_type": "positive", "description": "희토류 수요·가격 증가 → 비철금속 섹터 호재"},
 ]
 
 
@@ -87,36 +105,40 @@ def seed_commodities(db: Session) -> None:
 
 
 def seed_sector_commodity_relations(db: Session) -> None:
-    """섹터-원자재 관계를 시드한다. 이미 존재하면 스킵."""
-    # 기존 관계 확인
-    existing_count = db.query(SectorCommodityRelation).count()
-    if existing_count > 0:
-        logger.info(f"섹터-원자재 관계 이미 존재: {existing_count}개")
-        return
-
+    """섹터-원자재 관계를 시드한다. 누락된 관계만 추가 (upsert 방식)."""
     # 섹터명 → ID 매핑
     sector_map = {s.name: s.id for s in db.query(Sector).all()}
     # 원자재 심볼 → ID 매핑
     commodity_map = {c.symbol: c.id for c in db.query(Commodity).all()}
 
+    # 기존 관계 (sector_id, commodity_id) 셋
+    existing_pairs = {
+        (r.sector_id, r.commodity_id)
+        for r in db.query(SectorCommodityRelation.sector_id, SectorCommodityRelation.commodity_id).all()
+    }
+
     added = 0
     for rel in SECTOR_COMMODITY_RELATIONS:
         sector_id = sector_map.get(rel["sector_name"])
         commodity_id = commodity_map.get(rel["symbol"])
-        if sector_id and commodity_id:
-            db.add(SectorCommodityRelation(
-                sector_id=sector_id,
-                commodity_id=commodity_id,
-                correlation_type=rel["correlation_type"],
-                description=rel.get("description"),
-            ))
-            added += 1
-        else:
-            if not sector_id:
-                logger.debug(f"섹터 '{rel['sector_name']}' 미발견 — 관계 스킵")
-            if not commodity_id:
-                logger.debug(f"원자재 '{rel['symbol']}' 미발견 — 관계 스킵")
+        if not sector_id:
+            logger.debug(f"섹터 '{rel['sector_name']}' 미발견 — 관계 스킵")
+            continue
+        if not commodity_id:
+            logger.debug(f"원자재 '{rel['symbol']}' 미발견 — 관계 스킵")
+            continue
+        if (sector_id, commodity_id) in existing_pairs:
+            continue
+        db.add(SectorCommodityRelation(
+            sector_id=sector_id,
+            commodity_id=commodity_id,
+            correlation_type=rel["correlation_type"],
+            description=rel.get("description"),
+        ))
+        added += 1
 
     if added:
         db.commit()
         logger.info(f"섹터-원자재 관계 시드 완료: {added}개 추가")
+    else:
+        logger.info("섹터-원자재 관계: 추가할 신규 항목 없음")
