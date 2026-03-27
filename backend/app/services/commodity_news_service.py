@@ -74,7 +74,8 @@ def _determine_impact_direction(title: str) -> str:
 # "구리" → 광통신/반도체/전선 기사에서 "구리선" 비교 언급으로 오탐 다수
 _COMMODITY_EXTRA_KEYWORDS: dict[str, list[str]] = {
     "금": ["금값", "금가격", "금선물", "국제금", "금시세", "귀금속", "금거래", "금 가격", "금 시세"],
-    "은": ["은값", "은가격", "은선물", "귀금속", "은 가격", "은 시세"],
+    # "귀금속"은 금 전용 — 은에서 제거 (둘 다 태깅되는 오탐 방지)
+    "은": ["은값", "은가격", "은선물", "은 가격", "은 시세", "은시세"],
     "밀": ["밀가격", "밀 가격", "국제밀", "소맥", "밀 선물", "wheat price"],
     "구리": ["구리가격", "구리 가격", "구리값", "국제구리", "구리선물", "copper price", "구리 시장", "동 가격"],
 }
@@ -142,11 +143,12 @@ def classify_commodity_news(
 
     kw_map = _build_commodity_keyword_map(commodities)
     title_lower = title.lower()
+    # 키워드 매칭은 제목만 사용
+    # content[:500] 매칭은 "귀금속", "금값" 등이 기사 본문에서 부수적으로 언급될 때
+    # 오탐이 너무 많아 제목 기반으로만 판단
     text_to_check = title_lower
-    if content:
-        text_to_check = title_lower + " " + content[:500].lower()
 
-    # 키워드 매칭: 제목(+본문)에 원자재 이름이 포함되는지 확인
+    # 키워드 매칭: 제목에 원자재 이름이 포함되는지 확인
     matched_commodity_ids: set[int] = set()
     relations: list[NewsCommodityRelation] = []
 
