@@ -1,7 +1,7 @@
 ---
 id: SPEC-RELATION-001
 version: "1.0.0"
-status: draft
+status: completed
 created: "2026-03-27"
 updated: "2026-03-27"
 author: MoAI
@@ -396,3 +396,21 @@ IMPACT_REASON_TEMPLATES = {
     "customer_negative": "{target_name} 고객사 부진으로 {source_name}의 매출 감소 우려",
 }
 ```
+
+## Implementation Notes
+
+구현 완료일: 2026-03-27
+
+### 실제 구현 요약
+
+SPEC 계획대로 구현됨. 주요 결정 사항:
+
+1. **하드코딩 없는 AI 추론**: 섹터 간 공급망 관계와 섹터 내 경쟁사 관계 모두 Gemini AI가 DB 전체 섹터 기반으로 자동 추론
+2. **propagation_type 값**: 'direct' / 'propagated' (binary 구분, SPEC의 relation_type과 별도)
+3. **전파 상한**: 뉴스당 최대 20건으로 제한
+4. **백그라운드 추론**: 앱 시작 시 daemon thread로 비블로킹 실행
+
+### 배포 필요 사항
+
+- `alembic upgrade head` 실행 (019, 020 마이그레이션 적용)
+- 앱 재시작 시 AI 관계 추론 자동 실행 (초회만)

@@ -4,6 +4,23 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Added (SPEC-RELATION-001: 종목 간 관계 기반 간접 영향 뉴스 전파)
+
+- **stock_relations 테이블**: AI 추론 종목/섹터 간 방향성 관계 저장 (공급망, 경쟁사, 장비, 소재, 고객사)
+- **stock_relation_service.py**: Gemini AI 기반 섹터 간/섹터 내 관계 자동 추론 (하드코딩 없음)
+- **relation_propagator.py**: 관계 그래프 탐색 기반 간접 영향 뉴스 전파 엔진 (감성 역전 포함)
+- **간접 뉴스 배지**: "↗ 간접호재" / "↘ 간접악재" 프론트엔드 배지 표시
+- **관계 API**: GET/POST/DELETE /api/stocks/relations 엔드포인트
+- **DB 마이그레이션**: migration 019 (stock_relations 신규), 020 (news_stock_relations 컬럼 3개 추가)
+
+### Deployment Notes (SPEC-RELATION-001)
+
+- DB 마이그레이션 필요: `alembic upgrade head` (019, 020)
+- 앱 재시작 시 AI 관계 추론 자동 실행 (stock_relations 비어있을 때)
+- 하위 호환성: 기존 뉴스 크롤링 파이프라인 변경 없음
+
+---
+
 ### Added (SPEC-NEWS-001: 뉴스-가격 반응 추적 시스템)
 
 - **NewsPriceImpact 모델**: 뉴스 발행 시점의 주가 스냅샷 및 T+1D/T+5D 가격 변화율 추적
