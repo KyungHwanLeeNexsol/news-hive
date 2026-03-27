@@ -21,8 +21,8 @@ COMMODITIES_DATA = [
     {"symbol": "ZC=F", "name_ko": "옥수수", "name_en": "Corn", "category": "agriculture", "unit": "bushel"},
     {"symbol": "ZW=F", "name_ko": "밀", "name_en": "Wheat", "category": "agriculture", "unit": "bushel"},
     {"symbol": "ZS=F", "name_ko": "대두", "name_en": "Soybean", "category": "agriculture", "unit": "bushel"},
-    # 에너지 — 석탄 (Peabody Energy 주가를 프록시로 사용; 선물 yfinance 미지원)
-    {"symbol": "BTU", "name_ko": "석탄", "name_en": "Coal (Peabody proxy)", "category": "energy", "unit": "USD"},
+    # 에너지 — 석탄 (Range Global Coal ETF 프록시; 선물 yfinance 미지원)
+    {"symbol": "COAL", "name_ko": "석탄", "name_en": "Coal (ETF proxy)", "category": "energy", "unit": "USD"},
     # 금속 — 리튬/희토류 (ETF 대용; 선물 미상장)
     {"symbol": "LIT", "name_ko": "리튬", "name_en": "Lithium (ETF proxy)", "category": "metal", "unit": "USD"},
     {"symbol": "REMX", "name_ko": "희토류", "name_en": "Rare Earth (ETF proxy)", "category": "metal", "unit": "USD"},
@@ -72,9 +72,9 @@ SECTOR_COMMODITY_RELATIONS = [
     {"sector_name": "전기유틸리티", "symbol": "NG=F", "correlation_type": "negative", "description": "천연가스 발전 연료비 증가"},
     {"sector_name": "전기유틸리티", "symbol": "CL=F", "correlation_type": "negative", "description": "유가 상승 → 발전 원가 상승"},
     # 석탄
-    {"sector_name": "전기유틸리티", "symbol": "BTU", "correlation_type": "negative", "description": "석탄 발전 연료비 증가"},
-    {"sector_name": "철강", "symbol": "BTU", "correlation_type": "negative", "description": "코킹탄 원가 상승 → 철강 제조원가 증가"},
-    {"sector_name": "석유와가스", "symbol": "BTU", "correlation_type": "positive", "description": "석탄 가격 상승 → 에너지 대체재 수요 증가"},
+    {"sector_name": "전기유틸리티", "symbol": "COAL", "correlation_type": "negative", "description": "석탄 발전 연료비 증가"},
+    {"sector_name": "철강", "symbol": "COAL", "correlation_type": "negative", "description": "코킹탄 원가 상승 → 철강 제조원가 증가"},
+    {"sector_name": "석유와가스", "symbol": "COAL", "correlation_type": "positive", "description": "석탄 가격 상승 → 에너지 대체재 수요 증가"},
     # 리튬
     {"sector_name": "자동차", "symbol": "LIT", "correlation_type": "negative", "description": "리튬 가격 상승 → EV 배터리 원가 증가"},
     {"sector_name": "자동차부품", "symbol": "LIT", "correlation_type": "negative", "description": "리튬 원재료 비용 증가"},
