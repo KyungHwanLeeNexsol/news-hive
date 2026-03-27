@@ -43,8 +43,9 @@ def fetch_commodity_prices(db: Session) -> int:
 
     updated = 0
     try:
-        # yfinance 배치 다운로드 (1일 데이터)
-        data = yf.download(symbols, period="1d", progress=False)
+        # yfinance 배치 다운로드 — 5일치로 조회해 최근 유효 종가 확보
+        # (ETF는 미국 장 시간에만 거래되므로 period="1d"는 비장중 시간에 NaN 반환)
+        data = yf.download(symbols, period="5d", progress=False)
 
         if data.empty:
             logger.warning("yfinance 다운로드 결과 없음")
@@ -56,25 +57,30 @@ def fetch_commodity_prices(db: Session) -> int:
                 # yfinance 1.x: MultiIndex columns (Price, Ticker)
                 if len(symbols) == 1:
                     # 단일 심볼: columns = ['Close', 'High', ...]
-                    close_price = float(data["Close"].iloc[-1])
-                    open_price = float(data["Open"].iloc[-1])
-                    high_price = float(data["High"].iloc[-1])
-                    low_price = float(data["Low"].iloc[-1])
-                    vol = data["Volume"].iloc[-1]
+                    close_col = data["Close"].dropna()
+                    if close_col.empty:
+                        logger.debug(f"{symbol}: 데이터 없음")
+                        continue
+                    close_price = float(close_col.iloc[-1])
+                    open_price = float(data["Open"].dropna().iloc[-1])
+                    high_price = float(data["High"].dropna().iloc[-1])
+                    low_price = float(data["Low"].dropna().iloc[-1])
+                    vol = data["Volume"].dropna().iloc[-1]
                 else:
                     # 다중 심볼: columns = MultiIndex (Price, Ticker)
                     if symbol not in data["Close"].columns:
                         logger.debug(f"{symbol}: 데이터 없음")
                         continue
-                    col = data["Close"][symbol]
-                    if col.dropna().empty:
-                        logger.debug(f"{symbol}: 데이터 없음 (거래일 아닌 경우)")
+                    close_col = data["Close"][symbol].dropna()
+                    if close_col.empty:
+                        logger.debug(f"{symbol}: 데이터 없음 (거래일 없음)")
                         continue
-                    close_price = float(col.iloc[-1])
-                    open_price = float(data["Open"][symbol].iloc[-1])
-                    high_price = float(data["High"][symbol].iloc[-1])
-                    low_price = float(data["Low"][symbol].iloc[-1])
-                    vol = data["Volume"][symbol].iloc[-1]
+                    close_price = float(close_col.iloc[-1])
+                    open_price = float(data["Open"][symbol].dropna().iloc[-1])
+                    high_price = float(data["High"][symbol].dropna().iloc[-1])
+                    low_price = float(data["Low"][symbol].dropna().iloc[-1])
+                    vol_col = data["Volume"][symbol].dropna()
+                    vol = vol_col.iloc[-1] if not vol_col.empty else None
 
                 volume = int(vol) if vol and vol > 0 else None
 
