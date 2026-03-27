@@ -44,6 +44,10 @@ const PERIODS = [
   { value: "3mo", label: "3개월" },
   { value: "6mo", label: "6개월" },
   { value: "1y", label: "1년" },
+  { value: "2y", label: "2년" },
+  { value: "5y", label: "5년" },
+  { value: "10y", label: "10년" },
+  { value: "max", label: "전체" },
 ];
 
 const NEWS_PAGE_SIZE = 30;
@@ -58,8 +62,12 @@ function formatPrice(price: number, currency: string): string {
   return price.toLocaleString();
 }
 
-function formatChartDate(dateStr: string): string {
+function formatChartDate(dateStr: string, period?: string): string {
   const d = new Date(dateStr);
+  const longPeriods = new Set(["2y", "5y", "10y", "max"]);
+  if (period && longPeriods.has(period)) {
+    return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}`;
+  }
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
@@ -360,7 +368,7 @@ function CommoditiesContent() {
                       <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                       <XAxis
                         dataKey="date"
-                        tickFormatter={formatChartDate}
+                        tickFormatter={(d) => formatChartDate(d, period)}
                         tick={{ fontSize: 11, fill: "#999" }}
                         tickLine={false}
                         axisLine={{ stroke: "#e5e5e5" }}

@@ -5,6 +5,7 @@ yfinance를 사용하여 원자재 선물 가격을 수집하고,
 """
 
 import logging
+import time
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
@@ -16,6 +17,12 @@ logger = logging.getLogger(__name__)
 
 # 3% 이상 변동 시 MacroAlert 생성 기준
 ALERT_THRESHOLD_PCT = 3.0
+
+# 히스토리 인메모리 캐시: {cache_key: (timestamp, data)}
+# 장기 기간(2y+)은 1시간, 단기는 10분 TTL
+_history_cache: dict[str, tuple[float, list[dict]]] = {}
+_CACHE_TTL_SHORT = 600   # 10분 (1y 이하)
+_CACHE_TTL_LONG = 3600   # 1시간 (2y 이상)
 
 
 def fetch_commodity_prices(db: Session) -> int:
@@ -109,20 +116,34 @@ def fetch_commodity_history(symbol: str, period: str = "1mo") -> list[dict]:
 
     Args:
         symbol: yfinance 심볼 (예: CL=F)
-        period: 조회 기간 (1d, 5d, 1mo, 3mo, 6mo, 1y)
+        period: 조회 기간 (1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, max)
 
     Returns:
         날짜별 OHLCV 리스트.
     """
     import yfinance as yf
 
-    valid_periods = {"1d", "5d", "1mo", "3mo", "6mo", "1y"}
+    # 단기: 일봉, 장기(2y+): 주봉으로 데이터 포인트 수 절감
+    _long_periods = {"2y", "5y", "10y", "max"}
+    valid_periods = {"1d", "5d", "1mo", "3mo", "6mo", "1y"} | _long_periods
     if period not in valid_periods:
         period = "1mo"
 
+    interval = "1wk" if period in _long_periods else "1d"
+    cache_key = f"{symbol}:{period}:{interval}"
+    ttl = _CACHE_TTL_LONG if period in _long_periods else _CACHE_TTL_SHORT
+
+    # 캐시 확인
+    cached = _history_cache.get(cache_key)
+    if cached:
+        ts, data = cached
+        if time.time() - ts < ttl:
+            logger.debug(f"{cache_key} 캐시 히트")
+            return data
+
     try:
         ticker = yf.Ticker(symbol)
-        hist = ticker.history(period=period)
+        hist = ticker.history(period=period, interval=interval)
 
         if hist.empty:
             return []
@@ -137,6 +158,9 @@ def fetch_commodity_history(symbol: str, period: str = "1mo") -> list[dict]:
                 "close": round(float(row["Close"]), 4) if row["Close"] else None,
                 "volume": int(row["Volume"]) if row["Volume"] > 0 else None,
             })
+
+        # 캐시 저장
+        _history_cache[cache_key] = (time.time(), result)
         return result
 
     except Exception as e:

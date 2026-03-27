@@ -68,17 +68,45 @@ def _determine_impact_direction(title: str) -> str:
     return "neutral"
 
 
+# 1~2글자 원자재 이름의 오탐을 막기 위한 보강 키워드 목록
+# "금" → "금값", "금가격" 등으로 대체하여 조사/복합어 오탐 방지
+_COMMODITY_EXTRA_KEYWORDS: dict[str, list[str]] = {
+    "금": ["금값", "금가격", "금선물", "국제금", "금시세", "귀금속", "금거래", "금 가격", "금 시세"],
+    "은": ["은값", "은가격", "은선물", "귀금속", "은 가격", "은 시세"],
+    "밀": ["밀가격", "밀 가격", "국제밀", "소맥", "밀 선물", "wheat price"],
+}
+
+# 단독 사용 시 오탐이 많아 키워드로 등록하지 않을 이름 (한국어)
+_SKIP_SHORT_NAMES_KO: set[str] = {"금", "은", "밀"}
+
+
 def _build_commodity_keyword_map(commodities: list[Commodity]) -> dict[str, int]:
-    """원자재 이름(한/영)으로부터 keyword -> commodity_id 매핑을 생성한다."""
+    """원자재 이름(한/영)으로부터 keyword -> commodity_id 매핑을 생성한다.
+
+    1~2글자 한국어 이름(금, 은, 밀 등)은 한국어 조사/복합어에 오탐이 많아
+    단독 키워드로 등록하지 않고 보강 키워드(_COMMODITY_EXTRA_KEYWORDS)를 사용한다.
+    """
     kw_map: dict[str, int] = {}
     for c in commodities:
-        # 한국어 이름과 영어 이름 모두 키워드로 등록
-        kw_map[c.name_ko.lower()] = c.id
-        kw_map[c.name_en.lower()] = c.id
-        # 심볼에서 =F 제거한 것도 추가 (예: CL=F -> CL)
+        name_ko = c.name_ko.lower()
+        name_en = c.name_en.lower()
+
+        # 1~2글자 한국어 이름은 오탐 위험 — 보강 키워드로 대체
+        if name_ko not in _SKIP_SHORT_NAMES_KO:
+            kw_map[name_ko] = c.id
+        for extra_kw in _COMMODITY_EXTRA_KEYWORDS.get(name_ko, []):
+            kw_map[extra_kw.lower()] = c.id
+
+        # 영어 이름은 2글자 이상만 등록 (한국어 오탐 없음)
+        if len(name_en) >= 3:
+            kw_map[name_en] = c.id
+
+        # 심볼에서 =F 제거한 것도 추가 (예: CL=F -> cl, GC=F -> gc)
+        # 단, 너무 짧으면 영어 본문에서 오탐 가능 — 3글자 이상만
         symbol_clean = c.symbol.replace("=F", "").lower()
-        if len(symbol_clean) >= 2:
+        if len(symbol_clean) >= 3:
             kw_map[symbol_clean] = c.id
+
     return kw_map
 
 

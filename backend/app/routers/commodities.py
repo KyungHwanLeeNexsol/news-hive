@@ -8,6 +8,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import select
 
 from app.database import get_db
 from app.models.commodity import Commodity, CommodityPrice, SectorCommodityRelation
@@ -37,16 +38,33 @@ def _safe_float(v: float | None) -> float | None:
 async def list_commodities(db: Session = Depends(get_db)):
     """전체 원자재 목록 + 최신 가격 조회."""
     commodities = db.query(Commodity).order_by(Commodity.category, Commodity.name_ko).all()
+    if not commodities:
+        return []
+
+    # 최신 가격 단일 쿼리 — commodity_id별 max recorded_at 서브쿼리로 N+1 제거
+    commodity_ids = [c.id for c in commodities]
+    latest_subq = (
+        select(
+            CommodityPrice.commodity_id,
+            func.max(CommodityPrice.recorded_at).label("max_at"),
+        )
+        .where(CommodityPrice.commodity_id.in_(commodity_ids))
+        .group_by(CommodityPrice.commodity_id)
+        .subquery()
+    )
+    latest_prices_q = (
+        db.query(CommodityPrice)
+        .join(
+            latest_subq,
+            (CommodityPrice.commodity_id == latest_subq.c.commodity_id)
+            & (CommodityPrice.recorded_at == latest_subq.c.max_at),
+        )
+    )
+    latest_map: dict[int, CommodityPrice] = {lp.commodity_id: lp for lp in latest_prices_q}
 
     results = []
     for commodity in commodities:
-        # 최신 가격 조회
-        latest = (
-            db.query(CommodityPrice)
-            .filter(CommodityPrice.commodity_id == commodity.id)
-            .order_by(CommodityPrice.recorded_at.desc())
-            .first()
-        )
+        latest = latest_map.get(commodity.id)
         results.append(CommodityResponse(
             id=commodity.id,
             symbol=commodity.symbol,
@@ -124,29 +142,40 @@ async def list_commodity_news(
         .all()
     )
 
-    # 원자재 관계 정보를 추가하여 응답
+    # 원자재 관계 정보를 배치로 로드하여 N+1 제거
+    article_ids = [a.id for a in articles]
+    all_rels = (
+        db.query(NewsCommodityRelation)
+        .filter(NewsCommodityRelation.news_id.in_(article_ids))
+        .all()
+    ) if article_ids else []
+
+    # 원자재 정보 한 번에 로드
+    rel_commodity_ids = list({r.commodity_id for r in all_rels})
+    commodity_map: dict[int, Commodity] = {}
+    if rel_commodity_ids:
+        for c in db.query(Commodity).filter(Commodity.id.in_(rel_commodity_ids)).all():
+            commodity_map[c.id] = c
+
+    # news_id → relations 그룹핑
+    rels_by_news: dict[int, list[NewsCommodityRelation]] = {}
+    for r in all_rels:
+        rels_by_news.setdefault(r.news_id, []).append(r)
+
     result = []
     for article in articles:
-        article_data = format_articles([article])[0]
-        # 원자재 관계 정보 추가
-        commodity_rels = (
-            db.query(NewsCommodityRelation)
-            .filter(NewsCommodityRelation.news_id == article.id)
-            .all()
-        )
+        article_dict = format_articles([article])[0].model_dump()
         commodity_info = []
-        for cr in commodity_rels:
-            commodity = db.query(Commodity).filter(Commodity.id == cr.commodity_id).first()
-            if commodity:
+        for cr in rels_by_news.get(article.id, []):
+            c = commodity_map.get(cr.commodity_id)
+            if c:
                 commodity_info.append({
-                    "commodity_id": commodity.id,
-                    "name_ko": commodity.name_ko,
-                    "symbol": commodity.symbol,
+                    "commodity_id": c.id,
+                    "name_ko": c.name_ko,
+                    "symbol": c.symbol,
                     "relevance": cr.relevance,
                     "impact_direction": cr.impact_direction,
                 })
-        # Pydantic 모델을 dict로 변환 후 commodity_relations 추가
-        article_dict = article_data.model_dump()
         article_dict["commodity_relations"] = commodity_info
         result.append(article_dict)
 
