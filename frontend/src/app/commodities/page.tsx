@@ -145,31 +145,40 @@ function CommoditiesContent() {
   // 뉴스룸 데이터 로드
   useEffect(() => {
     if (mainTab !== "news") return;
+    let cancelled = false;
     setNewsLoading(true);
     const offset = (newsPage - 1) * NEWS_PAGE_SIZE;
 
     if (newsFilterCommodity) {
-      // 특정 원자재 필터 -> fetchCommodityNewsById (commodity_relations 없음)
+      // 특정 원자재 필터 -> fetchCommodityNewsById
       fetchCommodityNewsById(newsFilterCommodity, offset, NEWS_PAGE_SIZE)
         .then((r) => {
-          // NewsArticle을 CommodityNewsArticle로 변환 (commodity_relations 비어있음)
+          if (cancelled) return;
+          const filtered = commodities.find((c) => c.id === newsFilterCommodity);
           const mapped: CommodityNewsArticle[] = r.articles.map((a: NewsArticle) => ({
             ...a,
-            commodity_relations: [],
+            commodity_relations: filtered ? [{
+              commodity_id: filtered.id,
+              name_ko: filtered.name_ko,
+              symbol: filtered.symbol,
+              relevance: "keyword",
+              impact_direction: null,
+            }] : [],
           }));
           setNewsArticles(mapped);
           setNewsTotal(r.total);
         })
-        .catch(() => { setNewsArticles([]); setNewsTotal(0); })
-        .finally(() => setNewsLoading(false));
+        .catch(() => { if (!cancelled) { setNewsArticles([]); setNewsTotal(0); } })
+        .finally(() => { if (!cancelled) setNewsLoading(false); });
     } else {
       // 전체 원자재 뉴스
       fetchCommodityNews(offset, NEWS_PAGE_SIZE)
-        .then((r) => { setNewsArticles(r.articles); setNewsTotal(r.total); })
-        .catch(() => { setNewsArticles([]); setNewsTotal(0); })
-        .finally(() => setNewsLoading(false));
+        .then((r) => { if (!cancelled) { setNewsArticles(r.articles); setNewsTotal(r.total); } })
+        .catch(() => { if (!cancelled) { setNewsArticles([]); setNewsTotal(0); } })
+        .finally(() => { if (!cancelled) setNewsLoading(false); });
     }
-  }, [mainTab, newsPage, newsFilterCommodity]);
+    return () => { cancelled = true; };
+  }, [mainTab, newsPage, newsFilterCommodity, commodities]);
 
   const filteredCommodities =
     category === "all"
@@ -403,6 +412,8 @@ function CommoditiesContent() {
             <select
               value={newsFilterCommodity ?? ""}
               onChange={(e) => {
+                setNewsLoading(true);
+                setNewsArticles([]);
                 setNewsFilterCommodity(e.target.value ? Number(e.target.value) : null);
                 setNewsPage(1);
               }}

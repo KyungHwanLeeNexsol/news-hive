@@ -32,6 +32,19 @@ function sentimentLabel(sentiment: string | null): { text: string; className: st
 
 function ImpactBadge({ rel }: { rel: CommodityNewsRelation }) {
   const impact = rel.impact_direction ? IMPACT_LABELS[rel.impact_direction] : null;
+  const isPriceChange = rel.impact_direction === "price_up" || rel.impact_direction === "price_down";
+
+  if (impact && isPriceChange) {
+    // 가격상승/가격하락: 원자재명과 함께 하나의 뱃지로 표현
+    return (
+      <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[11px] font-medium rounded ${impact.className}`}>
+        {rel.name_ko}
+        <span className="mx-0.5 opacity-60">·</span>
+        {impact.text}
+      </span>
+    );
+  }
+
   return (
     <span className="inline-flex items-center gap-1">
       <span className="inline-block px-1.5 py-0.5 text-[11px] font-medium rounded bg-[#f0f0f0] text-[#555]">
