@@ -71,14 +71,17 @@ def _determine_impact_direction(title: str) -> str:
 
 # 1~2글자 원자재 이름의 오탐을 막기 위한 보강 키워드 목록
 # "금" → "금값", "금가격" 등으로 대체하여 조사/복합어 오탐 방지
+# "구리" → 광통신/반도체/전선 기사에서 "구리선" 비교 언급으로 오탐 다수
 _COMMODITY_EXTRA_KEYWORDS: dict[str, list[str]] = {
     "금": ["금값", "금가격", "금선물", "국제금", "금시세", "귀금속", "금거래", "금 가격", "금 시세"],
     "은": ["은값", "은가격", "은선물", "귀금속", "은 가격", "은 시세"],
     "밀": ["밀가격", "밀 가격", "국제밀", "소맥", "밀 선물", "wheat price"],
+    "구리": ["구리가격", "구리 가격", "구리값", "국제구리", "구리선물", "copper price", "구리 시장", "동 가격"],
 }
 
 # 단독 사용 시 오탐이 많아 키워드로 등록하지 않을 이름 (한국어)
-_SKIP_SHORT_NAMES_KO: set[str] = {"금", "은", "밀"}
+# 구리: "광통신 vs 구리선" 비교 문맥, 반도체 기사의 배선 언급 등으로 오탐
+_SKIP_SHORT_NAMES_KO: set[str] = {"금", "은", "밀", "구리"}
 
 
 def _build_commodity_keyword_map(commodities: list[Commodity]) -> dict[str, int]:
