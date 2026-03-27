@@ -1,6 +1,7 @@
 """원자재 가격 추적 및 뉴스 API 라우터."""
 
 import logging
+import math
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.encoders import jsonable_encoder
@@ -27,6 +28,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/commodities", tags=["commodities"])
 
 
+def _safe_float(v: float | None) -> float | None:
+    """nan/inf를 None으로 변환 (JSON 직렬화 오류 방지)."""
+    return None if v is None or (isinstance(v, float) and not math.isfinite(v)) else v
+
+
 @router.get("", response_model=list[CommodityResponse])
 async def list_commodities(db: Session = Depends(get_db)):
     """전체 원자재 목록 + 최신 가격 조회."""
@@ -50,8 +56,8 @@ async def list_commodities(db: Session = Depends(get_db)):
             unit=commodity.unit,
             currency=commodity.currency,
             created_at=commodity.created_at,
-            latest_price=latest.price if latest else None,
-            change_pct=latest.change_pct if latest else None,
+            latest_price=_safe_float(latest.price if latest else None),
+            change_pct=_safe_float(latest.change_pct if latest else None),
         ))
 
     return results
@@ -238,8 +244,8 @@ async def get_sector_commodities(sector_id: int, db: Session = Depends(get_db)):
             category=commodity.category,
             correlation_type=rel.correlation_type,
             description=rel.description,
-            latest_price=latest.price if latest else None,
-            change_pct=latest.change_pct if latest else None,
+            latest_price=_safe_float(latest.price if latest else None),
+            change_pct=_safe_float(latest.change_pct if latest else None),
         ))
 
     return results
