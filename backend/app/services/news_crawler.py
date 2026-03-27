@@ -339,7 +339,7 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
         logger.info(f"Filtered {filtered_count} non-financial articles (entertainment/sports/lifestyle)")
 
     if not unique_articles:
-        logger.info(f"No new articles (existing={len(existing_urls)}, raw={len(all_raw_articles)}).")
+        logger.info(f"No new articles after dedup/filter (unique_before_filter={pre_filter_count}).")
         return 0
 
     logger.info(f"Saving {len(unique_articles)} new articles...")
