@@ -167,6 +167,9 @@ export interface NewsRelation {
   sector_name: string | null;
   match_type: string;
   relevance: string;
+  relation_sentiment?: string | null;
+  propagation_type?: string | null;
+  impact_reason?: string | null;
 }
 
 export interface NewsArticle {

@@ -454,26 +454,49 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
 
             relations = ad.get("_relations", [])
 
+            # 뉴스 전파: 직접 관계를 기반으로 관련 종목/섹터에 전파
+            try:
+                from app.services.relation_propagator import propagate_news
+                from app.services.ai_classifier import classify_sentiment
+
+                article_sentiment = classify_sentiment(ad.get("title", ""))
+                propagated = propagate_news(
+                    db,
+                    news_id=article_id,
+                    article_sentiment=article_sentiment,
+                    direct_relations=relations,
+                )
+                if propagated:
+                    relations = relations + propagated
+            except Exception as e:
+                logger.warning(f"뉴스 전파 실패 (news_id={article_id}): {e}")
+
             seen_pairs: set[tuple] = set()
             for rel in relations:
                 pair = (rel.get("stock_id"), rel.get("sector_id"))
                 if pair not in seen_pairs:
                     seen_pairs.add(pair)
                     rel_values.append(
-                        f"(:ni{rel_idx}, :si{rel_idx}, :se{rel_idx}, :mt{rel_idx}, :rv{rel_idx})"
+                        f"(:ni{rel_idx}, :si{rel_idx}, :se{rel_idx}, :mt{rel_idx}, :rv{rel_idx},"
+                        f" :rs{rel_idx}, :pt{rel_idx}, :ir{rel_idx})"
                     )
                     rel_params[f"ni{rel_idx}"] = article_id
                     rel_params[f"si{rel_idx}"] = rel.get("stock_id")
                     rel_params[f"se{rel_idx}"] = rel.get("sector_id")
                     rel_params[f"mt{rel_idx}"] = rel.get("match_type", "keyword")
                     rel_params[f"rv{rel_idx}"] = rel.get("relevance", "indirect")
+                    rel_params[f"rs{rel_idx}"] = rel.get("relation_sentiment")
+                    rel_params[f"pt{rel_idx}"] = rel.get("propagation_type", "direct")
+                    rel_params[f"ir{rel_idx}"] = rel.get("impact_reason")
                     rel_idx += 1
 
             saved_count += 1
 
         if rel_values:
             rel_sql = sa_text(
-                f"""INSERT INTO news_stock_relations (news_id, stock_id, sector_id, match_type, relevance)
+                f"""INSERT INTO news_stock_relations
+                (news_id, stock_id, sector_id, match_type, relevance,
+                 relation_sentiment, propagation_type, impact_reason)
                 VALUES {', '.join(rel_values)}"""
             )
             for attempt in range(3):

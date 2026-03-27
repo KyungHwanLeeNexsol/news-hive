@@ -1,4 +1,4 @@
-import type { Sector, Stock, StockListItem, NewsArticle, StockDetail, FinancialPeriod, PriceRecord, SentimentTrendItem, SectorInsight, DisclosureItem, DisclosureDetail, MacroAlert, EconomicEvent, FundSignal, DailyBriefing, PortfolioReport, AccuracyStats, StockNewsImpactStats, Commodity, CommodityHistoryPoint, SectorCommodity, CommodityNewsArticle } from "./types";
+import type { Sector, Stock, StockListItem, NewsArticle, NewsRelation, StockDetail, FinancialPeriod, PriceRecord, SentimentTrendItem, SectorInsight, DisclosureItem, DisclosureDetail, MacroAlert, EconomicEvent, FundSignal, DailyBriefing, PortfolioReport, AccuracyStats, StockNewsImpactStats, Commodity, CommodityHistoryPoint, SectorCommodity, CommodityNewsArticle } from "./types";
 
 const API_BASE = "/api";
 
@@ -404,6 +404,24 @@ export async function fetchLatestPortfolioReport(): Promise<PortfolioReport | nu
   if (!res.ok) return null;
   const data = await res.json();
   return data || null;
+}
+
+// ── 종목 관계 (Stock Relations) ──
+
+export async function getStockRelations(stockId: number): Promise<NewsRelation[]> {
+  const res = await fetchWithRetry(`${API_BASE}/stocks/relations?stock_id=${stockId}`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function inferRelations(): Promise<void> {
+  const res = await fetch(`${API_BASE}/stocks/infer-relations`, { method: "POST" });
+  if (!res.ok) throw new Error("Failed to infer relations");
+}
+
+export async function deleteRelation(relationId: number): Promise<void> {
+  const res = await fetch(`${API_BASE}/stocks/relations/${relationId}`, { method: "DELETE" });
+  if (!res.ok) throw new Error("Failed to delete relation");
 }
 
 // ── 원자재 (Commodities) ──

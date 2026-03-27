@@ -10,6 +10,9 @@ class NewsRelationResponse(BaseModel):
     sector_name: str | None = None
     match_type: str
     relevance: str
+    relation_sentiment: str | None = None
+    propagation_type: str | None = None
+    impact_reason: str | None = None
 
     model_config = {"from_attributes": True}
 

@@ -434,6 +434,105 @@ async def get_stock_sentiment_trend(
     return list(trend.values())
 
 
+@router.get("/stocks/{stock_id}/relations")
+async def get_stock_relations(
+    stock_id: int,
+    db: Session = Depends(get_db),
+):
+    """종목의 관련 종목/섹터 관계 목록 조회."""
+    from sqlalchemy import or_
+    from app.models.stock_relation import StockRelation
+    from app.schemas.stock_relation import StockRelationResponse, StockRelationListResponse
+
+    stock = db.query(Stock).filter(Stock.id == stock_id).first()
+    if not stock:
+        raise HTTPException(status_code=404, detail="Stock not found")
+
+    # 종목이 source 또는 target인 관계 + 종목의 섹터가 source 또는 target인 관계
+    relations = (
+        db.query(StockRelation)
+        .filter(
+            or_(
+                StockRelation.source_stock_id == stock_id,
+                StockRelation.target_stock_id == stock_id,
+                StockRelation.source_sector_id == stock.sector_id,
+                StockRelation.target_sector_id == stock.sector_id,
+            )
+        )
+        .order_by(StockRelation.confidence.desc())
+        .all()
+    )
+
+    # 이름 매핑을 위해 관련 ID 수집
+    stock_ids_set: set[int] = set()
+    sector_ids_set: set[int] = set()
+    for r in relations:
+        if r.source_stock_id:
+            stock_ids_set.add(r.source_stock_id)
+        if r.target_stock_id:
+            stock_ids_set.add(r.target_stock_id)
+        if r.source_sector_id:
+            sector_ids_set.add(r.source_sector_id)
+        if r.target_sector_id:
+            sector_ids_set.add(r.target_sector_id)
+
+    stock_name_map: dict[int, str] = {}
+    sector_name_map: dict[int, str] = {}
+
+    if stock_ids_set:
+        for s in db.query(Stock.id, Stock.name).filter(Stock.id.in_(list(stock_ids_set))).all():
+            stock_name_map[s.id] = s.name
+    if sector_ids_set:
+        for s in db.query(Sector.id, Sector.name).filter(Sector.id.in_(list(sector_ids_set))).all():
+            sector_name_map[s.id] = s.name
+
+    items = []
+    for r in relations:
+        items.append(StockRelationResponse(
+            id=r.id,
+            source_stock_id=r.source_stock_id,
+            source_stock_name=stock_name_map.get(r.source_stock_id) if r.source_stock_id else None,
+            source_sector_id=r.source_sector_id,
+            source_sector_name=sector_name_map.get(r.source_sector_id) if r.source_sector_id else None,
+            target_stock_id=r.target_stock_id,
+            target_stock_name=stock_name_map.get(r.target_stock_id) if r.target_stock_id else None,
+            target_sector_id=r.target_sector_id,
+            target_sector_name=sector_name_map.get(r.target_sector_id) if r.target_sector_id else None,
+            relation_type=r.relation_type,
+            confidence=r.confidence,
+            reason=r.reason,
+            created_at=r.created_at,
+        ))
+
+    return StockRelationListResponse(relations=items, total=len(items))
+
+
+@router.post("/stocks/infer-relations")
+async def infer_relations(db: Session = Depends(get_db)):
+    """AI 기반 종목/섹터 관계 추론을 수동 실행한다."""
+    from app.services.stock_relation_service import run_full_inference
+    from app.schemas.stock_relation import InferRelationsResponse
+
+    stats = await run_full_inference(db)
+    return InferRelationsResponse(
+        inter_sector=stats["inter_sector"],
+        intra_sector=stats["intra_sector"],
+        message=f"추론 완료: 섹터 간 {stats['inter_sector']}건, 섹터 내 {stats['intra_sector']}건",
+    )
+
+
+@router.delete("/stocks/relations/{relation_id}", status_code=204)
+async def delete_relation(relation_id: int, db: Session = Depends(get_db)):
+    """종목/섹터 관계를 삭제한다."""
+    from app.models.stock_relation import StockRelation
+
+    relation = db.query(StockRelation).filter(StockRelation.id == relation_id).first()
+    if not relation:
+        raise HTTPException(status_code=404, detail="Relation not found")
+    db.delete(relation)
+    db.commit()
+
+
 @router.delete("/stocks/{stock_id}", status_code=204)
 async def delete_stock(stock_id: int, db: Session = Depends(get_db)):
     stock = db.query(Stock).filter(Stock.id == stock_id).first()

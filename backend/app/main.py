@@ -63,6 +63,26 @@ async def lifespan(app: FastAPI):
 
     threading.Thread(target=_run_seed, daemon=True).start()
 
+    # 종목/섹터 관계 AI 추론 (stock_relations 테이블이 비어있을 때만 실행)
+    def _run_relation_inference():
+        import asyncio as _aio
+        _logger = logging.getLogger(__name__)
+        db = SessionLocal()
+        try:
+            from app.services.stock_relation_service import should_run_inference, run_full_inference
+            if should_run_inference(db):
+                _logger.info("stock_relations 비어있음 - AI 관계 추론 시작")
+                stats = _aio.run(run_full_inference(db))
+                _logger.info(f"관계 추론 완료: 섹터 간 {stats['inter_sector']}건, 섹터 내 {stats['intra_sector']}건")
+            else:
+                _logger.info("stock_relations에 데이터 존재 - 초기 추론 스킵")
+        except Exception as e:
+            _logger.warning(f"관계 추론 실패: {e}")
+        finally:
+            db.close()
+
+    threading.Thread(target=_run_relation_inference, daemon=True).start()
+
     start_scheduler()
     yield
     # Shutdown

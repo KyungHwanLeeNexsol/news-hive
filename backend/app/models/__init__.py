@@ -8,10 +8,11 @@ from app.models.portfolio_report import PortfolioReport
 from app.models.news_price_impact import NewsPriceImpact
 from app.models.commodity import Commodity, CommodityPrice, SectorCommodityRelation
 from app.models.news_commodity_relation import NewsCommodityRelation
+from app.models.stock_relation import StockRelation
 
 __all__ = [
     "Sector", "Stock", "NewsArticle", "NewsStockRelation",
     "FundSignal", "DailyBriefing", "PortfolioReport", "NewsPriceImpact",
     "Commodity", "CommodityPrice", "SectorCommodityRelation",
-    "NewsCommodityRelation",
+    "NewsCommodityRelation", "StockRelation",
 ]

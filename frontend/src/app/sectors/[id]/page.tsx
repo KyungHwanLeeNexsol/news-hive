@@ -31,6 +31,21 @@ function sentimentLabel(sentiment: string | null): { text: string; className: st
   }
 }
 
+function propagatedBadge(
+  propagationType: string | null | undefined,
+  relationSentiment: string | null | undefined,
+): { text: string; className: string } | null {
+  if (propagationType !== "propagated") return null;
+  switch (relationSentiment) {
+    case "positive":
+      return { text: "\u2197 간접호재", className: "text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200" };
+    case "negative":
+      return { text: "\u2197 간접악재", className: "text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200" };
+    default:
+      return { text: "\u2197 간접관련", className: "text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200" };
+  }
+}
+
 export default function SectorDetail() {
   const params = useParams();
   const sectorId = Number(params.id);
@@ -365,6 +380,15 @@ export default function SectorDetail() {
               ) : (
                 news.map((article) => {
                   const sentiment = sentimentLabel(article.sentiment);
+                  // 간접 뉴스: 현재 섹터에 대한 relation에서 propagation 정보 추출
+                  const currentRelation = article.relations.find((r) => r.sector_id === sectorId);
+                  const indirectBadge = currentRelation
+                    ? propagatedBadge(currentRelation.propagation_type, currentRelation.relation_sentiment)
+                    : null;
+                  const impactReason =
+                    currentRelation?.propagation_type === "propagated" && currentRelation?.impact_reason
+                      ? currentRelation.impact_reason
+                      : null;
                   return (
                     <tr key={article.id}>
                       <td>
@@ -374,11 +398,18 @@ export default function SectorDetail() {
                         >
                           {article.title}
                         </Link>
+                        {impactReason && (
+                          <p className="text-xs text-gray-500 mt-0.5">{impactReason}</p>
+                        )}
                       </td>
                       <td className="text-center">
-                        <span className={`badge ${sentiment.className}`}>
-                          {sentiment.text}
-                        </span>
+                        {indirectBadge ? (
+                          <span className={indirectBadge.className}>{indirectBadge.text}</span>
+                        ) : (
+                          <span className={`badge ${sentiment.className}`}>
+                            {sentiment.text}
+                          </span>
+                        )}
                       </td>
                       <td className="text-center">
                         {(() => {
@@ -444,6 +475,15 @@ export default function SectorDetail() {
               ) : (
                 commodityNews.map((article) => {
                   const sentiment = sentimentLabel(article.sentiment);
+                  // 간접 뉴스: 현재 섹터에 대한 relation에서 propagation 정보 추출
+                  const comRelation = article.relations.find((r) => r.sector_id === sectorId);
+                  const comIndirectBadge = comRelation
+                    ? propagatedBadge(comRelation.propagation_type, comRelation.relation_sentiment)
+                    : null;
+                  const comImpactReason =
+                    comRelation?.propagation_type === "propagated" && comRelation?.impact_reason
+                      ? comRelation.impact_reason
+                      : null;
                   return (
                     <tr key={article.id}>
                       <td>
@@ -453,11 +493,18 @@ export default function SectorDetail() {
                         >
                           {article.title}
                         </Link>
+                        {comImpactReason && (
+                          <p className="text-xs text-gray-500 mt-0.5">{comImpactReason}</p>
+                        )}
                       </td>
                       <td className="text-center">
-                        <span className={`badge ${sentiment.className}`}>
-                          {sentiment.text}
-                        </span>
+                        {comIndirectBadge ? (
+                          <span className={comIndirectBadge.className}>{comIndirectBadge.text}</span>
+                        ) : (
+                          <span className={`badge ${sentiment.className}`}>
+                            {sentiment.text}
+                          </span>
+                        )}
                       </td>
                       <td className="text-center">
                         {(() => {

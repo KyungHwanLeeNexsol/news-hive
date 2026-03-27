@@ -18,6 +18,9 @@ def format_articles(articles: list[NewsArticle]) -> list[NewsArticleResponse]:
                         sector_name=rel.sector.name if rel.sector else None,
                         match_type=rel.match_type,
                         relevance=rel.relevance,
+                        relation_sentiment=rel.relation_sentiment,
+                        propagation_type=rel.propagation_type,
+                        impact_reason=rel.impact_reason,
                     )
                 )
         results.append(

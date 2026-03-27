@@ -246,6 +246,24 @@ def _run_news_impact_cleanup():
         db.close()
 
 
+def _run_relation_inference():
+    """주간 종목/섹터 관계 증분 추론."""
+    from app.services.stock_relation_service import run_incremental_inference
+
+    db = SessionLocal()
+    try:
+        stats = asyncio.run(run_incremental_inference(db))
+        if stats["inter_sector"] or stats["intra_sector"]:
+            logger.info(
+                f"주간 관계 추론 완료: 섹터 간 {stats['inter_sector']}건, "
+                f"섹터 내 {stats['intra_sector']}건"
+            )
+    except Exception as e:
+        logger.error(f"주간 관계 추론 실패: {e}")
+    finally:
+        db.close()
+
+
 def start_scheduler():
     """Start the background news crawl scheduler."""
     interval = settings.NEWS_CRAWL_INTERVAL_MINUTES
@@ -332,12 +350,24 @@ def start_scheduler():
         id="news_impact_cleanup",
         replace_existing=True,
     )
+    # 종목/섹터 관계 증분 추론: 매주 일요일 04:00 KST
+    scheduler.add_job(
+        _run_relation_inference,
+        "cron",
+        day_of_week="sun",
+        hour=4,
+        minute=0,
+        timezone="Asia/Seoul",
+        id="relation_inference",
+        replace_existing=True,
+    )
     scheduler.start()
     logger.info(
         f"Scheduler started: crawling every {interval} min, DART every 30 min, "
         f"market cap every 6h, commodity price every 10 min, commodity news every 30 min, "
         f"briefing at 08:30 KST, signal verify at 18:00 KST, "
-        f"impact backfill at 18:30 KST, impact cleanup at 03:00 KST"
+        f"impact backfill at 18:30 KST, impact cleanup at 03:00 KST, "
+        f"relation inference every Sunday 04:00 KST"
     )
 
 

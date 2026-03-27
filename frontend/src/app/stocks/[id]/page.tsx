@@ -45,6 +45,21 @@ function sentimentLabel(sentiment: string | null): { text: string; className: st
   }
 }
 
+function propagatedBadge(
+  propagationType: string | null | undefined,
+  relationSentiment: string | null | undefined,
+): { text: string; className: string } | null {
+  if (propagationType !== 'propagated') return null;
+  switch (relationSentiment) {
+    case 'positive':
+      return { text: '\u2197 간접호재', className: 'text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200' };
+    case 'negative':
+      return { text: '\u2197 간접악재', className: 'text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200' };
+    default:
+      return { text: '\u2197 간접관련', className: 'text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200' };
+  }
+}
+
 function sourceLabel(source: string): string {
   switch (source) {
     case 'naver': return '네이버';
@@ -672,6 +687,15 @@ export default function StockDetailPage() {
                   ) : (
                     news.map((article) => {
                       const sentiment = sentimentLabel(article.sentiment);
+                      // 간접 뉴스 뱃지: 현재 종목에 대한 relation에서 propagation 정보 추출
+                      const currentRelation = article.relations.find((r) => r.stock_id === stockId);
+                      const indirectBadge = currentRelation
+                        ? propagatedBadge(currentRelation.propagation_type, currentRelation.relation_sentiment)
+                        : null;
+                      const impactReason =
+                        currentRelation?.propagation_type === 'propagated' && currentRelation?.impact_reason
+                          ? currentRelation.impact_reason
+                          : null;
                       return (
                         <tr key={article.id}>
                           <td>
@@ -684,9 +708,16 @@ export default function StockDetailPage() {
                             {article.summary && (
                               <p className="text-[11px] text-[#999] mt-0.5 truncate max-w-[400px]">{article.summary}</p>
                             )}
+                            {impactReason && (
+                              <p className="text-xs text-gray-500 mt-0.5">{impactReason}</p>
+                            )}
                           </td>
                           <td className="text-center">
-                            <span className={`badge ${sentiment.className}`}>{sentiment.text}</span>
+                            {indirectBadge ? (
+                              <span className={indirectBadge.className}>{indirectBadge.text}</span>
+                            ) : (
+                              <span className={`badge ${sentiment.className}`}>{sentiment.text}</span>
+                            )}
                           </td>
                           <td className="text-center">
                             <span className="badge badge-source">{sourceLabel(article.source)}</span>
