@@ -167,10 +167,10 @@ async def generate_briefing_endpoint(
 ):
     """오늘의 데일리 브리핑을 생성합니다. regenerate=true면 기존 브리핑 삭제 후 재생성."""
     from app.config import settings
-    if not settings.OPENROUTER_API_KEY and not settings.GEMINI_API_KEY:
+    if not settings.OPENROUTER_API_KEY and not settings.GEMINI_API_KEY and not settings.GROQ_API_KEY:
         raise HTTPException(
             status_code=500,
-            detail="AI API 키가 설정되지 않았습니다. OPENROUTER_API_KEY 또는 GEMINI_API_KEY를 설정하세요.",
+            detail="AI API 키가 설정되지 않았습니다. GROQ_API_KEY, OPENROUTER_API_KEY, 또는 GEMINI_API_KEY 중 하나를 설정하세요.",
         )
     try:
         from app.services.fund_manager import generate_daily_briefing
