@@ -650,7 +650,10 @@ async def analyze_stock(
     peers = results[2] if sector else []
 
     # 과거 시그널 적중률 조회
-    from app.services.signal_verifier import get_accuracy_stats
+    from app.services.signal_verifier import get_accuracy_stats, calibrate_confidence
+    from app.services.factor_scoring import build_factor_scores_json
+    from app.services.prompt_versioner import get_current_version
+    from app.services.news_price_impact_service import get_sector_news_impact_stats
     accuracy = get_accuracy_stats(db, days=30)
     accuracy_text = "아직 검증된 시그널 없음"
     if accuracy["total"] > 0:
@@ -661,6 +664,31 @@ async def analyze_stock(
             f"매도 적중률: {accuracy['sell_accuracy']}%, "
             f"평균 수익률: {accuracy['avg_return']}%"
         )
+
+    # REQ-AI-003: 오류 패턴 분포 피드백
+    error_dist = accuracy.get("error_distribution", {})
+    error_text = ""
+    if error_dist:
+        error_parts = [f"{k} {v}건" for k, v in error_dist.items()]
+        error_text = f"\n최근 오류 패턴: {', '.join(error_parts)}"
+        error_text += "\n※ 위 오류 패턴을 참고하여 같은 실수를 반복하지 마세요."
+
+    # REQ-AI-009: 섹터별 뉴스 임팩트 통계
+    impact_stats = None
+    impact_text = ""
+    if sector:
+        impact_stats = get_sector_news_impact_stats(db, stock.sector_id)
+        if impact_stats.get("sample_sufficient"):
+            impact_text = (
+                f"\n\n## 섹터 뉴스 반응 통계 (최근 30일)\n"
+                f"- 이 섹터 뉴스 발생 후 평균 5일 수익률: {impact_stats['avg_return_5d']}%\n"
+                f"- 양수 수익률 비율: {impact_stats['win_rate']}%\n"
+                f"- 분석 대상 기사 수: {impact_stats['total_articles']}건\n"
+                f"※ 과거 통계를 참고하되, 현재 시장 상황이 다를 수 있음에 유의하세요."
+            )
+
+    # REQ-AI-008: 프롬프트 버전
+    current_prompt_version = get_current_version(db, template_key="signal")
 
     # Pre-compute values that would break f-string syntax
     trend_label = {'improving': '개선 중', 'worsening': '악화 중', 'stable': '안정적'}.get(
@@ -678,7 +706,7 @@ async def analyze_stock(
 - 섹터: {sector.name if sector else '미분류'}
 
 ## 0. 과거 시그널 성과 (자기 피드백)
-{accuracy_text}
+{accuracy_text}{error_text}
 ※ 적중률이 낮다면 더 보수적으로, 높다면 현재 전략을 유지하세요.
 
 ## 1. 최근 뉴스 동향 (최근 3일)
@@ -724,6 +752,7 @@ async def analyze_stock(
 {json.dumps(peers, ensure_ascii=False, indent=2) if peers else '동종업계 비교 데이터 없음'}
 ※ 동종업계 대비 밸류에이션/센티먼트/주가 흐름을 비교하여 상대적 매력도를 평가하세요.
   섹터 전체가 하락 중인데 해당 종목만 상승하면 과열 경계, 섹터 반등 시 후발주자면 기회로 판단.
+{impact_text}
 
 ## 8. 데일리 브리핑 판단 참고
 {_format_briefing_hint(briefing_hint) if briefing_hint else '(독립 분석 — 브리핑 참고 정보 없음)'}
@@ -772,6 +801,23 @@ async def analyze_stock(
         market_summary=parsed.get("market_summary"),
         price_at_signal=price_at_signal,
     )
+
+    # REQ-AI-006: 다중 팩터 스코어링
+    factor_json, comp_score = build_factor_scores_json(
+        news_data=news,
+        market_data=market_data or {},
+        financials=financial_data or {},
+        impact_stats=impact_stats,
+    )
+    signal.factor_scores = factor_json
+    signal.composite_score = comp_score
+
+    # REQ-AI-008: 프롬프트 버전 기록
+    signal.prompt_version = current_prompt_version
+
+    # REQ-AI-004: Bayesian confidence 보정
+    if accuracy["total"] >= 10:
+        signal.confidence = calibrate_confidence(signal.confidence, accuracy)
 
     db.add(signal)
     db.commit()
