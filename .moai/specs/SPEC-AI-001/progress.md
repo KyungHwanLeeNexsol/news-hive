@@ -21,9 +21,9 @@
 - [ ] REQ-AI-012: 섹터 전파 모델
 - [ ] REQ-AI-013: 페이퍼 트레이딩 시뮬레이션
 
-### 통합 작업 (미완료)
-- [ ] fund_manager.py에 factor_scoring 통합 호출
-- [ ] fund_manager.py에 prompt_version 할당 연동
-- [ ] fund_manager.py 프롬프트에 오류 패턴 분포 주입
-- [ ] fund_manager.py 프롬프트에 섹터별 뉴스 임팩트 통계 주입
-- [ ] calibrate_confidence()를 시그널 생성 파이프라인에 연결
+### 통합 작업 (완료)
+- [x] fund_manager.py에 factor_scoring 통합 호출 (commit b56b509)
+- [x] fund_manager.py에 prompt_version 할당 연동 (commit b56b509)
+- [x] fund_manager.py 프롬프트에 오류 패턴 분포 주입 (commit b56b509)
+- [x] fund_manager.py 프롬프트에 섹터별 뉴스 임팩트 통계 주입 (commit b56b509)
+- [x] calibrate_confidence()를 시그널 생성 파이프라인에 연결 (commit b56b509)
