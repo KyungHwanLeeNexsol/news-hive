@@ -191,6 +191,101 @@ async def verify_signals(db: Session) -> dict:
     return stats
 
 
+async def fast_verify(db: Session) -> dict:
+    """장중 빠른 검증: 6h/12h 경과 시그널의 가격 기록 및 손절가 이탈 감지.
+
+    한국 주식시장 개장 시간(09:00-15:30 KST)에만 동작한다.
+
+    Returns:
+        {"checked": 확인 수, "early_warnings": 손절가 이탈 수}
+    """
+    from zoneinfo import ZoneInfo
+
+    kst = ZoneInfo("Asia/Seoul")
+    now_kst = datetime.now(kst)
+
+    # 장중 시간 확인 (09:00-15:30 KST, 평일만)
+    if now_kst.weekday() >= 5:  # 토/일
+        return {"checked": 0, "early_warnings": 0}
+    market_open = now_kst.replace(hour=9, minute=0, second=0, microsecond=0)
+    market_close = now_kst.replace(hour=15, minute=30, second=0, microsecond=0)
+    if not (market_open <= now_kst <= market_close):
+        return {"checked": 0, "early_warnings": 0}
+
+    now = datetime.now(timezone.utc)
+    stats: dict[str, int] = {"checked": 0, "early_warnings": 0}
+
+    # 아직 최종 검증 안 된 buy/sell 시그널 중 6h+ 경과한 것
+    candidates = (
+        db.query(FundSignal)
+        .filter(
+            FundSignal.signal.in_(["buy", "sell"]),
+            FundSignal.verified_at.is_(None),
+            FundSignal.price_at_signal.isnot(None),
+            FundSignal.created_at <= now - timedelta(hours=6),
+        )
+        .all()
+    )
+
+    if not candidates:
+        return stats
+
+    stock_ids = set(s.stock_id for s in candidates)
+    stock_map: dict[int, Stock] = {}
+    for stock in db.query(Stock).filter(Stock.id.in_(stock_ids)).all():
+        stock_map[stock.id] = stock
+
+    price_cache: dict[str, int | None] = {}
+
+    for signal in candidates:
+        stock = stock_map.get(signal.stock_id)
+        if not stock:
+            continue
+
+        age_hours = (now - signal.created_at).total_seconds() / 3600
+
+        if stock.stock_code not in price_cache:
+            price_cache[stock.stock_code] = await _get_current_price(stock.stock_code)
+
+        current_price = price_cache.get(stock.stock_code)
+        if not current_price:
+            continue
+
+        updated = False
+
+        # 6시간 후 가격 기록
+        if age_hours >= 6 and signal.price_after_6h is None:
+            signal.price_after_6h = current_price
+            updated = True
+
+        # 12시간 후 가격 기록
+        if age_hours >= 12 and signal.price_after_12h is None:
+            signal.price_after_12h = current_price
+            updated = True
+
+        # 손절가 이탈 감지
+        if signal.stop_loss and current_price and signal.early_warning is None:
+            if signal.signal == "buy" and current_price <= signal.stop_loss:
+                signal.early_warning = True
+                stats["early_warnings"] += 1
+                logger.warning(
+                    "Early warning: %s (signal=%s, stop_loss=%d, current=%d)",
+                    stock.name, signal.signal, signal.stop_loss, current_price,
+                )
+                updated = True
+            elif signal.signal == "sell" and current_price >= signal.stop_loss:
+                signal.early_warning = True
+                stats["early_warnings"] += 1
+                updated = True
+
+        if updated:
+            stats["checked"] += 1
+
+    db.commit()
+    logger.info("Fast verify: %s", stats)
+    return stats
+
+
 def get_accuracy_stats(db: Session, days: int = 30) -> dict:
     """최근 N일간 시그널 적중률 통계를 산출한다.
 

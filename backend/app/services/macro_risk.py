@@ -1,7 +1,9 @@
 """매크로 리스크 감지 서비스.
 
 뉴스 크롤링 후 리스크 키워드 빈도를 분석하여 임계치 초과 시 MacroAlert를 생성한다.
+REQ-AI-010: 키워드 매칭 후 AI NLP 분류로 거짓 양성을 제거하고 심각도를 판단한다.
 """
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -80,8 +82,82 @@ CRITICAL_THRESHOLD = 7  # 7건 이상 → critical
 COOLDOWN_HOURS = 6
 
 
-def detect_macro_risks(db: Session) -> list[MacroAlert]:
-    """최근 크롤링된 뉴스에서 매크로 리스크 키워드를 감지하고 알림을 생성한다."""
+async def _classify_macro_severity(
+    articles: list[NewsArticle], group_name: str
+) -> dict:
+    """AI 기반 매크로 리스크 문맥 분류.
+
+    키워드 매칭된 기사들의 실제 리스크 심각도를 AI로 판단한다.
+    거짓 양성(키워드는 있지만 시장 리스크와 무관한 기사)을 걸러낸다.
+
+    Args:
+        articles: 키워드 매칭된 뉴스 기사 리스트
+        group_name: 리스크 그룹명 (전쟁, 금리인상 등)
+
+    Returns:
+        {"severity": str, "context_summary": str, "is_false_positive": bool}
+    """
+    from app.services.ai_client import ask_ai
+
+    # 기사 제목 + 요약 취합 (최대 5개)
+    article_texts = []
+    for a in articles[:5]:
+        title = a.title or ""
+        summary = (a.summary or "")[:100]
+        article_texts.append(f"- {title} ({summary})")
+
+    articles_text = "\n".join(article_texts)
+
+    prompt = (
+        f'다음 뉴스 기사들이 "{group_name}" 관련 매크로 리스크인지 분석해주세요.\n\n'
+        f"기사 목록:\n{articles_text}\n\n"
+        "다음 JSON 형식으로만 응답해주세요:\n"
+        "{\n"
+        '    "severity": "none/low/medium/high/critical 중 하나",\n'
+        '    "context_summary": "2-3문장으로 실제 시장 영향 분석",\n'
+        '    "is_false_positive": true/false\n'
+        "}\n\n"
+        "판단 기준:\n"
+        '- "none": 해당 키워드가 있지만 시장 리스크와 무관 (거짓 양성)\n'
+        '- "low": 뉴스로 보도되었으나 시장 영향 미미\n'
+        '- "medium": 특정 섹터에 영향을 줄 수 있는 수준\n'
+        '- "high": 시장 전체에 단기적 영향 예상\n'
+        '- "critical": 즉각적이고 광범위한 시장 충격 예상\n\n'
+        "반드시 JSON만 출력하세요."
+    )
+
+    fallback = {"severity": "medium", "context_summary": "", "is_false_positive": False}
+
+    try:
+        response = await ask_ai(prompt, max_retries=2)
+        if not response:
+            return fallback
+
+        # JSON 파싱 — 코드 블록 래핑 제거
+        cleaned = response.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("```")[1]
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:]
+
+        result = json.loads(cleaned)
+
+        valid_severities = {"none", "low", "medium", "high", "critical"}
+        if result.get("severity") not in valid_severities:
+            result["severity"] = "medium"
+
+        return result
+    except Exception as e:
+        logger.warning("매크로 NLP 분류 실패: %s", e)
+        return fallback
+
+
+# @MX:NOTE: [AUTO] REQ-AI-010 매크로 NLP 분류 적용 — async 전환
+async def detect_macro_risks(db: Session) -> list[MacroAlert]:
+    """최근 크롤링된 뉴스에서 매크로 리스크 키워드를 감지하고 알림을 생성한다.
+
+    REQ-AI-010: 키워드 매칭 후 AI NLP 분류로 거짓 양성 제거 및 심각도 판정.
+    """
     window_start = datetime.now(timezone.utc) - timedelta(hours=WINDOW_HOURS)
 
     # 최근 윈도우 내 뉴스 가져오기
@@ -119,7 +195,25 @@ def detect_macro_risks(db: Session) -> list[MacroAlert]:
         if count < WARNING_THRESHOLD:
             continue
 
-        level = "critical" if count >= CRITICAL_THRESHOLD else "warning"
+        # REQ-AI-010: AI NLP 분류로 거짓 양성 필터링 및 심각도 판정
+        nlp_result = await _classify_macro_severity(matched_articles, group_name)
+
+        if nlp_result.get("is_false_positive"):
+            logger.info("NLP 거짓 양성 판정 — 스킵: %s (%d건)", group_name, count)
+            continue
+
+        # AI 심각도를 alert level로 매핑
+        ai_severity = nlp_result.get("severity", "medium")
+        if ai_severity in ("high", "critical"):
+            level = "critical"
+        elif ai_severity in ("medium",):
+            level = "warning"
+        else:
+            # "none" 또는 "low" — 키워드 임계치를 넘었지만 AI가 낮게 판단
+            logger.info(
+                "NLP 낮은 심각도(%s) — 스킵: %s (%d건)", ai_severity, group_name, count
+            )
+            continue
 
         # 쿨다운 체크: 같은 키워드로 최근 알림이 있으면 스킵
         cooldown_start = datetime.now(timezone.utc) - timedelta(hours=COOLDOWN_HOURS)
@@ -136,26 +230,28 @@ def detect_macro_risks(db: Session) -> list[MacroAlert]:
             if existing.level == "warning" and level == "critical":
                 existing.level = "critical"
                 existing.article_count = count
-                existing.description = _build_description(matched_articles)
+                context_summary = nlp_result.get("context_summary", "")
+                existing.description = _build_description(matched_articles, context_summary)
                 db.commit()
-                logger.info(f"Macro alert upgraded to critical: {group_name} ({count} articles)")
+                logger.info("Macro alert upgraded to critical: %s (%d articles)", group_name, count)
             continue
 
         # 알림 생성
-        title = _build_title(group_name, count, level)
-        description = _build_description(matched_articles)
+        alert_title = _build_title(group_name, count, level)
+        context_summary = nlp_result.get("context_summary", "")
+        description = _build_description(matched_articles, context_summary)
 
         alert = MacroAlert(
             level=level,
             keyword=group_name,
-            title=title,
+            title=alert_title,
             description=description,
             article_count=count,
             is_active=True,
         )
         db.add(alert)
         created_alerts.append(alert)
-        logger.info(f"Macro alert created: [{level}] {group_name} ({count} articles)")
+        logger.info("Macro alert created: [%s] %s (%d articles)", level, group_name, count)
 
     if created_alerts:
         db.commit()
@@ -169,9 +265,15 @@ def _build_title(keyword: str, count: int, level: str) -> str:
     return f"[{prefix}] '{keyword}' 관련 뉴스 {count}건 감지"
 
 
-def _build_description(articles: list[NewsArticle]) -> str:
-    """관련 뉴스 제목 나열."""
+def _build_description(
+    articles: list[NewsArticle], context_summary: str = ""
+) -> str:
+    """관련 뉴스 제목 나열 + AI 문맥 요약 포함."""
     lines = []
+    # AI 문맥 요약이 있으면 상단에 배치
+    if context_summary:
+        lines.append(f"[AI 분석] {context_summary}")
+        lines.append("")
     for a in articles[:5]:  # 최대 5개
         lines.append(f"- {a.title}")
     if len(articles) > 5:

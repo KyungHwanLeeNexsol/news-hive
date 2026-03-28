@@ -30,10 +30,10 @@ def _run_crawl_job():
         count = asyncio.run(crawl_all_news(db))
         logger.info(f"Scheduled crawl completed: {count} new articles")
 
-        # Detect macro risks after crawling
+        # Detect macro risks after crawling (async — REQ-AI-010 NLP 분류)
         from app.services.macro_risk import detect_macro_risks, deactivate_old_alerts
         try:
-            alerts = detect_macro_risks(db)
+            alerts = asyncio.run(detect_macro_risks(db))
             if alerts:
                 logger.info(f"Created {len(alerts)} macro risk alerts")
             deactivate_old_alerts(db)
@@ -199,6 +199,21 @@ def _run_news_impact_backfill():
         db.close()
 
 
+def _run_fast_verify():
+    """장중 빠른 검증 실행 (1시간 간격)."""
+    from app.services.signal_verifier import fast_verify
+
+    db = SessionLocal()
+    try:
+        stats = asyncio.run(fast_verify(db))
+        if stats["checked"]:
+            logger.info(f"Fast verify: {stats['checked']} checked, {stats['early_warnings']} warnings")
+    except Exception as e:
+        logger.error(f"Fast verify failed: {e}")
+    finally:
+        db.close()
+
+
 def _run_commodity_price_fetch():
     """원자재 가격 수집 + 급변 알림 생성."""
     from app.services.commodity_service import fetch_commodity_prices, check_commodity_alerts
@@ -350,6 +365,14 @@ def start_scheduler():
         id="news_impact_cleanup",
         replace_existing=True,
     )
+    # REQ-AI-005: 장중 빠른 검증 (1시간 간격)
+    scheduler.add_job(
+        _run_fast_verify,
+        "interval",
+        hours=1,
+        id="fast_verify",
+        replace_existing=True,
+    )
     # 종목/섹터 관계 증분 추론: 매주 일요일 04:00 KST
     scheduler.add_job(
         _run_relation_inference,
@@ -367,7 +390,8 @@ def start_scheduler():
         f"market cap every 6h, commodity price every 10 min, commodity news every 30 min, "
         f"briefing at 08:30 KST, signal verify at 18:00 KST, "
         f"impact backfill at 18:30 KST, impact cleanup at 03:00 KST, "
-        f"relation inference every Sunday 04:00 KST"
+        f"relation inference every Sunday 04:00 KST, "
+        f"fast verify every 1h"
     )
 
 

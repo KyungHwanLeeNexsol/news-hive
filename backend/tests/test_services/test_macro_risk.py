@@ -2,20 +2,16 @@
 
 매크로 리스크 키워드 감지, 슬라이딩 윈도우, 임계치 에스컬레이션,
 쿨다운 중복방지, 긍정 맥락 필터링을 검증한다.
+REQ-AI-010: detect_macro_risks가 async로 전환됨.
 """
 
+import asyncio
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
-import pytest
-
-from app.models.macro_alert import MacroAlert
-from app.models.news import NewsArticle
 from app.services.macro_risk import (
     CRITICAL_THRESHOLD,
-    RISK_KEYWORD_GROUPS,
     WARNING_THRESHOLD,
-    WINDOW_HOURS,
     _build_description,
     _build_title,
     deactivate_old_alerts,
@@ -65,7 +61,10 @@ class TestBuildDescription:
 # ---------------------------------------------------------------------------
 
 class TestDetectMacroRisks:
-    """detect_macro_risks 함수 테스트."""
+    """detect_macro_risks 함수 테스트.
+
+    REQ-AI-010: async 전환 + NLP 분류 mock으로 기존 동작 검증 유지.
+    """
 
     def _create_articles(self, db, make_news, keyword: str, count: int):
         """특정 키워드를 포함하는 뉴스 기사 N개 생성."""
@@ -77,7 +76,7 @@ class TestDetectMacroRisks:
 
     def test_no_articles_returns_empty(self, db):
         """뉴스가 없으면 빈 리스트 반환."""
-        alerts = detect_macro_risks(db)
+        alerts = asyncio.run(detect_macro_risks(db))
         assert alerts == []
 
     def test_below_threshold_no_alert(self, db, make_news):
@@ -86,27 +85,39 @@ class TestDetectMacroRisks:
         for i in range(WARNING_THRESHOLD - 1):
             make_news(title=f"전쟁 관련 뉴스 {i}")
 
-        alerts = detect_macro_risks(db)
+        alerts = asyncio.run(detect_macro_risks(db))
         assert len(alerts) == 0
 
+    @patch(
+        "app.services.macro_risk._classify_macro_severity",
+        new=AsyncMock(return_value={
+            "severity": "medium", "context_summary": "", "is_false_positive": False,
+        }),
+    )
     def test_warning_threshold_creates_alert(self, db, make_news):
         """WARNING_THRESHOLD 이상이면 warning 알림 생성."""
         for i in range(WARNING_THRESHOLD):
             make_news(title=f"전쟁 교전 관련 뉴스 {i}")
 
-        alerts = detect_macro_risks(db)
+        alerts = asyncio.run(detect_macro_risks(db))
         assert len(alerts) >= 1
 
         war_alerts = [a for a in alerts if a.keyword == "전쟁"]
         assert len(war_alerts) == 1
         assert war_alerts[0].level == "warning"
 
+    @patch(
+        "app.services.macro_risk._classify_macro_severity",
+        new=AsyncMock(return_value={
+            "severity": "critical", "context_summary": "", "is_false_positive": False,
+        }),
+    )
     def test_critical_threshold_creates_critical_alert(self, db, make_news):
         """CRITICAL_THRESHOLD 이상이면 critical 알림 생성."""
         for i in range(CRITICAL_THRESHOLD):
             make_news(title=f"전쟁 교전 포격 뉴스 {i}")
 
-        alerts = detect_macro_risks(db)
+        alerts = asyncio.run(detect_macro_risks(db))
         war_alerts = [a for a in alerts if a.keyword == "전쟁"]
         assert len(war_alerts) == 1
         assert war_alerts[0].level == "critical"
@@ -118,7 +129,7 @@ class TestDetectMacroRisks:
         make_news(title="증시 급락 후 회복세")
         make_news(title="코스피 급락 패닉셀 발생")
 
-        alerts = detect_macro_risks(db)
+        alerts = asyncio.run(detect_macro_risks(db))
         # 긍정 맥락 2개 제외되면 1개만 남아 임계치(3) 미달
         polrak_alerts = [a for a in alerts if a.keyword == "폭락"]
         assert len(polrak_alerts) == 0
@@ -128,10 +139,16 @@ class TestDetectMacroRisks:
         for i in range(WARNING_THRESHOLD):
             make_news(title=f"매장 폐쇄 관련 폭락 뉴스 {i}")
 
-        alerts = detect_macro_risks(db)
+        alerts = asyncio.run(detect_macro_risks(db))
         polrak_alerts = [a for a in alerts if a.keyword == "폭락"]
         assert len(polrak_alerts) == 0
 
+    @patch(
+        "app.services.macro_risk._classify_macro_severity",
+        new=AsyncMock(return_value={
+            "severity": "medium", "context_summary": "", "is_false_positive": False,
+        }),
+    )
     def test_cooldown_prevents_duplicate_alert(self, db, make_news, make_macro_alert):
         """쿨다운 기간 내 동일 키워드로 중복 알림 미생성."""
         # 기존 warning 알림이 존재
@@ -141,11 +158,17 @@ class TestDetectMacroRisks:
         for i in range(WARNING_THRESHOLD):
             make_news(title=f"전쟁 교전 포격 뉴스 {i}")
 
-        alerts = detect_macro_risks(db)
+        alerts = asyncio.run(detect_macro_risks(db))
         # 쿨다운 중이므로 새 알림은 생성되지 않음
         new_war_alerts = [a for a in alerts if a.keyword == "전쟁"]
         assert len(new_war_alerts) == 0
 
+    @patch(
+        "app.services.macro_risk._classify_macro_severity",
+        new=AsyncMock(return_value={
+            "severity": "critical", "context_summary": "", "is_false_positive": False,
+        }),
+    )
     def test_cooldown_upgrades_warning_to_critical(self, db, make_news, make_macro_alert):
         """쿨다운 중 기존 warning -> critical 업그레이드."""
         existing = make_macro_alert(level="warning", keyword="전쟁")
@@ -153,9 +176,24 @@ class TestDetectMacroRisks:
         for i in range(CRITICAL_THRESHOLD):
             make_news(title=f"전쟁 교전 포격 뉴스 {i}")
 
-        detect_macro_risks(db)
+        asyncio.run(detect_macro_risks(db))
         db.refresh(existing)
         assert existing.level == "critical"
+
+    @patch(
+        "app.services.macro_risk._classify_macro_severity",
+        new=AsyncMock(return_value={
+            "severity": "low", "context_summary": "시장 영향 없음", "is_false_positive": True,
+        }),
+    )
+    def test_nlp_false_positive_skips_alert(self, db, make_news):
+        """REQ-AI-010: NLP가 거짓 양성으로 판정하면 알림 미생성."""
+        for i in range(WARNING_THRESHOLD):
+            make_news(title=f"전쟁 교전 뉴스 {i}")
+
+        alerts = asyncio.run(detect_macro_risks(db))
+        war_alerts = [a for a in alerts if a.keyword == "전쟁"]
+        assert len(war_alerts) == 0
 
 
 # ---------------------------------------------------------------------------

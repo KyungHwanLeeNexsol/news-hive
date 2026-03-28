@@ -291,6 +291,62 @@ async def get_stock_impact_stats(db: Session, stock_id: int, days: int = 30) -> 
     }
 
 
+def get_sector_news_impact_stats(db: Session, sector_id: int, days: int = 30) -> dict:
+    """섹터별 뉴스 임팩트 통계를 산출한다.
+
+    Args:
+        db: SQLAlchemy 세션
+        sector_id: 섹터 ID
+        days: 통계 기간 (기본 30일)
+
+    Returns:
+        {
+            "total_articles": 분석 대상 뉴스 수,
+            "avg_return_1d": 평균 1일 수익률,
+            "avg_return_5d": 평균 5일 수익률,
+            "win_rate": 양수 수익률 비율 (%),
+            "sample_sufficient": 10건 이상 여부,
+        }
+    """
+    from app.models.news_relation import NewsStockRelation
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+    # 해당 섹터 종목들의 news_price_impact 조회
+    impacts = (
+        db.query(NewsPriceImpact)
+        .join(NewsStockRelation, NewsPriceImpact.relation_id == NewsStockRelation.id)
+        .filter(
+            NewsStockRelation.sector_id == sector_id,
+            NewsPriceImpact.created_at >= cutoff,
+            NewsPriceImpact.return_5d_pct.isnot(None),
+        )
+        .all()
+    )
+
+    if not impacts:
+        return {
+            "total_articles": 0,
+            "avg_return_1d": 0.0,
+            "avg_return_5d": 0.0,
+            "win_rate": 50.0,
+            "sample_sufficient": False,
+        }
+
+    total = len(impacts)
+    returns_1d = [i.return_1d_pct for i in impacts if i.return_1d_pct is not None]
+    returns_5d = [i.return_5d_pct for i in impacts if i.return_5d_pct is not None]
+    wins = sum(1 for r in returns_5d if r > 0)
+
+    return {
+        "total_articles": total,
+        "avg_return_1d": round(sum(returns_1d) / len(returns_1d), 2) if returns_1d else 0.0,
+        "avg_return_5d": round(sum(returns_5d) / len(returns_5d), 2) if returns_5d else 0.0,
+        "win_rate": round(wins / len(returns_5d) * 100, 1) if returns_5d else 50.0,
+        "sample_sufficient": total >= 10,
+    }
+
+
 async def cleanup_old_impacts(db: Session) -> int:
     """90일 이상 된 impact 레코드를 삭제한다 (REQ-NPI-016).
 
