@@ -2,6 +2,8 @@
 
 과거 발행된 FundSignal의 시그널 방향(buy/sell)이 실제 주가 변동과
 일치하는지 검증하고, 적중률 통계를 산출한다.
+REQ-AI-003: 실패한 시그널의 오류 패턴을 AI로 분류한다.
+REQ-AI-004: 과거 적중률 기반 Bayesian 신뢰도 보정을 수행한다.
 """
 
 import logging
@@ -13,6 +15,15 @@ from app.models.fund_signal import FundSignal
 from app.models.stock import Stock
 
 logger = logging.getLogger(__name__)
+
+# REQ-AI-003: 허용되는 오류 카테고리 목록
+_VALID_ERROR_CATEGORIES = frozenset({
+    "macro_shock",
+    "supply_reversal",
+    "earnings_miss",
+    "sector_contagion",
+    "technical_breakdown",
+})
 
 
 async def _get_current_price(stock_code: str) -> int | None:
@@ -35,6 +46,53 @@ async def _get_current_price(stock_code: str) -> int | None:
         pass
 
     return None
+
+
+async def _classify_error(signal: FundSignal, stock_name: str) -> str | None:
+    """실패한 시그널의 오류 패턴을 AI로 분류한다.
+
+    Args:
+        signal: 실패한 FundSignal (is_correct=False)
+        stock_name: 종목명
+
+    Returns:
+        오류 카테고리 문자열 또는 None (분류 실패 시)
+    """
+    from app.services.ai_client import ask_ai
+
+    prompt = f"""투자 시그널이 실패한 원인을 분류해주세요.
+
+시그널 정보:
+- 종목: {stock_name}
+- 시그널 유형: {signal.signal} (confidence: {signal.confidence:.2f})
+- 시그널 발행 시 주가: {signal.price_at_signal}원
+- 5일 후 주가: {signal.price_after_5d}원
+- 수익률: {signal.return_pct}%
+
+다음 5가지 카테고리 중 하나만 영어로 응답해주세요 (카테고리명만 출력):
+- macro_shock: 거시경제 충격 (금리, 환율, 글로벌 이벤트 등)
+- supply_reversal: 수급 반전 (외국인/기관 매매 방향 전환)
+- earnings_miss: 실적 미달 (예상 대비 실적 부진)
+- sector_contagion: 섹터 전이 (동종 업종 악재 확산)
+- technical_breakdown: 기술적 이탈 (지지선/저항선 돌파 실패)"""
+
+    try:
+        response = await ask_ai(prompt, max_retries=2)
+        if not response:
+            return None
+
+        # AI 응답에서 카테고리 추출
+        category = response.strip().lower().replace(" ", "_")
+        # 응답에 유효한 카테고리가 포함되어 있는지 확인
+        for valid in _VALID_ERROR_CATEGORIES:
+            if valid in category:
+                return valid
+
+        logger.warning("AI가 유효하지 않은 오류 카테고리를 반환: %s", response)
+        return None
+    except Exception:
+        logger.exception("오류 패턴 분류 중 예외 발생")
+        return None
 
 
 async def verify_signals(db: Session) -> dict:
@@ -115,6 +173,12 @@ async def verify_signals(db: Session) -> dict:
             elif signal.signal == "sell":
                 signal.is_correct = price_change < 0  # 매도 시그널 → 주가 하락이면 적중
 
+            # REQ-AI-003: 실패한 시그널의 오류 패턴 분류
+            if signal.is_correct is False:
+                error_cat = await _classify_error(signal, stock.name)
+                if error_cat:
+                    signal.error_category = error_cat
+
             signal.verified_at = now
             stats["verified"] += 1
             updated = True
@@ -187,6 +251,12 @@ def get_accuracy_stats(db: Session, days: int = 30) -> dict:
                 "accuracy": round(sum(1 for r in results if r) / len(results) * 100, 1),
             }
 
+    # REQ-AI-003: 오류 패턴 분포
+    error_distribution: dict[str, int] = {}
+    failed = [s for s in verified if s.is_correct is False and s.error_category]
+    for s in failed:
+        error_distribution[s.error_category] = error_distribution.get(s.error_category, 0) + 1
+
     return {
         "total": total,
         "correct": correct,
@@ -195,4 +265,51 @@ def get_accuracy_stats(db: Session, days: int = 30) -> dict:
         "buy_accuracy": round(buy_correct / len(buy_signals) * 100, 1) if buy_signals else 0.0,
         "sell_accuracy": round(sell_correct / len(sell_signals) * 100, 1) if sell_signals else 0.0,
         "by_confidence": by_confidence,
+        "error_distribution": error_distribution,
     }
+
+
+def calibrate_confidence(raw_confidence: float, accuracy_stats: dict) -> float:
+    """과거 적중률 기반 Bayesian 신뢰도 보정.
+
+    AI가 출력한 원시 신뢰도를 과거 적중률 데이터로 보정하여
+    과신/과소평가를 교정한다.
+
+    Args:
+        raw_confidence: AI가 출력한 원시 신뢰도 (0.0~1.0)
+        accuracy_stats: get_accuracy_stats()의 반환값
+
+    Returns:
+        보정된 신뢰도 (0.1~0.95)
+    """
+    by_confidence = accuracy_stats.get("by_confidence", {})
+    overall_accuracy = accuracy_stats.get("accuracy", 0.0)
+
+    # 과거 데이터가 없으면 원시 신뢰도 그대로 반환
+    if not by_confidence or accuracy_stats.get("total", 0) == 0:
+        return raw_confidence
+
+    # 신뢰도 구간 결정 (high: 0.7+, medium: 0.4~0.7, low: ~0.4)
+    if raw_confidence >= 0.7:
+        bucket_key = "high"
+    elif raw_confidence >= 0.4:
+        bucket_key = "medium"
+    else:
+        bucket_key = "low"
+
+    bucket = by_confidence.get(bucket_key)
+    if not bucket:
+        # 해당 구간에 과거 데이터가 없으면 원시 신뢰도 반환
+        return raw_confidence
+
+    bucket_accuracy = bucket["accuracy"]  # 백분율 (0~100)
+
+    # Bayesian 보정 공식
+    # calibrated = raw * (bucket_accuracy / 100) + (1 - raw) * overall_accuracy / 100
+    calibrated = (
+        raw_confidence * (bucket_accuracy / 100.0)
+        + (1.0 - raw_confidence) * (overall_accuracy / 100.0)
+    )
+
+    # [0.1, 0.95] 범위로 클램핑
+    return max(0.1, min(0.95, calibrated))

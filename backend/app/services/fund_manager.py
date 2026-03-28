@@ -126,8 +126,33 @@ def _gather_sentiment_trend(db: Session, stock_id: int | None = None, sector_id:
     }
 
 
+def _calculate_news_time_weight(published_at: datetime | None) -> float:
+    """발행 시간 기반 뉴스 가중치 계산.
+
+    - 0~24시간: 가중치 1.0
+    - 24~48시간: 가중치 0.7
+    - 48~72시간: 가중치 0.4
+    - 72시간 초과: 0.0 (프롬프트에서 제외)
+    """
+    if not published_at:
+        return 0.4  # 발행일 불명 시 기본 가중치
+    now = datetime.now(timezone.utc)
+    # published_at에 tzinfo가 없으면 UTC로 간주
+    if published_at.tzinfo is None:
+        published_at = published_at.replace(tzinfo=timezone.utc)
+    hours_ago = (now - published_at).total_seconds() / 3600
+    if hours_ago <= 24:
+        return 1.0
+    elif hours_ago <= 48:
+        return 0.7
+    elif hours_ago <= 72:
+        return 0.4
+    else:
+        return 0.0
+
+
 def _gather_stock_news(db: Session, stock_id: int, days: int = 3) -> list[dict]:
-    """Gather recent news related to a stock (본문 포함, 토큰 절약)."""
+    """종목 관련 최근 뉴스 수집 (시간 가중치 적용, 본문 포함, 토큰 절약)."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     relations = (
         db.query(NewsStockRelation, NewsArticle)
@@ -142,11 +167,16 @@ def _gather_stock_news(db: Session, stock_id: int, days: int = 3) -> list[dict]:
     )
     results = []
     for rel, article in relations:
+        weight = _calculate_news_time_weight(article.published_at)
+        # 72시간 초과 뉴스는 프롬프트에서 제외
+        if weight <= 0.0:
+            continue
         entry = {
-            "title": article.title,
+            "title": f"[가중치: {weight}] {article.title}",
             "sentiment": article.sentiment or "neutral",
             "date": article.published_at.strftime("%m/%d") if article.published_at else "",
             "relevance": rel.relevance or "direct",
+            "weight": weight,
         }
         # 본문 핵심 내용 포함 (토큰 절약: 200자로 제한)
         if article.content:
@@ -154,11 +184,13 @@ def _gather_stock_news(db: Session, stock_id: int, days: int = 3) -> list[dict]:
         elif article.ai_summary:
             entry["content"] = article.ai_summary[:150]
         results.append(entry)
+    # 가중치 높은 순으로 정렬
+    results.sort(key=lambda x: x["weight"], reverse=True)
     return results
 
 
 def _gather_sector_news(db: Session, sector_id: int, days: int = 3) -> list[dict]:
-    """Gather recent news related to a sector (본문 포함, 토큰 절약)."""
+    """섹터 관련 최근 뉴스 수집 (시간 가중치 적용, 본문 포함, 토큰 절약)."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     relations = (
         db.query(NewsStockRelation, NewsArticle)
@@ -173,15 +205,22 @@ def _gather_sector_news(db: Session, sector_id: int, days: int = 3) -> list[dict
     )
     results = []
     for rel, article in relations:
+        weight = _calculate_news_time_weight(article.published_at)
+        # 72시간 초과 뉴스는 프롬프트에서 제외
+        if weight <= 0.0:
+            continue
         entry = {
-            "title": article.title,
+            "title": f"[가중치: {weight}] {article.title}",
             "sentiment": article.sentiment or "neutral",
+            "weight": weight,
         }
         if article.content:
             entry["content"] = article.content[:200]
         elif article.ai_summary:
             entry["content"] = article.ai_summary[:150]
         results.append(entry)
+    # 가중치 높은 순으로 정렬
+    results.sort(key=lambda x: x["weight"], reverse=True)
     return results
 
 
@@ -924,18 +963,24 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
 - "매수" 또는 "적극매수"는 **상승 추세가 확인된 종목만** 가능합니다.
 - 단순히 "많이 떨어져서 싸다"는 매수 근거가 아닙니다. 이것은 "떨어지는 칼날 잡기"입니다.
 - **매수 추천 필수 조건 (모두 충족해야 함):**
-  (1) change_rate(당일 등락률)이 0% 이상이거나, 최소 -1% 이내일 것
+  (1) change_rate(당일 등락률)이 -3% 이상일 것 (단, -1% 이하는 "조건부 매수 후보"로 분류)
   (2) price_5d_trend(5일 추세)가 양수이거나 하락 후 반등 신호가 있을 것
   (3) 외국인 또는 기관 순매수가 양수일 것 (foreign_net_5d 또는 institution_net_5d > 0)
   (4) 밸류에이션 매력이 있을 것 (PER이 업종 평균 이하 또는 PBR 1배 미만)
-- 위 4가지 중 3가지 이상 충족하지 못하면 "관망"으로 설정하세요.
+- 위 4가지 중 3가지 이상 충족하면 매수 후보로 포함하세요. 4가지 모두 충족하면 "적극매수" 후보, 3가지 충족하면 "조건부 매수" 후보로 분류하세요. 2가지 이하 충족 시 "관망"으로 설정하세요.
 
 ## 절대 금지 사항
-1. **당일 -3% 이상 하락 종목 → 무조건 "관망" 또는 "회피"**. 급락 중 매수 추천은 투자자에게 큰 손실을 줍니다.
+1. **당일 -5% 이상 하락 종목 → 무조건 "관망" 또는 "회피"**. -3%~-5% 구간은 반등 가능성을 수급과 기술적 지표로 판단. 급락 중 매수 추천은 투자자에게 큰 손실을 줍니다.
 2. **하락 추세 종목(5일, 20일 모두 마이너스) + 수급 악화(외국인/기관 매도) → "회피"**
 3. 뉴스에 언급됐다는 이유만으로 추천 금지. 밸류에이션 + 수급 + 추세를 종합 판단.
 4. PER이 업종 평균 대비 50% 이상 높거나 ROE 5% 미만 → "관망" 또는 "회피".
 5. 하락장에서 함부로 매수 추천 금지. 시장 전체가 약세이면 대부분 "관망"이 맞습니다.
+
+## 조건부 매수 후보 처리
+- 4가지 조건 중 3가지만 충족하는 종목은 "조건부 매수"로 표시하세요.
+- 미충족 조건을 명시하세요 (예: "[수급 미충족] 외국인/기관 순매도 중이나, 밸류에이션/추세/등락률 조건 충족")
+- 조건부 매수의 confidence는 0.5~0.65 범위로 설정하세요.
+- 4가지 모두 충족 시 confidence 0.7 이상 가능.
 
 ## 기타 규칙
 6. stock_picks는 반드시 후보 종목 데이터의 수치를 직접 인용하여 분석. 데이터 없이 추측 금지.

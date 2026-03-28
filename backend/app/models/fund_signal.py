@@ -33,4 +33,8 @@ class FundSignal(Base):
     return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)  # 5일 수익률 (%)
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # 검증 완료 시점
 
+    # REQ-AI-003: 시그널 실패 원인 분류
+    # 값: macro_shock, supply_reversal, earnings_miss, sector_contagion, technical_breakdown
+    error_category: Mapped[str | None] = mapped_column(String(30), nullable=True)
+
     stock = relationship("Stock")
