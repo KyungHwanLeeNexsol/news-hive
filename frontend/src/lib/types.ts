@@ -313,3 +313,47 @@ export interface CommodityNewsRelation {
 export interface CommodityNewsArticle extends NewsArticle {
   commodity_relations: CommodityNewsRelation[];
 }
+
+// 페이퍼 트레이딩
+export interface PaperTradingStats {
+  initial_capital: number;
+  current_cash: number;
+  total_trades: number;
+  closed_trades: number;
+  open_positions: number;
+  win_rate: number;
+  avg_return: number;
+  total_pnl: number;
+  cumulative_return: number;
+  sharpe_ratio: number;
+  mdd: number;
+  sharpe_warning: boolean;
+}
+
+export interface PaperPosition {
+  stock_name: string;
+  entry_price: number;
+  quantity: number;
+  target_price: number;
+  stop_loss: number;
+  entry_date: string;
+  invest_amount: number;
+}
+
+export interface PaperTrade {
+  stock_name: string;
+  entry_price: number;
+  exit_price: number;
+  pnl: number;
+  return_pct: number;
+  exit_reason: string;
+  entry_date: string;
+  exit_date: string;
+}
+
+export interface PaperSnapshot {
+  date: string;
+  total_value: number;
+  cumulative_return_pct: number;
+  daily_return_pct: number;
+}

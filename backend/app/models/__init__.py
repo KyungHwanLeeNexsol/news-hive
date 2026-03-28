@@ -10,6 +10,7 @@ from app.models.commodity import Commodity, CommodityPrice, SectorCommodityRelat
 from app.models.news_commodity_relation import NewsCommodityRelation
 from app.models.stock_relation import StockRelation
 from app.models.prompt_version import PromptVersion, PromptABResult
+from app.models.virtual_portfolio import VirtualPortfolio, VirtualTrade, PortfolioSnapshot
 
 __all__ = [
     "Sector", "Stock", "NewsArticle", "NewsStockRelation",
@@ -17,4 +18,5 @@ __all__ = [
     "Commodity", "CommodityPrice", "SectorCommodityRelation",
     "NewsCommodityRelation", "StockRelation",
     "PromptVersion", "PromptABResult",
+    "VirtualPortfolio", "VirtualTrade", "PortfolioSnapshot",
 ]

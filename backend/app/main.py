@@ -115,7 +115,7 @@ app.add_middleware(
 )
 
 # Import and register routers
-from app.routers import sectors, stocks, news, disclosures, alerts, events, fund_manager, auth, commodities  # noqa: E402
+from app.routers import sectors, stocks, news, disclosures, alerts, events, fund_manager, auth, commodities, paper_trading  # noqa: E402
 
 app.include_router(sectors.router)
 app.include_router(stocks.router)
@@ -127,6 +127,7 @@ app.include_router(fund_manager.router)
 app.include_router(auth.router)
 app.include_router(commodities.router)
 app.include_router(commodities.sector_commodity_router)
+app.include_router(paper_trading.router)
 
 
 @app.api_route("/api/health", methods=["GET", "HEAD"])

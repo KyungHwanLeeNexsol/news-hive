@@ -823,6 +823,14 @@ async def analyze_stock(
     db.commit()
     db.refresh(signal)
     logger.info(f"Fund signal created: {stock.name} → {signal.signal} (confidence: {signal.confidence})")
+
+    # REQ-AI-013: 페이퍼 트레이딩 자동 매매
+    try:
+        from app.services.paper_trading import execute_signal_trade
+        await execute_signal_trade(db, signal)
+    except Exception as e:
+        logger.warning("페이퍼 트레이딩 자동 매매 실패: %s", e)
+
     return signal
 
 

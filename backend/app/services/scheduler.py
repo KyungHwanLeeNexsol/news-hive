@@ -279,6 +279,34 @@ def _run_relation_inference():
         db.close()
 
 
+def _run_exit_check():
+    """장중 청산 조건 확인 (1시간 간격)."""
+    from app.services.paper_trading import check_exit_conditions
+
+    db = SessionLocal()
+    try:
+        stats = asyncio.run(check_exit_conditions(db))
+        if stats["closed"]:
+            logger.info(f"Paper trading exit check: {stats['closed']} closed ({stats['reasons']})")
+    except Exception as e:
+        logger.error(f"Paper trading exit check failed: {e}")
+    finally:
+        db.close()
+
+
+def _run_portfolio_snapshot():
+    """일말 포트폴리오 스냅샷 (매일 16:00 KST)."""
+    from app.services.paper_trading import take_daily_snapshot
+
+    db = SessionLocal()
+    try:
+        asyncio.run(take_daily_snapshot(db))
+    except Exception as e:
+        logger.error(f"Portfolio snapshot failed: {e}")
+    finally:
+        db.close()
+
+
 def start_scheduler():
     """Start the background news crawl scheduler."""
     interval = settings.NEWS_CRAWL_INTERVAL_MINUTES
@@ -384,6 +412,23 @@ def start_scheduler():
         id="relation_inference",
         replace_existing=True,
     )
+    # REQ-AI-013: 페이퍼 트레이딩 청산 체크 (장중 1시간 간격)
+    scheduler.add_job(
+        _run_exit_check,
+        "interval",
+        hours=1,
+        id="paper_exit_check",
+        replace_existing=True,
+    )
+    # REQ-AI-013: 포트폴리오 일일 스냅샷 (매일 16:00 KST = UTC 07:00)
+    scheduler.add_job(
+        _run_portfolio_snapshot,
+        "cron",
+        hour=7,
+        minute=0,
+        id="portfolio_snapshot",
+        replace_existing=True,
+    )
     scheduler.start()
     logger.info(
         f"Scheduler started: crawling every {interval} min, DART every 30 min, "
@@ -391,7 +436,8 @@ def start_scheduler():
         f"briefing at 08:30 KST, signal verify at 18:00 KST, "
         f"impact backfill at 18:30 KST, impact cleanup at 03:00 KST, "
         f"relation inference every Sunday 04:00 KST, "
-        f"fast verify every 1h"
+        f"fast verify every 1h, paper exit check every 1h, "
+        f"portfolio snapshot at 16:00 KST"
     )
 
 
