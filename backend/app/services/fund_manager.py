@@ -802,26 +802,31 @@ async def analyze_stock(
         price_at_signal=price_at_signal,
     )
 
-    # REQ-AI-006: 다중 팩터 스코어링
-    factor_json, comp_score = build_factor_scores_json(
-        news_data=news,
-        market_data=market_data or {},
-        financials=financial_data or {},
-        impact_stats=impact_stats,
-    )
-    signal.factor_scores = factor_json
-    signal.composite_score = comp_score
-
-    # REQ-AI-008: 프롬프트 버전 기록
-    signal.prompt_version = current_prompt_version
-
-    # REQ-AI-004: Bayesian confidence 보정
+    # REQ-AI-004: Bayesian confidence 보정 (컬럼 없어도 안전)
     if accuracy["total"] >= 10:
         signal.confidence = calibrate_confidence(signal.confidence, accuracy)
 
     db.add(signal)
     db.commit()
     db.refresh(signal)
+
+    # Phase B 필드 할당 (마이그레이션 미적용 시에도 안전하게 처리)
+    try:
+        # REQ-AI-006: 다중 팩터 스코어링
+        factor_json, comp_score = build_factor_scores_json(
+            news_data=news,
+            market_data=market_data or {},
+            financials=financial_data or {},
+            impact_stats=impact_stats,
+        )
+        signal.factor_scores = factor_json
+        signal.composite_score = comp_score
+        # REQ-AI-008: 프롬프트 버전 기록
+        signal.prompt_version = current_prompt_version
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.warning("Phase B 필드 저장 실패 (마이그레이션 미적용 가능): %s", e)
     logger.info(f"Fund signal created: {stock.name} → {signal.signal} (confidence: {signal.confidence})")
 
     # REQ-AI-013: 페이퍼 트레이딩 자동 매매
