@@ -418,6 +418,38 @@ async def _gather_market_data(stock_code: str) -> dict:
         if ta.volatility is not None:
             result["volatility"] = round(ta.volatility, 2)
 
+        # REQ-AI-014: 멀티 타임프레임 분석용 추가 데이터
+        # 5일 MA 기울기 (%)
+        if ta.sma_5 is not None and len(prices) >= 6:
+            sma_5_prev = sum(prices[1:6]) / 5
+            result["sma_5_slope"] = round((ta.sma_5 - sma_5_prev) / sma_5_prev * 100, 4) if sma_5_prev else 0
+        # 20일 MA 기울기 (%)
+        all_prices = [p.close for p in price_history if p.close > 0]
+        if ta.sma_20 is not None and len(all_prices) >= 21:
+            sma_20_prev = sum(all_prices[1:21]) / 20
+            result["sma_20_slope"] = round((ta.sma_20 - sma_20_prev) / sma_20_prev * 100, 4) if sma_20_prev else 0
+        # 현재가 vs 60일 MA 비율 (%)
+        if ta.sma_60 is not None and current_price:
+            result["price_vs_sma60"] = round((current_price - ta.sma_60) / ta.sma_60 * 100, 2)
+        # RSI 값 전달 (factor_scoring에서 사용)
+        if ta.rsi_14 is not None:
+            result["rsi"] = ta.rsi_14
+        # MACD 크로스 전달
+        if ta.macd_cross:
+            macd_map = {"골든크로스": "golden_cross", "데드크로스": "dead_cross"}
+            result["macd_signal"] = macd_map.get(ta.macd_cross, "")
+        # SMA 배열 전달
+        if ta.ma_alignment:
+            align_map = {"정배열": "bullish", "역배열": "bearish"}
+            result["sma_alignment"] = align_map.get(ta.ma_alignment, "")
+        # 볼린저 밴드 위치 전달
+        if ta.bb_position:
+            bb_map = {"하단돌파": "below_lower", "상단돌파": "above_upper"}
+            result["bollinger_position"] = bb_map.get(ta.bb_position, "")
+        # 거래량 비율 전달
+        if ta.volume_ratio is not None:
+            result["volume_ratio"] = ta.volume_ratio
+
     # 외국인/기관 수급 데이터 (20일 → 5일/10일/20일 분석)
     if investor_data and not isinstance(investor_data, Exception) and investor_data:
         # 기간별 수급 합산
@@ -823,6 +855,26 @@ async def analyze_stock(
         signal.composite_score = comp_score
         # REQ-AI-008: 프롬프트 버전 기록
         signal.prompt_version = current_prompt_version
+
+        # REQ-AI-014: 멀티 타임프레임 추세 정렬 저장
+        from app.services.factor_scoring import analyze_multi_timeframe
+        mtf = analyze_multi_timeframe(market_data or {})
+        signal.trend_alignment = mtf["trend_alignment"]
+        # REQ-AI-014: divergent 추세 시 confidence 감산
+        if mtf["confidence_adjustment"] != 0:
+            signal.confidence = max(0.0, min(1.0, signal.confidence + mtf["confidence_adjustment"]))
+
+        # REQ-AI-020: 시장 변동성 레벨 저장
+        try:
+            from app.services.market_context import get_market_volatility
+            vol_info = await get_market_volatility()
+            signal.volatility_level = vol_info["volatility_level"]
+            # 극단적 변동성 시 confidence 추가 감산
+            if vol_info["confidence_adjustment"] != 0:
+                signal.confidence = max(0.0, min(1.0, signal.confidence + vol_info["confidence_adjustment"]))
+        except Exception as vol_e:
+            logger.warning("시장 변동성 레벨 계산 실패 (시그널 생성 계속): %s", vol_e)
+
         db.commit()
     except Exception as e:
         db.rollback()
@@ -919,6 +971,15 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
     candidate_data = await _gather_pick_candidates(db, recent_news)
     candidate_text = json.dumps(candidate_data, ensure_ascii=False, indent=2) if candidate_data else '후보 종목 데이터 없음'
 
+    # REQ-AI-020: 시장 변동성 레벨 (브리핑 상단 표시)
+    volatility_text = ""
+    try:
+        from app.services.market_context import get_market_volatility, format_volatility_for_briefing
+        vol_info = await get_market_volatility()
+        volatility_text = "\n## 시장 변동성 현황\n" + format_volatility_for_briefing(vol_info) + "\n"
+    except Exception as vol_e:
+        logger.warning("브리핑용 시장 변동성 데이터 수집 실패 (브리핑 계속 진행): %s", vol_e)
+
     # REQ-NPI-014~015: 후보 종목별 뉴스-가격 반응 통계 주입
     news_impact_text = ""
     try:
@@ -992,7 +1053,7 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
 - dividend_yield: 배당수익률(%)
 
 {candidate_text}
-{news_impact_text}
+{volatility_text}{news_impact_text}
 반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트 없이 JSON만 출력하세요.
 {{
   "market_overview": "오늘 시장의 핵심 이슈를 7-10문장으로 상세 분석. (1) 글로벌 매크로 환경(금리, 환율, 유가, 지정학 리스크), (2) 국내 시장 흐름(코스피/코스닥 동향, 거래대금, 외국인/기관 동향), (3) 핵심 뉴스 2-3개를 구체적으로 인용하며 시장 영향 분석, (4) 당일 시장 전망. 일반 텍스트로 작성.",

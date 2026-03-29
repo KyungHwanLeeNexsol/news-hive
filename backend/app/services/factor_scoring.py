@@ -51,6 +51,88 @@ def compute_news_sentiment_score(
     return max(0, min(100, int(score)))
 
 
+def analyze_multi_timeframe(market_data: dict) -> dict:
+    """REQ-AI-014: 5일/20일/60일 멀티 타임프레임 추세 분석.
+
+    Args:
+        market_data: 기술적 지표 데이터
+            - sma_5_slope: 5일 이동평균 기울기 (%)
+            - rsi: RSI(14)
+            - sma_20_slope: 20일 이동평균 기울기 (%)
+            - macd_signal: MACD 신호 (golden_cross / dead_cross)
+            - price_vs_sma60: 현재가와 60일 이동평균 대비 비율 (%, 양수=위, 음수=아래)
+
+    Returns:
+        {"trend_alignment": "aligned"|"divergent"|"mixed",
+         "score_adjustment": int,
+         "confidence_adjustment": float,
+         "short_term": "up"|"down"|"neutral",
+         "mid_term": "up"|"down"|"neutral",
+         "long_term": "up"|"down"|"neutral"}
+    """
+    result = {
+        "trend_alignment": "mixed",
+        "score_adjustment": 0,
+        "confidence_adjustment": 0.0,
+        "short_term": "neutral",
+        "mid_term": "neutral",
+        "long_term": "neutral",
+    }
+
+    # 단기 (5일): 5일 MA 기울기 + RSI(14)
+    sma_5_slope = market_data.get("sma_5_slope")
+    rsi = market_data.get("rsi")
+    if sma_5_slope is not None and sma_5_slope > 0:
+        result["short_term"] = "up"
+    elif sma_5_slope is not None and sma_5_slope < 0:
+        result["short_term"] = "down"
+    # RSI가 있으면 보조 확인
+    if rsi is not None:
+        if rsi < 30:
+            # 과매도 → 반등 기대 → 상승으로 보정
+            result["short_term"] = "up"
+        elif rsi > 70:
+            result["short_term"] = "down"
+
+    # 중기 (20일): 20일 MA 기울기 + MACD 신호
+    sma_20_slope = market_data.get("sma_20_slope")
+    macd_sig = market_data.get("macd_signal")
+    if sma_20_slope is not None and sma_20_slope > 0:
+        result["mid_term"] = "up"
+    elif sma_20_slope is not None and sma_20_slope < 0:
+        result["mid_term"] = "down"
+    # MACD 보조 확인
+    if macd_sig == "golden_cross":
+        result["mid_term"] = "up"
+    elif macd_sig == "dead_cross":
+        result["mid_term"] = "down"
+
+    # 장기 (60일): 현재가 vs 60일 MA 위치
+    price_vs_sma60 = market_data.get("price_vs_sma60")
+    if price_vs_sma60 is not None and price_vs_sma60 > 0:
+        result["long_term"] = "up"
+    elif price_vs_sma60 is not None and price_vs_sma60 < 0:
+        result["long_term"] = "down"
+
+    # 추세 정렬 판단
+    directions = [result["short_term"], result["mid_term"], result["long_term"]]
+    non_neutral = [d for d in directions if d != "neutral"]
+
+    if len(non_neutral) >= 2 and all(d == non_neutral[0] for d in non_neutral):
+        # 2개 이상 동일 방향 (neutral 제외) → aligned
+        result["trend_alignment"] = "aligned"
+        result["score_adjustment"] = 15
+    elif (result["short_term"] == "up" and result["long_term"] == "down") or \
+         (result["short_term"] == "down" and result["long_term"] == "up"):
+        # 단기와 장기가 반대 → divergent
+        result["trend_alignment"] = "divergent"
+        result["confidence_adjustment"] = -0.1
+    else:
+        result["trend_alignment"] = "mixed"
+
+    return result
+
+
 def compute_technical_score(market_data: dict) -> int:
     """기술적 지표 기반 점수 (0-100).
 
@@ -103,7 +185,36 @@ def compute_technical_score(market_data: dict) -> int:
     elif bollinger_pos == "above_upper":
         score -= 10  # 상한 이탈 = 조정 기대
 
+    # REQ-AI-014: 멀티 타임프레임 추세 정렬 가산
+    mtf = analyze_multi_timeframe(market_data)
+    score += mtf["score_adjustment"]
+
     return max(0, min(100, int(score)))
+
+
+def detect_volume_spike(market_data: dict) -> dict:
+    """REQ-AI-015: 거래량 급증 감지.
+
+    일간 거래량이 20일 평균의 2배 이상이면 volume_spike = True.
+    volume_spike + 가격 상승 → supply_demand 점수 +10.
+
+    Args:
+        market_data: volume_ratio, price_5d_trend 포함
+
+    Returns:
+        {"volume_spike": bool, "score_adjustment": int}
+    """
+    volume_ratio = market_data.get("volume_ratio", 1.0)
+    price_trend = market_data.get("price_5d_trend", 0)
+
+    volume_spike = volume_ratio >= 2.0
+    score_adj = 0
+
+    if volume_spike and price_trend > 0:
+        # 거래량 급증 + 가격 상승 → 강한 수급 신호
+        score_adj = 10
+
+    return {"volume_spike": volume_spike, "score_adjustment": score_adj}
 
 
 def compute_supply_demand_score(market_data: dict) -> int:
@@ -135,10 +246,11 @@ def compute_supply_demand_score(market_data: dict) -> int:
     elif momentum == "strong_sell":
         score -= 10
 
-    # 거래량 급증
-    volume_ratio = market_data.get("volume_ratio", 1.0)
-    if volume_ratio > 2.0:
-        score += 10  # 거래량 2배 이상
+    # REQ-AI-015: 거래량 급증 감지 (기존 volume_ratio 가산을 통합)
+    vs = detect_volume_spike(market_data)
+    if vs["volume_spike"]:
+        score += 10  # 거래량 2배 이상 기본 가산
+        score += vs["score_adjustment"]  # 가격 상승 시 추가 +10
 
     return max(0, min(100, int(score)))
 
@@ -236,5 +348,18 @@ def build_factor_scores_json(
         "supply_demand": compute_supply_demand_score(market_data),
         "valuation": compute_valuation_score(financials),
     }
+
+    # composite_score는 4-factor 점수만으로 계산 (mtf/volume_spike는 이미 내부에서 반영됨)
     composite = compute_composite_score(scores, weights)
+
+    # REQ-AI-014: 멀티 타임프레임 분석 결과 포함 (compute_technical_score 내부와 동일 결과 재사용)
+    mtf = analyze_multi_timeframe(market_data)
+    scores["trend_alignment"] = mtf["trend_alignment"]
+    scores["short_term"] = mtf["short_term"]
+    scores["mid_term"] = mtf["mid_term"]
+    scores["long_term"] = mtf["long_term"]
+
+    # REQ-AI-015: 거래량 급증 감지 결과 포함
+    vs = detect_volume_spike(market_data)
+    scores["volume_spike"] = vs["volume_spike"]
     return json.dumps(scores), composite

@@ -49,4 +49,9 @@ class FundSignal(Base):
     # REQ-AI-008: A/B 테스트
     prompt_version: Mapped[str | None] = mapped_column(String(50), nullable=True)  # 프롬프트 버전
 
+    # REQ-AI-014: 멀티 타임프레임 추세 정렬 (aligned / divergent / mixed)
+    trend_alignment: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # REQ-AI-020: 시장 변동성 레벨 (low / normal / high / extreme)
+    volatility_level: Mapped[str | None] = mapped_column(String(10), nullable=True)
+
     stock = relationship("Stock")
