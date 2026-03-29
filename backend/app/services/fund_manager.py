@@ -10,7 +10,7 @@ import logging
 import re
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.config import settings
 from app.models.daily_briefing import DailyBriefing
@@ -349,7 +349,13 @@ async def _gather_pick_candidates(db: Session, recent_news: list) -> list[dict]:
     if not top_stock_ids:
         return []
 
-    stocks = db.query(Stock).filter(Stock.id.in_(top_stock_ids)).all()
+    # N+1 쿼리 방지: Stock과 Sector를 한번에 로드
+    stocks = (
+        db.query(Stock)
+        .options(selectinload(Stock.sector))
+        .filter(Stock.id.in_(top_stock_ids))
+        .all()
+    )
     stock_map = {s.id: s for s in stocks}
 
     # 시세 + 재무 데이터 병렬 수집
@@ -371,7 +377,8 @@ async def _gather_pick_candidates(db: Session, recent_news: list) -> list[dict]:
             if isinstance(financial_data, Exception):
                 financial_data = {}
 
-            sector = db.query(Sector).filter(Sector.id == stock.sector_id).first()
+            # eager loading된 관계 사용 (루프 내 DB 쿼리 제거)
+            sector = stock.sector
 
             candidate = {
                 "name": stock.name,

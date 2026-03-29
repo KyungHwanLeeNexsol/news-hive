@@ -369,20 +369,20 @@ def start_scheduler():
         replace_existing=True,
         next_run_time=datetime.now(),
     )
-    # DART disclosure crawl every 30 minutes (run immediately on startup too)
+    # DART 공시 크롤링 (설정 기반 주기, 시작 시 즉시 실행)
     scheduler.add_job(
         _run_dart_crawl,
         "interval",
-        minutes=30,
+        minutes=settings.DART_CRAWL_INTERVAL_MINUTES,
         id="dart_crawl",
         replace_existing=True,
         next_run_time=datetime.now(),
     )
-    # Market cap update every 6 hours (for stock list sorting order)
+    # 시가총액 업데이트 (설정 기반 주기)
     scheduler.add_job(
         _update_market_caps,
         "interval",
-        hours=6,
+        hours=settings.MARKET_CAP_UPDATE_HOURS,
         id="market_cap_update",
         replace_existing=True,
         next_run_time=datetime.now(),
@@ -502,8 +502,10 @@ def start_scheduler():
     )
     scheduler.start()
     logger.info(
-        f"Scheduler started: crawling every {interval} min, DART every 30 min, "
-        f"market cap every 6h, commodity price every 10 min, commodity news every 30 min, "
+        f"Scheduler started: crawling every {interval} min, "
+        f"DART every {settings.DART_CRAWL_INTERVAL_MINUTES} min, "
+        f"market cap every {settings.MARKET_CAP_UPDATE_HOURS}h, "
+        f"commodity price every 10 min, commodity news every 30 min, "
         f"briefing at 08:30 KST, signal verify at 18:00 KST, "
         f"impact backfill at 18:30 KST, impact cleanup at 03:00 KST, "
         f"relation inference every Sunday 04:00 KST, "

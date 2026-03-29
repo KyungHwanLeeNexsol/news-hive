@@ -4,7 +4,7 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
 from app.models.daily_briefing import DailyBriefing
@@ -42,12 +42,14 @@ router = APIRouter(
 )
 
 
-def _enrich_signal(signal: FundSignal, db: Session) -> FundSignalResponse:
-    """Add stock/sector names to signal response."""
-    stock = db.query(Stock).filter(Stock.id == signal.stock_id).first()
-    sector = None
-    if stock:
-        sector = db.query(Sector).filter(Sector.id == stock.sector_id).first()
+def _enrich_signal(signal: FundSignal) -> FundSignalResponse:
+    """시그널에 종목/섹터명을 추가하여 응답 객체로 변환.
+
+    selectinload로 미리 로드된 relationship을 사용한다.
+    N+1 쿼리 최적화: 개별 DB 쿼리 대신 eager loading된 관계 참조.
+    """
+    stock = signal.stock
+    sector = stock.sector if stock else None
 
     return FundSignalResponse(
         id=signal.id,
@@ -83,21 +85,23 @@ async def get_latest_signals(
     db: Session = Depends(get_db),
 ):
     """최근 AI 투자 시그널 목록을 조회합니다."""
-    # Get the latest signal per stock (subquery for max id per stock_id)
+    # 종목별 최신 시그널 ID 서브쿼리
     from sqlalchemy import func
     latest_ids = (
         db.query(func.max(FundSignal.id))
         .group_by(FundSignal.stock_id)
         .subquery()
     )
+    # N+1 쿼리 방지: selectinload로 Stock과 Sector를 한번에 로드
     signals = (
         db.query(FundSignal)
+        .options(selectinload(FundSignal.stock).selectinload(Stock.sector))
         .filter(FundSignal.id.in_(latest_ids))
         .order_by(FundSignal.created_at.desc())
         .limit(limit)
         .all()
     )
-    return [_enrich_signal(s, db) for s in signals]
+    return [_enrich_signal(s) for s in signals]
 
 
 @router.get("/signals/{stock_id}", response_model=list[FundSignalResponse])
@@ -107,14 +111,16 @@ async def get_stock_signals(
     db: Session = Depends(get_db),
 ):
     """특정 종목의 시그널 이력을 조회합니다."""
+    # N+1 쿼리 방지: selectinload로 Stock과 Sector를 한번에 로드
     signals = (
         db.query(FundSignal)
+        .options(selectinload(FundSignal.stock).selectinload(Stock.sector))
         .filter(FundSignal.stock_id == stock_id)
         .order_by(FundSignal.created_at.desc())
         .limit(limit)
         .all()
     )
-    return [_enrich_signal(s, db) for s in signals]
+    return [_enrich_signal(s) for s in signals]
 
 
 # ---- 적중률 통계 ----

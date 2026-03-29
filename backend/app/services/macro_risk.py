@@ -74,12 +74,13 @@ EXCLUDE_CONTEXT = [
     "게임", "드라마", "영화", "예능",
 ]
 
-# 임계치: 최근 N시간 내 뉴스 기사 수
-WINDOW_HOURS = 1  # 1시간 윈도우
-WARNING_THRESHOLD = 3  # 3건 이상 → warning
-CRITICAL_THRESHOLD = 7  # 7건 이상 → critical
-# 같은 키워드로 알림을 중복 생성하지 않는 최소 간격 (시간)
-COOLDOWN_HOURS = 6
+# 설정에서 매크로 리스크 임계치 로드
+from app.config import settings
+
+WINDOW_HOURS = settings.MACRO_RISK_WINDOW_HOURS          # 리스크 뉴스 집계 윈도우 (시간)
+WARNING_THRESHOLD = settings.MACRO_RISK_WARNING_THRESHOLD  # warning 알림 임계치 (기사 수)
+CRITICAL_THRESHOLD = settings.MACRO_RISK_CRITICAL_THRESHOLD  # critical 알림 임계치 (기사 수)
+COOLDOWN_HOURS = settings.MACRO_RISK_COOLDOWN_HOURS        # 알림 중복 방지 간격 (시간)
 
 
 async def _classify_macro_severity(

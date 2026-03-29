@@ -8,6 +8,7 @@ import asyncio
 import logging
 
 from app.config import settings
+from app.services.circuit_breaker import api_circuit_breaker
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,11 @@ async def ask_ai(prompt: str, max_retries: int = 3) -> str | None:
         logger.warning("Gemini API 키가 설정되지 않음 — AI 호출 건너뜀")
         return None
 
+    # 서킷 브레이커: Gemini 연속 실패 시 스킵
+    if not api_circuit_breaker.is_available("gemini"):
+        logger.warning("Gemini 서킷 열림, AI 호출 스킵")
+        return None
+
     n_keys = len(keys)
     start_idx = _call_counter % n_keys
     _call_counter += 1
@@ -74,6 +80,7 @@ async def ask_ai(prompt: str, max_retries: int = 3) -> str | None:
             try:
                 result = await _call_gemini(prompt, keys[key_idx])
                 if result:
+                    api_circuit_breaker.record_success("gemini")
                     return result
             except Exception as e:
                 err_str = str(e)
@@ -92,7 +99,10 @@ async def ask_ai(prompt: str, max_retries: int = 3) -> str | None:
                     break  # 다음 키로
 
     if errors:
+        api_circuit_breaker.record_failure("gemini")
         detail = "; ".join(errors)
         logger.error(f"모든 Gemini 키 실패: {detail}")
         raise RuntimeError(f"모든 Gemini API 키 실패 — {detail}")
+
+    api_circuit_breaker.record_success("gemini")
     return None

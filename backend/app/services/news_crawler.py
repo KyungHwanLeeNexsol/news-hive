@@ -21,11 +21,14 @@ from app.services.ai_classifier import (
     get_or_build_index, calculate_relevance_score,
 )
 
+from app.config import settings
+from app.services.circuit_breaker import api_circuit_breaker
+
 logger = logging.getLogger(__name__)
 
-# Query budget for search-based crawlers
-MAX_TOTAL_QUERIES = 60
-MAX_STOCK_QUERIES = 20
+# 설정에서 크롤링 쿼리 제한값 로드
+MAX_TOTAL_QUERIES = settings.MAX_TOTAL_QUERIES
+MAX_STOCK_QUERIES = settings.MAX_STOCK_QUERIES
 
 # ---------------------------------------------------------------------------
 # 뉴스 긴급도 분류
@@ -263,18 +266,34 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
     all_raw_articles: list[dict] = []
     source_counts: dict[str, int] = {"naver": 0, "google": 0, "yahoo": 0, "korean_rss": 0, "us_news": 0}
 
-    # Phase 1: RSS feeds (parallel)
+    # Phase 1: RSS feeds (parallel) — 서킷 브레이커 적용
     async def _fetch_korean_rss():
-        articles = await fetch_korean_rss_feeds()
-        for a in articles:
-            a["_query"] = None
-        return ("korean_rss", articles)
+        if not api_circuit_breaker.is_available("korean_rss"):
+            logger.info("korean_rss 서킷 열림, 스킵")
+            return ("korean_rss", [])
+        try:
+            articles = await fetch_korean_rss_feeds()
+            api_circuit_breaker.record_success("korean_rss")
+            for a in articles:
+                a["_query"] = None
+            return ("korean_rss", articles)
+        except Exception as e:
+            api_circuit_breaker.record_failure("korean_rss")
+            raise
 
     async def _fetch_yahoo_top():
-        articles = await search_yahoo_finance_top(num=20)
-        for a in articles:
-            a["_query"] = None
-        return ("yahoo", articles)
+        if not api_circuit_breaker.is_available("yahoo"):
+            logger.info("yahoo 서킷 열림, 스킵")
+            return ("yahoo", [])
+        try:
+            articles = await search_yahoo_finance_top(num=20)
+            api_circuit_breaker.record_success("yahoo")
+            for a in articles:
+                a["_query"] = None
+            return ("yahoo", articles)
+        except Exception as e:
+            api_circuit_breaker.record_failure("yahoo")
+            raise
 
     async def _fetch_us_news():
         from app.services.crawlers.us_news import fetch_us_industry_news
@@ -318,25 +337,34 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
 
         async def _search_one(query: str):
             async with semaphore:
-                crawlers = [
-                    search_naver_news(query, display=10),
-                    search_google_news(query, num=10),
-                ]
-                source_names = ["naver", "google"]
+                crawlers = []
+                source_names = []
+                # 서킷 브레이커: 사용 가능한 크롤러만 실행
+                if api_circuit_breaker.is_available("naver"):
+                    crawlers.append(search_naver_news(query, display=10))
+                    source_names.append("naver")
+                if api_circuit_breaker.is_available("google"):
+                    crawlers.append(search_google_news(query, num=10))
+                    source_names.append("google")
                 stock_code = stock_code_by_name.get(query)
-                if stock_code:
+                if stock_code and api_circuit_breaker.is_available("yahoo"):
                     crawlers.append(search_yahoo_stock_news(stock_code, num=5))
                     source_names.append("yahoo")
+
+                if not crawlers:
+                    return []
 
                 results = await asyncio.gather(*crawlers, return_exceptions=True)
                 articles = []
                 for sn, result in zip(source_names, results):
                     if isinstance(result, list):
+                        api_circuit_breaker.record_success(sn)
                         for a in result:
                             a["_query"] = query
                         articles.extend(result)
                         source_counts[sn] += len(result)
                     elif isinstance(result, Exception):
+                        api_circuit_breaker.record_failure(sn)
                         logger.warning(f"[{sn}] error for '{query}': {result}")
                 return articles
 

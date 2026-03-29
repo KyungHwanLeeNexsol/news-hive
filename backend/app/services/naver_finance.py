@@ -25,8 +25,10 @@ HEADERS = {
                   "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 }
 
-_CACHE_TTL_MARKET_OPEN = 10    # 10 seconds during market hours
-_CACHE_TTL_MARKET_CLOSED = 300  # 5 minutes outside market hours
+# 설정에서 캐시 TTL 로드
+from app.config import settings as _settings
+_CACHE_TTL_MARKET_OPEN = _settings.PRICE_CACHE_TTL_MARKET_OPEN    # 장중 캐시 TTL (초)
+_CACHE_TTL_MARKET_CLOSED = _settings.PRICE_CACHE_TTL_MARKET_CLOSED  # 장외 캐시 TTL (초)
 
 
 def _is_market_open() -> bool:
