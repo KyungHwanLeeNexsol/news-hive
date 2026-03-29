@@ -33,7 +33,7 @@ const SUGGESTIONS = [
   '오늘 시장 전체적인 분위기는 어때?',
 ];
 
-export default function ChatPage(): JSX.Element {
+export default function ChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);

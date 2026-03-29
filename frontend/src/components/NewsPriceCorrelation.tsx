@@ -34,7 +34,7 @@ function correlationBadge(value: number): { label: string; color: string; bg: st
   return { label: '약한 상관', color: '#999', bg: '#f5f5f5' };
 }
 
-export default function NewsPriceCorrelation({ stockId }: Props): JSX.Element {
+export default function NewsPriceCorrelation({ stockId }: Props) {
   const [data, setData] = useState<CorrelationData | null>(null);
   const [loading, setLoading] = useState(false);
   const [days, setDays] = useState(90);

@@ -17,7 +17,7 @@ import {
 type SortKey = 'stock_name' | 'signals' | 'win_rate' | 'avg_return';
 type SortDir = 'asc' | 'desc';
 
-export default function BacktestDashboard(): JSX.Element {
+export default function BacktestDashboard() {
   // 필터 상태
   const [days, setDays] = useState(90);
   const [signalType, setSignalType] = useState('all');
