@@ -16,6 +16,7 @@ from app.services.news_crawler import (
     _is_similar_title,
     _build_search_queries,
     _resolve_query_relations,
+    _classify_urgency,
 )
 
 
@@ -473,3 +474,120 @@ class TestDeduplicationScenario:
         n1 = _normalize_title(t1)
         n2 = _normalize_title(t2)
         assert n1 == n2
+
+
+# ---------------------------------------------------------------------------
+# SPEC-NEWS-002 Phase 2: 긴급도 분류 테스트 (TASK-005)
+# ---------------------------------------------------------------------------
+
+class TestClassifyUrgency:
+    """뉴스 긴급도 분류 테스트."""
+
+    @pytest.mark.parametrize("title", [
+        "[속보] 삼성전자 반도체 공장 화재",
+        "[긴급] 코스피 장중 5% 급락",
+        "[단독] SK하이닉스 대규모 인수 추진",
+        "[Breaking] Samsung fab fire",
+        "[EXCLUSIVE] Major acquisition deal",
+    ])
+    def test_breaking_tags(self, title: str) -> None:
+        """속보/긴급/단독/breaking/exclusive 태그가 있으면 breaking."""
+        assert _classify_urgency(title) == "breaking"
+
+    @pytest.mark.parametrize("title", [
+        "삼성전자 4분기 실적 발표",
+        "현대차 인수합병 M&A 추진",
+        "코스피 상장폐지 심사 개시",
+        "XX기업 유상증자 결정 공시",
+        "YY그룹 소송 결과 발표",
+    ])
+    def test_important_keywords(self, title: str) -> None:
+        """금융 영향 키워드가 있으면 important."""
+        assert _classify_urgency(title) == "important"
+
+    def test_routine_default(self) -> None:
+        """특별한 패턴이 없으면 routine."""
+        assert _classify_urgency("삼성전자 주주총회 개최 일정") == "routine"
+
+    def test_empty_title(self) -> None:
+        """빈 제목은 routine."""
+        assert _classify_urgency("") == "routine"
+
+    def test_recent_topic_counts_breaking(self) -> None:
+        """동일 토픽 5건 이상이면 breaking."""
+        result = _classify_urgency(
+            "삼성전자 관련 뉴스",
+            recent_topic_counts={"삼성전자": 5},
+        )
+        assert result == "breaking"
+
+    def test_recent_topic_counts_below_threshold(self) -> None:
+        """동일 토픽 4건 이하면 breaking 아님."""
+        result = _classify_urgency(
+            "삼성전자 관련 뉴스",
+            recent_topic_counts={"삼성전자": 4},
+        )
+        assert result != "breaking"
+
+
+# ---------------------------------------------------------------------------
+# SPEC-NEWS-002 Phase 3: 커버리지 갭 감지 테스트 (TASK-010)
+# ---------------------------------------------------------------------------
+
+class TestDetectCoverageGaps:
+    """뉴스 커버리지 갭 감지 테스트."""
+
+    @pytest.mark.asyncio
+    async def test_no_stocks_returns_empty(self, db) -> None:
+        """종목이 없으면 빈 리스트 반환."""
+        from app.services.news_crawler import detect_coverage_gaps
+        result = await detect_coverage_gaps(db)
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_stock_without_news_detected(self, db, make_sector, make_stock) -> None:
+        """뉴스가 전혀 없는 종목이 감지됨."""
+        from app.services.news_crawler import detect_coverage_gaps
+        sector = make_sector(name="반도체")
+        make_stock(name="삼성전자", sector_id=sector.id)
+        db.flush()
+
+        result = await detect_coverage_gaps(db)
+        assert len(result) == 1
+        assert result[0]["stock_name"] == "삼성전자"
+        assert result[0]["sector_name"] == "반도체"
+        assert result[0]["hours_since_last_news"] is None
+
+    @pytest.mark.asyncio
+    async def test_stock_with_recent_news_not_detected(
+        self, db, make_sector, make_stock, make_news, make_news_relation,
+    ) -> None:
+        """최근 뉴스가 있는 종목은 갭으로 감지되지 않음."""
+        from app.services.news_crawler import detect_coverage_gaps
+        sector = make_sector(name="반도체")
+        stock = make_stock(name="삼성전자", sector_id=sector.id)
+        # 1시간 전 뉴스 생성
+        news = make_news(title="삼성전자 실적 발표")
+        make_news_relation(news_id=news.id, stock_id=stock.id, sector_id=sector.id)
+        db.flush()
+
+        result = await detect_coverage_gaps(db)
+        # 최근 뉴스가 있으므로 갭이 아님
+        stock_ids_in_gaps = [g["stock_id"] for g in result]
+        assert stock.id not in stock_ids_in_gaps
+
+    @pytest.mark.asyncio
+    async def test_result_structure(self, db, make_sector, make_stock) -> None:
+        """반환 구조가 올바른지 확인."""
+        from app.services.news_crawler import detect_coverage_gaps
+        sector = make_sector(name="철강")
+        make_stock(name="POSCO홀딩스", sector_id=sector.id)
+        db.flush()
+
+        result = await detect_coverage_gaps(db)
+        assert len(result) == 1
+        gap = result[0]
+        assert "stock_id" in gap
+        assert "stock_name" in gap
+        assert "sector_name" in gap
+        assert "hours_since_last_news" in gap

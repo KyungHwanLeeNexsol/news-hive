@@ -47,15 +47,23 @@ async def _call_groq(prompt: str) -> str | None:
 
 
 async def _call_gemini_key(prompt: str, api_key: str) -> str | None:
-    """Call Gemini API with a specific API key."""
+    """Call Gemini API with a specific API key.
+
+    google.genai의 generate_content()는 동기 호출이므로
+    asyncio.to_thread()로 감싸서 이벤트 루프 블로킹을 방지한다.
+    """
     from google import genai
 
     client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(
-        model=settings.GEMINI_MODEL,
-        contents=prompt,
-    )
-    return response.text.strip()
+
+    def _sync_call() -> str | None:
+        response = client.models.generate_content(
+            model=settings.GEMINI_MODEL,
+            contents=prompt,
+        )
+        return response.text.strip()
+
+    return await asyncio.to_thread(_sync_call)
 
 
 async def ask_ai(prompt: str, max_retries: int = 3) -> str | None:

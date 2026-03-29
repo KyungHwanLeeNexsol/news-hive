@@ -1,12 +1,24 @@
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Optional
+
+from sqlalchemy import func
+from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.sector import Sector
 from app.models.stock import Stock
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# KeywordIndex 캐시 (모듈 레벨)
+# 단일 워커(uvicorn) 환경을 전제로 하므로 스레드 안전성 고려하지 않음.
+# ---------------------------------------------------------------------------
+_cached_index: Optional["KeywordIndex"] = None
+_cache_checkpoint: Optional[tuple[int, int, Optional[datetime], Optional[datetime]]] = None
 
 
 @dataclass
@@ -40,6 +52,35 @@ class KeywordIndex:
                     idx.sector_keywords[kw] = sector.id
 
         return idx
+
+
+def get_or_build_index(db: Session) -> "KeywordIndex":
+    """KeywordIndex를 캐시에서 반환하거나, 변경 감지 시 새로 빌드한다.
+
+    체크포인트 = (stock_count, sector_count, max_stock_created_at, max_sector_created_at)
+    stocks/sectors 테이블에 updated_at이 없으므로 COUNT + MAX(created_at)로 변경 감지.
+    단일 워커(uvicorn) 환경 전제 — 스레드 안전성 불필요.
+    """
+    global _cached_index, _cache_checkpoint
+
+    stock_count = db.query(func.count(Stock.id)).scalar() or 0
+    sector_count = db.query(func.count(Sector.id)).scalar() or 0
+    max_stock_created = db.query(func.max(Stock.created_at)).scalar()
+    max_sector_created = db.query(func.max(Sector.created_at)).scalar()
+
+    current_checkpoint = (stock_count, sector_count, max_stock_created, max_sector_created)
+
+    if _cached_index is not None and _cache_checkpoint == current_checkpoint:
+        logger.info("KeywordIndex: cache hit")
+        return _cached_index
+
+    # 캐시 미스 — 전체 재빌드
+    sectors = db.query(Sector).all()
+    stocks = db.query(Stock).all()
+    _cached_index = KeywordIndex.build(sectors, stocks)
+    _cache_checkpoint = current_checkpoint
+    logger.info("KeywordIndex: cache miss (rebuilt)")
+    return _cached_index
 
 
 # Patterns indicating non-financial content (entertainment, sports, lifestyle, etc.)
@@ -125,6 +166,137 @@ def is_non_financial_article(title: str, url: str = "", description: str = "") -
         return True
 
     return False
+
+
+# ---------------------------------------------------------------------------
+# 소스 신뢰도 5단계 매핑
+# ---------------------------------------------------------------------------
+SOURCE_CREDIBILITY: dict[str, float] = {
+    # Tier 1 (1.0x): 주요 경제지
+    "한국경제": 1.0, "매일경제": 1.0, "서울경제": 1.0, "이데일리": 1.0,
+    "머니투데이": 1.0, "한경": 1.0, "매경": 1.0, "서경": 1.0,
+    "파이낸셜뉴스": 1.0, "아시아경제": 1.0, "헤럴드경제": 1.0,
+    # Tier 2 (0.85x): 종합 일간지
+    "조선일보": 0.85, "중앙일보": 0.85, "동아일보": 0.85,
+    "한겨레": 0.85, "경향신문": 0.85, "조선비즈": 0.85,
+    # Tier 3 (0.7x): 통신사 및 방송
+    "연합뉴스": 0.7, "뉴스1": 0.7, "뉴시스": 0.7,
+    "YTN": 0.7, "SBS": 0.7, "KBS": 0.7, "MBC": 0.7, "JTBC": 0.7,
+    # Tier 4 (0.5x): 전문지/온라인 매체
+    "더벨": 0.5, "인포스탁데일리": 0.5, "팍스넷": 0.5,
+    "이투데이": 0.5, "데일리안": 0.5, "뉴데일리": 0.5,
+    # Tier 5 (0.3x): 기타 — 알 수 없는 소스 기본값
+}
+
+# 소스명 정규화를 위한 별칭 매핑
+_SOURCE_ALIASES: dict[str, str] = {
+    "한경": "한국경제", "매경": "매일경제", "서경": "서울경제",
+    "조선비즈": "조선일보", "조비즈": "조선비즈",
+}
+
+
+def get_source_credibility(source: str) -> float:
+    """소스 이름으로 신뢰도 가중치를 반환한다.
+
+    정확히 매칭되지 않으면 부분 문자열 매칭을 시도하고,
+    그래도 없으면 기본값 0.5를 반환한다.
+    """
+    if not source:
+        return 0.5
+
+    # 정확 매칭
+    if source in SOURCE_CREDIBILITY:
+        return SOURCE_CREDIBILITY[source]
+
+    # 별칭 매칭
+    if source in _SOURCE_ALIASES:
+        canonical = _SOURCE_ALIASES[source]
+        return SOURCE_CREDIBILITY.get(canonical, 0.5)
+
+    # 부분 문자열 매칭 (소스명이 키를 포함하거나 키가 소스명을 포함)
+    source_lower = source.lower()
+    for key, weight in SOURCE_CREDIBILITY.items():
+        if key.lower() in source_lower or source_lower in key.lower():
+            return weight
+
+    # 미매핑 소스 로깅
+    logger.debug(f"미매핑 소스 신뢰도: '{source}' → 기본값 0.5")
+    return 0.5
+
+
+# ---------------------------------------------------------------------------
+# 금융 키워드 및 관련성 점수 계산
+# ---------------------------------------------------------------------------
+FINANCIAL_KEYWORDS = [
+    "실적", "영업이익", "매출", "순이익", "배당", "수주", "계약",
+    "인수", "합병", "M&A", "IPO", "유상증자", "무상증자", "자사주",
+    "공시", "분기", "반기", "결산",
+]
+
+
+def calculate_relevance_score(
+    title: str,
+    description: str | None,
+    stock_name: str | None,
+    sector_name: str | None,
+    is_ai_classified: bool = False,
+    source: str | None = None,
+) -> int:
+    """뉴스-종목/섹터 관련성 점수를 0-100으로 계산한다.
+
+    점수 기준:
+    - 제목에 종목명 포함: +40
+    - 본문/설명에 종목명 포함: +20
+    - 제목에 동일 섹터 키워드 포함: +15
+    - 제목에 금융/실적 키워드 포함: +15
+    - 비금융 기사 패턴 감지: -30
+    - AI 분류 기사: 기본 +30 (키워드 매칭 불가했으므로 AI 판단 신뢰)
+
+    최종 점수에 소스 신뢰도 가중치를 곱한다.
+    """
+    raw_score = 0
+    title_lower = title.lower() if title else ""
+    desc_lower = (description or "").lower()
+
+    if is_ai_classified:
+        # AI가 분류한 경우 기본 점수
+        raw_score += 30
+    else:
+        # 제목에 종목명 포함: +40
+        if stock_name and stock_name in title:
+            raw_score += 40
+
+        # 설명에 종목명 포함: +20
+        if stock_name and stock_name in (description or ""):
+            raw_score += 20
+
+    # 제목에 섹터 키워드 포함: +15
+    if sector_name:
+        sector_parts = re.split(r"[와및·/,]", sector_name)
+        for part in sector_parts:
+            part = part.strip()
+            if len(part) >= 2 and part.lower() in title_lower:
+                raw_score += 15
+                break
+
+    # 제목에 금융 키워드 포함: +15
+    for kw in FINANCIAL_KEYWORDS:
+        if kw.lower() in title_lower:
+            raw_score += 15
+            break
+
+    # 비금융 기사 패턴 감지: -30
+    if is_non_financial_article(title, description=description or ""):
+        raw_score -= 30
+
+    # 0-100 범위 클램핑
+    raw_score = max(0, min(100, raw_score))
+
+    # 소스 신뢰도 가중치 적용
+    credibility = get_source_credibility(source or "")
+    final_score = int(raw_score * credibility)
+
+    return max(0, min(100, final_score))
 
 
 def classify_news(title: str, index: KeywordIndex) -> list[dict]:
@@ -216,28 +388,89 @@ def _count_keyword_matches(title: str, keywords: list[str]) -> int:
     return count
 
 
-def classify_sentiment(title: str) -> str:
-    """Classify news sentiment as positive/negative/neutral based on keywords."""
+# ---------------------------------------------------------------------------
+# 6단계 감성 분석
+# ---------------------------------------------------------------------------
+_VALID_SENTIMENTS = {
+    "strong_positive", "positive", "mixed",
+    "neutral", "negative", "strong_negative",
+}
+
+# 강한 긍정 키워드 (strong_positive 판별용)
+_STRONG_POSITIVE_KEYWORDS = [
+    "실적 서프라이즈", "사상최대", "대규모 수주", "깜짝 실적",
+    "역대 최대", "역대 최고", "어닝 서프라이즈", "호실적 서프라이즈",
+]
+
+# 강한 부정 키워드 (strong_negative 판별용)
+_STRONG_NEGATIVE_KEYWORDS = [
+    "상장폐지", "적자전환", "횡령", "분식회계", "상폐",
+    "워크아웃", "법정관리", "부도", "파산", "배임",
+]
+
+# 반전 패턴 키워드 (부정 → mixed 전환용)
+_REVERSAL_PATTERNS = ["다만", "그러나", "한편", "반면", "하지만", "그럼에도"]
+
+_POSITIVE_KEYWORDS = [
+    "급등", "상승", "호재", "최고", "신고가", "흑자", "실적개선", "수주",
+    "계약", "성장", "회복", "반등", "돌파", "호실적", "매출증가", "영업이익",
+    "순이익", "사상최대", "투자유치", "상향", "기대감", "강세", "랠리",
+    "호황", "확대", "증가", "수혜", "특수", "날개", "질주", "도약",
+    "기대", "청신호", "훈풍", "활기", "부활", "선전", "약진", "쾌거",
+]
+
+_NEGATIVE_KEYWORDS = [
+    "급락", "하락", "악재", "최저", "신저가", "적자", "실적악화", "손실",
+    "감소", "위기", "폭락", "부진", "하향", "약세", "침체", "매각",
+    "구조조정", "파산", "부도", "리콜", "소송", "제재", "벌금", "처분",
+    "감사의견", "상폐", "상장폐지", "워크아웃", "법정관리", "불확실",
+    "우려", "경고", "리스크", "충격", "타격", "먹구름", "한파", "적신호",
+]
+
+
+def classify_sentiment(title: str, content: str | None = None) -> str:
+    """뉴스 감성을 6단계로 분류한다.
+
+    반환값: strong_positive / positive / mixed / neutral / negative / strong_negative
+
+    판별 로직:
+    1. 강한 긍정 키워드 + pos_count >= 3 → strong_positive
+    2. 강한 부정 키워드 + neg_count >= 3 → strong_negative
+    3. pos > 0 AND neg > 0 → mixed
+    4. pos > neg → positive
+    5. neg > pos → negative
+    6. 그 외 → neutral
+
+    content가 있으면 반전 패턴을 감지하여 부정 → mixed로 전환한다.
+    """
     title_lower = title.lower()
 
-    positive_keywords = [
-        "급등", "상승", "호재", "최고", "신고가", "흑자", "실적개선", "수주",
-        "계약", "성장", "회복", "반등", "돌파", "호실적", "매출증가", "영업이익",
-        "순이익", "사상최대", "투자유치", "상향", "기대감", "강세", "랠리",
-        "호황", "확대", "증가", "수혜", "특수", "날개", "질주", "도약",
-        "기대", "청신호", "훈풍", "활기", "부활", "선전", "약진", "쾌거",
-    ]
+    pos_count = _count_keyword_matches(title_lower, _POSITIVE_KEYWORDS)
+    neg_count = _count_keyword_matches(title_lower, _NEGATIVE_KEYWORDS)
 
-    negative_keywords = [
-        "급락", "하락", "악재", "최저", "신저가", "적자", "실적악화", "손실",
-        "감소", "위기", "폭락", "부진", "하향", "약세", "침체", "매각",
-        "구조조정", "파산", "부도", "리콜", "소송", "제재", "벌금", "처분",
-        "감사의견", "상폐", "상장폐지", "워크아웃", "법정관리", "불확실",
-        "우려", "경고", "리스크", "충격", "타격", "먹구름", "한파", "적신호",
-    ]
+    # 강한 긍정 감지
+    has_strong_pos = any(kw in title for kw in _STRONG_POSITIVE_KEYWORDS)
+    if has_strong_pos and pos_count >= 3:
+        return "strong_positive"
 
-    pos_count = _count_keyword_matches(title_lower, positive_keywords)
-    neg_count = _count_keyword_matches(title_lower, negative_keywords)
+    # 강한 부정 감지
+    has_strong_neg = any(kw in title for kw in _STRONG_NEGATIVE_KEYWORDS)
+    if has_strong_neg and neg_count >= 3:
+        return "strong_negative"
+
+    # 반전 패턴 감지 (content 기반)
+    if content and neg_count > pos_count:
+        content_lower = content.lower()
+        has_reversal = any(rp in content_lower for rp in _REVERSAL_PATTERNS)
+        if has_reversal:
+            # 반전 패턴 뒤에 긍정 키워드가 있으면 mixed
+            content_pos = _count_keyword_matches(content_lower, _POSITIVE_KEYWORDS)
+            if content_pos > 0:
+                return "mixed"
+
+    # 양쪽 모두 존재하면 mixed
+    if pos_count > 0 and neg_count > 0:
+        return "mixed"
 
     if pos_count > neg_count:
         return "positive"
@@ -278,7 +511,14 @@ async def classify_sentiment_with_ai(
             items.append({"id": j + 1, "title": title, "desc": desc})
 
         prompt = f"""다음 투자 관련 뉴스 기사들의 감성을 분류해주세요.
-각 기사가 주가에 미치는 영향을 기준으로 positive/negative/neutral 중 하나로 판단하세요.
+각 기사의 sentiment를 strong_positive/positive/mixed/neutral/negative/strong_negative 중 하나로 판단하세요.
+
+- strong_positive: 실적 서프라이즈, 사상최대 등 매우 강한 호재
+- positive: 일반적인 호재
+- mixed: 긍정과 부정이 혼재
+- neutral: 중립적 사실 보도
+- negative: 일반적인 악재
+- strong_negative: 상장폐지, 횡령, 분식회계 등 매우 강한 악재
 
 기사 목록:
 {_json.dumps(items, ensure_ascii=False)}
@@ -300,7 +540,7 @@ async def classify_sentiment_with_ai(
                 idx = item.get("id", 0) - 1
                 if 0 <= idx < len(chunk):
                     sentiment = item.get("sentiment", "neutral")
-                    if sentiment in ("positive", "negative"):
+                    if sentiment in _VALID_SENTIMENTS and sentiment != "neutral":
                         orig_idx, article = chunk[idx]
                         article["_ai_sentiment"] = sentiment
                         reclassified += 1
@@ -616,6 +856,99 @@ async def classify_news_with_ai(
 
     if classified_count:
         logger.info(f"AI classified {classified_count}/{len(unmatched)} previously unmatched articles")
+
+
+# ---------------------------------------------------------------------------
+# 글로벌 뉴스 영향 분석
+# ---------------------------------------------------------------------------
+# 글로벌 뉴스 키워드 -> 한국 섹터 매핑
+GLOBAL_KEYWORD_SECTOR_MAP: dict[str, list[str]] = {
+    # 반도체 섹터
+    "semiconductor": ["반도체"], "chip": ["반도체"], "TSMC": ["반도체"],
+    "Nvidia": ["반도체"], "AMD": ["반도체"], "Intel": ["반도체"],
+    "memory": ["반도체"], "DRAM": ["반도체"], "NAND": ["반도체"],
+    "HBM": ["반도체"],
+    # 정유/화학
+    "oil price": ["정유", "화학"], "crude": ["정유", "화학"], "OPEC": ["정유"],
+    "brent": ["정유"], "WTI": ["정유"],
+    # 금융
+    "Fed rate": ["금융", "은행"], "interest rate": ["금융", "은행"],
+    "treasury": ["금융"], "Federal Reserve": ["금융"],
+    # 2차전지
+    "EV": ["2차전지", "자동차"], "battery": ["2차전지"],
+    "lithium": ["2차전지"], "cathode": ["2차전지"], "anode": ["2차전지"],
+    # 철강
+    "steel": ["철강"], "iron ore": ["철강"],
+    # 한국 대기업 (영문명)
+    "Samsung": ["반도체", "전자"], "Hyundai": ["자동차", "건설"],
+    "LG": ["전자", "2차전지"], "SK": ["반도체", "에너지"],
+    "Kia": ["자동차"], "POSCO": ["철강"],
+}
+
+# 글로벌 소스 판별용 패턴
+_GLOBAL_SOURCES = {"yahoo", "google", "reuters", "bloomberg", "cnbc", "bbc"}
+
+
+def detect_global_impact(title: str, source: str) -> list[dict]:
+    """글로벌 뉴스에서 한국 시장 영향을 감지한다.
+
+    영문 소스(Yahoo, Google 등)의 기사 제목에서 글로벌 키워드를 탐지하고,
+    해당 키워드가 영향을 줄 수 있는 한국 섹터를 매핑한다.
+
+    Args:
+        title: 뉴스 기사 제목
+        source: 뉴스 소스명 (yahoo, google, naver 등)
+
+    Returns:
+        list of {"keyword": str, "sectors": list[str], "is_pre_market": bool}
+        매칭되는 글로벌 키워드가 없으면 빈 리스트를 반환한다.
+    """
+    from datetime import datetime, timezone, timedelta
+
+    # 글로벌 소스가 아니면 빈 리스트 반환
+    source_lower = (source or "").lower()
+    is_global_source = any(gs in source_lower for gs in _GLOBAL_SOURCES)
+    if not is_global_source:
+        return []
+
+    # 프리마켓 판별 (KST 09:00 이전)
+    kst = timezone(timedelta(hours=9))
+    now_kst = datetime.now(kst)
+    is_pre_market = now_kst.hour < 9
+
+    results: list[dict] = []
+    seen_keywords: set[str] = set()
+
+    for keyword, sectors in GLOBAL_KEYWORD_SECTOR_MAP.items():
+        # 대소문자 구분 없이 매칭 (단, 2글자 이하 키워드는 단어 경계 확인)
+        kw_lower = keyword.lower()
+        title_lower = title.lower()
+
+        if len(keyword) <= 2:
+            # 짧은 키워드(EV, LG, SK)는 단어 경계에서만 매칭
+            if not re.search(rf"\b{re.escape(kw_lower)}\b", title_lower):
+                continue
+        else:
+            if kw_lower not in title_lower:
+                continue
+
+        if kw_lower in seen_keywords:
+            continue
+        seen_keywords.add(kw_lower)
+
+        results.append({
+            "keyword": keyword,
+            "sectors": sectors,
+            "is_pre_market": is_pre_market,
+        })
+
+    if results:
+        logger.info(
+            f"글로벌 뉴스 영향 감지: {len(results)}개 키워드 매칭 "
+            f"(pre_market={is_pre_market}, title='{title[:50]}...')"
+        )
+
+    return results
 
 
 def _extract_sector_keywords(sector_name: str) -> list[str]:
