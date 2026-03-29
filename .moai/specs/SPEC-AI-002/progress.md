@@ -11,3 +11,13 @@
   - AC-014-1,2,3 / AC-015-1 / AC-020-1,2: all completed
 - Phase 2.10 (Simplify): complete - volume_spike 이중가산 통합, volatility 캐시 추가, composite 필터 정리
 - Phase 2.5 (Quality): complete - 69/69 tests passing, no regression (기존 24 failures 동일)
+- Phase 2 (DDD): complete - Phase 2 implementation (REQ-016, 017, 019)
+  - 5 files created, 3 files modified, 34 new tests, all passing
+  - AC-016-1,2 / AC-017-1 / AC-019-1: all completed
+  - sector_momentum.py 서비스, ORM 모델 2개, Alembic 마이그레이션 완료
+  - 기존 69 tests 모두 통과 (regression 없음)
+- Phase 2 (DDD): complete - Phase 3 implementation (REQ-018, 024)
+  - 1 file created (earnings_analyzer.py), 2 files modified (market_context.py, fund_manager.py)
+  - 40 new tests (earnings 24 + commodity 16), all passing
+  - AC-018-1,2,3 / AC-024-1: all completed
+  - 총 테스트: 403 passed, 23 pre-existing failures (regression 없음)

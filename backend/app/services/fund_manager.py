@@ -980,6 +980,51 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
     except Exception as vol_e:
         logger.warning("브리핑용 시장 변동성 데이터 수집 실패 (브리핑 계속 진행): %s", vol_e)
 
+    # REQ-AI-016/017: 섹터 모멘텀 분석 + 로테이션 감지
+    sector_momentum_text = ""
+    try:
+        from app.services.sector_momentum import (
+            detect_momentum_sectors,
+            detect_capital_inflow,
+            detect_sector_rotation,
+            format_sector_momentum_for_briefing,
+        )
+        momentum_sectors = detect_momentum_sectors(db)
+        inflow_sectors = detect_capital_inflow(db)
+        rotation_events = detect_sector_rotation(db)
+        sector_momentum_text = "\n" + format_sector_momentum_for_briefing(
+            momentum_sectors, inflow_sectors, rotation_events, db
+        ) + "\n"
+    except Exception as sm_e:
+        logger.warning("섹터 모멘텀 분석 실패 (브리핑 계속 진행): %s", sm_e)
+
+    # REQ-AI-018: 어닝 프리뷰 (실적 공시 예정 D-5)
+    earnings_text = ""
+    try:
+        from app.services.earnings_analyzer import (
+            get_upcoming_earnings,
+            analyze_earnings_preview,
+            format_earnings_for_briefing,
+        )
+        upcoming = get_upcoming_earnings(db)
+        if upcoming:
+            previews = []
+            for item in upcoming[:5]:  # 최대 5개 종목
+                preview = analyze_earnings_preview(db, item["stock_id"])
+                previews.append(preview)
+            earnings_text = "\n" + format_earnings_for_briefing(previews) + "\n"
+    except Exception as earn_e:
+        logger.warning("어닝 프리뷰 분석 실패 (브리핑 계속 진행): %s", earn_e)
+
+    # REQ-AI-024: 원자재 크로스 검증 컨텍스트
+    commodity_context_text = ""
+    try:
+        from app.services.market_context import format_commodity_context_for_briefing
+        all_sector_ids = [s["id"] for s in sector_info]
+        commodity_context_text = "\n" + format_commodity_context_for_briefing(db, all_sector_ids) + "\n"
+    except Exception as comm_e:
+        logger.warning("원자재 컨텍스트 수집 실패 (브리핑 계속 진행): %s", comm_e)
+
     # REQ-NPI-014~015: 후보 종목별 뉴스-가격 반응 통계 주입
     news_impact_text = ""
     try:
@@ -1053,7 +1098,7 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
 - dividend_yield: 배당수익률(%)
 
 {candidate_text}
-{volatility_text}{news_impact_text}
+{volatility_text}{sector_momentum_text}{earnings_text}{commodity_context_text}{news_impact_text}
 반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트 없이 JSON만 출력하세요.
 {{
   "market_overview": "오늘 시장의 핵심 이슈를 7-10문장으로 상세 분석. (1) 글로벌 매크로 환경(금리, 환율, 유가, 지정학 리스크), (2) 국내 시장 흐름(코스피/코스닥 동향, 거래대금, 외국인/기관 동향), (3) 핵심 뉴스 2-3개를 구체적으로 인용하며 시장 영향 분석, (4) 당일 시장 전망. 일반 텍스트로 작성.",

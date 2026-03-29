@@ -11,6 +11,8 @@ from app.models.news_commodity_relation import NewsCommodityRelation
 from app.models.stock_relation import StockRelation
 from app.models.prompt_version import PromptVersion, PromptABResult
 from app.models.virtual_portfolio import VirtualPortfolio, VirtualTrade, PortfolioSnapshot
+from app.models.sector_momentum import SectorMomentum
+from app.models.sector_rotation_event import SectorRotationEvent
 
 __all__ = [
     "Sector", "Stock", "NewsArticle", "NewsStockRelation",
@@ -19,4 +21,5 @@ __all__ = [
     "NewsCommodityRelation", "StockRelation",
     "PromptVersion", "PromptABResult",
     "VirtualPortfolio", "VirtualTrade", "PortfolioSnapshot",
+    "SectorMomentum", "SectorRotationEvent",
 ]

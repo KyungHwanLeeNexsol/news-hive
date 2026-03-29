@@ -294,6 +294,42 @@ def _run_exit_check():
         db.close()
 
 
+def _run_sector_momentum():
+    """섹터 모멘텀 일간 데이터 수집 + 분석 (매일 16:30 KST)."""
+    from app.services.sector_momentum import (
+        record_daily_sector_performance,
+        detect_momentum_sectors,
+        detect_capital_inflow,
+        detect_sector_rotation,
+    )
+
+    db = SessionLocal()
+    try:
+        # 1) 당일 섹터 등락률 기록
+        count = asyncio.run(record_daily_sector_performance(db))
+        if count:
+            logger.info(f"섹터 모멘텀 일간 데이터 {count}건 기록")
+
+        # 2) 모멘텀 섹터 감지
+        momentum = detect_momentum_sectors(db)
+        if momentum:
+            logger.info(f"모멘텀 섹터 {len(momentum)}개 감지")
+
+        # 3) 자금 유입 감지
+        inflow = detect_capital_inflow(db)
+        if inflow:
+            logger.info(f"자금 유입 섹터 {len(inflow)}개 감지")
+
+        # 4) 섹터 로테이션 감지
+        rotations = detect_sector_rotation(db)
+        if rotations:
+            logger.info(f"섹터 로테이션 {len(rotations)}건 감지")
+    except Exception as e:
+        logger.error(f"섹터 모멘텀 분석 실패: {e}")
+    finally:
+        db.close()
+
+
 def _run_portfolio_snapshot():
     """일말 포트폴리오 스냅샷 (매일 16:00 KST)."""
     from app.services.paper_trading import take_daily_snapshot
@@ -429,6 +465,16 @@ def start_scheduler():
         id="portfolio_snapshot",
         replace_existing=True,
     )
+    # REQ-AI-016: 섹터 모멘텀 일간 수집 + 분석 (매일 16:30 KST)
+    scheduler.add_job(
+        _run_sector_momentum,
+        "cron",
+        hour=16,
+        minute=30,
+        timezone="Asia/Seoul",
+        id="sector_momentum",
+        replace_existing=True,
+    )
     scheduler.start()
     logger.info(
         f"Scheduler started: crawling every {interval} min, DART every 30 min, "
@@ -437,7 +483,8 @@ def start_scheduler():
         f"impact backfill at 18:30 KST, impact cleanup at 03:00 KST, "
         f"relation inference every Sunday 04:00 KST, "
         f"fast verify every 1h, paper exit check every 1h, "
-        f"portfolio snapshot at 16:00 KST"
+        f"portfolio snapshot at 16:00 KST, "
+        f"sector momentum at 16:30 KST"
     )
 
 
