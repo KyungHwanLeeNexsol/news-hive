@@ -1,24 +1,51 @@
 llm:
-  mode: ""
-  team_mode: ""
-  glm_env_var: "GLM_API_KEY"
+  # =================================================================
+  # CG Mode: Claude (Leader) + Gemini (Teammates)
+  # =================================================================
+  # Leader (MoAI Orchestrator): Claude - planning, review, security
+  # Teammates (Implementation): Gemini - coding, testing, docs
+  # =================================================================
+  mode: "cg"
+  team_mode: "cg"
+  glm_env_var: "GEMINI_API_KEY"
 
-  # Performance tier selection (set once during init/update)
-  # Controls model selection for all sub-agents and team agents
-  # Options: high (complex reasoning), medium (balanced), low (fast/cheap)
-  performance_tier: "medium"
+  # Leader performance tier (Claude models for orchestration)
+  # high = Claude Opus for all leader tasks
+  performance_tier: "high"
 
-  # Claude model mapping by tier
+  # -----------------------------------------------------------------
+  # Claude Models - LEADER (orchestration, planning, review, security)
+  # -----------------------------------------------------------------
   claude_models:
-    high: "opus"      # Complex reasoning, architecture, security
-    medium: "sonnet"  # Balanced performance for most tasks
-    low: "haiku"      # Fast exploration, simple tasks
+    high: "opus"      # Plan/SPEC, architecture, security review, complex debugging
+    medium: "sonnet"  # Code review, quality gates, documentation sync
+    low: "haiku"      # Exploration, simple queries, hypothesis testing
 
-  # GLM backend configuration
+  # -----------------------------------------------------------------
+  # Gemini Models - TEAMMATES (implementation, testing, documentation)
+  # Accessed via Anthropic-compatible proxy (OpenRouter or LiteLLM)
+  # -----------------------------------------------------------------
   glm:
-    base_url: "https://api.z.ai/api/anthropic"
+    # LiteLLM local proxy: Gemini API Key -> Anthropic-compatible endpoint
+    # Start with: litellm --model gemini/gemini-2.5-pro --port 4000
+    base_url: "http://localhost:4000"
     models:
-      high: "glm-5"           # Complex reasoning
-      medium: "glm-4.7"       # Balanced performance
-      low: "glm-4.5-air"      # Lightweight tasks (Z.ai official default)
+      high: "google/gemini-2.5-pro"          # Complex implementation tasks
+      medium: "google/gemini-2.5-flash"      # Standard coding, test generation
+      low: "google/gemini-2.5-flash-lite"    # Bulk tasks, boilerplate, docs
 
+  # -----------------------------------------------------------------
+  # Task Allocation Strategy
+  # -----------------------------------------------------------------
+  # Phase     | LLM      | Model          | Reason
+  # ----------|----------|----------------|--------------------------------
+  # Plan      | Claude   | Opus           | Deep reasoning, EARS format
+  # Strategy  | Claude   | Opus           | Architecture decisions
+  # Security  | Claude   | Opus           | Vulnerability analysis
+  # Debug     | Claude   | Sonnet         | Root cause analysis
+  # Review    | Claude   | Sonnet         | Nuanced code quality
+  # Backend   | Gemini   | 2.5 Pro        | Code generation, cost-effective
+  # Frontend  | Gemini   | 2.5 Pro        | Component coding, patterns
+  # Testing   | Gemini   | 2.5 Flash      | Bulk test writing
+  # Docs      | Gemini   | 2.5 Flash      | Documentation generation
+  # Explore   | Gemini   | 2.5 Flash      | Large context window (1M+)
