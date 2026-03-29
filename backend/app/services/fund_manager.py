@@ -56,6 +56,76 @@ def _parse_json_response(text: str) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# REQ-023: Chain-of-Thought 프롬프트 검증
+# ---------------------------------------------------------------------------
+
+# CoT 5단계 분석에서 기대하는 STEP 키워드 목록
+COT_REQUIRED_STEPS = ["STEP 1", "STEP 2", "STEP 3", "STEP 4", "STEP 5"]
+
+
+def validate_cot_steps(ai_response_text: str | None) -> dict:
+    """AI 응답에서 CoT 5단계(STEP 1~5) 존재 여부를 검증한다.
+
+    Args:
+        ai_response_text: AI가 반환한 원본 텍스트 (JSON 포함 가능)
+
+    Returns:
+        {"complete": bool, "missing_steps": list[str], "found_steps": list[str]}
+    """
+    if not ai_response_text:
+        return {
+            "complete": False,
+            "missing_steps": list(COT_REQUIRED_STEPS),
+            "found_steps": [],
+        }
+
+    found = [step for step in COT_REQUIRED_STEPS if step in ai_response_text]
+    missing = [step for step in COT_REQUIRED_STEPS if step not in ai_response_text]
+
+    return {
+        "complete": len(missing) == 0,
+        "missing_steps": missing,
+        "found_steps": found,
+    }
+
+
+def apply_cot_penalty(
+    parsed_data: dict,
+    cot_result: dict,
+) -> dict:
+    """CoT 검증 결과에 따라 stock_picks의 confidence를 감산하고 태그를 부여한다.
+
+    STEP 1~5 중 하나라도 누락되면:
+    - 각 stock_pick의 confidence를 0.1 감산 (최소 0.0)
+    - parsed_data에 "incomplete_analysis" 태그 부여
+
+    Args:
+        parsed_data: 파싱된 AI 응답 dict
+        cot_result: validate_cot_steps()의 결과
+
+    Returns:
+        수정된 parsed_data (원본 dict를 변경함)
+    """
+    if cot_result["complete"]:
+        return parsed_data
+
+    # 불완전 분석 태그 부여
+    parsed_data["_cot_validation"] = {
+        "status": "incomplete_analysis",
+        "missing_steps": cot_result["missing_steps"],
+        "found_steps": cot_result["found_steps"],
+    }
+
+    # stock_picks 내 각 종목의 confidence 감산은 시그널 생성 시 적용
+    # (브리핑의 stock_picks는 JSON 텍스트이므로 여기서는 태그만 부여)
+    logger.warning(
+        "CoT 불완전 분석: 누락된 단계 %s", cot_result["missing_steps"]
+    )
+
+    return parsed_data
+
+
+# ---------------------------------------------------------------------------
 # Data gathering helpers
 # ---------------------------------------------------------------------------
 
@@ -1025,6 +1095,46 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
     except Exception as comm_e:
         logger.warning("원자재 컨텍스트 수집 실패 (브리핑 계속 진행): %s", comm_e)
 
+    # REQ-AI-022: 과거 유사 시장 패턴 매칭
+    historical_pattern_text = ""
+    try:
+        from app.services.market_context import format_historical_patterns_for_briefing
+        # vol_info에서 변동성 레벨, sector_momentum에서 모멘텀 섹터 추출
+        _vol_level = vol_info.get("volatility_level") if vol_info else None
+        # KOSPI 5일 수익률: sector_momentum의 전체 평균으로 추정
+        _kospi_ret_5d = None
+        _momentum_ids: list[int] = []
+        try:
+            from app.models.sector_momentum import SectorMomentum
+            from sqlalchemy import func as _sa_func
+            from datetime import date as _date_type
+            _today = _date_type.today()
+            _avg_row = (
+                db.query(_sa_func.avg(SectorMomentum.avg_return_5d))
+                .filter(SectorMomentum.date == _today)
+                .scalar()
+            )
+            _kospi_ret_5d = float(_avg_row) if _avg_row is not None else None
+            _momentum_rows = (
+                db.query(SectorMomentum.sector_id)
+                .filter(
+                    SectorMomentum.date == _today,
+                    SectorMomentum.momentum_tag == "momentum_sector",
+                )
+                .all()
+            )
+            _momentum_ids = [r[0] for r in _momentum_rows]
+        except Exception:
+            pass  # 모멘텀 데이터 없어도 패턴 매칭 시도 가능
+
+        _pattern_text = format_historical_patterns_for_briefing(
+            db, _kospi_ret_5d, _vol_level, _momentum_ids
+        )
+        if _pattern_text:
+            historical_pattern_text = "\n" + _pattern_text + "\n"
+    except Exception as hist_e:
+        logger.warning("과거 패턴 매칭 실패 (브리핑 계속 진행): %s", hist_e)
+
     # REQ-NPI-014~015: 후보 종목별 뉴스-가격 반응 통계 주입
     news_impact_text = ""
     try:
@@ -1049,6 +1159,26 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
             news_impact_text = "\n## 뉴스 반응 통계 (30일)\n" + "\n".join(impact_lines) + "\n"
     except Exception as e:
         logger.warning(f"뉴스 반응 통계 수집 실패 (브리핑 계속 진행): {e}")
+
+    # REQ-021: 방어 모드 상태 확인 및 브리핑 경고 문구
+    defensive_mode_text = ""
+    try:
+        from app.services.paper_trading import check_defensive_mode, get_or_create_portfolio
+        is_defensive = check_defensive_mode(db)
+        if is_defensive:
+            portfolio = get_or_create_portfolio(db)
+            entered_at = portfolio.defensive_mode_entered_at
+            entered_str = entered_at.strftime('%Y-%m-%d %H:%M') if entered_at else "알 수 없음"
+            defensive_mode_text = (
+                f"\n## [경고] 방어 모드 활성화 중\n"
+                f"- 포트폴리오 누적 수익률이 -10% 이하로 하락하여 방어 모드가 활성화되었습니다.\n"
+                f"- 방어 모드 진입 시각: {entered_str}\n"
+                f"- 신규 매수 시그널이 차단됩니다.\n"
+                f"- 기존 포지션의 손절 기준이 -5%에서 -3%로 강화됩니다.\n"
+                f"- 누적 수익률이 -5% 이상으로 회복되면 자동 해제됩니다.\n"
+            )
+    except Exception as e:
+        logger.warning(f"방어 모드 상태 확인 실패 (브리핑 계속 진행): {e}")
 
     prompt = f"""당신은 국내 최고 자산운용사의 CIO(최고투자책임자)이자 20년 경력 전문 펀드매니저입니다.
 오늘 날짜: {today.strftime('%Y년 %m월 %d일')}
@@ -1098,7 +1228,25 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
 - dividend_yield: 배당수익률(%)
 
 {candidate_text}
-{volatility_text}{sector_momentum_text}{earnings_text}{commodity_context_text}{news_impact_text}
+{volatility_text}{sector_momentum_text}{earnings_text}{commodity_context_text}{historical_pattern_text}{news_impact_text}{defensive_mode_text}
+## Chain-of-Thought 분석 (5단계)
+아래 5단계를 **반드시 순서대로** 수행하고, 각 단계의 분석 결과를 JSON의 "cot_reasoning" 필드에 포함하세요.
+
+[STEP 1: 시장 환경 진단]
+현재 시장 변동성, 섹터 로테이션, 매크로 리스크를 종합하여 시장 환경을 진단하시오.
+
+[STEP 2: 종목별 팩터 분석]
+각 후보 종목에 대해 4개 팩터(뉴스, 기술적, 수급, 밸류에이션) 점수를 기반으로 강약점을 분석하시오.
+
+[STEP 3: 추세 정렬 검증]
+다중 시간축(5일/20일/60일) 추세 방향이 일치하는지 확인하시오.
+
+[STEP 4: 리스크 평가]
+과거 유사 시장 상황의 적중률, 섹터 중복 리스크, 어닝 이벤트 유무를 평가하시오.
+
+[STEP 5: 최종 추천 및 근거]
+매수 추천 종목과 구체적 근거를 제시하시오. 각 추천에 대해 "가장 큰 리스크"도 명시하시오.
+
 반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트 없이 JSON만 출력하세요.
 {{
   "market_overview": "오늘 시장의 핵심 이슈를 7-10문장으로 상세 분석. (1) 글로벌 매크로 환경(금리, 환율, 유가, 지정학 리스크), (2) 국내 시장 흐름(코스피/코스닥 동향, 거래대금, 외국인/기관 동향), (3) 핵심 뉴스 2-3개를 구체적으로 인용하며 시장 영향 분석, (4) 당일 시장 전망. 일반 텍스트로 작성.",
@@ -1119,7 +1267,9 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
 
   "risk_assessment": "5-7문장. (1) 현재 가장 큰 매크로 리스크와 그 영향을 구체적 수치로 분석, (2) 포트폴리오 방어 전략, (3) 주의해야 할 섹터/종목. 뉴스 제목을 직접 인용하며 분석.",
 
-  "strategy": "5-7문장. (1) 오늘 시장에서 취해야 할 구체적 액션(비중 조절, 섹터 로테이션 등), (2) 단기(1주) 전략, (3) 중기(1개월) 관점. 추상적 조언이 아닌 실행 가능한 구체적 전략 제시."
+  "strategy": "5-7문장. (1) 오늘 시장에서 취해야 할 구체적 액션(비중 조절, 섹터 로테이션 등), (2) 단기(1주) 전략, (3) 중기(1개월) 관점. 추상적 조언이 아닌 실행 가능한 구체적 전략 제시.",
+
+  "cot_reasoning": "위 5단계 Chain-of-Thought 분석 내용을 여기에 작성. 반드시 [STEP 1], [STEP 2], [STEP 3], [STEP 4], [STEP 5] 헤더를 모두 포함하여 단계별 분석 결과를 기술."
 }}
 
 **핵심 규칙 (절대 위반 금지):**
@@ -1171,6 +1321,14 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
     if not parsed:
         raise RuntimeError(f"AI 응답 JSON 파싱 실패. 원본 응답(앞 500자): {response[:500]}")
 
+    # REQ-023: CoT 5단계 완성도 검증
+    # cot_reasoning 필드 또는 원본 응답에서 STEP 1~5 존재 여부 확인
+    cot_text = parsed.get("cot_reasoning", "") or ""
+    # cot_reasoning 필드에 없으면 원본 응답 전체에서 검색
+    cot_check_target = cot_text if cot_text.strip() else response
+    cot_result = validate_cot_steps(cot_check_target)
+    parsed = apply_cot_penalty(parsed, cot_result)
+
     def _to_str(val) -> str | None:
         if val is None:
             return None
@@ -1190,36 +1348,53 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
     db.add(briefing)
     db.commit()
     db.refresh(briefing)
-    logger.info(f"Daily briefing generated for {today}")
+    # REQ-023: CoT 프롬프트 버전 및 검증 결과 로깅
+    logger.info(
+        "Daily briefing generated for %s (prompt=cot_v1, cot_complete=%s)",
+        today, cot_result["complete"],
+    )
 
     # 브리핑 추천 종목 → 백그라운드에서 투자 시그널 생성
     stock_picks_data = parsed.get("stock_picks")
+    # REQ-023: CoT 불완전 분석 정보를 시그널 생성에 전달
+    cot_validation = parsed.get("_cot_validation")
     if stock_picks_data:
         asyncio.get_event_loop().create_task(
-            _generate_signals_background(stock_picks_data)
+            _generate_signals_background(stock_picks_data, cot_validation)
         )
 
     return briefing
 
 
-async def _generate_signals_background(stock_picks_data) -> None:
+async def _generate_signals_background(
+    stock_picks_data, cot_validation: dict | None = None,
+) -> None:
     """백그라운드에서 브리핑 추천 종목의 투자 시그널을 생성한다.
 
     별도 DB 세션을 사용하여 메인 요청과 독립적으로 실행.
+
+    Args:
+        cot_validation: REQ-023 CoT 검증 결과. 불완전 시 confidence 감산에 사용.
     """
     from app.database import SessionLocal
 
     db = SessionLocal()
     try:
-        await _generate_signals_from_picks(db, stock_picks_data)
+        await _generate_signals_from_picks(db, stock_picks_data, cot_validation)
     except Exception as e:
         logger.error(f"백그라운드 시그널 생성 실패: {e}")
     finally:
         db.close()
 
 
-async def _generate_signals_from_picks(db: Session, stock_picks) -> None:
-    """브리핑의 stock_picks에서 종목명을 추출하여 자동 투자 시그널 생성."""
+async def _generate_signals_from_picks(
+    db: Session, stock_picks, cot_validation: dict | None = None,
+) -> None:
+    """브리핑의 stock_picks에서 종목명을 추출하여 자동 투자 시그널 생성.
+
+    Args:
+        cot_validation: REQ-023 CoT 검증 결과. 불완전 시 생성된 시그널 confidence 0.1 감산.
+    """
     if not stock_picks:
         return
 
@@ -1265,11 +1440,24 @@ async def _generate_signals_from_picks(db: Session, stock_picks) -> None:
             logger.warning(f"브리핑 추천 종목 '{name}'을 DB에서 찾을 수 없습니다")
 
     # 각 종목에 대해 시그널 생성 (순차 실행 — AI API rate limit 고려)
+    # REQ-023: CoT 불완전 분석 시 confidence 0.1 감산
+    is_incomplete_cot = (
+        cot_validation is not None
+        and cot_validation.get("status") == "incomplete_analysis"
+    )
     generated = 0
     for stock, hint in matched:
         try:
             signal = await analyze_stock(db, stock.id, briefing_hint=hint)
             if signal:
+                # REQ-023: CoT 불완전 분석 시 confidence 감산 및 태그
+                if is_incomplete_cot:
+                    signal.confidence = max(0.0, signal.confidence - 0.1)
+                    db.commit()
+                    logger.info(
+                        "REQ-023: CoT 불완전 분석으로 %s confidence 0.1 감산 → %.2f",
+                        stock.name, signal.confidence,
+                    )
                 generated += 1
                 logger.info(f"브리핑 추천 → 시그널 생성: {stock.name} → {signal.signal} ({signal.confidence})")
         except Exception as e:

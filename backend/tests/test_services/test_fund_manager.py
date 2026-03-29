@@ -22,6 +22,9 @@ from app.services.fund_manager import (
     _gather_sector_news,
     _gather_disclosures,
     _format_briefing_hint,
+    validate_cot_steps,
+    apply_cot_penalty,
+    COT_REQUIRED_STEPS,
 )
 
 
@@ -502,3 +505,90 @@ class TestFormatBriefingHint:
         hint = {"action": "관망", "reasoning": ""}
         result = _format_briefing_hint(hint)
         assert "관망" in result
+
+
+class TestValidateCotSteps:
+    """REQ-023: validate_cot_steps CoT 5단계 검증."""
+
+    def test_all_steps_present(self) -> None:
+        """5개 STEP 모두 포함된 응답은 complete=True."""
+        text = (
+            "[STEP 1: 시장 환경 진단] 현재 변동성이 높습니다.\n"
+            "[STEP 2: 종목별 팩터 분석] 삼성전자 뉴스 팩터 양호.\n"
+            "[STEP 3: 추세 정렬 검증] 5일/20일/60일 모두 상승.\n"
+            "[STEP 4: 리스크 평가] 매크로 리스크 낮음.\n"
+            "[STEP 5: 최종 추천 및 근거] 삼성전자 매수 추천."
+        )
+        result = validate_cot_steps(text)
+        assert result["complete"] is True
+        assert result["missing_steps"] == []
+        assert len(result["found_steps"]) == 5
+
+    def test_missing_some_steps(self) -> None:
+        """일부 STEP이 누락되면 complete=False이고 missing_steps에 표시."""
+        text = (
+            "[STEP 1: 시장 환경 진단] 분석 내용.\n"
+            "[STEP 3: 추세 정렬 검증] 분석 내용.\n"
+            "[STEP 5: 최종 추천 및 근거] 분석 내용."
+        )
+        result = validate_cot_steps(text)
+        assert result["complete"] is False
+        assert "STEP 2" in result["missing_steps"]
+        assert "STEP 4" in result["missing_steps"]
+        assert len(result["found_steps"]) == 3
+
+    def test_no_steps_at_all(self) -> None:
+        """STEP이 하나도 없는 응답."""
+        text = "그냥 일반 분석 텍스트입니다. 매수 추천합니다."
+        result = validate_cot_steps(text)
+        assert result["complete"] is False
+        assert len(result["missing_steps"]) == 5
+
+    def test_none_input(self) -> None:
+        """None 입력이면 모든 STEP이 누락."""
+        result = validate_cot_steps(None)
+        assert result["complete"] is False
+        assert result["missing_steps"] == list(COT_REQUIRED_STEPS)
+
+    def test_empty_string(self) -> None:
+        """빈 문자열이면 모든 STEP이 누락."""
+        result = validate_cot_steps("")
+        assert result["complete"] is False
+        assert len(result["missing_steps"]) == 5
+
+
+class TestApplyCotPenalty:
+    """REQ-023: apply_cot_penalty CoT 불완전 분석 패널티 적용."""
+
+    def test_complete_cot_no_penalty(self) -> None:
+        """CoT 완전한 경우 패널티 없음."""
+        parsed = {"market_overview": "test", "stock_picks": []}
+        cot_result = {"complete": True, "missing_steps": [], "found_steps": list(COT_REQUIRED_STEPS)}
+        result = apply_cot_penalty(parsed, cot_result)
+        assert "_cot_validation" not in result
+
+    def test_incomplete_cot_adds_tag(self) -> None:
+        """CoT 불완전 시 _cot_validation 태그가 추가된다."""
+        parsed = {"market_overview": "test", "stock_picks": []}
+        cot_result = {
+            "complete": False,
+            "missing_steps": ["STEP 2", "STEP 4"],
+            "found_steps": ["STEP 1", "STEP 3", "STEP 5"],
+        }
+        result = apply_cot_penalty(parsed, cot_result)
+        assert "_cot_validation" in result
+        assert result["_cot_validation"]["status"] == "incomplete_analysis"
+        assert "STEP 2" in result["_cot_validation"]["missing_steps"]
+        assert "STEP 4" in result["_cot_validation"]["missing_steps"]
+
+    def test_all_steps_missing(self) -> None:
+        """모든 STEP 누락 시에도 정상 동작."""
+        parsed = {"market_overview": "test"}
+        cot_result = {
+            "complete": False,
+            "missing_steps": list(COT_REQUIRED_STEPS),
+            "found_steps": [],
+        }
+        result = apply_cot_penalty(parsed, cot_result)
+        assert result["_cot_validation"]["status"] == "incomplete_analysis"
+        assert len(result["_cot_validation"]["missing_steps"]) == 5

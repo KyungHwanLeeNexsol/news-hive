@@ -1,23 +1,29 @@
 """market_context 모듈 테스트.
 
 SPEC-AI-002 REQ-AI-020: 시장 변동성 기반 포지션 사이징.
+SPEC-AI-002 REQ-AI-022: 과거 유사 시장 패턴 매칭.
 SPEC-AI-002 REQ-AI-024: 원자재 연관 종목 크로스 검증.
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from unittest.mock import patch, AsyncMock
 from sqlalchemy.orm import Session
 
 from app.models.commodity import Commodity, CommodityPrice, SectorCommodityRelation
+from app.models.fund_signal import FundSignal
+from app.models.sector_momentum import SectorMomentum
 from app.services.market_context import (
     COMMODITY_DIVERGENCE_CONFIDENCE_PENALTY,
     COMMODITY_DIVERGENCE_DAYS,
+    PATTERN_MIN_HISTORY_DAYS,
     apply_commodity_adjustment,
     calculate_volatility_level,
     check_commodity_divergence,
+    find_similar_market_patterns,
     format_commodity_context_for_briefing,
+    format_historical_patterns_for_briefing,
     format_volatility_for_briefing,
     get_commodity_trend,
     get_market_volatility,
@@ -490,3 +496,350 @@ class TestFormatCommodityContextForBriefing:
         result = format_commodity_context_for_briefing(db, [sector.id])
         assert "경고" in result
         assert "연속 하락" in result
+
+
+# ---------------------------------------------------------------------------
+# REQ-AI-022: 과거 유사 시장 패턴 매칭 테스트
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def make_sector_momentum(db: Session):
+    """SectorMomentum 팩토리."""
+
+    def _factory(
+        sector_id: int,
+        target_date: date | None = None,
+        daily_return: float = 0.0,
+        avg_return_5d: float | None = None,
+        momentum_tag: str | None = None,
+        capital_inflow: bool = False,
+    ) -> SectorMomentum:
+        sm = SectorMomentum(
+            sector_id=sector_id,
+            date=target_date or date.today(),
+            daily_return=daily_return,
+            avg_return_5d=avg_return_5d,
+            momentum_tag=momentum_tag,
+            capital_inflow=capital_inflow,
+        )
+        db.add(sm)
+        db.flush()
+        return sm
+
+    return _factory
+
+
+def _create_verified_signals_for_date(
+    db: Session,
+    make_fund_signal,
+    target_date: date,
+    count: int = 3,
+    volatility_level: str = "normal",
+    is_correct_values: list[bool | None] | None = None,
+    return_pct_values: list[float | None] | None = None,
+) -> list[FundSignal]:
+    """특정 날짜에 검증 완료된 시그널 여러 개를 생성하는 헬퍼."""
+    signals = []
+    for i in range(count):
+        is_correct = True
+        if is_correct_values and i < len(is_correct_values):
+            is_correct = is_correct_values[i]
+
+        return_pct = 2.0
+        if return_pct_values and i < len(return_pct_values):
+            return_pct = return_pct_values[i]
+
+        sig = make_fund_signal(
+            created_at=datetime(target_date.year, target_date.month, target_date.day, 9, 0, tzinfo=timezone.utc),
+            volatility_level=volatility_level,
+            is_correct=is_correct,
+            return_pct=return_pct,
+            verified_at=datetime(target_date.year, target_date.month, target_date.day, 18, 0, tzinfo=timezone.utc),
+        )
+        signals.append(sig)
+    return signals
+
+
+class TestFindSimilarMarketPatterns:
+    """find_similar_market_patterns 유닛 테스트 (AC-022-1)."""
+
+    def test_none_inputs_returns_no_matches(self, db: Session) -> None:
+        """입력 데이터 없음 → 매칭 결과 없음."""
+        result = find_similar_market_patterns(db, None, None, None)
+        assert result["has_matches"] is False
+        assert result["sample_sufficient"] is False
+
+    def test_insufficient_history_returns_not_sufficient(
+        self, db: Session, make_fund_signal
+    ) -> None:
+        """이력 30일 미만 → sample_sufficient=False."""
+        # 시그널 5개만 생성 (같은 날짜 → 1일)
+        today = date.today()
+        for i in range(5):
+            make_fund_signal(
+                created_at=datetime(today.year, today.month, today.day, 9 + i, 0, tzinfo=timezone.utc),
+                volatility_level="normal",
+                is_correct=True,
+                return_pct=1.0,
+                verified_at=datetime(today.year, today.month, today.day, 18, 0, tzinfo=timezone.utc),
+            )
+
+        result = find_similar_market_patterns(db, 0.5, "normal", [])
+        assert result["sample_sufficient"] is False
+        assert result["has_matches"] is False
+
+    def test_sufficient_history_with_matching_patterns(
+        self,
+        db: Session,
+        make_fund_signal,
+        make_sector,
+        make_sector_momentum,
+    ) -> None:
+        """충분한 이력 + 유사 패턴 존재 → 적중률 통계 반환."""
+        sector = make_sector(name="반도체")
+        base_date = date.today() - timedelta(days=60)
+
+        # 30일+ 다른 날짜에 시그널 생성 (검증 완료)
+        for day_offset in range(35):
+            d = base_date + timedelta(days=day_offset)
+            vol_level = "normal"
+            _create_verified_signals_for_date(
+                db, make_fund_signal, d, count=2,
+                volatility_level=vol_level,
+                is_correct_values=[True, False],
+                return_pct_values=[3.0, -1.0],
+            )
+            # 섹터 모멘텀 데이터 (avg_return_5d = 0.5%)
+            make_sector_momentum(
+                sector_id=sector.id,
+                target_date=d,
+                avg_return_5d=0.5,
+                momentum_tag="momentum_sector",
+            )
+
+        # 현재 상황: KOSPI 5일 수익률 0.8% (0.5와 차이 0.3%p < 1%p)
+        result = find_similar_market_patterns(
+            db, 0.8, "normal", [sector.id]
+        )
+
+        assert result["has_matches"] is True
+        assert result["sample_sufficient"] is True
+        assert result["match_count"] > 0
+        assert result["signal_count"] > 0
+        assert result["accuracy_pct"] is not None
+        assert 0 <= result["accuracy_pct"] <= 100
+        assert result["avg_return_pct"] is not None
+        assert len(result["matched_dates"]) > 0
+
+    def test_no_match_when_return_diff_exceeds_tolerance(
+        self,
+        db: Session,
+        make_fund_signal,
+        make_sector,
+        make_sector_momentum,
+    ) -> None:
+        """KOSPI 5일 수익률 차이 > 1%p → 매칭 안 됨."""
+        sector = make_sector(name="자동차")
+        base_date = date.today() - timedelta(days=60)
+
+        for day_offset in range(35):
+            d = base_date + timedelta(days=day_offset)
+            _create_verified_signals_for_date(
+                db, make_fund_signal, d, count=1,
+                volatility_level="normal",
+                is_correct_values=[True],
+            )
+            # 과거 avg_return_5d = 5.0%
+            make_sector_momentum(
+                sector_id=sector.id,
+                target_date=d,
+                avg_return_5d=5.0,
+                momentum_tag="momentum_sector",
+            )
+
+        # 현재 KOSPI 5일 수익률 = -2.0% → 차이 7.0%p > 1%p
+        result = find_similar_market_patterns(
+            db, -2.0, "normal", [sector.id]
+        )
+
+        assert result["has_matches"] is False
+
+    def test_no_match_when_volatility_level_differs(
+        self,
+        db: Session,
+        make_fund_signal,
+        make_sector,
+        make_sector_momentum,
+    ) -> None:
+        """변동성 레벨 불일치 → 매칭 안 됨."""
+        sector = make_sector(name="바이오")
+        base_date = date.today() - timedelta(days=60)
+
+        for day_offset in range(35):
+            d = base_date + timedelta(days=day_offset)
+            # 과거에는 "high" 변동성
+            _create_verified_signals_for_date(
+                db, make_fund_signal, d, count=1,
+                volatility_level="high",
+                is_correct_values=[True],
+            )
+            make_sector_momentum(
+                sector_id=sector.id,
+                target_date=d,
+                avg_return_5d=0.5,
+                momentum_tag="momentum_sector",
+            )
+
+        # 현재 "normal" → "high"와 불일치
+        result = find_similar_market_patterns(
+            db, 0.5, "normal", [sector.id]
+        )
+
+        assert result["has_matches"] is False
+
+    def test_no_match_when_momentum_sectors_dont_overlap(
+        self,
+        db: Session,
+        make_fund_signal,
+        make_sector,
+        make_sector_momentum,
+    ) -> None:
+        """모멘텀 섹터 겹침 없음 → 매칭 안 됨."""
+        sector_a = make_sector(name="건설")
+        sector_b = make_sector(name="금융")
+        base_date = date.today() - timedelta(days=60)
+
+        for day_offset in range(35):
+            d = base_date + timedelta(days=day_offset)
+            _create_verified_signals_for_date(
+                db, make_fund_signal, d, count=1,
+                volatility_level="normal",
+                is_correct_values=[True],
+            )
+            # 과거에는 sector_a가 모멘텀
+            make_sector_momentum(
+                sector_id=sector_a.id,
+                target_date=d,
+                avg_return_5d=0.5,
+                momentum_tag="momentum_sector",
+            )
+
+        # 현재 모멘텀 섹터는 sector_b만 → 겹침 없음
+        result = find_similar_market_patterns(
+            db, 0.5, "normal", [sector_b.id]
+        )
+
+        assert result["has_matches"] is False
+
+    def test_accuracy_calculation(
+        self,
+        db: Session,
+        make_fund_signal,
+        make_sector,
+        make_sector_momentum,
+    ) -> None:
+        """적중률 계산이 정확한지 검증."""
+        sector = make_sector(name="IT")
+        base_date = date.today() - timedelta(days=60)
+
+        # 35일 이력, 각 날짜에 시그널 2개씩 (1개 적중, 1개 실패)
+        for day_offset in range(35):
+            d = base_date + timedelta(days=day_offset)
+            _create_verified_signals_for_date(
+                db, make_fund_signal, d, count=2,
+                volatility_level="normal",
+                is_correct_values=[True, False],
+                return_pct_values=[2.0, -1.5],
+            )
+            make_sector_momentum(
+                sector_id=sector.id,
+                target_date=d,
+                avg_return_5d=1.0,
+                momentum_tag="momentum_sector",
+            )
+
+        result = find_similar_market_patterns(
+            db, 1.0, "normal", [sector.id]
+        )
+
+        assert result["has_matches"] is True
+        # 각 날짜 2개 시그널 중 1개 적중 → 50%
+        assert result["accuracy_pct"] == pytest.approx(50.0, abs=0.1)
+
+
+class TestFormatHistoricalPatternsForBriefing:
+    """format_historical_patterns_for_briefing 유닛 테스트 (AC-022-2, AC-022-3)."""
+
+    def test_no_data_returns_empty(self, db: Session) -> None:
+        """데이터 없음 → 빈 문자열."""
+        result = format_historical_patterns_for_briefing(db, None, None, None)
+        assert result == ""
+
+    def test_formats_high_accuracy_with_positive_note(
+        self,
+        db: Session,
+        make_fund_signal,
+        make_sector,
+        make_sector_momentum,
+    ) -> None:
+        """적중률 70%+ → 신뢰도 보강 코멘트 포함."""
+        sector = make_sector(name="전자")
+        base_date = date.today() - timedelta(days=60)
+
+        for day_offset in range(35):
+            d = base_date + timedelta(days=day_offset)
+            # 3개 중 3개 적중 → 100%
+            _create_verified_signals_for_date(
+                db, make_fund_signal, d, count=3,
+                volatility_level="low",
+                is_correct_values=[True, True, True],
+                return_pct_values=[3.0, 2.0, 1.0],
+            )
+            make_sector_momentum(
+                sector_id=sector.id,
+                target_date=d,
+                avg_return_5d=0.3,
+                momentum_tag="momentum_sector",
+            )
+
+        text = format_historical_patterns_for_briefing(
+            db, 0.3, "low", [sector.id]
+        )
+
+        assert "과거 유사 시장 패턴 분석" in text
+        assert "적중률" in text
+        assert "신뢰도 보강" in text
+
+    def test_formats_low_accuracy_with_caution_note(
+        self,
+        db: Session,
+        make_fund_signal,
+        make_sector,
+        make_sector_momentum,
+    ) -> None:
+        """적중률 40% 이하 → 보수적 접근 코멘트 포함."""
+        sector = make_sector(name="유통")
+        base_date = date.today() - timedelta(days=60)
+
+        for day_offset in range(35):
+            d = base_date + timedelta(days=day_offset)
+            # 3개 중 1개 적중 → ~33%
+            _create_verified_signals_for_date(
+                db, make_fund_signal, d, count=3,
+                volatility_level="high",
+                is_correct_values=[True, False, False],
+                return_pct_values=[1.0, -2.0, -3.0],
+            )
+            make_sector_momentum(
+                sector_id=sector.id,
+                target_date=d,
+                avg_return_5d=-0.2,
+                momentum_tag="momentum_sector",
+            )
+
+        text = format_historical_patterns_for_briefing(
+            db, -0.2, "high", [sector.id]
+        )
+
+        assert "과거 유사 시장 패턴 분석" in text
+        assert "보수적 접근" in text

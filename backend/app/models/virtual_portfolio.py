@@ -16,6 +16,10 @@ class VirtualPortfolio(Base):
     initial_capital: Mapped[int] = mapped_column(Integer, default=100_000_000)  # 초기 자본금 (1억원)
     current_cash: Mapped[int] = mapped_column(Integer, default=100_000_000)  # 현재 현금
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_defensive_mode: Mapped[bool] = mapped_column(Boolean, default=False)  # 방어 모드 활성화 여부
+    defensive_mode_entered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )  # 방어 모드 진입 시각
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

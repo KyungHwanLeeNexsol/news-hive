@@ -294,6 +294,21 @@ def _run_exit_check():
         db.close()
 
 
+def _run_ml_feature_capture():
+    """일별 ML 피처 스냅샷 생성 (REQ-025)."""
+    from app.services.ml_feature_engineering import capture_daily_features
+
+    db = SessionLocal()
+    try:
+        snapshot = asyncio.run(capture_daily_features(db))
+        if snapshot:
+            logger.info(f"ML 피처 스냅샷 생성: {snapshot.date}")
+    except Exception as e:
+        logger.error(f"ML 피처 스냅샷 생성 실패: {e}")
+    finally:
+        db.close()
+
+
 def _run_sector_momentum():
     """섹터 모멘텀 일간 데이터 수집 + 분석 (매일 16:30 KST)."""
     from app.services.sector_momentum import (
@@ -475,6 +490,16 @@ def start_scheduler():
         id="sector_momentum",
         replace_existing=True,
     )
+    # REQ-025: ML 피처 스냅샷 (매일 09:00 KST, 데일리 브리핑 이후)
+    scheduler.add_job(
+        _run_ml_feature_capture,
+        "cron",
+        hour=9,
+        minute=0,
+        timezone="Asia/Seoul",
+        id="ml_feature_capture",
+        replace_existing=True,
+    )
     scheduler.start()
     logger.info(
         f"Scheduler started: crawling every {interval} min, DART every 30 min, "
@@ -484,7 +509,8 @@ def start_scheduler():
         f"relation inference every Sunday 04:00 KST, "
         f"fast verify every 1h, paper exit check every 1h, "
         f"portfolio snapshot at 16:00 KST, "
-        f"sector momentum at 16:30 KST"
+        f"sector momentum at 16:30 KST, "
+        f"ML feature capture at 09:00 KST"
     )
 
 

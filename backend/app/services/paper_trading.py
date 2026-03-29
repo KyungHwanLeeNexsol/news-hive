@@ -19,6 +19,11 @@ MAX_POSITION_PCT = 0.10
 # 타임아웃: 포지션 최대 보유 기간 (영업일 기준)
 MAX_HOLD_DAYS = 10
 
+# 방어 모드 임계값 (REQ-021)
+DEFENSIVE_MODE_ENTER_THRESHOLD = -10.0  # 누적 수익률 -10% 이하 → 방어 모드 진입
+DEFENSIVE_MODE_EXIT_THRESHOLD = -5.0    # 누적 수익률 -5% 이상 → 방어 모드 해제
+DEFENSIVE_STOP_LOSS_PCT = 0.03          # 방어 모드 시 손절 기준: 진입가 대비 -3%
+
 
 def get_or_create_portfolio(db: Session) -> VirtualPortfolio:
     """활성 가상 포트폴리오를 가져오거나 생성한다."""
@@ -36,6 +41,54 @@ def get_or_create_portfolio(db: Session) -> VirtualPortfolio:
     return portfolio
 
 
+def check_defensive_mode(db: Session) -> bool:
+    """포트폴리오 방어 모드를 점검하고 상태를 갱신한다.
+
+    - 누적 수익률 <= -10%: 방어 모드 진입 (신규 매수 차단, 손절 기준 강화)
+    - 누적 수익률 >= -5%: 방어 모드 해제
+
+    Returns:
+        현재 방어 모드 활성화 여부
+    """
+    portfolio = db.query(VirtualPortfolio).filter(VirtualPortfolio.is_active.is_(True)).first()
+    if not portfolio:
+        return False
+
+    # 최신 스냅샷에서 누적 수익률 확인
+    latest_snapshot = (
+        db.query(PortfolioSnapshot)
+        .filter(PortfolioSnapshot.portfolio_id == portfolio.id)
+        .order_by(PortfolioSnapshot.snapshot_date.desc())
+        .first()
+    )
+    if not latest_snapshot:
+        return portfolio.is_defensive_mode
+
+    cumulative_return = latest_snapshot.cumulative_return_pct or 0.0
+    was_defensive = portfolio.is_defensive_mode
+
+    if not was_defensive and cumulative_return <= DEFENSIVE_MODE_ENTER_THRESHOLD:
+        # 방어 모드 진입
+        portfolio.is_defensive_mode = True
+        portfolio.defensive_mode_entered_at = datetime.now(timezone.utc)
+        db.commit()
+        logger.warning(
+            "방어 모드 진입: 누적 수익률 %.2f%% (임계값: %.1f%%)",
+            cumulative_return, DEFENSIVE_MODE_ENTER_THRESHOLD,
+        )
+    elif was_defensive and cumulative_return >= DEFENSIVE_MODE_EXIT_THRESHOLD:
+        # 방어 모드 해제
+        portfolio.is_defensive_mode = False
+        portfolio.defensive_mode_entered_at = None
+        db.commit()
+        logger.info(
+            "방어 모드 해제: 누적 수익률 %.2f%% (회복 임계값: %.1f%%)",
+            cumulative_return, DEFENSIVE_MODE_EXIT_THRESHOLD,
+        )
+
+    return portfolio.is_defensive_mode
+
+
 async def execute_signal_trade(db: Session, signal: FundSignal) -> VirtualTrade | None:
     """시그널 기반 가상 매매를 실행한다.
 
@@ -46,6 +99,12 @@ async def execute_signal_trade(db: Session, signal: FundSignal) -> VirtualTrade 
     if signal.signal == "hold":
         return None
     if signal.signal == "buy" and signal.confidence < 0.6:
+        return None
+
+    # REQ-021: 방어 모드 점검 및 매수 차단
+    is_defensive = check_defensive_mode(db)
+    if is_defensive and signal.signal == "buy":
+        logger.info("방어 모드 활성화: 신규 매수 시그널 차단 (종목 ID: %d)", signal.stock_id)
         return None
 
     portfolio = get_or_create_portfolio(db)
@@ -160,6 +219,9 @@ async def check_exit_conditions(db: Session) -> dict:
     stats: dict = {"checked": 0, "closed": 0, "reasons": {}}
     now = datetime.now(timezone.utc)
 
+    # REQ-021: 방어 모드 시 손절 기준 강화 (-5% → -3%)
+    is_defensive = portfolio.is_defensive_mode
+
     for trade in open_trades:
         stock = db.query(Stock).filter(Stock.id == trade.stock_id).first()
         if not stock:
@@ -172,11 +234,19 @@ async def check_exit_conditions(db: Session) -> dict:
         stats["checked"] += 1
         exit_reason = None
 
+        # 방어 모드: 진입가 대비 -3% 손절 기준 적용
+        effective_stop_loss = trade.stop_loss
+        if is_defensive:
+            defensive_stop = int(trade.entry_price * (1 - DEFENSIVE_STOP_LOSS_PCT))
+            # 방어 모드 손절가가 기존 손절가보다 높으면 (더 보수적이면) 방어 모드 기준 사용
+            if effective_stop_loss is None or defensive_stop > effective_stop_loss:
+                effective_stop_loss = defensive_stop
+
         # 목표가 도달
         if trade.target_price and current_price >= trade.target_price:
             exit_reason = "target_hit"
-        # 손절가 이탈
-        elif trade.stop_loss and current_price <= trade.stop_loss:
+        # 손절가 이탈 (방어 모드 시 강화된 기준 적용)
+        elif effective_stop_loss and current_price <= effective_stop_loss:
             exit_reason = "stop_loss"
         # 타임아웃
         elif (now - trade.entry_date).days >= MAX_HOLD_DAYS:
@@ -275,6 +345,10 @@ async def take_daily_snapshot(db: Session) -> PortfolioSnapshot | None:
     db.commit()
     db.refresh(snapshot)
     logger.info("포트폴리오 스냅샷: 총자산=%d, 수익률=%.2f%%", total_value, cumulative_return)
+
+    # REQ-021: 스냅샷 저장 후 방어 모드 점검
+    check_defensive_mode(db)
+
     return snapshot
 
 
@@ -347,4 +421,9 @@ def get_portfolio_stats(db: Session) -> dict:
         "sharpe_ratio": sharpe_ratio,
         "mdd": mdd,
         "sharpe_warning": sharpe_ratio < 1.0 and len(daily_returns) >= 20,
+        "is_defensive_mode": portfolio.is_defensive_mode,
+        "defensive_mode_entered_at": (
+            portfolio.defensive_mode_entered_at.isoformat()
+            if portfolio.defensive_mode_entered_at else None
+        ),
     }

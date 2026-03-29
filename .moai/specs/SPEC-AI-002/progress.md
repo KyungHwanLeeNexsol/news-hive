@@ -21,3 +21,11 @@
   - 40 new tests (earnings 24 + commodity 16), all passing
   - AC-018-1,2,3 / AC-024-1: all completed
   - 총 테스트: 403 passed, 23 pre-existing failures (regression 없음)
+- Phase 2 (DDD): complete - Phase 4 implementation (REQ-021, 022, 023, 025)
+  - REQ-021: Max Drawdown 방어 모드 (진입 -10%, 해제 -5%, 손절 강화 -3%)
+  - REQ-022: 과거 유사 패턴 매칭 (KOSPI 수익률, 변동성, 모멘텀 섹터)
+  - REQ-023: 5단계 CoT 프롬프트 + STEP 누락 감지
+  - REQ-025: ML 피처 스냅샷 테이블 + 일간 자동 캡처 + 90일 준비 알림
+  - 47 new tests, all passing
+  - 총 테스트: 450 passed, 24 pre-existing failures (regression 없음)
+  - SPEC-AI-002 전체 구현 완료

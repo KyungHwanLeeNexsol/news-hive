@@ -13,6 +13,7 @@ from app.models.prompt_version import PromptVersion, PromptABResult
 from app.models.virtual_portfolio import VirtualPortfolio, VirtualTrade, PortfolioSnapshot
 from app.models.sector_momentum import SectorMomentum
 from app.models.sector_rotation_event import SectorRotationEvent
+from app.models.ml_feature import MLFeatureSnapshot
 
 __all__ = [
     "Sector", "Stock", "NewsArticle", "NewsStockRelation",
@@ -22,4 +23,5 @@ __all__ = [
     "PromptVersion", "PromptABResult",
     "VirtualPortfolio", "VirtualTrade", "PortfolioSnapshot",
     "SectorMomentum", "SectorRotationEvent",
+    "MLFeatureSnapshot",
 ]
