@@ -326,6 +326,11 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
             source_counts[source_name] = len(articles)
         elif isinstance(result, Exception):
             logger.warning(f"Phase 1 fetch failed: {result}")
+            try:
+                from app.metrics import CRAWL_ERRORS
+                CRAWL_ERRORS.labels(source="phase1").inc()
+            except Exception:
+                pass
 
     # Phase 2: Query-based search
     search_queries = _build_search_queries(db, sectors, stocks)
@@ -375,6 +380,15 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
                 all_raw_articles.extend(result)
 
     logger.info(f"Raw articles by source: {source_counts}, total={len(all_raw_articles)}")
+
+    # Prometheus 크롤링 메트릭 기록
+    try:
+        from app.metrics import CRAWL_ARTICLES
+        for source_name, count in source_counts.items():
+            if count > 0:
+                CRAWL_ARTICLES.labels(source=source_name).inc(count)
+    except Exception:
+        pass
 
     # Deduplicate by URL + near-duplicate title detection (exact + fuzzy)
     seen_urls: set[str] = set()

@@ -1,23 +1,36 @@
 import asyncio
 import logging
+import time as _time
 from datetime import datetime
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from app.config import settings
 from app.database import SessionLocal
+from app.services.job_retry import retry_with_backoff
 
 logger = logging.getLogger(__name__)
+
+
+def _record_job_duration(job_id: str, duration: float) -> None:
+    """Prometheus JOB_DURATION 메트릭 기록 (임포트 실패 시 무시)."""
+    try:
+        from app.metrics import JOB_DURATION
+        JOB_DURATION.labels(job_id=job_id).observe(duration)
+    except Exception:
+        pass
 
 scheduler = BackgroundScheduler()
 
 
+@retry_with_backoff(max_attempts=3)
 def _run_crawl_job():
     """Sync wrapper that runs the async crawl job.
 
     BackgroundScheduler runs jobs in a separate thread pool, so asyncio.run()
     safely creates a new event loop without conflicting with uvloop on the main thread.
     """
+    _start = _time.monotonic()
     from app.services.news_crawler import crawl_all_news
     from app.services.ai_classifier import classify_sentiment
     from app.models.news import NewsArticle
@@ -49,7 +62,9 @@ def _run_crawl_job():
             logger.info(f"Backfilled sentiment for {len(articles)} articles")
     except Exception as e:
         logger.error(f"Scheduled crawl failed: {e}")
+        raise
     finally:
+        _record_job_duration("news_crawl", _time.monotonic() - _start)
         db.close()
 
 
@@ -95,8 +110,10 @@ def _cleanup_old_disclosures(db):
         logger.info(f"Cleaned up {deleted} disclosures older than 7 days")
 
 
+@retry_with_backoff(max_attempts=3)
 def _run_dart_crawl():
     """Sync wrapper that runs the async DART disclosure crawl."""
+    _start = _time.monotonic()
     from app.services.dart_crawler import fetch_dart_disclosures, backfill_disclosure_stock_ids, backfill_disclosure_report_types
 
     db = SessionLocal()
@@ -109,13 +126,17 @@ def _run_dart_crawl():
         backfill_disclosure_report_types(db)
     except Exception as e:
         logger.error(f"DART crawl failed: {e}")
+        raise
     finally:
+        _record_job_duration("dart_crawl", _time.monotonic() - _start)
         db.close()
 
 
 
+@retry_with_backoff(max_attempts=3)
 def _update_market_caps():
     """Fetch market cap from Naver Mobile API and update DB stocks."""
+    _start = _time.monotonic()
     from app.models.stock import Stock
     from app.services.naver_finance import fetch_naver_stock_list
 
@@ -150,12 +171,16 @@ def _update_market_caps():
         logger.info(f"Updated market_cap for {updated}/{len(stocks)} stocks (from {len(cap_map)} rankings)")
     except Exception as e:
         logger.error(f"Market cap update failed: {e}")
+        raise
     finally:
+        _record_job_duration("market_cap_update", _time.monotonic() - _start)
         db.close()
 
 
+@retry_with_backoff(max_attempts=3)
 def _run_daily_briefing():
     """매일 오전 데일리 브리핑 자동 생성."""
+    _start = _time.monotonic()
     from app.services.fund_manager import generate_daily_briefing
 
     db = SessionLocal()
@@ -165,12 +190,16 @@ def _run_daily_briefing():
             logger.info(f"Daily briefing auto-generated for {briefing.briefing_date}")
     except Exception as e:
         logger.error(f"Daily briefing generation failed: {e}")
+        raise
     finally:
+        _record_job_duration("daily_briefing", _time.monotonic() - _start)
         db.close()
 
 
+@retry_with_backoff(max_attempts=3)
 def _run_signal_verification():
     """과거 시그널의 적중 여부를 검증한다."""
+    _start = _time.monotonic()
     from app.services.signal_verifier import verify_signals
 
     db = SessionLocal()
@@ -180,12 +209,16 @@ def _run_signal_verification():
             logger.info(f"Signal verification: {stats['verified']} verified, {stats['updated']} updated")
     except Exception as e:
         logger.error(f"Signal verification failed: {e}")
+        raise
     finally:
+        _record_job_duration("signal_verification", _time.monotonic() - _start)
         db.close()
 
 
+@retry_with_backoff(max_attempts=3)
 def _run_news_impact_backfill():
     """뉴스-가격 반응 1일/5일 backfill (REQ-NPI-006~009)."""
+    _start = _time.monotonic()
     from app.services.news_price_impact_service import backfill_prices
 
     db = SessionLocal()
@@ -195,12 +228,16 @@ def _run_news_impact_backfill():
             logger.info(f"News impact backfill: 1d={stats['updated_1d']}, 5d={stats['updated_5d']}")
     except Exception as e:
         logger.error(f"News impact backfill failed: {e}")
+        raise
     finally:
+        _record_job_duration("news_impact_backfill", _time.monotonic() - _start)
         db.close()
 
 
+@retry_with_backoff(max_attempts=3)
 def _run_fast_verify():
     """장중 빠른 검증 실행 (1시간 간격)."""
+    _start = _time.monotonic()
     from app.services.signal_verifier import fast_verify
 
     db = SessionLocal()
@@ -210,12 +247,16 @@ def _run_fast_verify():
             logger.info(f"Fast verify: {stats['checked']} checked, {stats['early_warnings']} warnings")
     except Exception as e:
         logger.error(f"Fast verify failed: {e}")
+        raise
     finally:
+        _record_job_duration("fast_verify", _time.monotonic() - _start)
         db.close()
 
 
+@retry_with_backoff(max_attempts=3)
 def _run_commodity_price_fetch():
     """원자재 가격 수집 + 급변 알림 생성."""
+    _start = _time.monotonic()
     from app.services.commodity_service import fetch_commodity_prices, check_commodity_alerts
 
     db = SessionLocal()
@@ -227,12 +268,16 @@ def _run_commodity_price_fetch():
                 logger.info(f"원자재 급변 알림: {len(alerts)}개 생성")
     except Exception as e:
         logger.error(f"원자재 가격 수집 실패: {e}")
+        raise
     finally:
+        _record_job_duration("commodity_price_fetch", _time.monotonic() - _start)
         db.close()
 
 
+@retry_with_backoff(max_attempts=3)
 def _run_commodity_news_crawl():
     """원자재 뉴스 크롤링 (기존 크롤러 재사용)."""
+    _start = _time.monotonic()
     from app.services.commodity_news_service import crawl_commodity_news
 
     db = SessionLocal()
@@ -242,12 +287,16 @@ def _run_commodity_news_crawl():
             logger.info(f"원자재 뉴스 크롤링 완료: {count}개 기사")
     except Exception as e:
         logger.error(f"원자재 뉴스 크롤링 실패: {e}")
+        raise
     finally:
+        _record_job_duration("commodity_news_crawl", _time.monotonic() - _start)
         db.close()
 
 
+@retry_with_backoff(max_attempts=3)
 def _run_news_impact_cleanup():
     """90일 초과 뉴스-가격 반응 레코드 정리 (REQ-NPI-016)."""
+    _start = _time.monotonic()
     from app.services.news_price_impact_service import cleanup_old_impacts
 
     db = SessionLocal()
@@ -257,12 +306,16 @@ def _run_news_impact_cleanup():
             logger.info(f"News impact cleanup: {deleted} records deleted")
     except Exception as e:
         logger.error(f"News impact cleanup failed: {e}")
+        raise
     finally:
+        _record_job_duration("news_impact_cleanup", _time.monotonic() - _start)
         db.close()
 
 
+@retry_with_backoff(max_attempts=3)
 def _run_relation_inference():
     """주간 종목/섹터 관계 증분 추론."""
+    _start = _time.monotonic()
     from app.services.stock_relation_service import run_incremental_inference
 
     db = SessionLocal()
@@ -275,12 +328,16 @@ def _run_relation_inference():
             )
     except Exception as e:
         logger.error(f"주간 관계 추론 실패: {e}")
+        raise
     finally:
+        _record_job_duration("relation_inference", _time.monotonic() - _start)
         db.close()
 
 
+@retry_with_backoff(max_attempts=3)
 def _run_exit_check():
     """장중 청산 조건 확인 (1시간 간격)."""
+    _start = _time.monotonic()
     from app.services.paper_trading import check_exit_conditions
 
     db = SessionLocal()
@@ -290,12 +347,16 @@ def _run_exit_check():
             logger.info(f"Paper trading exit check: {stats['closed']} closed ({stats['reasons']})")
     except Exception as e:
         logger.error(f"Paper trading exit check failed: {e}")
+        raise
     finally:
+        _record_job_duration("paper_exit_check", _time.monotonic() - _start)
         db.close()
 
 
+@retry_with_backoff(max_attempts=3)
 def _run_ml_feature_capture():
     """일별 ML 피처 스냅샷 생성 (REQ-025)."""
+    _start = _time.monotonic()
     from app.services.ml_feature_engineering import capture_daily_features
 
     db = SessionLocal()
@@ -305,10 +366,13 @@ def _run_ml_feature_capture():
             logger.info(f"ML 피처 스냅샷 생성: {snapshot.date}")
     except Exception as e:
         logger.error(f"ML 피처 스냅샷 생성 실패: {e}")
+        raise
     finally:
+        _record_job_duration("ml_feature_capture", _time.monotonic() - _start)
         db.close()
 
 
+@retry_with_backoff(max_attempts=3)
 def _run_sector_momentum():
     """섹터 모멘텀 일간 데이터 수집 + 분석 (매일 16:30 KST)."""
     from app.services.sector_momentum import (
@@ -318,6 +382,7 @@ def _run_sector_momentum():
         detect_sector_rotation,
     )
 
+    _start = _time.monotonic()
     db = SessionLocal()
     try:
         # 1) 당일 섹터 등락률 기록
@@ -341,12 +406,16 @@ def _run_sector_momentum():
             logger.info(f"섹터 로테이션 {len(rotations)}건 감지")
     except Exception as e:
         logger.error(f"섹터 모멘텀 분석 실패: {e}")
+        raise
     finally:
+        _record_job_duration("sector_momentum", _time.monotonic() - _start)
         db.close()
 
 
+@retry_with_backoff(max_attempts=3)
 def _run_portfolio_snapshot():
     """일말 포트폴리오 스냅샷 (매일 16:00 KST)."""
+    _start = _time.monotonic()
     from app.services.paper_trading import take_daily_snapshot
 
     db = SessionLocal()
@@ -354,7 +423,9 @@ def _run_portfolio_snapshot():
         asyncio.run(take_daily_snapshot(db))
     except Exception as e:
         logger.error(f"Portfolio snapshot failed: {e}")
+        raise
     finally:
+        _record_job_duration("portfolio_snapshot", _time.monotonic() - _start)
         db.close()
 
 

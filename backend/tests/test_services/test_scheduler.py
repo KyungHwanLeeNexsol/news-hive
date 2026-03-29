@@ -56,11 +56,12 @@ class TestRunCrawlJob:
         assert mock_arun.call_count >= 1  # crawl_all_news + detect_macro_risks
         mock_db.close.assert_called_once()
 
+    @patch("app.services.job_retry.time.sleep")
     @patch("app.services.scheduler._cleanup_old_articles")
     @patch("app.services.scheduler.asyncio.run")
     @patch("app.services.scheduler.SessionLocal")
     def test_handles_crawl_exception(
-        self, mock_session_cls, mock_arun, mock_cleanup,
+        self, mock_session_cls, mock_arun, mock_cleanup, mock_sleep,
     ) -> None:
         """크롤링 실패 시 예외가 전파되지 않고 db.close()가 호출된다."""
         mock_db = MagicMock()
@@ -69,7 +70,7 @@ class TestRunCrawlJob:
 
         _run_crawl_job()
 
-        mock_db.close.assert_called_once()
+        mock_db.close.assert_called()
 
 
 class TestRunDailyBriefing:
@@ -90,10 +91,11 @@ class TestRunDailyBriefing:
         mock_arun.assert_called_once()
         mock_db.close.assert_called_once()
 
+    @patch("app.services.job_retry.time.sleep")
     @patch("app.services.scheduler.asyncio.run")
     @patch("app.services.scheduler.SessionLocal")
     def test_handles_briefing_exception(
-        self, mock_session_cls, mock_arun,
+        self, mock_session_cls, mock_arun, mock_sleep,
     ) -> None:
         """브리핑 생성 실패 시 예외가 전파되지 않는다."""
         mock_db = MagicMock()
@@ -102,7 +104,7 @@ class TestRunDailyBriefing:
 
         _run_daily_briefing()
 
-        mock_db.close.assert_called_once()
+        mock_db.close.assert_called()
 
 
 class TestRunSignalVerification:
@@ -182,10 +184,11 @@ class TestRunNewsImpactCleanup:
         mock_arun.assert_called_once()
         mock_db.close.assert_called_once()
 
+    @patch("app.services.job_retry.time.sleep")
     @patch("app.services.scheduler.asyncio.run")
     @patch("app.services.scheduler.SessionLocal")
     def test_handles_cleanup_exception(
-        self, mock_session_cls, mock_arun,
+        self, mock_session_cls, mock_arun, mock_sleep,
     ) -> None:
         """정리 실패 시 예외가 전파되지 않는다."""
         mock_db = MagicMock()
@@ -194,7 +197,7 @@ class TestRunNewsImpactCleanup:
 
         _run_news_impact_cleanup()
 
-        mock_db.close.assert_called_once()
+        mock_db.close.assert_called()
 
 
 # ---------------------------------------------------------------------------
@@ -217,9 +220,10 @@ class TestRunFastVerify:
         mock_arun.assert_called_once()
         mock_db.close.assert_called_once()
 
+    @patch("app.services.job_retry.time.sleep")
     @patch("app.services.scheduler.asyncio.run")
     @patch("app.services.scheduler.SessionLocal")
-    def test_handles_fast_verify_exception(self, mock_session_cls, mock_arun) -> None:
+    def test_handles_fast_verify_exception(self, mock_session_cls, mock_arun, mock_sleep) -> None:
         """fast_verify 실패 시 예외가 전파되지 않는다."""
         mock_db = MagicMock()
         mock_session_cls.return_value = mock_db
@@ -227,7 +231,7 @@ class TestRunFastVerify:
 
         _run_fast_verify()
 
-        mock_db.close.assert_called_once()
+        mock_db.close.assert_called()
 
 
 class TestRunCommodityPriceFetch:
@@ -259,15 +263,16 @@ class TestRunCommodityPriceFetch:
         mock_fetch.assert_called_once()
         mock_alerts.assert_not_called()
 
+    @patch("app.services.job_retry.time.sleep")
     @patch("app.services.commodity_service.fetch_commodity_prices", side_effect=Exception("err"))
     @patch("app.services.scheduler.SessionLocal")
-    def test_handles_exception(self, mock_session_cls, mock_fetch) -> None:
+    def test_handles_exception(self, mock_session_cls, mock_fetch, mock_sleep) -> None:
         mock_db = MagicMock()
         mock_session_cls.return_value = mock_db
 
         _run_commodity_price_fetch()
 
-        mock_db.close.assert_called_once()
+        mock_db.close.assert_called()
 
 
 class TestRunCommodityNewsCrawl:
@@ -285,16 +290,17 @@ class TestRunCommodityNewsCrawl:
         mock_arun.assert_called_once()
         mock_db.close.assert_called_once()
 
+    @patch("app.services.job_retry.time.sleep")
     @patch("app.services.scheduler.asyncio.run")
     @patch("app.services.scheduler.SessionLocal")
-    def test_handles_exception(self, mock_session_cls, mock_arun) -> None:
+    def test_handles_exception(self, mock_session_cls, mock_arun, mock_sleep) -> None:
         mock_db = MagicMock()
         mock_session_cls.return_value = mock_db
         mock_arun.side_effect = Exception("crawl error")
 
         _run_commodity_news_crawl()
 
-        mock_db.close.assert_called_once()
+        mock_db.close.assert_called()
 
 
 class TestRunRelationInference:
@@ -312,16 +318,17 @@ class TestRunRelationInference:
         mock_arun.assert_called_once()
         mock_db.close.assert_called_once()
 
+    @patch("app.services.job_retry.time.sleep")
     @patch("app.services.scheduler.asyncio.run")
     @patch("app.services.scheduler.SessionLocal")
-    def test_handles_exception(self, mock_session_cls, mock_arun) -> None:
+    def test_handles_exception(self, mock_session_cls, mock_arun, mock_sleep) -> None:
         mock_db = MagicMock()
         mock_session_cls.return_value = mock_db
         mock_arun.side_effect = Exception("inference error")
 
         _run_relation_inference()
 
-        mock_db.close.assert_called_once()
+        mock_db.close.assert_called()
 
 
 class TestRunExitCheck:
@@ -339,16 +346,17 @@ class TestRunExitCheck:
         mock_arun.assert_called_once()
         mock_db.close.assert_called_once()
 
+    @patch("app.services.job_retry.time.sleep")
     @patch("app.services.scheduler.asyncio.run")
     @patch("app.services.scheduler.SessionLocal")
-    def test_handles_exception(self, mock_session_cls, mock_arun) -> None:
+    def test_handles_exception(self, mock_session_cls, mock_arun, mock_sleep) -> None:
         mock_db = MagicMock()
         mock_session_cls.return_value = mock_db
         mock_arun.side_effect = Exception("exit check error")
 
         _run_exit_check()
 
-        mock_db.close.assert_called_once()
+        mock_db.close.assert_called()
 
 
 class TestRunPortfolioSnapshot:
@@ -366,16 +374,17 @@ class TestRunPortfolioSnapshot:
         mock_arun.assert_called_once()
         mock_db.close.assert_called_once()
 
+    @patch("app.services.job_retry.time.sleep")
     @patch("app.services.scheduler.asyncio.run")
     @patch("app.services.scheduler.SessionLocal")
-    def test_handles_exception(self, mock_session_cls, mock_arun) -> None:
+    def test_handles_exception(self, mock_session_cls, mock_arun, mock_sleep) -> None:
         mock_db = MagicMock()
         mock_session_cls.return_value = mock_db
         mock_arun.side_effect = Exception("snapshot error")
 
         _run_portfolio_snapshot()
 
-        mock_db.close.assert_called_once()
+        mock_db.close.assert_called()
 
 
 class TestRunSectorMomentum:
@@ -399,16 +408,17 @@ class TestRunSectorMomentum:
         mock_rotation.assert_called_once_with(mock_db)
         mock_db.close.assert_called_once()
 
+    @patch("app.services.job_retry.time.sleep")
     @patch("app.services.scheduler.asyncio.run")
     @patch("app.services.scheduler.SessionLocal")
-    def test_handles_exception(self, mock_session_cls, mock_arun) -> None:
+    def test_handles_exception(self, mock_session_cls, mock_arun, mock_sleep) -> None:
         mock_db = MagicMock()
         mock_session_cls.return_value = mock_db
         mock_arun.side_effect = Exception("momentum error")
 
         _run_sector_momentum()
 
-        mock_db.close.assert_called_once()
+        mock_db.close.assert_called()
 
 
 class TestRunMlFeatureCapture:
@@ -427,16 +437,17 @@ class TestRunMlFeatureCapture:
         mock_arun.assert_called_once()
         mock_db.close.assert_called_once()
 
+    @patch("app.services.job_retry.time.sleep")
     @patch("app.services.scheduler.asyncio.run")
     @patch("app.services.scheduler.SessionLocal")
-    def test_handles_exception(self, mock_session_cls, mock_arun) -> None:
+    def test_handles_exception(self, mock_session_cls, mock_arun, mock_sleep) -> None:
         mock_db = MagicMock()
         mock_session_cls.return_value = mock_db
         mock_arun.side_effect = Exception("ML error")
 
         _run_ml_feature_capture()
 
-        mock_db.close.assert_called_once()
+        mock_db.close.assert_called()
 
 
 class TestCleanupOldDisclosures:
@@ -478,16 +489,17 @@ class TestUpdateMarketCaps:
         assert mock_arun.called
         mock_db.close.assert_called_once()
 
+    @patch("app.services.job_retry.time.sleep")
     @patch("app.services.scheduler.asyncio.run")
     @patch("app.services.scheduler.SessionLocal")
-    def test_handles_exception(self, mock_session_cls, mock_arun) -> None:
+    def test_handles_exception(self, mock_session_cls, mock_arun, mock_sleep) -> None:
         mock_db = MagicMock()
         mock_session_cls.return_value = mock_db
         mock_arun.side_effect = Exception("market cap error")
 
         _update_market_caps()
 
-        mock_db.close.assert_called_once()
+        mock_db.close.assert_called()
 
 
 class TestStartStopScheduler:

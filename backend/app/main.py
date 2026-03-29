@@ -17,7 +17,21 @@ from app.services.scheduler import start_scheduler, stop_scheduler
 
 import logging
 
-logging.basicConfig(level=logging.INFO)
+# 구조화된 JSON 로깅 설정 (기존 로그 출력과 병행)
+try:
+    from pythonjsonlogger.json import JsonFormatter as _JsonFormatter
+
+    _json_handler = logging.StreamHandler()
+    _json_formatter = _JsonFormatter(
+        "%(asctime)s %(name)s %(levelname)s %(message)s",
+        rename_fields={"asctime": "timestamp", "levelname": "level"},
+    )
+    _json_handler.setFormatter(_json_formatter)
+    logging.root.handlers = [_json_handler]
+    logging.root.setLevel(logging.INFO)
+except ImportError:
+    # python-json-logger 미설치 시 기본 로깅 유지
+    logging.basicConfig(level=logging.INFO)
 
 
 def _run_migrations():
@@ -121,6 +135,15 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Stock News Tracker API", lifespan=lifespan)
 
+# Prometheus 메트릭 자동 수집 (전체 라우트 자동 계측)
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+    Instrumentator().instrument(app).expose(app, endpoint="/metrics")
+except ImportError:
+    logging.getLogger(__name__).info(
+        "prometheus-fastapi-instrumentator 미설치 - /metrics 비활성화"
+    )
+
 from app.config import settings as app_settings  # noqa: E402
 
 app.add_middleware(
@@ -158,6 +181,33 @@ app.include_router(ws_router)
 @app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/api/health/scheduler")
+def scheduler_health():
+    """스케줄러 작업 상태 반환: id, next_run_time, is_overdue."""
+    from app.services.scheduler import scheduler
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    jobs = []
+    for job in scheduler.get_jobs():
+        next_run = job.next_run_time
+        is_overdue = False
+        next_run_str = None
+        if next_run is not None:
+            next_run_str = next_run.isoformat()
+            is_overdue = next_run < now
+        jobs.append({
+            "id": job.id,
+            "next_run_time": next_run_str,
+            "is_overdue": is_overdue,
+        })
+    return {
+        "scheduler_running": scheduler.running,
+        "job_count": len(jobs),
+        "jobs": jobs,
+    }
 
 
 @app.get("/api/admin/cache/stats")
