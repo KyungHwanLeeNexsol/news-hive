@@ -1,7 +1,7 @@
 ---
 id: SPEC-AI-002
 version: "1.0.0"
-status: draft
+status: completed
 created: "2026-03-29"
 updated: "2026-03-29"
 author: zuge3
@@ -293,3 +293,42 @@ SPEC-AI-001(Phase A/B/C)에서 구축한 4-factor scoring, A/B 테스트, 베이
 | REQ-AI-023 | CoT 프롬프트 고도화 | fund_manager.py |
 | REQ-AI-024 | 원자재 크로스 검증 | fund_manager.py |
 | REQ-AI-025 | ML 피처 엔지니어링 | ml_features.py (신규) |
+
+---
+
+## Implementation Notes
+
+구현 완료일: 2026-03-29
+
+### Phase 1 (REQ-014, 015, 020)
+- factor_scoring.py에 다중 시간축 분석 (5/20/60일) 통합
+- 거래량 이상 탐지 (20일 평균 2배 기준) 구현
+- market_context.py에 KOSPI 20일 변동성 레벨 계산 구현
+- fund_signals에 trend_alignment, volatility_level 필드 추가
+
+### Phase 2 (REQ-016, 017, 019)
+- sector_momentum.py 서비스 신규 생성
+- SectorMomentum, SectorRotationEvent ORM 모델 생성
+- Alembic 마이그레이션 030 생성
+- fund_manager.py에 섹터별 시그널 중복 제거 (최대 2개) 구현
+
+### Phase 3 (REQ-018, 024)
+- earnings_analyzer.py 서비스 신규 생성 (DART 어닝 서프라이즈)
+- market_context.py에 원자재 연관 검증 로직 추가
+- Commodity, CommodityPrice, SectorCommodityRelation 모델 활용
+
+### Phase 4 (REQ-021, 022, 023, 025)
+- paper_trading.py에 방어 모드 (진입 -10%, 해제 -5%, 손절 -3%) 구현
+- market_context.py에 유사 패턴 매칭 함수 추가
+- fund_manager.py에 5단계 CoT 프롬프트 + STEP 누락 감지 구현
+- ml_feature_engineering.py 서비스 신규 생성 (일별 피처 스냅샷)
+- Alembic 마이그레이션 031, 032 생성
+
+### 테스트 현황
+- 총 450 tests passed (신규 ~120개)
+- 24 pre-existing failures (SPEC-AI-002 이전부터 존재)
+- regression 없음
+
+### 장기 항목
+- REQ-AI-011 (ML 앙상블): REQ-025로 데이터 수집 준비 완료. 90일 축적 후 활성화
+- REQ-AI-012 (섹터 전파): 별도 SPEC으로 계획 필요
