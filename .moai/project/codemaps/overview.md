@@ -107,7 +107,7 @@ APScheduler의 BackgroundScheduler가 7개 작업을 관리한다.
 
 | 컴포넌트 | 환경 | 주소 |
 |---------|------|------|
-| Backend | Oracle Cloud VM (Ubuntu) | `168.107.51.242:8000` |
+| Backend | Oracle Cloud VM (Ubuntu) | `140.245.76.242:8000` |
 | Frontend | Vercel (자동 배포) | Vercel 도메인 |
 | Database | PostgreSQL 16 (Docker) | VM 내부 `localhost:5432` |
 | 서비스 관리 | systemd (`newshive` 유닛) | - |

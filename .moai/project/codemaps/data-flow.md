@@ -188,7 +188,7 @@ _update_market_caps()
 Next.js (Vercel)
     │
     ├── next.config.ts의 rewrites 규칙
-    │   `/api/*` → `http://168.107.51.242:8000/api/*`
+    │   `/api/*` → `http://140.245.76.242:8000/api/*`
     │
     ▼
 lib/api.ts의 fetchWithRetry()
