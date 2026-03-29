@@ -7,6 +7,7 @@ import type { Sector, NewsArticle, StockListItem, DisclosureItem } from '@/lib/t
 import { formatSectorName } from '@/lib/format';
 import ChangeRate from '@/components/ChangeRate';
 import CommodityTicker from '@/components/CommodityTicker';
+import SectorHeatmap from '@/components/SectorHeatmap';
 import { useWatchlist } from '@/lib/watchlist';
 import { useMarketRefresh } from '@/lib/useMarketRefresh';
 
@@ -49,6 +50,7 @@ export default function Dashboard() {
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [watchedStocks, setWatchedStocks] = useState<StockListItem[]>([]);
+  const [showTable, setShowTable] = useState(false);
   const [recentDisclosures, setRecentDisclosures] = useState<DisclosureItem[]>([]);
   const { watchlist, toggleStock, isWatched } = useWatchlist();
 
@@ -145,75 +147,100 @@ export default function Dashboard() {
     <div className="flex gap-4">
       {/* Left: Sector table */}
       <div className="flex-1 min-w-0">
+        {/* 섹터 히트맵 */}
+        {!loading && visibleSectors.length > 0 && (
+          <div className="section-box mb-3">
+            <div className="section-title">
+              <span>업종 히트맵</span>
+              <span className="text-[12px] font-normal text-[#999]">
+                크기: 종목 수 비례 / 색상: 전일대비
+              </span>
+            </div>
+            <div className="p-3">
+              <SectorHeatmap sectors={visibleSectors} />
+            </div>
+          </div>
+        )}
+
         <div className="section-box">
           <div className="section-title">
             <span>업종 현황</span>
-            {!loading && (
-              <span className="text-[12px] font-normal text-[#999]">
-                {visibleSectors.length}개 업종 / {totalStocks}개 종목
-              </span>
-            )}
-          </div>
-          <table className="naver-table">
-            <thead>
-              <tr>
-                <th className="text-left" style={{ width: '30%' }}>업종명</th>
-                <th style={{ width: '14%' }}>전일대비</th>
-                <th style={{ width: '10%' }}>전체</th>
-                <th style={{ width: '10%' }}>상승</th>
-                <th style={{ width: '10%' }}>보합</th>
-                <th style={{ width: '10%' }}>하락</th>
-                <th style={{ width: '16%' }}>뉴스</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                Array.from({ length: 10 }).map((_, i) => (
-                  <tr key={`sk-${i}`}>
-                    <td><div className="skeleton skeleton-text" style={{ width: `${50 + Math.random() * 30}%` }} /></td>
-                    <td className="text-center"><div className="skeleton skeleton-badge mx-auto" /></td>
-                    <td className="text-center"><div className="skeleton skeleton-text-sm mx-auto" style={{ width: '40%' }} /></td>
-                    <td className="text-center"><div className="skeleton skeleton-text-sm mx-auto" style={{ width: '40%' }} /></td>
-                    <td className="text-center"><div className="skeleton skeleton-text-sm mx-auto" style={{ width: '40%' }} /></td>
-                    <td className="text-center"><div className="skeleton skeleton-text-sm mx-auto" style={{ width: '40%' }} /></td>
-                    <td className="text-center"><div className="skeleton skeleton-text-sm mx-auto" style={{ width: '60%' }} /></td>
-                  </tr>
-                ))
-              ) : visibleSectors.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="text-center py-8 text-[#999]">
-                    등록된 업종이 없습니다.
-                  </td>
-                </tr>
-              ) : (
-                visibleSectors.map((sector) => (
-                  <tr key={sector.id}>
-                    <td>
-                      <Link
-                        href={`/sectors/${sector.id}`}
-                        className="text-[#333] hover:text-[#1261c4] hover:underline font-medium"
-                      >
-                        {formatSectorName(sector.name)}
-                      </Link>
-                      {sector.is_custom && <span className="badge badge-source ml-1">커스텀</span>}
-                    </td>
-                    <td className="text-center">
-                      <ChangeRate value={sector.change_rate} />
-                    </td>
-                    <td className="text-center text-[#333]">{sector.total_stocks ?? sector.stock_count ?? 0}</td>
-                    <td className="text-center text-rise">{sector.rising_stocks ?? '-'}</td>
-                    <td className="text-center text-[#333]">{sector.flat_stocks ?? '-'}</td>
-                    <td className="text-center text-fall">{sector.falling_stocks ?? '-'}</td>
-                    <td className="text-center">
-                      <Link href={`/sectors/${sector.id}`} className="text-[#1261c4] hover:underline text-[12px]">
-                        뉴스보기
-                      </Link>
-                    </td>
-                  </tr>
-                ))
+            <div className="flex items-center gap-3">
+              {!loading && (
+                <span className="text-[12px] font-normal text-[#999]">
+                  {visibleSectors.length}개 업종 / {totalStocks}개 종목
+                </span>
               )}
-            </tbody>
-          </table>
+              <button
+                onClick={() => setShowTable(!showTable)}
+                className="text-[12px] font-normal text-[#1261c4] hover:underline"
+              >
+                {showTable ? '테이블 접기' : '테이블 펼치기'}
+              </button>
+            </div>
+          </div>
+          {showTable && (
+            <table className="naver-table">
+              <thead>
+                <tr>
+                  <th className="text-left" style={{ width: '30%' }}>업종명</th>
+                  <th style={{ width: '14%' }}>전일대비</th>
+                  <th style={{ width: '10%' }}>전체</th>
+                  <th style={{ width: '10%' }}>상승</th>
+                  <th style={{ width: '10%' }}>보합</th>
+                  <th style={{ width: '10%' }}>하락</th>
+                  <th style={{ width: '16%' }}>뉴스</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  Array.from({ length: 10 }).map((_, i) => (
+                    <tr key={`sk-${i}`}>
+                      <td><div className="skeleton skeleton-text" style={{ width: `${50 + Math.random() * 30}%` }} /></td>
+                      <td className="text-center"><div className="skeleton skeleton-badge mx-auto" /></td>
+                      <td className="text-center"><div className="skeleton skeleton-text-sm mx-auto" style={{ width: '40%' }} /></td>
+                      <td className="text-center"><div className="skeleton skeleton-text-sm mx-auto" style={{ width: '40%' }} /></td>
+                      <td className="text-center"><div className="skeleton skeleton-text-sm mx-auto" style={{ width: '40%' }} /></td>
+                      <td className="text-center"><div className="skeleton skeleton-text-sm mx-auto" style={{ width: '40%' }} /></td>
+                      <td className="text-center"><div className="skeleton skeleton-text-sm mx-auto" style={{ width: '60%' }} /></td>
+                    </tr>
+                  ))
+                ) : visibleSectors.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="text-center py-8 text-[#999]">
+                      등록된 업종이 없습니다.
+                    </td>
+                  </tr>
+                ) : (
+                  visibleSectors.map((sector) => (
+                    <tr key={sector.id}>
+                      <td>
+                        <Link
+                          href={`/sectors/${sector.id}`}
+                          className="text-[#333] hover:text-[#1261c4] hover:underline font-medium"
+                        >
+                          {formatSectorName(sector.name)}
+                        </Link>
+                        {sector.is_custom && <span className="badge badge-source ml-1">커스텀</span>}
+                      </td>
+                      <td className="text-center">
+                        <ChangeRate value={sector.change_rate} />
+                      </td>
+                      <td className="text-center text-[#333]">{sector.total_stocks ?? sector.stock_count ?? 0}</td>
+                      <td className="text-center text-rise">{sector.rising_stocks ?? '-'}</td>
+                      <td className="text-center text-[#333]">{sector.flat_stocks ?? '-'}</td>
+                      <td className="text-center text-fall">{sector.falling_stocks ?? '-'}</td>
+                      <td className="text-center">
+                        <Link href={`/sectors/${sector.id}`} className="text-[#1261c4] hover:underline text-[12px]">
+                          뉴스보기
+                        </Link>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
 

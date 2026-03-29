@@ -8,6 +8,9 @@ import { formatSectorName } from '@/lib/format';
 import type { StockDetail, NewsArticle, PriceRecord, FinancialPeriod, SentimentTrendItem, DisclosureItem, StockNewsImpactStats } from '@/lib/types';
 import Pagination from '@/components/Pagination';
 import DisclosureModal from '@/components/DisclosureModal';
+import CandlestickChart from '@/components/CandlestickChart';
+import TechnicalIndicatorChart from '@/components/TechnicalIndicatorChart';
+import NewsPriceCorrelation from '@/components/NewsPriceCorrelation';
 import { useWatchlist } from '@/lib/watchlist';
 import { useMarketRefresh } from '@/lib/useMarketRefresh';
 
@@ -71,148 +74,7 @@ function sourceLabel(source: string): string {
   }
 }
 
-/* ─── Candlestick Chart ─── */
-
-function PriceChart({ prices }: { prices: PriceRecord[] }) {
-  if (prices.length < 2) return <p className="text-[13px] text-[#999] py-8 text-center">차트 데이터가 부족합니다.</p>;
-
-  const data = [...prices].reverse();
-  const n = data.length;
-
-  // Price range (use high/low for full range)
-  const allHighs = data.map(p => p.high || p.close);
-  const allLows = data.map(p => (p.low || p.close));
-  const minP = Math.min(...allLows);
-  const maxP = Math.max(...allHighs);
-  const priceRange = maxP - minP || 1;
-
-  // Volume range
-  const volumes = data.map(p => p.volume);
-  const maxVol = Math.max(...volumes, 1);
-
-  // Layout constants
-  const w = 800;
-  const chartH = 240;       // candlestick area height
-  const volH = 60;           // volume bar area height
-  const gap = 8;             // gap between chart and volume
-  const totalH = chartH + gap + volH;
-  const padL = 60;           // left padding for price labels
-  const padR = 10;
-  const padT = 10;
-  const padB = 25;           // bottom for date labels
-  const chartAreaW = w - padL - padR;
-  const candleW = Math.max(2, Math.min(8, (chartAreaW / n) * 0.7));
-  const candleGap = chartAreaW / n;
-
-  // Price → Y coordinate (in candlestick area)
-  const priceY = (price: number) => padT + (1 - (price - minP) / priceRange) * (chartH - padT);
-
-  // Volume → Y coordinate (in volume area)
-  const volY = (vol: number) => chartH + gap + volH - (vol / maxVol) * volH;
-
-  // Generate ~5 price ticks for the y-axis
-  const priceTicks: number[] = [];
-  const tickCount = 5;
-  for (let i = 0; i <= tickCount; i++) {
-    priceTicks.push(Math.round(minP + (priceRange * i) / tickCount));
-  }
-
-  return (
-    <div className="px-4 py-3">
-      <div className="flex items-center gap-3 mb-2">
-        <span className="text-[12px] font-bold text-[#333]">주가 차트</span>
-        <span className="flex items-center gap-1 text-[11px]">
-          <span className="inline-block w-3 h-3 bg-[#e12343]" /> 상승
-        </span>
-        <span className="flex items-center gap-1 text-[11px]">
-          <span className="inline-block w-3 h-3 bg-[#1261c4]" /> 하락
-        </span>
-      </div>
-      <div className="overflow-x-auto">
-        <svg viewBox={`0 0 ${w} ${totalH + padB}`} className="w-full" style={{ minWidth: 500, height: totalH + padB }}>
-          {/* Price grid lines + labels */}
-          {priceTicks.map((tick) => {
-            const y = priceY(tick);
-            return (
-              <g key={`tick-${tick}`}>
-                <line x1={padL} y1={y} x2={w - padR} y2={y} stroke="#eee" strokeWidth={1} />
-                <text x={padL - 5} y={y + 3} textAnchor="end" fontSize={10} fill="#999">
-                  {tick.toLocaleString()}
-                </text>
-              </g>
-            );
-          })}
-
-          {/* Volume label */}
-          <text x={padL - 5} y={chartH + gap + 10} textAnchor="end" fontSize={9} fill="#999">거래량</text>
-
-          {/* Candlesticks + Volume bars */}
-          {data.map((d, i) => {
-            const cx = padL + i * candleGap + candleGap / 2;
-            const isUp = d.close >= d.open;
-            const color = isUp ? '#e12343' : '#1261c4';
-
-            const bodyTop = priceY(Math.max(d.open, d.close));
-            const bodyBot = priceY(Math.min(d.open, d.close));
-            const bodyH = Math.max(1, bodyBot - bodyTop);
-
-            const wickTop = priceY(d.high || Math.max(d.open, d.close));
-            const wickBot = priceY(d.low || Math.min(d.open, d.close));
-
-            const vTop = volY(d.volume);
-            const vBot = chartH + gap + volH;
-
-            // Date labels: show a few evenly spaced
-            const showDate = i === 0 || i === n - 1 || (n > 10 && i % Math.ceil(n / 6) === 0);
-            const dateLabel = d.date.replace(/\./g, '/').replace(/^20/, '');
-
-            return (
-              <g key={`c-${i}`}>
-                {/* Wick (high-low line) */}
-                <line x1={cx} y1={wickTop} x2={cx} y2={wickBot} stroke={color} strokeWidth={1} />
-                {/* Candle body */}
-                <rect
-                  x={cx - candleW / 2}
-                  y={bodyTop}
-                  width={candleW}
-                  height={bodyH}
-                  fill={isUp ? color : color}
-                  stroke={color}
-                  strokeWidth={0.5}
-                />
-                {/* Volume bar */}
-                <rect
-                  x={cx - candleW / 2}
-                  y={vTop}
-                  width={candleW}
-                  height={vBot - vTop}
-                  fill={color}
-                  opacity={0.35}
-                />
-                {/* Date label */}
-                {showDate && (
-                  <text
-                    x={cx}
-                    y={totalH + padB - 5}
-                    textAnchor="middle"
-                    fontSize={9}
-                    fill="#999"
-                  >
-                    {dateLabel}
-                  </text>
-                )}
-              </g>
-            );
-          })}
-        </svg>
-      </div>
-      <div className="flex justify-between text-[11px] text-[#999] mt-1">
-        <span>최저 {formatNumber(minP)}원</span>
-        <span>최고 {formatNumber(maxP)}원</span>
-      </div>
-    </div>
-  );
-}
+/* ─── (기존 SVG PriceChart 제거 → CandlestickChart 컴포넌트로 교체) ─── */
 
 /* ─── Sentiment Trend Chart ─── */
 
@@ -354,6 +216,7 @@ export default function StockDetailPage() {
   const [prices, setPrices] = useState<PriceRecord[]>([]);
   const [pricesLoading, setPricesLoading] = useState(false);
   const [pricesLoaded, setPricesLoaded] = useState(false);
+  const [priceMonths, setPriceMonths] = useState(3);
   const [sentimentTrend, setSentimentTrend] = useState<SentimentTrendItem[]>([]);
   const [sentimentLoaded, setSentimentLoaded] = useState(false);
   const [impactStats, setImpactStats] = useState<StockNewsImpactStats | null>(null);
@@ -400,7 +263,7 @@ export default function StockDetailPage() {
 
     if (tab === 'indicators' && !pricesLoaded) {
       setPricesLoading(true);
-      fetchStockPrices(stockId, 3)
+      fetchStockPrices(stockId, priceMonths)
         .then((p) => { setPrices(p); setPricesLoaded(true); })
         .catch(() => {})
         .finally(() => setPricesLoading(false));
@@ -441,7 +304,13 @@ export default function StockDetailPage() {
         .catch(() => {})
         .finally(() => setDisclosuresLoading(false));
     }
-  }, [stockId, tab, pricesLoaded, sentimentLoaded, impactStatsLoaded, financialsLoaded, newsLoaded, disclosuresLoaded]);
+  }, [stockId, tab, pricesLoaded, sentimentLoaded, impactStatsLoaded, financialsLoaded, newsLoaded, disclosuresLoaded, priceMonths]);
+
+  // 차트 기간 변경 핸들러
+  function handleTimeRangeChange(months: number): void {
+    setPriceMonths(months);
+    setPricesLoaded(false); // 데이터 다시 로드 트리거
+  }
 
   // News pagination
   useEffect(() => {
@@ -581,13 +450,12 @@ export default function StockDetailPage() {
                   ))}
                 </div>
               )}
-              {pricesLoading ? (
-                <div className="p-4">
-                  <div className="skeleton" style={{ width: '100%', height: 200 }} />
-                </div>
-              ) : (
-                <PriceChart prices={prices} />
-              )}
+              <CandlestickChart
+                prices={prices}
+                onTimeRangeChange={handleTimeRangeChange}
+                loading={pricesLoading}
+              />
+              <TechnicalIndicatorChart prices={prices} />
               {sentimentLoaded && (
                 <div className="border-t border-[#e5e5e5]">
                   <SentimentChart data={sentimentTrend} />
@@ -624,6 +492,12 @@ export default function StockDetailPage() {
                       </div>
                     </div>
                   )}
+                </div>
+              )}
+              {/* 뉴스-주가 상관관계 */}
+              {stockId && (
+                <div className="border-t border-[#e5e5e5]">
+                  <NewsPriceCorrelation stockId={stockId} />
                 </div>
               )}
             </div>

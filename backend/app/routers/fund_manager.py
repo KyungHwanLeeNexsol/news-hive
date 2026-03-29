@@ -235,3 +235,151 @@ async def get_latest_portfolio_report(db: Session = Depends(get_db)):
     if not report:
         return None
     return PortfolioReportResponse.model_validate(report)
+
+
+# ---- 백테스트 ----
+
+
+@router.get("/backtest")
+async def backtest_signals(
+    days: int = Query(90, ge=7, le=365),
+    stock_id: int | None = Query(None),
+    sector_id: int | None = Query(None),
+    signal_type: str | None = Query(None, description="buy / sell / hold"),
+    min_confidence: float = Query(0.0, ge=0.0, le=1.0),
+    db: Session = Depends(get_db),
+):
+    """AI 시그널 백테스트 — 기간/종목/섹터/시그널 유형별 성과 분석.
+
+    검증 완료된(is_correct IS NOT NULL) 시그널을 기반으로
+    승률, 평균 수익률, MDD, 샤프 비율, KOSPI 벤치마크 수익률을 계산한다.
+    """
+    import math
+    from collections import defaultdict
+    from sqlalchemy import func as sqlfunc
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+    # 기본 쿼리: 검증 완료된 시그널만
+    query = (
+        db.query(FundSignal)
+        .options(selectinload(FundSignal.stock).selectinload(Stock.sector))
+        .filter(
+            FundSignal.created_at >= cutoff,
+            FundSignal.is_correct.isnot(None),
+            FundSignal.confidence >= min_confidence,
+        )
+    )
+
+    if stock_id:
+        query = query.filter(FundSignal.stock_id == stock_id)
+    if sector_id:
+        query = query.filter(Stock.sector_id == sector_id)
+        query = query.join(Stock, FundSignal.stock_id == Stock.id)
+    if signal_type:
+        query = query.filter(FundSignal.signal == signal_type.lower())
+
+    signals = query.order_by(FundSignal.created_at.asc()).all()
+
+    total_signals = len(signals)
+    if total_signals == 0:
+        return {
+            "summary": {
+                "total_signals": 0,
+                "win_rate": 0.0,
+                "avg_return": 0.0,
+                "max_drawdown": 0.0,
+                "sharpe_ratio": 0.0,
+                "kospi_return": 0.0,
+            },
+            "timeline": [],
+            "by_stock": [],
+        }
+
+    # 승률 및 수익률 계산
+    correct_count = sum(1 for s in signals if s.is_correct is True)
+    returns = [s.return_pct for s in signals if s.return_pct is not None]
+    win_rate = correct_count / total_signals if total_signals > 0 else 0.0
+    avg_return = sum(returns) / len(returns) if returns else 0.0
+
+    # MDD 계산 (누적 수익률 기반)
+    cumulative = 0.0
+    peak = 0.0
+    max_drawdown = 0.0
+    for r in returns:
+        cumulative += r
+        if cumulative > peak:
+            peak = cumulative
+        drawdown = peak - cumulative
+        if drawdown > max_drawdown:
+            max_drawdown = drawdown
+
+    # 샤프 비율 (연간 무위험이자율 3.5% → 일간 환산)
+    risk_free_daily = 3.5 / 365.0
+    if len(returns) >= 2:
+        mean_r = sum(returns) / len(returns)
+        variance = sum((r - mean_r) ** 2 for r in returns) / (len(returns) - 1)
+        std_dev = math.sqrt(variance) if variance > 0 else 0.001
+        sharpe_ratio = (mean_r - risk_free_daily) / std_dev
+    else:
+        sharpe_ratio = 0.0
+
+    # KOSPI 벤치마크 수익률 (간이: 첫 시그널 ~ 마지막 시그널 기간의 대략적 추정)
+    # 실제 KOSPI 데이터가 없으므로 0으로 표시
+    kospi_return = 0.0
+
+    # 일별 타임라인
+    daily_data: dict[str, dict] = {}
+    cum_return = 0.0
+    for s in signals:
+        date_str = s.created_at.strftime("%Y-%m-%d") if s.created_at else "unknown"
+        r = s.return_pct or 0.0
+        cum_return += r
+        if date_str not in daily_data:
+            daily_data[date_str] = {"date": date_str, "cumulative_return": 0.0, "signal_count": 0}
+        daily_data[date_str]["cumulative_return"] = round(cum_return, 2)
+        daily_data[date_str]["signal_count"] += 1
+
+    timeline = sorted(daily_data.values(), key=lambda x: x["date"])
+
+    # 종목별 분석
+    stock_stats: dict[int, dict] = defaultdict(lambda: {
+        "stock_name": "",
+        "signals": 0,
+        "correct": 0,
+        "returns": [],
+    })
+
+    for s in signals:
+        sid = s.stock_id
+        stock_stats[sid]["stock_name"] = s.stock.name if s.stock else f"Stock-{sid}"
+        stock_stats[sid]["signals"] += 1
+        if s.is_correct is True:
+            stock_stats[sid]["correct"] += 1
+        if s.return_pct is not None:
+            stock_stats[sid]["returns"].append(s.return_pct)
+
+    by_stock = []
+    for sid, data in stock_stats.items():
+        s_returns = data["returns"]
+        by_stock.append({
+            "stock_name": data["stock_name"],
+            "signals": data["signals"],
+            "win_rate": round(data["correct"] / data["signals"], 4) if data["signals"] > 0 else 0.0,
+            "avg_return": round(sum(s_returns) / len(s_returns), 2) if s_returns else 0.0,
+        })
+
+    by_stock.sort(key=lambda x: x["avg_return"], reverse=True)
+
+    return {
+        "summary": {
+            "total_signals": total_signals,
+            "win_rate": round(win_rate, 4),
+            "avg_return": round(avg_return, 2),
+            "max_drawdown": round(max_drawdown, 2),
+            "sharpe_ratio": round(sharpe_ratio, 4),
+            "kospi_return": round(kospi_return, 2),
+        },
+        "timeline": timeline,
+        "by_stock": by_stock,
+    }

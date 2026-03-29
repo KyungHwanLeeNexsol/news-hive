@@ -555,6 +555,145 @@ async def delete_relation(relation_id: int, db: Session = Depends(get_db)):
     db.commit()
 
 
+@router.get("/stocks/{stock_id}/news-price-correlation")
+async def get_news_price_correlation(
+    stock_id: int,
+    days: int = Query(default=90, ge=7, le=365),
+    db: Session = Depends(get_db),
+):
+    """뉴스 감성 점수와 주가 변동의 7일 롤링 피어슨 상관계수.
+
+    일별 감성 점수 = (positive 건수 - negative 건수) / 전체 건수
+    일별 가격 변동률 = (종가 - 전일 종가) / 전일 종가 * 100
+    7일 롤링 피어슨 상관계수로 뉴스-가격 연관성을 측정한다.
+    """
+    import math
+
+    stock = db.query(Stock).filter(Stock.id == stock_id).first()
+    if not stock:
+        raise HTTPException(status_code=404, detail="Stock not found")
+
+    since = datetime.utcnow() - timedelta(days=days)
+
+    # 1) 일별 감성 집계
+    sentiment_rows = (
+        db.query(
+            cast(NewsArticle.published_at, Date).label("date"),
+            NewsArticle.sentiment,
+            func.count().label("cnt"),
+        )
+        .join(NewsStockRelation, NewsStockRelation.news_id == NewsArticle.id)
+        .filter(
+            NewsStockRelation.stock_id == stock_id,
+            NewsArticle.published_at >= since,
+            NewsArticle.sentiment.isnot(None),
+        )
+        .group_by(cast(NewsArticle.published_at, Date), NewsArticle.sentiment)
+        .all()
+    )
+
+    # {date_str: {"positive": n, "negative": n, "neutral": n, ...}}
+    daily_sentiment: dict[str, dict[str, int]] = {}
+    for row in sentiment_rows:
+        d = str(row.date)
+        if d not in daily_sentiment:
+            daily_sentiment[d] = {}
+        daily_sentiment[d][row.sentiment] = row.cnt
+
+    # 감성 점수 계산: (긍정 - 부정) / 전체
+    def _calc_sentiment_score(counts: dict[str, int]) -> float:
+        pos = counts.get("positive", 0) + counts.get("strong_positive", 0)
+        neg = counts.get("negative", 0) + counts.get("strong_negative", 0)
+        total = sum(counts.values())
+        if total == 0:
+            return 0.0
+        return (pos - neg) / total
+
+    # 2) 일별 가격 변동률 (네이버 가격 히스토리)
+    from app.services.naver_finance import fetch_stock_price_history
+
+    pages = max(1, min(days // 15, 20))
+    prices = await fetch_stock_price_history(stock.stock_code, pages=pages)
+
+    # 날짜 → 종가 맵 (prices는 최신순 정렬)
+    price_map: dict[str, float] = {}
+    for p in prices:
+        price_map[p.date] = p.close
+
+    # 날짜 정렬 (오래된 순)
+    sorted_dates = sorted(price_map.keys())
+
+    # 일별 가격 변동률
+    price_changes: dict[str, float] = {}
+    for i in range(1, len(sorted_dates)):
+        prev_close = price_map[sorted_dates[i - 1]]
+        curr_close = price_map[sorted_dates[i]]
+        if prev_close > 0:
+            pct = (curr_close - prev_close) / prev_close * 100
+            price_changes[sorted_dates[i]] = round(pct, 2)
+
+    # 3) 공통 날짜에서 타임라인 구성
+    all_dates = sorted(set(daily_sentiment.keys()) | set(price_changes.keys()))
+
+    timeline: list[dict] = []
+    sentiments_series: list[float] = []
+    prices_series: list[float] = []
+
+    for d in all_dates:
+        s_score = _calc_sentiment_score(daily_sentiment.get(d, {}))
+        p_change = price_changes.get(d)
+
+        sentiments_series.append(s_score)
+        prices_series.append(p_change if p_change is not None else 0.0)
+
+        # 7일 롤링 상관계수
+        corr_7d = None
+        if len(sentiments_series) >= 7:
+            window_s = sentiments_series[-7:]
+            window_p = prices_series[-7:]
+            corr_7d = _pearson_correlation(window_s, window_p)
+
+        entry: dict = {
+            "date": d,
+            "sentiment_score": round(s_score, 4),
+            "price_change_pct": p_change,
+            "correlation_7d": round(corr_7d, 4) if corr_7d is not None else None,
+        }
+        timeline.append(entry)
+
+    # 현재 7일 상관계수
+    current_corr = None
+    if len(sentiments_series) >= 7:
+        current_corr = _pearson_correlation(sentiments_series[-7:], prices_series[-7:])
+
+    return {
+        "correlation_7d": round(current_corr, 4) if current_corr is not None else None,
+        "timeline": timeline,
+    }
+
+
+def _pearson_correlation(x: list[float], y: list[float]) -> float | None:
+    """두 시계열의 피어슨 상관계수를 계산한다. 데이터 부족 시 None 반환."""
+    import math
+
+    n = len(x)
+    if n < 2 or n != len(y):
+        return None
+
+    mean_x = sum(x) / n
+    mean_y = sum(y) / n
+
+    numerator = sum((xi - mean_x) * (yi - mean_y) for xi, yi in zip(x, y))
+    denom_x = sum((xi - mean_x) ** 2 for xi in x)
+    denom_y = sum((yi - mean_y) ** 2 for yi in y)
+
+    denominator = math.sqrt(denom_x * denom_y)
+    if denominator == 0:
+        return 0.0
+
+    return numerator / denominator
+
+
 @router.delete("/stocks/{stock_id}", status_code=204)
 async def delete_stock(stock_id: int, db: Session = Depends(get_db)):
     stock = db.query(Stock).filter(Stock.id == stock_id).first()

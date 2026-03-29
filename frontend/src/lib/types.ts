@@ -357,3 +357,55 @@ export interface PaperSnapshot {
   cumulative_return_pct: number;
   daily_return_pct: number;
 }
+
+// ── AI 채팅 ──
+
+export interface ChatResponse {
+  reply: string;
+  context_used: string[];
+  session_id: string;
+}
+
+// ── 백테스트 ──
+
+export interface BacktestSummary {
+  total_signals: number;
+  win_rate: number;
+  avg_return: number;
+  max_drawdown: number;
+  sharpe_ratio: number;
+  kospi_return: number;
+}
+
+export interface BacktestTimeline {
+  date: string;
+  cumulative_return: number;
+  signal_count: number;
+}
+
+export interface BacktestByStock {
+  stock_name: string;
+  signals: number;
+  win_rate: number;
+  avg_return: number;
+}
+
+export interface BacktestResult {
+  summary: BacktestSummary;
+  timeline: BacktestTimeline[];
+  by_stock: BacktestByStock[];
+}
+
+// ── 뉴스-주가 상관관계 ──
+
+export interface CorrelationTimeline {
+  date: string;
+  sentiment_score: number;
+  price_change_pct: number;
+  correlation_7d: number | null;
+}
+
+export interface NewsPriceCorrelation {
+  correlation_7d: number;
+  timeline: CorrelationTimeline[];
+}

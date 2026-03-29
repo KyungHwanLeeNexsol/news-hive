@@ -22,8 +22,9 @@ import type {
 } from '@/lib/types';
 import { useWatchlist } from '@/lib/watchlist';
 import { useAdmin } from '@/lib/useAdmin';
+import BacktestDashboard from '@/components/BacktestDashboard';
 
-type Tab = 'briefing' | 'signals' | 'accuracy' | 'portfolio' | 'paper';
+type Tab = 'briefing' | 'signals' | 'accuracy' | 'portfolio' | 'paper' | 'backtest';
 
 function formatDateTime(dateStr: string): string {
   const d = new Date(dateStr);
@@ -1220,6 +1221,7 @@ export default function FundManagerPage() {
     { key: 'accuracy', label: '적중률' },
     { key: 'portfolio', label: '포트폴리오' },
     { key: 'paper', label: '페이퍼 트레이딩' },
+    { key: 'backtest', label: '백테스트' },
   ];
 
   return (
@@ -1261,6 +1263,7 @@ export default function FundManagerPage() {
       {tab === 'accuracy' && <AccuracyTab />}
       {tab === 'portfolio' && <PortfolioTab />}
       {tab === 'paper' && <PaperTradingTab />}
+      {tab === 'backtest' && <BacktestDashboard />}
     </div>
   );
 }
