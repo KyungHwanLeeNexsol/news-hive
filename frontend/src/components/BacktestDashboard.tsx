@@ -214,8 +214,8 @@ export default function BacktestDashboard() {
                 width={55}
               />
               <Tooltip
-                formatter={(value: number | string) => [`${Number(value).toFixed(2)}%`, '누적 수익률']}
-                labelFormatter={(label: string) => label}
+                formatter={(value) => [`${Number(value).toFixed(2)}%`, '누적 수익률']}
+                labelFormatter={(label) => String(label)}
                 contentStyle={{ fontSize: 12, borderRadius: 8 }}
               />
               <Line

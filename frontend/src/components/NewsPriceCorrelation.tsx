@@ -143,17 +143,17 @@ export default function NewsPriceCorrelation({ stockId }: Props) {
             }}
           />
           <Tooltip
-            formatter={(value: number | string, name: string) => {
+            formatter={(value, name) => {
               const v = Number(value);
               if (name === 'sentiment_score') return [v.toFixed(3), '감성 점수'];
               if (name === 'price_change_pct') return [`${v.toFixed(2)}%`, '주가 변동률'];
-              return [value, name];
+              return [String(value), String(name)];
             }}
-            labelFormatter={(label: string) => label}
+            labelFormatter={(label) => String(label)}
             contentStyle={{ fontSize: 12, borderRadius: 8 }}
           />
           <Legend
-            formatter={(value: string) => {
+            formatter={(value) => {
               if (value === 'sentiment_score') return '감성 점수';
               if (value === 'price_change_pct') return '주가 변동률';
               return value;
