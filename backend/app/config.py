@@ -12,12 +12,6 @@ class Settings(BaseSettings):
     GEMINI_API_KEY_3: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
 
-    GROQ_API_KEY: str = ""
-    GROQ_MODEL: str = "llama-3.3-70b-versatile"
-
-    OPENROUTER_API_KEY: str = ""
-    OPENROUTER_MODEL: str = "meta-llama/llama-3.3-70b-instruct"
-
     KIS_APP_KEY: str = ""
     KIS_APP_SECRET: str = ""
 

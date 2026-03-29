@@ -1112,15 +1112,14 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
 
     response = await _ask_ai(prompt)
     if not response:
-        # Check which providers were configured
+        # 설정된 키 확인
         from app.config import settings as _s
         configured = []
-        if _s.OPENROUTER_API_KEY:
-            configured.append(f"OpenRouter(key={_s.OPENROUTER_API_KEY[:8]}...)")
-        if _s.GEMINI_API_KEY:
-            configured.append(f"Gemini(key={_s.GEMINI_API_KEY[:8]}...)")
+        for idx, key in enumerate([_s.GEMINI_API_KEY, _s.GEMINI_API_KEY_2, _s.GEMINI_API_KEY_3], 1):
+            if key:
+                configured.append(f"Gemini-{idx}(key={key[:8]}...)")
         raise RuntimeError(
-            f"모든 AI 프로바이더가 실패했습니다. 설정된 프로바이더: {configured or '없음'}. "
+            f"모든 Gemini API 키가 실패했습니다. 설정된 키: {configured or '없음'}. "
             "서버 로그에서 상세 에러를 확인하세요."
         )
     parsed = _parse_json_response(response)

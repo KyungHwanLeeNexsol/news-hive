@@ -1,53 +1,31 @@
-"""Unified AI client with Groq (primary) + Gemini x3 fallback.
+"""Gemini 전용 AI 클라이언트 — 3개 API 키 라운드로빈.
 
-All AI calls in the project should go through `ask_ai()` instead of
-calling individual providers directly.  This gives us:
-  - Groq (free, high limit) as primary
-  - Gemini key 1, 2, 3 as sequential fallbacks (free tier rate limit rotation)
-  - Centralized rate-limit retry logic
+모든 AI 호출은 `ask_ai()`를 통해 수행한다.
+Gemini API 키 3개를 순환하여 일일 1000건 제한을 분산한다.
 """
 
 import asyncio
 import logging
 
-import httpx
-
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-
-async def _call_groq(prompt: str) -> str | None:
-    """Call Groq API (OpenAI-compatible)."""
-    if not settings.GROQ_API_KEY:
-        return None
-
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {settings.GROQ_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": settings.GROQ_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3,
-        "max_tokens": 4096,
-    }
-
-    async with httpx.AsyncClient(timeout=60) as client:
-        response = await client.post(url, json=payload, headers=headers)
-        if response.status_code != 200:
-            body = response.text[:500]
-            raise RuntimeError(f"Groq HTTP {response.status_code}: {body}")
-        data = response.json()
-        choices = data.get("choices")
-        if not choices:
-            raise RuntimeError(f"Groq empty choices: {data}")
-        return choices[0]["message"]["content"].strip()
+# 라운드로빈 카운터 (모듈 수준 상태)
+_call_counter: int = 0
 
 
-async def _call_gemini_key(prompt: str, api_key: str) -> str | None:
-    """Call Gemini API with a specific API key.
+def _get_gemini_keys() -> list[str]:
+    """설정된 Gemini API 키 목록을 반환한다."""
+    keys = []
+    for key in [settings.GEMINI_API_KEY, settings.GEMINI_API_KEY_2, settings.GEMINI_API_KEY_3]:
+        if key:
+            keys.append(key)
+    return keys
+
+
+async def _call_gemini(prompt: str, api_key: str) -> str | None:
+    """Gemini API 호출.
 
     google.genai의 generate_content()는 동기 호출이므로
     asyncio.to_thread()로 감싸서 이벤트 루프 블로킹을 방지한다.
@@ -66,62 +44,55 @@ async def _call_gemini_key(prompt: str, api_key: str) -> str | None:
     return await asyncio.to_thread(_sync_call)
 
 
+# @MX:ANCHOR: [AUTO] 모든 AI 호출의 진입점 — 키 순환 순서가 일일 사용량 분산에 영향
+# @MX:REASON: Gemini 3키 라운드로빈 구조, 변경 시 전체 AI 기능에 영향
 async def ask_ai(prompt: str, max_retries: int = 3) -> str | None:
-    """Send a prompt to AI and return the response text.
+    """AI에 프롬프트를 전송하고 응답 텍스트를 반환한다.
 
-    Tries providers in order: Groq → Gemini key1 → Gemini key2 → Gemini key3.
-    On rate limit, immediately falls through to the next provider/key.
+    3개 Gemini API 키를 라운드로빈으로 순환한다.
+    rate limit 발생 시 다음 키로 즉시 전환한다.
     """
-    # # @MX:ANCHOR: 모든 AI 호출의 진입점 — 프로바이더 순서가 비용과 가용성에 영향
-    # # @MX:REASON: Groq(1차) → Gemini 3키 순환(2~4차) 구조, 변경 시 전체 AI 기능에 영향
-    # (name, callable(prompt) -> str | None) 쌍 목록
-    providers: list[tuple[str, object]] = []
+    global _call_counter
 
-    if settings.GROQ_API_KEY:
-        providers.append(("Groq", _call_groq))
-
-    # Gemini 키 3개를 순서대로 추가 (rate limit 시 다음 키로 fallback)
-    for idx, key in enumerate(
-        [settings.GEMINI_API_KEY, settings.GEMINI_API_KEY_2, settings.GEMINI_API_KEY_3],
-        start=1,
-    ):
-        if key:
-            def _make_gemini_fn(k: str):
-                async def _fn(p: str) -> str | None:
-                    return await _call_gemini_key(p, k)
-                return _fn
-            providers.append((f"Gemini-{idx}", _make_gemini_fn(key)))
-
-    if not providers:
-        logger.warning("No AI API keys configured — skipping AI call")
+    keys = _get_gemini_keys()
+    if not keys:
+        logger.warning("Gemini API 키가 설정되지 않음 — AI 호출 건너뜀")
         return None
+
+    n_keys = len(keys)
+    start_idx = _call_counter % n_keys
+    _call_counter += 1
 
     errors = []
 
-    for provider_name, call_fn in providers:
+    # 라운드로빈 시작점부터 모든 키를 순회
+    for i in range(n_keys):
+        key_idx = (start_idx + i) % n_keys
+        key_name = f"Gemini-{key_idx + 1}"
+
         for attempt in range(max_retries):
             try:
-                result = await call_fn(prompt)
+                result = await _call_gemini(prompt, keys[key_idx])
                 if result:
                     return result
             except Exception as e:
                 err_str = str(e)
                 is_rate_limit = any(k in err_str for k in ("429", "RESOURCE_EXHAUSTED", "rate_limit"))
                 if is_rate_limit:
-                    logger.warning(f"{provider_name} rate limited, trying next key/provider")
-                    errors.append(f"{provider_name}: rate_limited")
-                    break
+                    logger.warning(f"{key_name} rate limited, 다음 키로 전환")
+                    errors.append(f"{key_name}: rate_limited")
+                    break  # 다음 키로
                 elif attempt < max_retries - 1:
                     wait = 2 * (2 ** attempt)
-                    logger.info(f"{provider_name} error, retrying in {wait}s (attempt {attempt + 1})")
+                    logger.info(f"{key_name} 오류, {wait}초 후 재시도 (attempt {attempt + 1})")
                     await asyncio.sleep(wait)
                 else:
-                    logger.warning(f"{provider_name} failed: {e}")
-                    errors.append(f"{provider_name}: {type(e).__name__}: {e}")
-                    break
+                    logger.warning(f"{key_name} 실패: {e}")
+                    errors.append(f"{key_name}: {type(e).__name__}: {e}")
+                    break  # 다음 키로
 
     if errors:
         detail = "; ".join(errors)
-        logger.error(f"All AI providers failed: {detail}")
-        raise RuntimeError(f"모든 AI 프로바이더 실패 — {detail}")
+        logger.error(f"모든 Gemini 키 실패: {detail}")
+        raise RuntimeError(f"모든 Gemini API 키 실패 — {detail}")
     return None
