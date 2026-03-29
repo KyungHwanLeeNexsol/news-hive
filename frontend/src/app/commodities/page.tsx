@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState, useCallback } from "react";
+import { Suspense, useEffect, useState, useCallback, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { fetchCommodities, fetchCommodityHistory, refreshCommodityPrices, fetchCommodityNews, fetchCommodityNewsById } from "@/lib/api";

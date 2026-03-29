@@ -958,6 +958,20 @@ async def analyze_stock(
         logger.warning("Phase B 필드 저장 실패 (마이그레이션 미적용 가능): %s", e)
     logger.info(f"Fund signal created: {stock.name} → {signal.signal} (confidence: {signal.confidence})")
 
+    # WebSocket 브로드캐스트: 새 펀드 시그널 전파
+    try:
+        from app.event_bus import broadcast_event
+        await broadcast_event("signals", {
+            "type": "fund_signal",
+            "id": signal.id,
+            "stock_id": signal.stock_id,
+            "signal": signal.signal,
+            "confidence": signal.confidence,
+            "created_at": str(signal.created_at),
+        })
+    except Exception:
+        logger.debug("시그널 WebSocket 브로드캐스트 실패", exc_info=True)
+
     # REQ-AI-013: 페이퍼 트레이딩 자동 매매
     try:
         from app.services.paper_trading import execute_signal_trade

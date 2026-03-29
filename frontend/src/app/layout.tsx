@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import Header from "@/components/Header";
+import { Providers } from "@/components/Providers";
 
 export const metadata: Metadata = {
   title: "NewsHive",
@@ -23,10 +24,12 @@ export default function RootLayout({
         />
       </head>
       <body className="bg-[#f6f6f6] min-h-screen font-[Pretendard,sans-serif]">
-        <Header />
-        <main className="max-w-[1200px] mx-auto px-4 py-4">
-          {children}
-        </main>
+        <Providers>
+          <Header />
+          <main className="max-w-[1200px] mx-auto px-4 py-4">
+            {children}
+          </main>
+        </Providers>
       </body>
     </html>
   );

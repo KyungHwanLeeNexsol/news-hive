@@ -96,10 +96,21 @@ async def lifespan(app: FastAPI):
 
     threading.Thread(target=_run_relation_inference, daemon=True).start()
 
+    # WebSocket ConnectionManager 초기화
+    from app.websocket import ConnectionManager as WSManager
+    from app import websocket as ws_module
+    from app.event_bus import set_event_bus, clear_event_bus
+
+    ws_manager = WSManager()
+    ws_module.manager = ws_manager
+    set_event_bus(ws_manager)
+
     start_scheduler()
     yield
     # Shutdown
     stop_scheduler()
+    clear_event_bus()
+    ws_module.manager = None
     # Redis 연결 종료
     try:
         from app.cache import close_redis
@@ -138,6 +149,10 @@ app.include_router(auth.router)
 app.include_router(commodities.router)
 app.include_router(commodities.sector_commodity_router)
 app.include_router(paper_trading.router)
+
+# WebSocket 엔드포인트 등록
+from app.websocket import router as ws_router  # noqa: E402
+app.include_router(ws_router)
 
 
 @app.api_route("/api/health", methods=["GET", "HEAD"])

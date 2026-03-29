@@ -1,28 +1,39 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { fetchAlerts, dismissAlert } from '@/lib/api';
-import type { MacroAlert } from '@/lib/types';
+import { useEffect } from 'react';
+import { fetchAlerts, dismissAlert as apiDismissAlert } from '@/lib/api';
+import { useAlertStore } from '@/stores/alertStore';
 
+/**
+ * 매크로 알림 배너
+ * - 마운트 시 API에서 초기 알림 로드 후 Zustand 스토어에 저장
+ * - WebSocket 업데이트는 스토어를 통해 자동 반영
+ * - WebSocket 미연결 시 60초 간격 폴링 폴백 유지
+ */
 export default function MacroAlertBanner() {
-  const [alerts, setAlerts] = useState<MacroAlert[]>([]);
-  const [dismissed, setDismissed] = useState<Set<number>>(new Set());
+  const alerts = useAlertStore((s) => s.alerts);
+  const dismissedIds = useAlertStore((s) => s.dismissedIds);
+  const setAlerts = useAlertStore((s) => s.setAlerts);
+  const dismissAlert = useAlertStore((s) => s.dismissAlert);
 
   useEffect(() => {
+    // 초기 로드
     fetchAlerts(true).then(setAlerts).catch(() => {});
-    // 1분마다 새 알림 확인
+
+    // 폴링 폴백: WebSocket이 끊겨도 1분마다 새 알림 확인
     const interval = setInterval(() => {
       fetchAlerts(true).then(setAlerts).catch(() => {});
     }, 60_000);
-    return () => clearInterval(interval);
-  }, []);
 
-  const visible = alerts.filter((a) => !dismissed.has(a.id));
+    return () => clearInterval(interval);
+  }, [setAlerts]);
+
+  const visible = alerts.filter((a) => !dismissedIds.has(a.id));
   if (visible.length === 0) return null;
 
   function handleDismiss(id: number) {
-    setDismissed((prev) => new Set(prev).add(id));
-    dismissAlert(id).catch(() => {});
+    dismissAlert(id);
+    apiDismissAlert(id).catch(() => {});
   }
 
   return (

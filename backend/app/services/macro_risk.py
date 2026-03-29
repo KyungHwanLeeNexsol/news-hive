@@ -257,6 +257,19 @@ async def detect_macro_risks(db: Session) -> list[MacroAlert]:
     if created_alerts:
         db.commit()
 
+        # WebSocket 브로드캐스트: 새 매크로 알림 전파
+        from app.event_bus import fire_event
+        for alert in created_alerts:
+            fire_event("alerts", {
+                "type": "macro_alert",
+                "id": alert.id,
+                "level": alert.level,
+                "keyword": alert.keyword,
+                "title": alert.title,
+                "article_count": alert.article_count,
+                "created_at": str(alert.created_at),
+            })
+
     return created_alerts
 
 

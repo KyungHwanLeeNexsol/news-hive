@@ -561,6 +561,15 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
         if not url_to_id:
             continue
 
+        # WebSocket 브로드캐스트: 새 뉴스 기사 알림
+        if url_to_id:
+            from app.event_bus import fire_event
+            fire_event("news", {
+                "type": "new_articles",
+                "count": len(url_to_id),
+                "article_ids": list(url_to_id.values())[:10],
+            })
+
         # Step 2: Bulk insert relations via raw SQL (using pre-computed _relations)
         rel_values = []
         rel_params: dict = {}
