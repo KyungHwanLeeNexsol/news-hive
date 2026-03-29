@@ -59,6 +59,16 @@ def _set_cached(key: str, data, total: str):
     _response_cache[key] = (time.time() + _response_cache_ttl(), data, total)
 
 
+async def _set_cached_with_redis(key: str, data, total: str):
+    """인메모리 + Redis 동시 저장."""
+    _set_cached(key, data, total)
+    try:
+        from app.cache import cache_set
+        await cache_set(f"api:stocks:{key}", {"data": data, "total": total}, ttl=_response_cache_ttl())
+    except Exception:
+        pass
+
+
 def _get_news_counts(db: Session, stock_ids: list[int]) -> dict[int, int]:
     """Single query to get news counts for all stocks."""
     if not stock_ids:
@@ -126,7 +136,7 @@ async def list_stocks(
 ):
     """List stocks sorted by market cap with realtime prices."""
 
-    # --- Check response cache first ---
+    # --- Check response cache first (인메모리 → Redis 폴백) ---
     cache_key = _cache_key(q, market, sector_id, ids, limit, offset)
     cached = _get_cached(cache_key)
     if cached:
@@ -135,6 +145,18 @@ async def list_stocks(
             content=data,
             headers={"X-Total-Count": total_str, "Access-Control-Expose-Headers": "X-Total-Count"},
         )
+    # 인메모리 미스 시 Redis 조회
+    try:
+        from app.cache import cache_get
+        redis_data = await cache_get(f"api:stocks:{cache_key}")
+        if redis_data and isinstance(redis_data, dict):
+            _set_cached(cache_key, redis_data["data"], redis_data["total"])
+            return JSONResponse(
+                content=redis_data["data"],
+                headers={"X-Total-Count": redis_data["total"], "Access-Control-Expose-Headers": "X-Total-Count"},
+            )
+    except Exception:
+        pass
 
     # --- Watchlist or search mode ---
     if ids or q or sector_id:
@@ -188,7 +210,7 @@ async def list_stocks(
 
         result = jsonable_encoder(items)
         total_str = str(total)
-        _set_cached(cache_key, result, total_str)
+        await _set_cached_with_redis(cache_key, result, total_str)
 
         return JSONResponse(
             content=result,
@@ -257,7 +279,7 @@ async def list_stocks(
 
     result = jsonable_encoder(items)
     total_str = str(total)
-    _set_cached(cache_key, result, total_str)
+    await _set_cached_with_redis(cache_key, result, total_str)
 
     return JSONResponse(
         content=result,

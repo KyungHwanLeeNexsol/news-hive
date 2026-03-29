@@ -115,6 +115,18 @@ async def get_market_volatility() -> dict:
     if _volatility_cache["data"] is not None and (now - _volatility_cache["timestamp"]) < _VOLATILITY_CACHE_TTL:
         return _volatility_cache["data"]
 
+    # 인메모리 미스 시 Redis 복구 시도
+    if _volatility_cache["data"] is None:
+        try:
+            from app.cache import cache_get
+            redis_data = await cache_get("market:volatility")
+            if redis_data and isinstance(redis_data, dict):
+                _volatility_cache["data"] = redis_data
+                _volatility_cache["timestamp"] = now
+                return redis_data
+        except Exception:
+            pass
+
     try:
         from app.services.naver_finance import fetch_stock_price_history
 
@@ -142,6 +154,12 @@ async def get_market_volatility() -> dict:
         # 캐시 저장
         _volatility_cache["data"] = result
         _volatility_cache["timestamp"] = now
+        # Redis write-through (TTL=300초)
+        try:
+            from app.cache import cache_set
+            await cache_set("market:volatility", result, ttl=300)
+        except Exception:
+            pass
 
         return result
 

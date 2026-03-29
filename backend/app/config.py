@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     DART_CRAWL_INTERVAL_MINUTES: int = 30  # DART 공시 크롤링 주기 (분)
     MARKET_CAP_UPDATE_HOURS: int = 6       # 시가총액 업데이트 주기 (시간)
 
+    # --- Redis 캐시 ---
+    REDIS_URL: str = ""  # 빈 문자열 = 비활성화, 인메모리 캐시 폴백 사용
+    RATE_LIMIT_PER_MINUTE: int = 60  # 일반 API 분당 요청 제한
+    RATE_LIMIT_EXPENSIVE_PER_MINUTE: int = 10  # 고비용 API 분당 요청 제한
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 

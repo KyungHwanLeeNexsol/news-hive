@@ -149,6 +149,18 @@ async def fetch_kis_stock_price(stock_code: str) -> Optional[KISStockPrice]:
             and (now - _price_cache.last_updated.get(stock_code, 0)) < _kis_cache_ttl()):
         return _price_cache.data[stock_code]
 
+    # 인메모리 미스 시 Redis 복구 시도
+    if stock_code not in _price_cache.data:
+        try:
+            from app.cache import cache_get
+            redis_data = await cache_get(f"kis:price:{stock_code}")
+            if redis_data and isinstance(redis_data, dict):
+                _price_cache.data[stock_code] = KISStockPrice(**redis_data)
+                _price_cache.last_updated[stock_code] = now
+                return _price_cache.data[stock_code]
+        except Exception:
+            pass
+
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             token = await _get_access_token(client)
@@ -191,6 +203,13 @@ async def fetch_kis_stock_price(stock_code: str) -> Optional[KISStockPrice]:
 
             _price_cache.data[stock_code] = result
             _price_cache.last_updated[stock_code] = now
+            # Redis write-through
+            try:
+                from app.cache import cache_set
+                from dataclasses import asdict
+                await cache_set(f"kis:price:{stock_code}", asdict(result), ttl=_kis_cache_ttl())
+            except Exception:
+                pass
             api_circuit_breaker.record_success("kis")
             return result
 

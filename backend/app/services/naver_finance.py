@@ -101,6 +101,7 @@ async def fetch_sector_performances(force: bool = False) -> dict[str, SectorPerf
     Non-forced calls always return cached data immediately (even if stale)
     — the scheduler refreshes the cache every 5 minutes in the background.
     Only blocks when force=True (scheduler) or on first call with empty cache.
+    Redis 사용 가능 시 인메모리 캐시가 비어있으면 Redis에서 복구 시도.
     """
     now = time.time()
     cache_fresh = (now - _cache.last_updated) < _cache_ttl()
@@ -108,6 +109,19 @@ async def fetch_sector_performances(force: bool = False) -> dict[str, SectorPerf
     if not force:
         if _cache.data:
             return _cache.data
+        # 인메모리 비어있으면 Redis에서 복구 시도
+        if not _cache.data:
+            try:
+                from app.cache import cache_get
+                redis_data = await cache_get("sector:perf")
+                if redis_data and isinstance(redis_data, dict):
+                    _cache.data = {
+                        k: SectorPerformance(**v) for k, v in redis_data.items()
+                    }
+                    _cache.last_updated = now
+                    return _cache.data
+            except Exception:
+                pass
         if cache_fresh:
             return _cache.data
 
@@ -164,6 +178,17 @@ async def fetch_sector_performances(force: bool = False) -> dict[str, SectorPerf
         if results:
             _cache.data = results
             _cache.last_updated = now
+            # Redis에도 저장 (비동기, 실패 무시)
+            try:
+                from app.cache import cache_set
+                from dataclasses import asdict
+                await cache_set(
+                    "sector:perf",
+                    {k: asdict(v) for k, v in results.items()},
+                    ttl=_cache_ttl(),
+                )
+            except Exception:
+                pass
             logger.info(f"Fetched performance data for {len(results)} sectors from Naver Finance")
 
         return results if results else _cache.data
@@ -245,6 +270,18 @@ async def fetch_sector_stock_performances(naver_code: str) -> list[StockPerforma
             and (now - _stock_perf_cache.last_updated.get(naver_code, 0)) < _cache_ttl()):
         return _stock_perf_cache.data[naver_code]
 
+    # 인메모리 미스 시 Redis 복구 시도
+    if naver_code not in _stock_perf_cache.data:
+        try:
+            from app.cache import cache_get
+            redis_data = await cache_get(f"sector:{naver_code}:stocks")
+            if redis_data and isinstance(redis_data, list):
+                _stock_perf_cache.data[naver_code] = [StockPerformance(**item) for item in redis_data]
+                _stock_perf_cache.last_updated[naver_code] = now
+                return _stock_perf_cache.data[naver_code]
+        except Exception:
+            pass
+
     url = SECTOR_DETAIL_URL.format(code=naver_code)
     try:
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
@@ -311,6 +348,17 @@ async def fetch_sector_stock_performances(naver_code: str) -> list[StockPerforma
         if results:
             _stock_perf_cache.data[naver_code] = results
             _stock_perf_cache.last_updated[naver_code] = now
+            # Redis write-through
+            try:
+                from app.cache import cache_set
+                from dataclasses import asdict
+                await cache_set(
+                    f"sector:{naver_code}:stocks",
+                    [asdict(s) for s in results],
+                    ttl=_cache_ttl(),
+                )
+            except Exception:
+                pass
             logger.info(f"Fetched performance data for {len(results)} stocks in sector {naver_code}")
 
         return results
@@ -360,6 +408,18 @@ async def fetch_stock_fundamentals(stock_code: str) -> Optional[StockFundamental
             and (now - _fundamentals_cache.last_updated.get(stock_code, 0)) < _cache_ttl()):
         return _fundamentals_cache.data[stock_code]
 
+    # 인메모리 미스 시 Redis 복구 시도
+    if stock_code not in _fundamentals_cache.data:
+        try:
+            from app.cache import cache_get
+            redis_data = await cache_get(f"stock:{stock_code}:fundamentals")
+            if redis_data and isinstance(redis_data, dict):
+                _fundamentals_cache.data[stock_code] = StockFundamentals(**redis_data)
+                _fundamentals_cache.last_updated[stock_code] = now
+                return _fundamentals_cache.data[stock_code]
+        except Exception:
+            pass
+
     url = POLLING_API_URL.format(code=stock_code)
     try:
         async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
@@ -407,6 +467,13 @@ async def fetch_stock_fundamentals(stock_code: str) -> Optional[StockFundamental
 
         _fundamentals_cache.data[stock_code] = result
         _fundamentals_cache.last_updated[stock_code] = now
+        # Redis write-through
+        try:
+            from app.cache import cache_set
+            from dataclasses import asdict
+            await cache_set(f"stock:{stock_code}:fundamentals", asdict(result), ttl=_cache_ttl())
+        except Exception:
+            pass
         return result
 
     except Exception as e:
@@ -586,6 +653,18 @@ async def fetch_stock_price_history(stock_code: str, pages: int = 5) -> list[Pri
             and (now - _price_cache.last_updated.get(stock_code, 0)) < PRICE_CACHE_TTL):
         return _price_cache.data[stock_code]
 
+    # 인메모리 미스 시 Redis 복구 시도
+    if stock_code not in _price_cache.data:
+        try:
+            from app.cache import cache_get
+            redis_data = await cache_get(f"stock:{stock_code}:prices")
+            if redis_data and isinstance(redis_data, list):
+                _price_cache.data[stock_code] = [PriceRecord(**item) for item in redis_data]
+                _price_cache.last_updated[stock_code] = now
+                return _price_cache.data[stock_code]
+        except Exception:
+            pass
+
     results: list[PriceRecord] = []
     try:
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
@@ -625,6 +704,13 @@ async def fetch_stock_price_history(stock_code: str, pages: int = 5) -> list[Pri
         if results:
             _price_cache.data[stock_code] = results
             _price_cache.last_updated[stock_code] = now
+            # Redis write-through (TTL=3600초)
+            try:
+                from app.cache import cache_set
+                from dataclasses import asdict
+                await cache_set(f"stock:{stock_code}:prices", [asdict(r) for r in results], ttl=3600)
+            except Exception:
+                pass
             logger.info(f"Fetched {len(results)} daily prices for {stock_code}")
 
         return results
@@ -743,6 +829,18 @@ async def fetch_market_cap_rankings(
     if _market_cap_cache.data and (now - _market_cap_cache.last_updated) < _cache_ttl():
         return _market_cap_cache.data
 
+    # 인메모리 비어있으면 Redis 복구 시도
+    if not _market_cap_cache.data:
+        try:
+            from app.cache import cache_get
+            redis_data = await cache_get("market:caps")
+            if redis_data and isinstance(redis_data, list):
+                _market_cap_cache.data = [MarketCapItem(**item) for item in redis_data]
+                _market_cap_cache.last_updated = now
+                return _market_cap_cache.data
+        except Exception:
+            pass
+
     import asyncio
 
     async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
@@ -762,6 +860,13 @@ async def fetch_market_cap_rankings(
     if results:
         _market_cap_cache.data = results
         _market_cap_cache.last_updated = now
+        # Redis write-through
+        try:
+            from app.cache import cache_set
+            from dataclasses import asdict
+            await cache_set("market:caps", [asdict(item) for item in results], ttl=_cache_ttl())
+        except Exception:
+            pass
         logger.info(f"Fetched market cap rankings: {len(results)} stocks")
 
     return _market_cap_cache.data if _market_cap_cache.data else results

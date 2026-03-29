@@ -100,6 +100,12 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown
     stop_scheduler()
+    # Redis 연결 종료
+    try:
+        from app.cache import close_redis
+        await close_redis()
+    except Exception:
+        pass
 
 
 app = FastAPI(title="Stock News Tracker API", lifespan=lifespan)
@@ -113,6 +119,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Rate Limiter 미들웨어 (Redis 미사용 시 자동 비활성화)
+from app.middleware.rate_limiter import RateLimiterMiddleware  # noqa: E402
+app.add_middleware(RateLimiterMiddleware)
 
 # Import and register routers
 from app.routers import sectors, stocks, news, disclosures, alerts, events, fund_manager, auth, commodities, paper_trading  # noqa: E402
@@ -133,6 +143,29 @@ app.include_router(paper_trading.router)
 @app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/api/admin/cache/stats")
+async def cache_stats():
+    """캐시 적중/미스 통계 반환."""
+    from app.cache import get_cache_stats, get_redis
+    stats = get_cache_stats()
+    r = await get_redis()
+    stats["redis_connected"] = r is not None
+    return stats
+
+
+@app.delete("/api/admin/cache")
+async def flush_cache(namespace: str = ""):
+    """캐시 초기화. namespace 지정 시 해당 패턴만 삭제, 미지정 시 전체 삭제."""
+    from app.cache import cache_delete, get_redis
+    r = await get_redis()
+    if r is None:
+        return {"deleted": 0, "message": "Redis 미연결 - 인메모리 캐시만 초기화"}
+
+    pattern = f"{namespace}*" if namespace else "*"
+    deleted = await cache_delete(pattern)
+    return {"deleted": deleted, "pattern": pattern}
 
 
 @app.post("/api/deploy")
