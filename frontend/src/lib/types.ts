@@ -366,6 +366,7 @@ export interface ChatResponse {
   reply: string;
   context_used: string[];
   session_id: string;
+  ai_model: string | null;
 }
 
 // ── 백테스트 ──

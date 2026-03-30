@@ -35,6 +35,7 @@ class ChatResponse(BaseModel):
     reply: str
     context_used: list[str]
     session_id: str
+    ai_model: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -340,7 +341,7 @@ async def chat_endpoint(req: ChatRequest, db: Session = Depends(get_db)):
     사용자 메시지에서 종목을 감지하고, 관련 데이터를 수집하여
     Gemini에게 분석을 요청한 후 응답을 반환한다.
     """
-    from app.services.ai_client import ask_ai
+    from app.services.ai_client import ask_ai_with_model
 
     # 세션 관리
     session_id, history = _get_or_create_session(req.session_id)
@@ -366,8 +367,9 @@ async def chat_endpoint(req: ChatRequest, db: Session = Depends(get_db)):
     prompt = _build_prompt(req.message, context_text, stock_name, history)
 
     # AI 호출
+    ai_model_used: str | None = None
     try:
-        reply = await ask_ai(prompt)
+        reply, ai_model_used = await ask_ai_with_model(prompt)
         if not reply:
             reply = "죄송합니다. AI 응답을 생성하지 못했습니다. 잠시 후 다시 시도해주세요."
     except Exception as e:
@@ -382,4 +384,5 @@ async def chat_endpoint(req: ChatRequest, db: Session = Depends(get_db)):
         reply=reply,
         context_used=sources_used,
         session_id=session_id,
+        ai_model=ai_model_used,
     )

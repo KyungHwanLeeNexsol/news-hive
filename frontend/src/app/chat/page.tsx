@@ -11,6 +11,7 @@ interface ChatMessage {
   content: string;
   context_used?: string[];
   timestamp: string; // ISO 문자열로 저장/복원
+  ai_model?: string | null;
 }
 
 // 멀티 세션 인터페이스
@@ -296,6 +297,7 @@ export default function ChatPage() {
           content: res.reply,
           context_used: res.context_used,
           timestamp: new Date().toISOString(),
+          ai_model: res.ai_model,
         };
 
         updateSession(currentSessionId, (s) => ({
@@ -532,20 +534,33 @@ export default function ChatPage() {
               >
                 <div className="max-w-[85%]">
                   {/* 컨텍스트 태그 (AI 응답 위에 표시) */}
-                  {msg.role === 'assistant' &&
-                    msg.context_used &&
-                    msg.context_used.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mb-1.5">
-                        {msg.context_used.map((ctx, j) => (
+                  {msg.role === 'assistant' && (msg.context_used?.length || msg.ai_model) && (
+                    <div className="flex flex-wrap items-center gap-1 mb-1.5">
+                      {msg.context_used?.map((ctx, j) => (
+                        <span
+                          key={j}
+                          className="inline-block px-2 py-0.5 bg-[#e8f0fe] text-[#1261c4] text-[11px] rounded-full font-medium"
+                        >
+                          {ctx}
+                        </span>
+                      ))}
+                      {msg.ai_model && (() => {
+                        const isGlm = msg.ai_model.toLowerCase().includes('glm');
+                        return (
                           <span
-                            key={j}
-                            className="inline-block px-2 py-0.5 bg-[#e8f0fe] text-[#1261c4] text-[11px] rounded-full font-medium"
+                            className={`inline-block px-1.5 py-0.5 text-[10px] rounded font-mono border ${
+                              isGlm
+                                ? 'bg-[#fff8e1] text-[#f57f17] border-[#ffe082]'
+                                : 'bg-[#e8f5e9] text-[#2e7d32] border-[#a5d6a7]'
+                            }`}
+                            title={isGlm ? 'Gemini rate limit 초과로 GLM 모델 사용 — 분석 품질이 다소 낮을 수 있습니다' : `AI 모델: ${msg.ai_model}`}
                           >
-                            {ctx}
+                            {msg.ai_model}
                           </span>
-                        ))}
-                      </div>
-                    )}
+                        );
+                      })()}
+                    </div>
+                  )}
                   <div
                     className={`px-4 py-3 rounded-2xl text-[14px] leading-relaxed ${
                       msg.role === 'user'
