@@ -157,9 +157,10 @@ export default function ChatPage() {
           const legacySessionKey = user ? `chat_session_id_${user.id}` : 'chat_session_id_guest';
           const legacySessionId = localStorage.getItem(legacySessionKey) ?? undefined;
           const now = new Date().toISOString();
+          const firstUserMsg = legacyMessages.find((m) => m.role === 'user');
           const importedSession: ChatSession = {
             id: crypto.randomUUID(),
-            title: '이전 대화',
+            title: firstUserMsg ? firstUserMsg.content.slice(0, 28) : '이전 대화',
             messages: legacyMessages.map((m) => ({ ...m, timestamp: m.timestamp })),
             backendSessionId: legacySessionId,
             createdAt: now,
@@ -341,10 +342,10 @@ export default function ChatPage() {
   }, []);
 
   return (
-    // @MX:NOTE: -mx-4 -my-4로 layout.tsx의 px-4 py-4 패딩을 상쇄하여 이중 스크롤바 방지
+    // @MX:NOTE: position:fixed + top:48px로 layout main 패딩을 완전히 탈출하여 이중 스크롤바 방지
     <div
-      className="flex overflow-hidden -mx-4 -my-4"
-      style={{ height: 'calc(100vh - 48px)' }}
+      className="flex overflow-hidden fixed bg-white"
+      style={{ top: '48px', left: 0, right: 0, bottom: 0 }}
     >
       {/* 모바일 사이드바 오버레이 */}
       {sidebarOpen && (
@@ -360,10 +361,9 @@ export default function ChatPage() {
           flex flex-col w-[240px] flex-shrink-0
           bg-[#f8f9fa] border-r border-[#e5e5e5]
           transition-transform duration-200 ease-in-out
-          fixed md:static inset-y-0 left-0 z-20
+          md:relative md:translate-x-0
           ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
         `}
-        style={{ height: 'calc(100vh - 48px)' }}
       >
         {/* 새 채팅 버튼 */}
         <div className="p-3 border-b border-[#e5e5e5]">
