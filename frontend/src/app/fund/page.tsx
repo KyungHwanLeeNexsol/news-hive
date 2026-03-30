@@ -10,12 +10,21 @@ import {
   fetchLatestPortfolioReport,
   fetchAccuracyStats,
   verifySignals,
+  fetchPaperTradingStats,
+  fetchPaperPositions,
+  fetchPaperTrades,
+  fetchPaperSnapshots,
+  resetPaperTrading,
 } from '@/lib/api';
-import type { FundSignal, DailyBriefing, PortfolioReport, AccuracyStats } from '@/lib/types';
+import type {
+  FundSignal, DailyBriefing, PortfolioReport, AccuracyStats,
+  PaperTradingStats, PaperPosition, PaperTrade, PaperSnapshot,
+} from '@/lib/types';
 import { useWatchlist } from '@/lib/watchlist';
 import { useAdmin } from '@/lib/useAdmin';
+import BacktestDashboard from '@/components/BacktestDashboard';
 
-type Tab = 'briefing' | 'signals' | 'accuracy' | 'portfolio';
+type Tab = 'briefing' | 'signals' | 'accuracy' | 'portfolio' | 'paper' | 'backtest';
 
 function formatDateTime(dateStr: string): string {
   const d = new Date(dateStr);
@@ -883,6 +892,312 @@ function PortfolioTab() {
   );
 }
 
+// ── Paper Trading Tab ──
+function PaperTradingTab() {
+  const [stats, setStats] = useState<PaperTradingStats | null>(null);
+  const [positions, setPositions] = useState<PaperPosition[]>([]);
+  const [trades, setTrades] = useState<PaperTrade[]>([]);
+  const [snapshots, setSnapshots] = useState<PaperSnapshot[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [resetting, setResetting] = useState(false);
+
+  useEffect(() => {
+    Promise.all([
+      fetchPaperTradingStats(),
+      fetchPaperPositions(),
+      fetchPaperTrades(50),
+      fetchPaperSnapshots(30),
+    ])
+      .then(([s, p, t, sn]) => {
+        setStats(s);
+        setPositions(p);
+        setTrades(t);
+        setSnapshots(sn);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function handleReset() {
+    if (!confirm('포트폴리오를 초기화하시겠습니까?\n모든 포지션과 거래 기록이 삭제됩니다.')) return;
+    setResetting(true);
+    try {
+      const ok = await resetPaperTrading();
+      if (ok) {
+        setStats(null);
+        setPositions([]);
+        setTrades([]);
+        setSnapshots([]);
+        // 초기화 후 새로 불러오기
+        const s = await fetchPaperTradingStats();
+        setStats(s);
+      } else {
+        alert('초기화에 실패했습니다.');
+      }
+    } catch {
+      alert('초기화에 실패했습니다.');
+    } finally {
+      setResetting(false);
+    }
+  }
+
+  const exitReasonLabel: Record<string, string> = {
+    target_hit: '목표가 도달',
+    stop_loss: '손절',
+    timeout: '기간만료',
+    signal_sell: '매도시그널',
+  };
+
+  if (loading) {
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-4 gap-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="section-box p-4">
+              <div className="skeleton skeleton-text mb-2" style={{ width: '60%' }} />
+              <div className="skeleton skeleton-text" style={{ width: '40%' }} />
+            </div>
+          ))}
+        </div>
+        <div className="section-box p-4">
+          <div className="skeleton skeleton-text mb-2" style={{ width: '30%' }} />
+          <div className="skeleton skeleton-text mb-1" style={{ width: '90%' }} />
+          <div className="skeleton skeleton-text" style={{ width: '70%' }} />
+        </div>
+      </div>
+    );
+  }
+
+  if (!stats) {
+    return (
+      <div className="section-box p-8 text-center">
+        <div className="text-[40px] mb-3">&#x1F4B9;</div>
+        <p className="text-[15px] text-[#333] font-medium mb-1">페이퍼 트레이딩 데이터가 없습니다</p>
+        <p className="text-[13px] text-[#999]">
+          AI 펀드매니저가 시그널을 기반으로 모의 매매를 실행하면 여기에 표시됩니다.
+        </p>
+      </div>
+    );
+  }
+
+  const totalValue = stats.initial_capital + stats.total_pnl;
+
+  return (
+    <div>
+      {/* 상단 통계 카드 */}
+      <div className="grid grid-cols-4 gap-3 mb-3">
+        <div className="section-box p-4 text-center">
+          <div className="text-[20px] font-bold text-[#333]">
+            {formatNumber(totalValue)}
+            <span className="text-[12px] font-normal text-[#999] ml-1">원</span>
+          </div>
+          <div className="text-[11px] text-[#999] mt-1">총 자산</div>
+          <div className={`text-[12px] font-medium mt-0.5 ${stats.cumulative_return >= 0 ? 'text-[#e12343]' : 'text-[#1261c4]'}`}>
+            {stats.cumulative_return >= 0 ? '+' : ''}{stats.cumulative_return.toFixed(2)}%
+          </div>
+        </div>
+        <div className="section-box p-4 text-center">
+          <div className={`text-[24px] font-bold ${stats.win_rate >= 50 ? 'text-[#e12343]' : 'text-[#1261c4]'}`}>
+            {stats.win_rate.toFixed(1)}%
+          </div>
+          <div className="text-[11px] text-[#999] mt-1">승률</div>
+          <div className="text-[11px] text-[#666]">{stats.closed_trades}건 중</div>
+        </div>
+        <div className="section-box p-4 text-center">
+          <div className={`text-[24px] font-bold ${stats.sharpe_warning ? 'text-[#ffa723]' : 'text-[#2e7d32]'}`}>
+            {stats.sharpe_ratio.toFixed(2)}
+          </div>
+          <div className="text-[11px] text-[#999] mt-1">Sharpe Ratio</div>
+          {stats.sharpe_warning && (
+            <div className="text-[10px] text-[#ffa723] font-medium mt-0.5">&#x26A0; 1.0 미만</div>
+          )}
+        </div>
+        <div className="section-box p-4 text-center">
+          <div className="text-[24px] font-bold text-[#1261c4]">
+            {stats.mdd.toFixed(2)}%
+          </div>
+          <div className="text-[11px] text-[#999] mt-1">MDD</div>
+          <div className="text-[11px] text-[#666]">최대낙폭</div>
+        </div>
+      </div>
+
+      {/* 오픈 포지션 */}
+      <div className="section-box mb-3">
+        <div className="section-title">
+          <span>오픈 포지션</span>
+          <span className="text-[12px] font-normal text-[#999]">{positions.length}건</span>
+        </div>
+        {positions.length === 0 ? (
+          <div className="p-6 text-center text-[13px] text-[#999]">
+            오픈 포지션이 없습니다
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-[12px]">
+              <thead>
+                <tr className="border-b border-[#eee] bg-[#f7f8fa]">
+                  <th className="text-left px-4 py-2.5 font-semibold text-[#666]">종목명</th>
+                  <th className="text-right px-4 py-2.5 font-semibold text-[#666]">진입가</th>
+                  <th className="text-right px-4 py-2.5 font-semibold text-[#666]">수량</th>
+                  <th className="text-right px-4 py-2.5 font-semibold text-[#666]">투자금액</th>
+                  <th className="text-right px-4 py-2.5 font-semibold text-[#666]">목표가</th>
+                  <th className="text-right px-4 py-2.5 font-semibold text-[#666]">손절가</th>
+                  <th className="text-right px-4 py-2.5 font-semibold text-[#666]">진입일</th>
+                </tr>
+              </thead>
+              <tbody>
+                {positions.map((pos, i) => (
+                  <tr key={i} className="border-b border-[#f0f0f0] hover:bg-[#f7f8fa]">
+                    <td className="px-4 py-2.5 font-medium text-[#333]">{pos.stock_name}</td>
+                    <td className="text-right px-4 py-2.5 text-[#333]">{formatNumber(pos.entry_price)}원</td>
+                    <td className="text-right px-4 py-2.5 text-[#333]">{formatNumber(pos.quantity)}</td>
+                    <td className="text-right px-4 py-2.5 text-[#333]">{formatNumber(pos.invest_amount)}원</td>
+                    <td className="text-right px-4 py-2.5 text-[#e12343]">{formatNumber(pos.target_price)}원</td>
+                    <td className="text-right px-4 py-2.5 text-[#1261c4]">{formatNumber(pos.stop_loss)}원</td>
+                    <td className="text-right px-4 py-2.5 text-[#999]">{pos.entry_date.slice(0, 10)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* 거래 내역 */}
+      <div className="section-box mb-3">
+        <div className="section-title">
+          <span>거래 내역</span>
+          <span className="text-[12px] font-normal text-[#999]">{trades.length}건</span>
+        </div>
+        {trades.length === 0 ? (
+          <div className="p-6 text-center text-[13px] text-[#999]">
+            거래 내역이 없습니다
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-[12px]">
+              <thead>
+                <tr className="border-b border-[#eee] bg-[#f7f8fa]">
+                  <th className="text-left px-4 py-2.5 font-semibold text-[#666]">종목명</th>
+                  <th className="text-right px-4 py-2.5 font-semibold text-[#666]">진입가</th>
+                  <th className="text-right px-4 py-2.5 font-semibold text-[#666]">청산가</th>
+                  <th className="text-right px-4 py-2.5 font-semibold text-[#666]">손익</th>
+                  <th className="text-right px-4 py-2.5 font-semibold text-[#666]">수익률</th>
+                  <th className="text-center px-4 py-2.5 font-semibold text-[#666]">청산사유</th>
+                  <th className="text-right px-4 py-2.5 font-semibold text-[#666]">진입일</th>
+                  <th className="text-right px-4 py-2.5 font-semibold text-[#666]">청산일</th>
+                </tr>
+              </thead>
+              <tbody>
+                {trades.map((trade, i) => (
+                  <tr key={i} className="border-b border-[#f0f0f0] hover:bg-[#f7f8fa]">
+                    <td className="px-4 py-2.5 font-medium text-[#333]">{trade.stock_name}</td>
+                    <td className="text-right px-4 py-2.5 text-[#333]">{formatNumber(trade.entry_price)}원</td>
+                    <td className="text-right px-4 py-2.5 text-[#333]">{formatNumber(trade.exit_price)}원</td>
+                    <td className={`text-right px-4 py-2.5 font-medium ${trade.pnl >= 0 ? 'text-[#e12343]' : 'text-[#1261c4]'}`}>
+                      {trade.pnl >= 0 ? '+' : ''}{formatNumber(trade.pnl)}원
+                    </td>
+                    <td className={`text-right px-4 py-2.5 font-medium ${trade.return_pct >= 0 ? 'text-[#e12343]' : 'text-[#1261c4]'}`}>
+                      {trade.return_pct >= 0 ? '+' : ''}{trade.return_pct.toFixed(2)}%
+                    </td>
+                    <td className="text-center px-4 py-2.5">
+                      <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-medium ${
+                        trade.exit_reason === 'target_hit'
+                          ? 'bg-[#e8f5e9] text-[#2e7d32]'
+                          : trade.exit_reason === 'stop_loss'
+                            ? 'bg-[#fce4ec] text-[#c62828]'
+                            : 'bg-[#f5f5f5] text-[#666]'
+                      }`}>
+                        {exitReasonLabel[trade.exit_reason] || trade.exit_reason}
+                      </span>
+                    </td>
+                    <td className="text-right px-4 py-2.5 text-[#999]">{trade.entry_date.slice(0, 10)}</td>
+                    <td className="text-right px-4 py-2.5 text-[#999]">{trade.exit_date.slice(0, 10)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* 일별 수익률 추이 */}
+      <div className="section-box mb-3">
+        <div className="section-title">
+          <span>일별 수익률 추이</span>
+          <span className="text-[12px] font-normal text-[#999]">최근 {snapshots.length}일</span>
+        </div>
+        {snapshots.length === 0 ? (
+          <div className="p-6 text-center text-[13px] text-[#999]">
+            스냅샷 데이터가 없습니다
+          </div>
+        ) : (
+          <div className="p-4">
+            {/* 누적 수익률 바 차트 */}
+            <div className="space-y-1.5">
+              {snapshots.map((snap) => {
+                const maxAbs = Math.max(
+                  ...snapshots.map((s) => Math.abs(s.cumulative_return_pct)),
+                  1,
+                );
+                const width = Math.abs(snap.cumulative_return_pct) / maxAbs * 50;
+                const isPositive = snap.cumulative_return_pct >= 0;
+                return (
+                  <div key={snap.date} className="flex items-center gap-2 text-[11px]">
+                    <span className="w-[70px] text-[#999] shrink-0">{snap.date.slice(5)}</span>
+                    <div className="flex-1 flex items-center">
+                      <div className="w-1/2 flex justify-end">
+                        {!isPositive && (
+                          <div
+                            className="h-3 bg-[#1261c4] rounded-l"
+                            style={{ width: `${width}%` }}
+                          />
+                        )}
+                      </div>
+                      <div className="w-px h-4 bg-[#ddd] shrink-0" />
+                      <div className="w-1/2">
+                        {isPositive && (
+                          <div
+                            className="h-3 bg-[#e12343] rounded-r"
+                            style={{ width: `${width}%` }}
+                          />
+                        )}
+                      </div>
+                    </div>
+                    <span className={`w-[55px] text-right shrink-0 font-medium ${isPositive ? 'text-[#e12343]' : 'text-[#1261c4]'}`}>
+                      {isPositive ? '+' : ''}{snap.cumulative_return_pct.toFixed(2)}%
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+            {/* 범례 */}
+            <div className="flex items-center justify-center gap-4 mt-3 text-[10px] text-[#999]">
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-2.5 h-2.5 bg-[#e12343] rounded-sm" /> 수익
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-2.5 h-2.5 bg-[#1261c4] rounded-sm" /> 손실
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 초기화 버튼 */}
+      <div className="text-center mt-4">
+        <button
+          onClick={handleReset}
+          disabled={resetting}
+          className="px-4 py-2 text-[12px] text-[#999] border border-[#ddd] rounded hover:text-[#e12343] hover:border-[#e12343] disabled:opacity-50 transition-colors"
+        >
+          {resetting ? '초기화 중...' : '포트폴리오 초기화'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Page ──
 export default function FundManagerPage() {
   const { isAdmin, checking, login, logout } = useAdmin();
@@ -905,6 +1220,8 @@ export default function FundManagerPage() {
     { key: 'signals', label: '투자 시그널' },
     { key: 'accuracy', label: '적중률' },
     { key: 'portfolio', label: '포트폴리오' },
+    { key: 'paper', label: '페이퍼 트레이딩' },
+    { key: 'backtest', label: '백테스트' },
   ];
 
   return (
@@ -945,6 +1262,8 @@ export default function FundManagerPage() {
       {tab === 'signals' && <SignalsTab />}
       {tab === 'accuracy' && <AccuracyTab />}
       {tab === 'portfolio' && <PortfolioTab />}
+      {tab === 'paper' && <PaperTradingTab />}
+      {tab === 'backtest' && <BacktestDashboard />}
     </div>
   );
 }

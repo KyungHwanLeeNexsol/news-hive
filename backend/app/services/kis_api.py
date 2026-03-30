@@ -13,9 +13,12 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
+import asyncio
+
 import httpx
 
 from app.config import settings
+from app.services.circuit_breaker import api_circuit_breaker
 
 logger = logging.getLogger(__name__)
 
@@ -36,26 +39,39 @@ class _TokenCache:
 
 
 _token_cache = _TokenCache()
+# 동시 토큰 갱신 경쟁 조건 방지 (REQ-FIX-011)
+_token_lock = asyncio.Lock()
 
 
 async def _get_access_token(client: httpx.AsyncClient) -> str:
-    """Get or refresh the KIS API access token."""
+    """KIS API 접근 토큰을 가져오거나 갱신.
+
+    asyncio.Lock으로 동시 갱신 경쟁 조건을 방지한다.
+    """
+    # 캐시된 토큰이 유효하면 락 없이 바로 반환
     now = time.time()
-    if _token_cache.access_token and now < _token_cache.expires_at - 60:
+    if _token_cache.access_token and now < _token_cache.expires_at - settings.KIS_TOKEN_REFRESH_MARGIN_SECONDS:
         return _token_cache.access_token
 
-    resp = await client.post(TOKEN_URL, json={
-        "grant_type": "client_credentials",
-        "appkey": settings.KIS_APP_KEY,
-        "appsecret": settings.KIS_APP_SECRET,
-    })
-    resp.raise_for_status()
-    data = resp.json()
+    # 토큰 갱신은 한 번에 하나의 코루틴만 수행
+    async with _token_lock:
+        # 더블 체크: 다른 코루틴이 이미 갱신했을 수 있음
+        now = time.time()
+        if _token_cache.access_token and now < _token_cache.expires_at - settings.KIS_TOKEN_REFRESH_MARGIN_SECONDS:
+            return _token_cache.access_token
 
-    _token_cache.access_token = data["access_token"]
-    _token_cache.expires_at = now + data.get("expires_in", 86400)
-    logger.info("KIS API token refreshed")
-    return _token_cache.access_token
+        resp = await client.post(TOKEN_URL, json={
+            "grant_type": "client_credentials",
+            "appkey": settings.KIS_APP_KEY,
+            "appsecret": settings.KIS_APP_SECRET,
+        })
+        resp.raise_for_status()
+        data = resp.json()
+
+        _token_cache.access_token = data["access_token"]
+        _token_cache.expires_at = now + data.get("expires_in", settings.KIS_TOKEN_DEFAULT_EXPIRES)
+        logger.info("KIS API token refreshed")
+        return _token_cache.access_token
 
 
 def _auth_headers(token: str) -> dict:
@@ -124,10 +140,26 @@ async def fetch_kis_stock_price(stock_code: str) -> Optional[KISStockPrice]:
     if not settings.KIS_APP_KEY or not settings.KIS_APP_SECRET:
         return None
 
+    # 서킷 브레이커: KIS API 연속 실패 시 스킵
+    if not api_circuit_breaker.is_available("kis"):
+        return _price_cache.data.get(stock_code)
+
     now = time.time()
     if (stock_code in _price_cache.data
             and (now - _price_cache.last_updated.get(stock_code, 0)) < _kis_cache_ttl()):
         return _price_cache.data[stock_code]
+
+    # 인메모리 미스 시 Redis 복구 시도
+    if stock_code not in _price_cache.data:
+        try:
+            from app.cache import cache_get
+            redis_data = await cache_get(f"kis:price:{stock_code}")
+            if redis_data and isinstance(redis_data, dict):
+                _price_cache.data[stock_code] = KISStockPrice(**redis_data)
+                _price_cache.last_updated[stock_code] = now
+                return _price_cache.data[stock_code]
+        except Exception:
+            pass
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -171,8 +203,17 @@ async def fetch_kis_stock_price(stock_code: str) -> Optional[KISStockPrice]:
 
             _price_cache.data[stock_code] = result
             _price_cache.last_updated[stock_code] = now
+            # Redis write-through
+            try:
+                from app.cache import cache_set
+                from dataclasses import asdict
+                await cache_set(f"kis:price:{stock_code}", asdict(result), ttl=_kis_cache_ttl())
+            except Exception:
+                pass
+            api_circuit_breaker.record_success("kis")
             return result
 
     except Exception as e:
+        api_circuit_breaker.record_failure("kis")
         logger.error(f"KIS API error for {stock_code}: {e}")
         return _price_cache.data.get(stock_code)

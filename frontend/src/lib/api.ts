@@ -1,4 +1,4 @@
-import type { Sector, Stock, StockListItem, NewsArticle, NewsRelation, StockDetail, FinancialPeriod, PriceRecord, SentimentTrendItem, SectorInsight, DisclosureItem, DisclosureDetail, MacroAlert, EconomicEvent, FundSignal, DailyBriefing, PortfolioReport, AccuracyStats, StockNewsImpactStats, Commodity, CommodityHistoryPoint, SectorCommodity, CommodityNewsArticle } from "./types";
+import type { Sector, Stock, StockListItem, NewsArticle, NewsRelation, StockDetail, FinancialPeriod, PriceRecord, SentimentTrendItem, SectorInsight, DisclosureItem, DisclosureDetail, MacroAlert, EconomicEvent, FundSignal, DailyBriefing, PortfolioReport, AccuracyStats, StockNewsImpactStats, Commodity, CommodityHistoryPoint, SectorCommodity, CommodityNewsArticle, PaperTradingStats, PaperPosition, PaperTrade, PaperSnapshot, ChatResponse, BacktestResult, NewsPriceCorrelation } from "./types";
 
 const API_BASE = "/api";
 
@@ -508,6 +508,84 @@ export async function fetchCommodityNewsById(
     return { articles: data, total };
   }
   return { articles: data.articles ?? [], total: data.total ?? 0 };
+}
+
+// ── 페이퍼 트레이딩 ──
+
+export async function fetchPaperTradingStats(): Promise<PaperTradingStats | null> {
+  const res = await fetchWithRetry(`${API_BASE}/paper-trading/stats`);
+  if (!res.ok) return null;
+  return res.json();
+}
+
+export async function fetchPaperPositions(): Promise<PaperPosition[]> {
+  const res = await fetchWithRetry(`${API_BASE}/paper-trading/positions`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function fetchPaperTrades(limit = 50): Promise<PaperTrade[]> {
+  const res = await fetchWithRetry(`${API_BASE}/paper-trading/trades?limit=${limit}`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function fetchPaperSnapshots(days = 30): Promise<PaperSnapshot[]> {
+  const res = await fetchWithRetry(`${API_BASE}/paper-trading/snapshots?days=${days}`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function resetPaperTrading(): Promise<boolean> {
+  const res = await fetch(`${API_BASE}/paper-trading/reset`, { method: 'POST' });
+  return res.ok;
+}
+
+// ── AI 채팅 ──
+
+export async function sendChatMessage(
+  message: string,
+  sessionId?: string,
+  stockCode?: string,
+): Promise<ChatResponse> {
+  const res = await fetchWithRetry(`${API_BASE}/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, session_id: sessionId, stock_code: stockCode }),
+  });
+  if (!res.ok) throw new Error('Failed to send chat message');
+  return res.json();
+}
+
+// ── 백테스트 ──
+
+export async function fetchBacktest(params: {
+  days?: number;
+  stock_id?: number;
+  signal_type?: string;
+  min_confidence?: number;
+}): Promise<BacktestResult> {
+  const sp = new URLSearchParams();
+  if (params.days) sp.set('days', String(params.days));
+  if (params.stock_id) sp.set('stock_id', String(params.stock_id));
+  if (params.signal_type) sp.set('signal_type', params.signal_type);
+  if (params.min_confidence != null) sp.set('min_confidence', String(params.min_confidence));
+  const res = await fetchWithRetry(`${API_BASE}/fund/backtest?${sp}`, {
+    headers: adminHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to fetch backtest');
+  return res.json();
+}
+
+// ── 뉴스-주가 상관관계 ──
+
+export async function fetchNewsPriceCorrelation(
+  stockId: number,
+  days = 90,
+): Promise<NewsPriceCorrelation> {
+  const res = await fetchWithRetry(`${API_BASE}/stocks/${stockId}/news-price-correlation?days=${days}`);
+  if (!res.ok) throw new Error('Failed to fetch news-price correlation');
+  return res.json();
 }
 
 export async function fetchSectorCommodityNews(

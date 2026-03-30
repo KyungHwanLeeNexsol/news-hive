@@ -30,7 +30,7 @@ def _news_cache_key(limit: int, offset: int, q: str | None) -> str:
 
 @router.get("")
 async def list_news(limit: int = 30, offset: int = 0, q: str | None = None, db: Session = Depends(get_db)):
-    # Check cache
+    # Check cache (인메모리 → Redis 폴백)
     ck = _news_cache_key(limit, offset, q)
     if ck in _news_cache:
         expires, data, total_str = _news_cache[ck]
@@ -40,6 +40,18 @@ async def list_news(limit: int = 30, offset: int = 0, q: str | None = None, db: 
                 headers={"X-Total-Count": total_str, "Access-Control-Expose-Headers": "X-Total-Count"},
             )
         del _news_cache[ck]
+    # 인메모리 미스 시 Redis 조회
+    try:
+        from app.cache import cache_get
+        redis_data = await cache_get(f"api:news:{ck}")
+        if redis_data and isinstance(redis_data, dict):
+            _news_cache[ck] = (time.time() + _NEWS_CACHE_TTL, redis_data["data"], redis_data["total"])
+            return JSONResponse(
+                content=redis_data["data"],
+                headers={"X-Total-Count": redis_data["total"], "Access-Control-Expose-Headers": "X-Total-Count"},
+            )
+    except Exception:
+        pass
 
     base_query = db.query(NewsArticle)
     count_query = db.query(func.count(NewsArticle.id))
@@ -67,6 +79,12 @@ async def list_news(limit: int = 30, offset: int = 0, q: str | None = None, db: 
     data = jsonable_encoder(format_articles(articles))
     total_str = str(total)
     _news_cache[ck] = (time.time() + _NEWS_CACHE_TTL, data, total_str)
+    # Redis에도 저장
+    try:
+        from app.cache import cache_set
+        await cache_set(f"api:news:{ck}", {"data": data, "total": total_str}, ttl=_NEWS_CACHE_TTL)
+    except Exception:
+        pass
 
     return JSONResponse(
         content=data,
@@ -150,10 +168,16 @@ async def _run_full_refresh():
             dart_count = await fetch_dart_disclosures(db)
             logger.info(f"DART crawl completed: {dart_count} new disclosures")
 
-        # Invalidate caches
+        # Invalidate caches (인메모리 + Redis)
         _news_cache.clear()
         from app.routers.stocks import _response_cache
         _response_cache.clear()
+        try:
+            from app.cache import cache_delete
+            await cache_delete("api:news:*")
+            await cache_delete("api:stocks:*")
+        except Exception:
+            pass
     except Exception as e:
         logger.error(f"Background refresh failed: {e}")
     finally:

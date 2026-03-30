@@ -20,7 +20,9 @@ class NewsArticle(Base):
     collected_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
-    sentiment: Mapped[str | None] = mapped_column(String(10), nullable=True)  # 'positive' | 'negative' | 'neutral'
+    sentiment: Mapped[str | None] = mapped_column(String(20), nullable=True)  # 6단계: strong_positive/positive/mixed/neutral/negative/strong_negative
+    # Phase 2: 기사 긴급도 (breaking/important/routine)
+    urgency: Mapped[str | None] = mapped_column(String(20), nullable=True)
     ai_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     content: Mapped[str | None] = mapped_column(Text, nullable=True)
 

@@ -17,7 +17,21 @@ from app.services.scheduler import start_scheduler, stop_scheduler
 
 import logging
 
-logging.basicConfig(level=logging.INFO)
+# 구조화된 JSON 로깅 설정 (기존 로그 출력과 병행)
+try:
+    from pythonjsonlogger.json import JsonFormatter as _JsonFormatter
+
+    _json_handler = logging.StreamHandler()
+    _json_formatter = _JsonFormatter(
+        "%(asctime)s %(name)s %(levelname)s %(message)s",
+        rename_fields={"asctime": "timestamp", "levelname": "level"},
+    )
+    _json_handler.setFormatter(_json_formatter)
+    logging.root.handlers = [_json_handler]
+    logging.root.setLevel(logging.INFO)
+except ImportError:
+    # python-json-logger 미설치 시 기본 로깅 유지
+    logging.basicConfig(level=logging.INFO)
 
 
 def _run_migrations():
@@ -96,13 +110,39 @@ async def lifespan(app: FastAPI):
 
     threading.Thread(target=_run_relation_inference, daemon=True).start()
 
+    # WebSocket ConnectionManager 초기화
+    from app.websocket import ConnectionManager as WSManager
+    from app import websocket as ws_module
+    from app.event_bus import set_event_bus, clear_event_bus
+
+    ws_manager = WSManager()
+    ws_module.manager = ws_manager
+    set_event_bus(ws_manager)
+
     start_scheduler()
     yield
     # Shutdown
     stop_scheduler()
+    clear_event_bus()
+    ws_module.manager = None
+    # Redis 연결 종료
+    try:
+        from app.cache import close_redis
+        await close_redis()
+    except Exception:
+        pass
 
 
 app = FastAPI(title="Stock News Tracker API", lifespan=lifespan)
+
+# Prometheus 메트릭 자동 수집 (전체 라우트 자동 계측)
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+    Instrumentator().instrument(app).expose(app, endpoint="/metrics")
+except ImportError:
+    logging.getLogger(__name__).info(
+        "prometheus-fastapi-instrumentator 미설치 - /metrics 비활성화"
+    )
 
 from app.config import settings as app_settings  # noqa: E402
 
@@ -114,8 +154,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Rate Limiter 미들웨어 (Redis 미사용 시 자동 비활성화)
+from app.middleware.rate_limiter import RateLimiterMiddleware  # noqa: E402
+app.add_middleware(RateLimiterMiddleware)
+
 # Import and register routers
-from app.routers import sectors, stocks, news, disclosures, alerts, events, fund_manager, auth, commodities  # noqa: E402
+from app.routers import sectors, stocks, news, disclosures, alerts, events, fund_manager, auth, commodities, paper_trading, chat  # noqa: E402
 
 app.include_router(sectors.router)
 app.include_router(stocks.router)
@@ -127,11 +171,67 @@ app.include_router(fund_manager.router)
 app.include_router(auth.router)
 app.include_router(commodities.router)
 app.include_router(commodities.sector_commodity_router)
+app.include_router(paper_trading.router)
+app.include_router(chat.router)
+
+# WebSocket 엔드포인트 등록
+from app.websocket import router as ws_router  # noqa: E402
+app.include_router(ws_router)
 
 
 @app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/api/health/scheduler")
+def scheduler_health():
+    """스케줄러 작업 상태 반환: id, next_run_time, is_overdue."""
+    from app.services.scheduler import scheduler
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    jobs = []
+    for job in scheduler.get_jobs():
+        next_run = job.next_run_time
+        is_overdue = False
+        next_run_str = None
+        if next_run is not None:
+            next_run_str = next_run.isoformat()
+            is_overdue = next_run < now
+        jobs.append({
+            "id": job.id,
+            "next_run_time": next_run_str,
+            "is_overdue": is_overdue,
+        })
+    return {
+        "scheduler_running": scheduler.running,
+        "job_count": len(jobs),
+        "jobs": jobs,
+    }
+
+
+@app.get("/api/admin/cache/stats")
+async def cache_stats():
+    """캐시 적중/미스 통계 반환."""
+    from app.cache import get_cache_stats, get_redis
+    stats = get_cache_stats()
+    r = await get_redis()
+    stats["redis_connected"] = r is not None
+    return stats
+
+
+@app.delete("/api/admin/cache")
+async def flush_cache(namespace: str = ""):
+    """캐시 초기화. namespace 지정 시 해당 패턴만 삭제, 미지정 시 전체 삭제."""
+    from app.cache import cache_delete, get_redis
+    r = await get_redis()
+    if r is None:
+        return {"deleted": 0, "message": "Redis 미연결 - 인메모리 캐시만 초기화"}
+
+    pattern = f"{namespace}*" if namespace else "*"
+    deleted = await cache_delete(pattern)
+    return {"deleted": deleted, "pattern": pattern}
 
 
 @app.post("/api/deploy")

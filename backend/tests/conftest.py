@@ -26,6 +26,16 @@ from app.models.fund_signal import FundSignal
 from app.models.daily_briefing import DailyBriefing
 from app.models.disclosure import Disclosure
 from app.models.macro_alert import MacroAlert
+from app.models.sector_insight import SectorInsight
+from app.models.economic_event import EconomicEvent
+from app.models.news_price_impact import NewsPriceImpact
+from app.models.portfolio_report import PortfolioReport
+from app.models.commodity import Commodity
+from app.models.news_commodity_relation import NewsCommodityRelation
+from app.models.sector_momentum import SectorMomentum
+from app.models.prompt_version import PromptVersion
+from app.models.stock_relation import StockRelation
+from app.models.virtual_portfolio import VirtualPortfolio
 
 
 # 테스트 DB URL: 기본 SQLite 인메모리, 환경변수로 PostgreSQL 오버라이드 가능
@@ -116,6 +126,12 @@ def test_engine():
     from app.models.economic_event import EconomicEvent  # noqa: F401
     from app.models.news_price_impact import NewsPriceImpact  # noqa: F401
     from app.models.portfolio_report import PortfolioReport  # noqa: F401
+    from app.models.commodity import Commodity, CommodityPrice, SectorCommodityRelation  # noqa: F401
+    from app.models.news_commodity_relation import NewsCommodityRelation  # noqa: F401
+    from app.models.sector_momentum import SectorMomentum  # noqa: F401
+    from app.models.prompt_version import PromptVersion, PromptABResult  # noqa: F401
+    from app.models.stock_relation import StockRelation  # noqa: F401
+    from app.models.virtual_portfolio import VirtualPortfolio, VirtualTrade, PortfolioSnapshot  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     yield engine
@@ -366,5 +382,301 @@ def make_disclosure(db: Session):
         db.add(disclosure)
         db.flush()
         return disclosure
+
+    return _factory
+
+
+@pytest.fixture
+def make_daily_briefing(db: Session):
+    """DailyBriefing 팩토리 — AI 펀드매니저 일일 브리핑."""
+    from datetime import date as date_type
+    _counter = 0
+
+    def _factory(**kwargs) -> DailyBriefing:
+        nonlocal _counter
+        _counter += 1
+        defaults = {
+            "briefing_date": date_type(2026, 1, _counter % 28 + 1),
+            "market_overview": f"오늘의 시장 요약 {_counter}",
+            "sector_highlights": f"섹터 동향 {_counter}",
+            "stock_picks": f"주목 종목 {_counter}",
+            "risk_assessment": f"리스크 평가 {_counter}",
+            "strategy": f"전략 제안 {_counter}",
+        }
+        defaults.update(kwargs)
+        briefing = DailyBriefing(**defaults)
+        db.add(briefing)
+        db.flush()
+        return briefing
+
+    return _factory
+
+
+@pytest.fixture
+def make_sector_insight(db: Session, make_sector):
+    """SectorInsight 팩토리 — 섹터 분석 인사이트."""
+    _counter = 0
+
+    def _factory(sector_id: int | None = None, **kwargs) -> SectorInsight:
+        nonlocal _counter
+        _counter += 1
+        if sector_id is None:
+            sector = make_sector()
+            sector_id = sector.id
+        defaults = {
+            "sector_id": sector_id,
+            "content": f"섹터 인사이트 분석 내용 {_counter}",
+        }
+        defaults.update(kwargs)
+        insight = SectorInsight(**defaults)
+        db.add(insight)
+        db.flush()
+        return insight
+
+    return _factory
+
+
+@pytest.fixture
+def make_economic_event(db: Session):
+    """EconomicEvent 팩토리 — 글로벌 경제/지정학 이벤트."""
+    _counter = 0
+
+    def _factory(**kwargs) -> EconomicEvent:
+        nonlocal _counter
+        _counter += 1
+        now = datetime.utcnow() if _is_sqlite else datetime.now(timezone.utc)
+        defaults = {
+            "title": f"경제 이벤트 {_counter}",
+            "description": f"이벤트 설명 {_counter}",
+            "event_date": now,
+            "category": "fomc",
+            "importance": "medium",
+            "country": "US",
+        }
+        defaults.update(kwargs)
+        if _is_sqlite:
+            val = defaults.get("event_date")
+            if val and hasattr(val, "tzinfo") and val.tzinfo is not None:
+                defaults["event_date"] = val.replace(tzinfo=None)
+        event = EconomicEvent(**defaults)
+        db.add(event)
+        db.flush()
+        return event
+
+    return _factory
+
+
+@pytest.fixture
+def make_news_price_impact(db: Session, make_stock, make_news):
+    """NewsPriceImpact 팩토리 — 뉴스-가격 반응 추적."""
+    _counter = 0
+
+    def _factory(
+        stock_id: int | None = None,
+        news_id: int | None = None,
+        **kwargs,
+    ) -> NewsPriceImpact:
+        nonlocal _counter
+        _counter += 1
+        if stock_id is None:
+            stock = make_stock()
+            stock_id = stock.id
+        if news_id is None:
+            news = make_news()
+            news_id = news.id
+        defaults = {
+            "stock_id": stock_id,
+            "news_id": news_id,
+            "price_at_news": 50000.0 + _counter * 100,
+        }
+        defaults.update(kwargs)
+        impact = NewsPriceImpact(**defaults)
+        db.add(impact)
+        db.flush()
+        return impact
+
+    return _factory
+
+
+@pytest.fixture
+def make_portfolio_report(db: Session):
+    """PortfolioReport 팩토리 — AI 포트폴리오 분석 리포트."""
+    _counter = 0
+
+    def _factory(**kwargs) -> PortfolioReport:
+        nonlocal _counter
+        _counter += 1
+        defaults = {
+            "stock_ids": "1,2,3",
+            "overall_assessment": f"종합 평가 {_counter}",
+            "risk_analysis": f"리스크 분석 {_counter}",
+            "sector_balance": f"섹터 분산 분석 {_counter}",
+            "rebalancing": f"리밸런싱 제안 {_counter}",
+        }
+        defaults.update(kwargs)
+        report = PortfolioReport(**defaults)
+        db.add(report)
+        db.flush()
+        return report
+
+    return _factory
+
+
+@pytest.fixture
+def make_commodity(db: Session):
+    """Commodity 팩토리 — 원자재 마스터."""
+    _counter = 0
+
+    def _factory(**kwargs) -> Commodity:
+        nonlocal _counter
+        _counter += 1
+        defaults = {
+            "symbol": f"TEST{_counter}=F",
+            "name_ko": f"테스트원자재_{_counter}",
+            "name_en": f"Test Commodity {_counter}",
+            "category": "energy",
+            "unit": "barrel",
+            "currency": "USD",
+        }
+        defaults.update(kwargs)
+        commodity = Commodity(**defaults)
+        db.add(commodity)
+        db.flush()
+        return commodity
+
+    return _factory
+
+
+@pytest.fixture
+def make_news_commodity_relation(db: Session, make_news, make_commodity):
+    """NewsCommodityRelation 팩토리 — 뉴스-원자재 매핑."""
+
+    def _factory(
+        news_id: int | None = None,
+        commodity_id: int | None = None,
+        **kwargs,
+    ) -> NewsCommodityRelation:
+        if news_id is None:
+            news = make_news()
+            news_id = news.id
+        if commodity_id is None:
+            commodity = make_commodity()
+            commodity_id = commodity.id
+        defaults = {
+            "news_id": news_id,
+            "commodity_id": commodity_id,
+            "relevance": "direct",
+            "match_type": "keyword",
+        }
+        defaults.update(kwargs)
+        rel = NewsCommodityRelation(**defaults)
+        db.add(rel)
+        db.flush()
+        return rel
+
+    return _factory
+
+
+@pytest.fixture
+def make_sector_momentum(db: Session, make_sector):
+    """SectorMomentum 팩토리 — 섹터 모멘텀 일간 데이터."""
+    from datetime import date as date_type
+    _counter = 0
+
+    def _factory(sector_id: int | None = None, **kwargs) -> SectorMomentum:
+        nonlocal _counter
+        _counter += 1
+        if sector_id is None:
+            sector = make_sector()
+            sector_id = sector.id
+        defaults = {
+            "sector_id": sector_id,
+            "date": date_type(2026, 1, _counter % 28 + 1),
+            "daily_return": 1.5,
+        }
+        defaults.update(kwargs)
+        momentum = SectorMomentum(**defaults)
+        db.add(momentum)
+        db.flush()
+        return momentum
+
+    return _factory
+
+
+@pytest.fixture
+def make_prompt_version(db: Session):
+    """PromptVersion 팩토리 — AI 프롬프트 버전 관리."""
+    _counter = 0
+
+    def _factory(**kwargs) -> PromptVersion:
+        nonlocal _counter
+        _counter += 1
+        defaults = {
+            "version_name": f"v{_counter}.0",
+            "description": f"프롬프트 변경사항 {_counter}",
+            "template_key": "briefing",
+            "is_active": True,
+            "is_control": False,
+        }
+        defaults.update(kwargs)
+        version = PromptVersion(**defaults)
+        db.add(version)
+        db.flush()
+        return version
+
+    return _factory
+
+
+@pytest.fixture
+def make_stock_relation(db: Session, make_stock):
+    """StockRelation 팩토리 — 종목/섹터 간 관계."""
+
+    def _factory(
+        source_stock_id: int | None = None,
+        target_stock_id: int | None = None,
+        **kwargs,
+    ) -> StockRelation:
+        if source_stock_id is None:
+            stock = make_stock()
+            source_stock_id = stock.id
+        if target_stock_id is None:
+            stock = make_stock()
+            target_stock_id = stock.id
+        defaults = {
+            "source_stock_id": source_stock_id,
+            "target_stock_id": target_stock_id,
+            "relation_type": "competitor",
+            "confidence": 0.9,
+            "reason": "동일 업종 경쟁사",
+        }
+        defaults.update(kwargs)
+        rel = StockRelation(**defaults)
+        db.add(rel)
+        db.flush()
+        return rel
+
+    return _factory
+
+
+@pytest.fixture
+def make_virtual_portfolio(db: Session):
+    """VirtualPortfolio 팩토리 — 가상 포트폴리오."""
+    _counter = 0
+
+    def _factory(**kwargs) -> VirtualPortfolio:
+        nonlocal _counter
+        _counter += 1
+        defaults = {
+            "name": f"테스트 포트폴리오 {_counter}",
+            "initial_capital": 100_000_000,
+            "current_cash": 100_000_000,
+            "is_active": True,
+            "is_defensive_mode": False,
+        }
+        defaults.update(kwargs)
+        portfolio = VirtualPortfolio(**defaults)
+        db.add(portfolio)
+        db.flush()
+        return portfolio
 
     return _factory

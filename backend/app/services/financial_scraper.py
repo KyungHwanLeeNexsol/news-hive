@@ -89,6 +89,18 @@ async def fetch_stock_valuation(stock_code: str) -> Optional[StockValuation]:
             and (now - _valuation_cache.last_updated.get(stock_code, 0)) < CACHE_TTL_SECONDS):
         return _valuation_cache.data[stock_code]
 
+    # 인메모리 미스 시 Redis 복구 시도
+    if stock_code not in _valuation_cache.data:
+        try:
+            from app.cache import cache_get
+            redis_data = await cache_get(f"stock:{stock_code}:valuation")
+            if redis_data and isinstance(redis_data, dict):
+                _valuation_cache.data[stock_code] = StockValuation(**redis_data)
+                _valuation_cache.last_updated[stock_code] = now
+                return _valuation_cache.data[stock_code]
+        except Exception:
+            pass
+
     url = WISEREPORT_OVERVIEW_URL.format(code=stock_code)
     try:
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
@@ -160,6 +172,13 @@ async def fetch_stock_valuation(stock_code: str) -> Optional[StockValuation]:
 
         _valuation_cache.data[stock_code] = result
         _valuation_cache.last_updated[stock_code] = now
+        # Redis write-through (TTL=300초)
+        try:
+            from app.cache import cache_set
+            from dataclasses import asdict
+            await cache_set(f"stock:{stock_code}:valuation", asdict(result), ttl=300)
+        except Exception:
+            pass
         return result
 
     except Exception as e:
@@ -413,6 +432,21 @@ async def fetch_stock_financials(stock_code: str) -> dict:
             and (now - _financial_cache.last_updated.get(stock_code, 0)) < FINANCIAL_CACHE_TTL):
         return _financial_cache.data[stock_code]
 
+    # 인메모리 미스 시 Redis 복구 시도
+    if stock_code not in _financial_cache.data:
+        try:
+            from app.cache import cache_get
+            redis_data = await cache_get(f"stock:{stock_code}:financials")
+            if redis_data and isinstance(redis_data, dict):
+                _financial_cache.data[stock_code] = {
+                    "annual": [FinancialPeriod(**fp) for fp in redis_data.get("annual", [])],
+                    "quarter": [FinancialPeriod(**fp) for fp in redis_data.get("quarter", [])],
+                }
+                _financial_cache.last_updated[stock_code] = now
+                return _financial_cache.data[stock_code]
+        except Exception:
+            pass
+
     empty = {"annual": [], "quarter": []}
 
     try:
@@ -445,6 +479,17 @@ async def fetch_stock_financials(stock_code: str) -> dict:
         if result["annual"] or result["quarter"]:
             _financial_cache.data[stock_code] = result
             _financial_cache.last_updated[stock_code] = now
+            # Redis write-through (TTL=86400초=24시간)
+            try:
+                from app.cache import cache_set
+                from dataclasses import asdict
+                serializable = {
+                    "annual": [asdict(fp) for fp in result["annual"]],
+                    "quarter": [asdict(fp) for fp in result["quarter"]],
+                }
+                await cache_set(f"stock:{stock_code}:financials", serializable, ttl=86400)
+            except Exception:
+                pass
             logger.info(
                 f"Fetched financials for {stock_code}: "
                 f"{len(result['annual'])} annual, {len(result['quarter'])} quarterly periods"

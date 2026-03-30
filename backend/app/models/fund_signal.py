@@ -33,4 +33,25 @@ class FundSignal(Base):
     return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)  # 5일 수익률 (%)
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # 검증 완료 시점
 
+    # REQ-AI-003: 시그널 실패 원인 분류
+    # 값: macro_shock, supply_reversal, earnings_miss, sector_contagion, technical_breakdown
+    error_category: Mapped[str | None] = mapped_column(String(30), nullable=True)
+
+    # REQ-AI-005: 장중 빠른 검증
+    price_after_6h: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 6시간 후 주가
+    price_after_12h: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 12시간 후 주가
+    early_warning: Mapped[bool | None] = mapped_column(Boolean, nullable=True)  # 손절가 이탈 경고
+
+    # REQ-AI-006: 다중 팩터 스코어링
+    factor_scores: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON: 4개 팩터 점수
+    composite_score: Mapped[float | None] = mapped_column(Float, nullable=True)  # 가중 합산 점수
+
+    # REQ-AI-008: A/B 테스트
+    prompt_version: Mapped[str | None] = mapped_column(String(50), nullable=True)  # 프롬프트 버전
+
+    # REQ-AI-014: 멀티 타임프레임 추세 정렬 (aligned / divergent / mixed)
+    trend_alignment: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # REQ-AI-020: 시장 변동성 레벨 (low / normal / high / extreme)
+    volatility_level: Mapped[str | None] = mapped_column(String(10), nullable=True)
+
     stock = relationship("Stock")

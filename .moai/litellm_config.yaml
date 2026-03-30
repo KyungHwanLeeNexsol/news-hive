@@ -1,0 +1,72 @@
+model_list:
+  # Gemini 2.5 Pro - mapped from Claude Sonnet model names
+  - model_name: "claude-3-5-sonnet-20241022"
+    litellm_params:
+      model: "gemini/gemini-2.5-flash"
+      api_key: "os.environ/GEMINI_API_KEY"
+      thinking:
+        type: "enabled"
+        thinking_budget: 1024
+
+  # Gemini 2.5 Flash - mapped from Claude Haiku model names
+  - model_name: "claude-3-5-haiku-20241022"
+    litellm_params:
+      model: "gemini/gemini-2.5-flash"
+      api_key: "os.environ/GEMINI_API_KEY"
+      thinking:
+        type: "enabled"
+        thinking_budget: 1024
+
+  # Claude Sonnet 4 -> Gemini 2.5 Pro
+  - model_name: "claude-sonnet-4-20250514"
+    litellm_params:
+      model: "gemini/gemini-2.5-pro"
+      api_key: "os.environ/GEMINI_API_KEY"
+      thinking:
+        type: "enabled"
+        thinking_budget: 2048
+
+  # Claude Opus 4 -> Gemini 2.5 Pro
+  - model_name: "claude-opus-4-20250514"
+    litellm_params:
+      model: "gemini/gemini-2.5-pro"
+      api_key: "os.environ/GEMINI_API_KEY"
+      thinking:
+        type: "enabled"
+        thinking_budget: 4096
+
+  # Claude Haiku 4.5 -> Gemini 2.5 Flash
+  - model_name: "claude-haiku-4-5-20251001"
+    litellm_params:
+      model: "gemini/gemini-2.5-flash"
+      api_key: "os.environ/GEMINI_API_KEY"
+      thinking:
+        type: "enabled"
+        thinking_budget: 1024
+
+  # Opus 4.6 -> Gemini 2.5 Pro
+  - model_name: "claude-opus-4-6-20250605"
+    litellm_params:
+      model: "gemini/gemini-2.5-pro"
+      api_key: "os.environ/GEMINI_API_KEY"
+      thinking:
+        type: "enabled"
+        thinking_budget: 4096
+
+  # Sonnet 4.6 -> Gemini 2.5 Flash
+  - model_name: "claude-sonnet-4-6-20250605"
+    litellm_params:
+      model: "gemini/gemini-2.5-flash"
+      api_key: "os.environ/GEMINI_API_KEY"
+      thinking:
+        type: "enabled"
+        thinking_budget: 2048
+
+litellm_settings:
+  # Drop unsupported params instead of erroring
+  drop_params: true
+  # Set request timeout
+  request_timeout: 120
+
+general_settings:
+  pass_through_endpoints: []

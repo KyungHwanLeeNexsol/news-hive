@@ -1,0 +1,31 @@
+## SPEC-AI-002 Progress
+
+- Started: 2026-03-29T00:00:00+09:00
+- Phase 1 (Strategy): complete - 5-Phase execution plan approved
+- Phase 1.5: complete - Task decomposition (4 tasks for Phase 1)
+- Phase 1.6: complete - 6 acceptance criteria registered as pending tasks
+- Phase 1.7: complete - 1 stub file created (market_context.py), LSP baseline captured
+- Phase 1.8: complete - MX context scan (no MX tags on target files)
+- Phase 2 (DDD): complete - Phase 1 implementation (REQ-014, 015, 020)
+  - 7 files modified/created, 69 tests (37 characterization + 32 new), all passing
+  - AC-014-1,2,3 / AC-015-1 / AC-020-1,2: all completed
+- Phase 2.10 (Simplify): complete - volume_spike 이중가산 통합, volatility 캐시 추가, composite 필터 정리
+- Phase 2.5 (Quality): complete - 69/69 tests passing, no regression (기존 24 failures 동일)
+- Phase 2 (DDD): complete - Phase 2 implementation (REQ-016, 017, 019)
+  - 5 files created, 3 files modified, 34 new tests, all passing
+  - AC-016-1,2 / AC-017-1 / AC-019-1: all completed
+  - sector_momentum.py 서비스, ORM 모델 2개, Alembic 마이그레이션 완료
+  - 기존 69 tests 모두 통과 (regression 없음)
+- Phase 2 (DDD): complete - Phase 3 implementation (REQ-018, 024)
+  - 1 file created (earnings_analyzer.py), 2 files modified (market_context.py, fund_manager.py)
+  - 40 new tests (earnings 24 + commodity 16), all passing
+  - AC-018-1,2,3 / AC-024-1: all completed
+  - 총 테스트: 403 passed, 23 pre-existing failures (regression 없음)
+- Phase 2 (DDD): complete - Phase 4 implementation (REQ-021, 022, 023, 025)
+  - REQ-021: Max Drawdown 방어 모드 (진입 -10%, 해제 -5%, 손절 강화 -3%)
+  - REQ-022: 과거 유사 패턴 매칭 (KOSPI 수익률, 변동성, 모멘텀 섹터)
+  - REQ-023: 5단계 CoT 프롬프트 + STEP 누락 감지
+  - REQ-025: ML 피처 스냅샷 테이블 + 일간 자동 캡처 + 90일 준비 알림
+  - 47 new tests, all passing
+  - 총 테스트: 450 passed, 24 pre-existing failures (regression 없음)
+  - SPEC-AI-002 전체 구현 완료

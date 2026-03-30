@@ -18,13 +18,59 @@ from app.services.ai_classifier import (
     KeywordIndex, classify_news, classify_news_with_ai, classify_sentiment,
     classify_sentiment_with_ai, _extract_sector_keywords,
     translate_articles_batch, is_non_financial_article,
+    get_or_build_index, calculate_relevance_score,
 )
+
+from app.config import settings
+from app.services.circuit_breaker import api_circuit_breaker
 
 logger = logging.getLogger(__name__)
 
-# Query budget for search-based crawlers
-MAX_TOTAL_QUERIES = 60
-MAX_STOCK_QUERIES = 20
+# 설정에서 크롤링 쿼리 제한값 로드
+MAX_TOTAL_QUERIES = settings.MAX_TOTAL_QUERIES
+MAX_STOCK_QUERIES = settings.MAX_STOCK_QUERIES
+
+# ---------------------------------------------------------------------------
+# 뉴스 긴급도 분류
+# ---------------------------------------------------------------------------
+_BREAKING_RE = re.compile(
+    r"\[속보\]|\[긴급\]|\[단독\]|\[breaking\]|\[exclusive\]",
+    re.IGNORECASE,
+)
+
+_IMPORTANT_KEYWORDS = [
+    "실적", "인수", "합병", "M&A", "규제", "소송", "배당",
+    "상장폐지", "유상증자", "감사의견", "워크아웃", "법정관리",
+    "공시", "IPO", "상폐",
+]
+
+
+def _classify_urgency(
+    title: str,
+    recent_topic_counts: dict[str, int] | None = None,
+) -> str:
+    """기사 제목으로 긴급도를 분류한다.
+
+    반환값: 'breaking' / 'important' / 'routine'
+    """
+    # 속보/긴급/단독 태그 감지
+    if _BREAKING_RE.search(title):
+        return "breaking"
+
+    # (선택) 동일 토픽 5건 이상이면 breaking
+    if recent_topic_counts:
+        for _topic, count in recent_topic_counts.items():
+            if count >= 5:
+                return "breaking"
+
+    # 금융 영향 키워드 감지
+    title_lower = title.lower()
+    for kw in _IMPORTANT_KEYWORDS:
+        if kw.lower() in title_lower:
+            return "important"
+
+    return "routine"
+
 
 # Regex to strip noise for title dedup (whitespace, punctuation, source suffixes)
 _TITLE_NOISE_RE = re.compile(r"[\s\-–—·:;,.\[\](){}「」『』<>《》\u200b]+")
@@ -53,7 +99,41 @@ def _title_bigrams(norm_title: str) -> set[str]:
     return {norm_title[i:i+2] for i in range(len(norm_title) - 1)}
 
 
-def _is_similar_title(bigrams_a: set[str], bigrams_b: set[str], threshold: float = 0.55) -> bool:
+def _adaptive_threshold(
+    bigrams_a: set[str],
+    bigrams_b: set[str],
+    source_a: str | None = None,
+    source_b: str | None = None,
+) -> float:
+    """제목 길이와 출처에 따른 적응형 중복 제거 임계값 계산.
+
+    - 짧은 제목 (bigram < 10): 0.70 (짧을수록 엄격하게)
+    - 중간 제목 (10-20 bigrams): 0.60
+    - 긴 제목 (20+ bigrams): 0.50 (길수록 부분 일치 허용)
+    - 다른 출처: threshold + 0.05 (교차 출처는 약간 더 엄격)
+    """
+    avg_size = (len(bigrams_a) + len(bigrams_b)) / 2
+    if avg_size < 10:
+        threshold = 0.70
+    elif avg_size <= 20:
+        threshold = 0.60
+    else:
+        threshold = 0.50
+
+    # 다른 출처에서 온 기사는 우연히 유사할 수 있으므로 임계값을 높임
+    if source_a and source_b and source_a != source_b:
+        threshold += 0.05
+
+    return threshold
+
+
+def _is_similar_title(
+    bigrams_a: set[str],
+    bigrams_b: set[str],
+    threshold: float | None = None,
+    source_a: str | None = None,
+    source_b: str | None = None,
+) -> bool:
     """Check if two titles are similar using Jaccard + containment on bigrams.
 
     Two-pass approach:
@@ -61,9 +141,15 @@ def _is_similar_title(bigrams_a: set[str], bigrams_b: set[str], threshold: float
     2. Containment ratio >= 0.7 (catches cases where one title is a subset
        of another with different surrounding text, e.g. same event reported
        with different wording)
+
+    threshold가 None이면 _adaptive_threshold()로 자동 결정.
     """
     if not bigrams_a or not bigrams_b:
         return False
+
+    if threshold is None:
+        threshold = _adaptive_threshold(bigrams_a, bigrams_b, source_a, source_b)
+
     intersection = len(bigrams_a & bigrams_b)
     union = len(bigrams_a | bigrams_b)
     if (intersection / union) >= threshold:
@@ -174,24 +260,40 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
 
     logger.info(f"DB state: {len(sectors)} sectors, {len(stocks)} stocks")
 
-    # Build keyword index once — reused for all articles
-    index = KeywordIndex.build(sectors, stocks)
+    # 캐시된 KeywordIndex 사용 (stocks/sectors 변경 시에만 재빌드)
+    index = get_or_build_index(db)
 
     all_raw_articles: list[dict] = []
     source_counts: dict[str, int] = {"naver": 0, "google": 0, "yahoo": 0, "korean_rss": 0, "us_news": 0}
 
-    # Phase 1: RSS feeds (parallel)
+    # Phase 1: RSS feeds (parallel) — 서킷 브레이커 적용
     async def _fetch_korean_rss():
-        articles = await fetch_korean_rss_feeds()
-        for a in articles:
-            a["_query"] = None
-        return ("korean_rss", articles)
+        if not api_circuit_breaker.is_available("korean_rss"):
+            logger.info("korean_rss 서킷 열림, 스킵")
+            return ("korean_rss", [])
+        try:
+            articles = await fetch_korean_rss_feeds()
+            api_circuit_breaker.record_success("korean_rss")
+            for a in articles:
+                a["_query"] = None
+            return ("korean_rss", articles)
+        except Exception as e:
+            api_circuit_breaker.record_failure("korean_rss")
+            raise
 
     async def _fetch_yahoo_top():
-        articles = await search_yahoo_finance_top(num=20)
-        for a in articles:
-            a["_query"] = None
-        return ("yahoo", articles)
+        if not api_circuit_breaker.is_available("yahoo"):
+            logger.info("yahoo 서킷 열림, 스킵")
+            return ("yahoo", [])
+        try:
+            articles = await search_yahoo_finance_top(num=20)
+            api_circuit_breaker.record_success("yahoo")
+            for a in articles:
+                a["_query"] = None
+            return ("yahoo", articles)
+        except Exception as e:
+            api_circuit_breaker.record_failure("yahoo")
+            raise
 
     async def _fetch_us_news():
         from app.services.crawlers.us_news import fetch_us_industry_news
@@ -224,6 +326,11 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
             source_counts[source_name] = len(articles)
         elif isinstance(result, Exception):
             logger.warning(f"Phase 1 fetch failed: {result}")
+            try:
+                from app.metrics import CRAWL_ERRORS
+                CRAWL_ERRORS.labels(source="phase1").inc()
+            except Exception:
+                pass
 
     # Phase 2: Query-based search
     search_queries = _build_search_queries(db, sectors, stocks)
@@ -235,25 +342,34 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
 
         async def _search_one(query: str):
             async with semaphore:
-                crawlers = [
-                    search_naver_news(query, display=10),
-                    search_google_news(query, num=10),
-                ]
-                source_names = ["naver", "google"]
+                crawlers = []
+                source_names = []
+                # 서킷 브레이커: 사용 가능한 크롤러만 실행
+                if api_circuit_breaker.is_available("naver"):
+                    crawlers.append(search_naver_news(query, display=10))
+                    source_names.append("naver")
+                if api_circuit_breaker.is_available("google"):
+                    crawlers.append(search_google_news(query, num=10))
+                    source_names.append("google")
                 stock_code = stock_code_by_name.get(query)
-                if stock_code:
+                if stock_code and api_circuit_breaker.is_available("yahoo"):
                     crawlers.append(search_yahoo_stock_news(stock_code, num=5))
                     source_names.append("yahoo")
+
+                if not crawlers:
+                    return []
 
                 results = await asyncio.gather(*crawlers, return_exceptions=True)
                 articles = []
                 for sn, result in zip(source_names, results):
                     if isinstance(result, list):
+                        api_circuit_breaker.record_success(sn)
                         for a in result:
                             a["_query"] = query
                         articles.extend(result)
                         source_counts[sn] += len(result)
                     elif isinstance(result, Exception):
+                        api_circuit_breaker.record_failure(sn)
                         logger.warning(f"[{sn}] error for '{query}': {result}")
                 return articles
 
@@ -265,10 +381,20 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
 
     logger.info(f"Raw articles by source: {source_counts}, total={len(all_raw_articles)}")
 
+    # Prometheus 크롤링 메트릭 기록
+    try:
+        from app.metrics import CRAWL_ARTICLES
+        for source_name, count in source_counts.items():
+            if count > 0:
+                CRAWL_ARTICLES.labels(source=source_name).inc(count)
+    except Exception:
+        pass
+
     # Deduplicate by URL + near-duplicate title detection (exact + fuzzy)
     seen_urls: set[str] = set()
     seen_titles: set[str] = set()
-    seen_bigrams: list[set[str]] = []  # for fuzzy matching
+    # (bigrams, source) 튜플 리스트 — 적응형 임계값에 source 정보 활용
+    seen_bigrams: list[tuple[set[str], str | None]] = []
     unique_articles: list[dict] = []
     existing_urls = set()
     for row in db.query(NewsArticle.url).yield_per(500):
@@ -283,11 +409,11 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
         if norm:
             seen_titles.add(norm)
             existing_norm_titles.append(norm)
-    # Build bigram index for existing titles (for fuzzy dedup)
+    # DB 기존 제목의 bigram 인덱스 (source 불명이므로 None)
     for norm in existing_norm_titles:
         bg = _title_bigrams(norm)
         if bg:
-            seen_bigrams.append(bg)
+            seen_bigrams.append((bg, None))
 
     title_dedup_count = 0
     fuzzy_dedup_count = 0
@@ -307,12 +433,16 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
             title_dedup_count += 1
             continue
 
-        # Fuzzy match dedup (bigram Jaccard similarity)
+        # Fuzzy match dedup (적응형 임계값 기반 bigram Jaccard similarity)
         new_bigrams = _title_bigrams(norm_title)
+        new_source = article.get("source")
         if new_bigrams and len(new_bigrams) >= 4:  # skip very short titles
             is_fuzzy_dup = False
-            for existing_bg in seen_bigrams:
-                if _is_similar_title(new_bigrams, existing_bg):
+            for existing_bg, existing_source in seen_bigrams:
+                if _is_similar_title(
+                    new_bigrams, existing_bg,
+                    source_a=new_source, source_b=existing_source,
+                ):
                     is_fuzzy_dup = True
                     break
             if is_fuzzy_dup:
@@ -321,7 +451,7 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
 
         seen_titles.add(norm_title)
         if new_bigrams:
-            seen_bigrams.append(new_bigrams)
+            seen_bigrams.append((new_bigrams, new_source))
         unique_articles.append(article)
 
     if title_dedup_count or fuzzy_dedup_count:
@@ -405,18 +535,21 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
         params: dict = {}
         for j, ad in enumerate(batch):
             values_parts.append(
-                f"(:t{j}, :sm{j}, :u{j}, :sr{j}, :pa{j}, :se{j}, :ct{j})"
+                f"(:t{j}, :sm{j}, :u{j}, :sr{j}, :pa{j}, :se{j}, :ct{j}, :ug{j})"
             )
             params[f"t{j}"] = ad["title"][:500]
             params[f"sm{j}"] = (ad.get("description") or "")[:2000]
             params[f"u{j}"] = ad["url"][:1000]
             params[f"sr{j}"] = ad["source"]
             params[f"pa{j}"] = ad.get("published_at")
+            # 감성: AI 분류 결과 우선, 없으면 키워드 기반 6단계 분류
             params[f"se{j}"] = ad.get("_ai_sentiment") or classify_sentiment(ad["title"])
             params[f"ct{j}"] = ad.get("_content")
+            # 긴급도 분류
+            params[f"ug{j}"] = _classify_urgency(ad["title"])
 
         sql = sa_text(
-            f"""INSERT INTO news_articles (title, summary, url, source, published_at, sentiment, content)
+            f"""INSERT INTO news_articles (title, summary, url, source, published_at, sentiment, content, urgency)
             VALUES {', '.join(values_parts)}
             ON CONFLICT (url) DO NOTHING
             RETURNING id, url"""
@@ -442,10 +575,23 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
         if not url_to_id:
             continue
 
+        # WebSocket 브로드캐스트: 새 뉴스 기사 알림
+        if url_to_id:
+            from app.event_bus import fire_event
+            fire_event("news", {
+                "type": "new_articles",
+                "count": len(url_to_id),
+                "article_ids": list(url_to_id.values())[:10],
+            })
+
         # Step 2: Bulk insert relations via raw SQL (using pre-computed _relations)
         rel_values = []
         rel_params: dict = {}
         rel_idx = 0
+
+        # 섹터/종목 이름 매핑 (relevance_score 계산용, 배치당 1회만 생성)
+        sector_name_map = {s.id: s.name for s in sectors}
+        stock_name_map = {s.id: s.name for s in stocks}
 
         for ad in batch:
             article_id = url_to_id.get(ad["url"])
@@ -474,21 +620,41 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
             seen_pairs: set[tuple] = set()
             for rel in relations:
                 pair = (rel.get("stock_id"), rel.get("sector_id"))
-                if pair not in seen_pairs:
-                    seen_pairs.add(pair)
-                    rel_values.append(
-                        f"(:ni{rel_idx}, :si{rel_idx}, :se{rel_idx}, :mt{rel_idx}, :rv{rel_idx},"
-                        f" :rs{rel_idx}, :pt{rel_idx}, :ir{rel_idx})"
-                    )
-                    rel_params[f"ni{rel_idx}"] = article_id
-                    rel_params[f"si{rel_idx}"] = rel.get("stock_id")
-                    rel_params[f"se{rel_idx}"] = rel.get("sector_id")
-                    rel_params[f"mt{rel_idx}"] = rel.get("match_type", "keyword")
-                    rel_params[f"rv{rel_idx}"] = rel.get("relevance", "indirect")
-                    rel_params[f"rs{rel_idx}"] = rel.get("relation_sentiment")
-                    rel_params[f"pt{rel_idx}"] = rel.get("propagation_type", "direct")
-                    rel_params[f"ir{rel_idx}"] = rel.get("impact_reason")
-                    rel_idx += 1
+                if pair in seen_pairs:
+                    continue
+
+                # 관련성 점수 계산 (소스 신뢰도 반영)
+                stock_name = stock_name_map.get(rel.get("stock_id")) if rel.get("stock_id") else None
+                sector_name = sector_name_map.get(rel.get("sector_id")) if rel.get("sector_id") else None
+                is_ai = rel.get("match_type") == "ai_classified"
+                score = calculate_relevance_score(
+                    title=ad["title"],
+                    description=ad.get("description"),
+                    stock_name=stock_name,
+                    sector_name=sector_name,
+                    is_ai_classified=is_ai,
+                    source=ad.get("source"),
+                )
+
+                # 관련성 점수 30 미만인 relation은 저장하지 않음
+                if score < 30:
+                    continue
+
+                seen_pairs.add(pair)
+                rel_values.append(
+                    f"(:ni{rel_idx}, :si{rel_idx}, :se{rel_idx}, :mt{rel_idx}, :rv{rel_idx},"
+                    f" :rs{rel_idx}, :pt{rel_idx}, :ir{rel_idx}, :sc{rel_idx})"
+                )
+                rel_params[f"ni{rel_idx}"] = article_id
+                rel_params[f"si{rel_idx}"] = rel.get("stock_id")
+                rel_params[f"se{rel_idx}"] = rel.get("sector_id")
+                rel_params[f"mt{rel_idx}"] = rel.get("match_type", "keyword")
+                rel_params[f"rv{rel_idx}"] = rel.get("relevance", "indirect")
+                rel_params[f"rs{rel_idx}"] = rel.get("relation_sentiment")
+                rel_params[f"pt{rel_idx}"] = rel.get("propagation_type", "direct")
+                rel_params[f"ir{rel_idx}"] = rel.get("impact_reason")
+                rel_params[f"sc{rel_idx}"] = score
+                rel_idx += 1
 
             saved_count += 1
 
@@ -496,7 +662,7 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
             rel_sql = sa_text(
                 f"""INSERT INTO news_stock_relations
                 (news_id, stock_id, sector_id, match_type, relevance,
-                 relation_sentiment, propagation_type, impact_reason)
+                 relation_sentiment, propagation_type, impact_reason, relevance_score)
                 VALUES {', '.join(rel_values)}"""
             )
             for attempt in range(3):
@@ -539,3 +705,72 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
 
     logger.info(f"Saved {saved_count} new articles.")
     return saved_count
+
+
+# ---------------------------------------------------------------------------
+# 뉴스 커버리지 갭 감지
+# ---------------------------------------------------------------------------
+async def detect_coverage_gaps(db: Session) -> list[dict]:
+    """최근 72시간 동안 뉴스가 없는 종목을 감지한다.
+
+    Returns:
+        list of {"stock_id": int, "stock_name": str, "sector_name": str,
+                 "hours_since_last_news": float | None}
+        hours_since_last_news가 None이면 해당 종목에 뉴스가 전혀 없음을 의미한다.
+    """
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import func as sa_func, text as sa_text
+
+    now = datetime.now(timezone.utc)
+    gap_threshold = now - timedelta(hours=72)
+
+    # 종목별 최근 뉴스 시점 조회
+    # LEFT JOIN으로 뉴스가 없는 종목도 포함
+    results = (
+        db.query(
+            Stock.id.label("stock_id"),
+            Stock.name.label("stock_name"),
+            Sector.name.label("sector_name"),
+            sa_func.max(NewsArticle.published_at).label("last_news_at"),
+        )
+        .join(Sector, Stock.sector_id == Sector.id)
+        .outerjoin(NewsStockRelation, NewsStockRelation.stock_id == Stock.id)
+        .outerjoin(NewsArticle, NewsStockRelation.news_id == NewsArticle.id)
+        .group_by(Stock.id, Stock.name, Sector.name)
+        .all()
+    )
+
+    gaps: list[dict] = []
+    for row in results:
+        last_news_at = row.last_news_at
+        hours_since: float | None = None
+
+        if last_news_at is None:
+            # 뉴스가 전혀 없는 종목
+            hours_since = None
+            gaps.append({
+                "stock_id": row.stock_id,
+                "stock_name": row.stock_name,
+                "sector_name": row.sector_name,
+                "hours_since_last_news": hours_since,
+            })
+        else:
+            # timezone-naive datetime 처리
+            if hasattr(last_news_at, "tzinfo") and last_news_at.tzinfo is None:
+                last_news_at = last_news_at.replace(tzinfo=timezone.utc)
+            if last_news_at < gap_threshold:
+                hours_since = (now - last_news_at).total_seconds() / 3600
+                gaps.append({
+                    "stock_id": row.stock_id,
+                    "stock_name": row.stock_name,
+                    "sector_name": row.sector_name,
+                    "hours_since_last_news": round(hours_since, 1),
+                })
+
+    if gaps:
+        logger.info(
+            f"커버리지 갭 감지: {len(gaps)}개 종목에 72시간 이상 뉴스 없음 "
+            f"(뉴스 없는 종목: {sum(1 for g in gaps if g['hours_since_last_news'] is None)}건)"
+        )
+
+    return gaps

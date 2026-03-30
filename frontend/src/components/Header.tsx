@@ -10,6 +10,7 @@ const navItems = [
   { href: '/commodities', label: '원자재' },
   { href: '/disclosures', label: '공시' },
   { href: '/calendar', label: '캘린더' },
+  { href: '/chat', label: 'AI 분석' },
 ];
 
 export default function Header() {

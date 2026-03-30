@@ -313,3 +313,99 @@ export interface CommodityNewsRelation {
 export interface CommodityNewsArticle extends NewsArticle {
   commodity_relations: CommodityNewsRelation[];
 }
+
+// 페이퍼 트레이딩
+export interface PaperTradingStats {
+  initial_capital: number;
+  current_cash: number;
+  total_trades: number;
+  closed_trades: number;
+  open_positions: number;
+  win_rate: number;
+  avg_return: number;
+  total_pnl: number;
+  cumulative_return: number;
+  sharpe_ratio: number;
+  mdd: number;
+  sharpe_warning: boolean;
+}
+
+export interface PaperPosition {
+  stock_name: string;
+  entry_price: number;
+  quantity: number;
+  target_price: number;
+  stop_loss: number;
+  entry_date: string;
+  invest_amount: number;
+}
+
+export interface PaperTrade {
+  stock_name: string;
+  entry_price: number;
+  exit_price: number;
+  pnl: number;
+  return_pct: number;
+  exit_reason: string;
+  entry_date: string;
+  exit_date: string;
+}
+
+export interface PaperSnapshot {
+  date: string;
+  total_value: number;
+  cumulative_return_pct: number;
+  daily_return_pct: number;
+}
+
+// ── AI 채팅 ──
+
+export interface ChatResponse {
+  reply: string;
+  context_used: string[];
+  session_id: string;
+}
+
+// ── 백테스트 ──
+
+export interface BacktestSummary {
+  total_signals: number;
+  win_rate: number;
+  avg_return: number;
+  max_drawdown: number;
+  sharpe_ratio: number;
+  kospi_return: number;
+}
+
+export interface BacktestTimeline {
+  date: string;
+  cumulative_return: number;
+  signal_count: number;
+}
+
+export interface BacktestByStock {
+  stock_name: string;
+  signals: number;
+  win_rate: number;
+  avg_return: number;
+}
+
+export interface BacktestResult {
+  summary: BacktestSummary;
+  timeline: BacktestTimeline[];
+  by_stock: BacktestByStock[];
+}
+
+// ── 뉴스-주가 상관관계 ──
+
+export interface CorrelationTimeline {
+  date: string;
+  sentiment_score: number;
+  price_change_pct: number;
+  correlation_7d: number | null;
+}
+
+export interface NewsPriceCorrelation {
+  correlation_7d: number;
+  timeline: CorrelationTimeline[];
+}

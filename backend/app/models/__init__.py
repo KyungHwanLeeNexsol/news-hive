@@ -9,10 +9,19 @@ from app.models.news_price_impact import NewsPriceImpact
 from app.models.commodity import Commodity, CommodityPrice, SectorCommodityRelation
 from app.models.news_commodity_relation import NewsCommodityRelation
 from app.models.stock_relation import StockRelation
+from app.models.prompt_version import PromptVersion, PromptABResult
+from app.models.virtual_portfolio import VirtualPortfolio, VirtualTrade, PortfolioSnapshot
+from app.models.sector_momentum import SectorMomentum
+from app.models.sector_rotation_event import SectorRotationEvent
+from app.models.ml_feature import MLFeatureSnapshot
 
 __all__ = [
     "Sector", "Stock", "NewsArticle", "NewsStockRelation",
     "FundSignal", "DailyBriefing", "PortfolioReport", "NewsPriceImpact",
     "Commodity", "CommodityPrice", "SectorCommodityRelation",
     "NewsCommodityRelation", "StockRelation",
+    "PromptVersion", "PromptABResult",
+    "VirtualPortfolio", "VirtualTrade", "PortfolioSnapshot",
+    "SectorMomentum", "SectorRotationEvent",
+    "MLFeatureSnapshot",
 ]

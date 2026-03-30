@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models.disclosure import Disclosure
 from app.models.stock import Stock
+from app.services.circuit_breaker import api_circuit_breaker
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +112,11 @@ async def fetch_dart_disclosures(
         logger.warning("DART_API_KEY not set, skipping disclosure fetch")
         return 0
 
+    # 서킷 브레이커: DART API 연속 실패 시 스킵
+    if not api_circuit_breaker.is_available("dart"):
+        logger.info("DART API 서킷 열림, 스킵")
+        return 0
+
     # Build corp_name / stock_code → stock_id mapping
     stocks = db.query(Stock).filter(Stock.stock_code.isnot(None)).all()
     name_to_id: dict[str, int] = {s.name: s.id for s in stocks}
@@ -149,6 +155,7 @@ async def fetch_dart_disclosures(
                 resp.raise_for_status()
                 data = resp.json()
             except Exception as e:
+                api_circuit_breaker.record_failure("dart")
                 logger.error(f"DART API request failed (page {page_no}): {e}")
                 break
 
@@ -213,6 +220,7 @@ async def fetch_dart_disclosures(
             page_no += 1
 
     if saved:
+        api_circuit_breaker.record_success("dart")
         db.commit()
         logger.info(
             f"Saved {saved} new DART disclosures "

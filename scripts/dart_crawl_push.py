@@ -156,7 +156,7 @@ def push_to_server(items: list[dict], api_url: str, push_secret: str) -> dict:
 
 
 def main():
-    api_url = os.environ.get("API_URL", "http://168.107.51.242:8000")
+    api_url = os.environ.get("API_URL", "http://140.245.76.242:8000")
     push_secret = os.environ.get("DART_PUSH_SECRET", "")
 
     if not push_secret:

@@ -10,7 +10,7 @@ import logging
 import re
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.config import settings
 from app.models.daily_briefing import DailyBriefing
@@ -53,6 +53,76 @@ def _parse_json_response(text: str) -> dict | None:
                 pass
         logger.warning(f"Failed to parse JSON from Gemini response: {cleaned[:200]}")
         return None
+
+
+# ---------------------------------------------------------------------------
+# REQ-023: Chain-of-Thought 프롬프트 검증
+# ---------------------------------------------------------------------------
+
+# CoT 5단계 분석에서 기대하는 STEP 키워드 목록
+COT_REQUIRED_STEPS = ["STEP 1", "STEP 2", "STEP 3", "STEP 4", "STEP 5"]
+
+
+def validate_cot_steps(ai_response_text: str | None) -> dict:
+    """AI 응답에서 CoT 5단계(STEP 1~5) 존재 여부를 검증한다.
+
+    Args:
+        ai_response_text: AI가 반환한 원본 텍스트 (JSON 포함 가능)
+
+    Returns:
+        {"complete": bool, "missing_steps": list[str], "found_steps": list[str]}
+    """
+    if not ai_response_text:
+        return {
+            "complete": False,
+            "missing_steps": list(COT_REQUIRED_STEPS),
+            "found_steps": [],
+        }
+
+    found = [step for step in COT_REQUIRED_STEPS if step in ai_response_text]
+    missing = [step for step in COT_REQUIRED_STEPS if step not in ai_response_text]
+
+    return {
+        "complete": len(missing) == 0,
+        "missing_steps": missing,
+        "found_steps": found,
+    }
+
+
+def apply_cot_penalty(
+    parsed_data: dict,
+    cot_result: dict,
+) -> dict:
+    """CoT 검증 결과에 따라 stock_picks의 confidence를 감산하고 태그를 부여한다.
+
+    STEP 1~5 중 하나라도 누락되면:
+    - 각 stock_pick의 confidence를 0.1 감산 (최소 0.0)
+    - parsed_data에 "incomplete_analysis" 태그 부여
+
+    Args:
+        parsed_data: 파싱된 AI 응답 dict
+        cot_result: validate_cot_steps()의 결과
+
+    Returns:
+        수정된 parsed_data (원본 dict를 변경함)
+    """
+    if cot_result["complete"]:
+        return parsed_data
+
+    # 불완전 분석 태그 부여
+    parsed_data["_cot_validation"] = {
+        "status": "incomplete_analysis",
+        "missing_steps": cot_result["missing_steps"],
+        "found_steps": cot_result["found_steps"],
+    }
+
+    # stock_picks 내 각 종목의 confidence 감산은 시그널 생성 시 적용
+    # (브리핑의 stock_picks는 JSON 텍스트이므로 여기서는 태그만 부여)
+    logger.warning(
+        "CoT 불완전 분석: 누락된 단계 %s", cot_result["missing_steps"]
+    )
+
+    return parsed_data
 
 
 # ---------------------------------------------------------------------------
@@ -126,8 +196,33 @@ def _gather_sentiment_trend(db: Session, stock_id: int | None = None, sector_id:
     }
 
 
+def _calculate_news_time_weight(published_at: datetime | None) -> float:
+    """발행 시간 기반 뉴스 가중치 계산.
+
+    - 0~24시간: 가중치 1.0
+    - 24~48시간: 가중치 0.7
+    - 48~72시간: 가중치 0.4
+    - 72시간 초과: 0.0 (프롬프트에서 제외)
+    """
+    if not published_at:
+        return 0.4  # 발행일 불명 시 기본 가중치
+    now = datetime.now(timezone.utc)
+    # published_at에 tzinfo가 없으면 UTC로 간주
+    if published_at.tzinfo is None:
+        published_at = published_at.replace(tzinfo=timezone.utc)
+    hours_ago = (now - published_at).total_seconds() / 3600
+    if hours_ago <= 24:
+        return 1.0
+    elif hours_ago <= 48:
+        return 0.7
+    elif hours_ago <= 72:
+        return 0.4
+    else:
+        return 0.0
+
+
 def _gather_stock_news(db: Session, stock_id: int, days: int = 3) -> list[dict]:
-    """Gather recent news related to a stock (본문 포함, 토큰 절약)."""
+    """종목 관련 최근 뉴스 수집 (시간 가중치 적용, 본문 포함, 토큰 절약)."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     relations = (
         db.query(NewsStockRelation, NewsArticle)
@@ -142,11 +237,16 @@ def _gather_stock_news(db: Session, stock_id: int, days: int = 3) -> list[dict]:
     )
     results = []
     for rel, article in relations:
+        weight = _calculate_news_time_weight(article.published_at)
+        # 72시간 초과 뉴스는 프롬프트에서 제외
+        if weight <= 0.0:
+            continue
         entry = {
-            "title": article.title,
+            "title": f"[가중치: {weight}] {article.title}",
             "sentiment": article.sentiment or "neutral",
             "date": article.published_at.strftime("%m/%d") if article.published_at else "",
             "relevance": rel.relevance or "direct",
+            "weight": weight,
         }
         # 본문 핵심 내용 포함 (토큰 절약: 200자로 제한)
         if article.content:
@@ -154,11 +254,13 @@ def _gather_stock_news(db: Session, stock_id: int, days: int = 3) -> list[dict]:
         elif article.ai_summary:
             entry["content"] = article.ai_summary[:150]
         results.append(entry)
+    # 가중치 높은 순으로 정렬
+    results.sort(key=lambda x: x["weight"], reverse=True)
     return results
 
 
 def _gather_sector_news(db: Session, sector_id: int, days: int = 3) -> list[dict]:
-    """Gather recent news related to a sector (본문 포함, 토큰 절약)."""
+    """섹터 관련 최근 뉴스 수집 (시간 가중치 적용, 본문 포함, 토큰 절약)."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     relations = (
         db.query(NewsStockRelation, NewsArticle)
@@ -173,15 +275,22 @@ def _gather_sector_news(db: Session, sector_id: int, days: int = 3) -> list[dict
     )
     results = []
     for rel, article in relations:
+        weight = _calculate_news_time_weight(article.published_at)
+        # 72시간 초과 뉴스는 프롬프트에서 제외
+        if weight <= 0.0:
+            continue
         entry = {
-            "title": article.title,
+            "title": f"[가중치: {weight}] {article.title}",
             "sentiment": article.sentiment or "neutral",
+            "weight": weight,
         }
         if article.content:
             entry["content"] = article.content[:200]
         elif article.ai_summary:
             entry["content"] = article.ai_summary[:150]
         results.append(entry)
+    # 가중치 높은 순으로 정렬
+    results.sort(key=lambda x: x["weight"], reverse=True)
     return results
 
 
@@ -240,7 +349,13 @@ async def _gather_pick_candidates(db: Session, recent_news: list) -> list[dict]:
     if not top_stock_ids:
         return []
 
-    stocks = db.query(Stock).filter(Stock.id.in_(top_stock_ids)).all()
+    # N+1 쿼리 방지: Stock과 Sector를 한번에 로드
+    stocks = (
+        db.query(Stock)
+        .options(selectinload(Stock.sector))
+        .filter(Stock.id.in_(top_stock_ids))
+        .all()
+    )
     stock_map = {s.id: s for s in stocks}
 
     # 시세 + 재무 데이터 병렬 수집
@@ -262,7 +377,8 @@ async def _gather_pick_candidates(db: Session, recent_news: list) -> list[dict]:
             if isinstance(financial_data, Exception):
                 financial_data = {}
 
-            sector = db.query(Sector).filter(Sector.id == stock.sector_id).first()
+            # eager loading된 관계 사용 (루프 내 DB 쿼리 제거)
+            sector = stock.sector
 
             candidate = {
                 "name": stock.name,
@@ -378,6 +494,38 @@ async def _gather_market_data(stock_code: str) -> dict:
             result["avg_volume_20d"] = sum(p.volume for p in price_history[:20]) // 20
         if ta.volatility is not None:
             result["volatility"] = round(ta.volatility, 2)
+
+        # REQ-AI-014: 멀티 타임프레임 분석용 추가 데이터
+        # 5일 MA 기울기 (%)
+        if ta.sma_5 is not None and len(prices) >= 6:
+            sma_5_prev = sum(prices[1:6]) / 5
+            result["sma_5_slope"] = round((ta.sma_5 - sma_5_prev) / sma_5_prev * 100, 4) if sma_5_prev else 0
+        # 20일 MA 기울기 (%)
+        all_prices = [p.close for p in price_history if p.close > 0]
+        if ta.sma_20 is not None and len(all_prices) >= 21:
+            sma_20_prev = sum(all_prices[1:21]) / 20
+            result["sma_20_slope"] = round((ta.sma_20 - sma_20_prev) / sma_20_prev * 100, 4) if sma_20_prev else 0
+        # 현재가 vs 60일 MA 비율 (%)
+        if ta.sma_60 is not None and current_price:
+            result["price_vs_sma60"] = round((current_price - ta.sma_60) / ta.sma_60 * 100, 2)
+        # RSI 값 전달 (factor_scoring에서 사용)
+        if ta.rsi_14 is not None:
+            result["rsi"] = ta.rsi_14
+        # MACD 크로스 전달
+        if ta.macd_cross:
+            macd_map = {"골든크로스": "golden_cross", "데드크로스": "dead_cross"}
+            result["macd_signal"] = macd_map.get(ta.macd_cross, "")
+        # SMA 배열 전달
+        if ta.ma_alignment:
+            align_map = {"정배열": "bullish", "역배열": "bearish"}
+            result["sma_alignment"] = align_map.get(ta.ma_alignment, "")
+        # 볼린저 밴드 위치 전달
+        if ta.bb_position:
+            bb_map = {"하단돌파": "below_lower", "상단돌파": "above_upper"}
+            result["bollinger_position"] = bb_map.get(ta.bb_position, "")
+        # 거래량 비율 전달
+        if ta.volume_ratio is not None:
+            result["volume_ratio"] = ta.volume_ratio
 
     # 외국인/기관 수급 데이터 (20일 → 5일/10일/20일 분석)
     if investor_data and not isinstance(investor_data, Exception) and investor_data:
@@ -611,7 +759,10 @@ async def analyze_stock(
     peers = results[2] if sector else []
 
     # 과거 시그널 적중률 조회
-    from app.services.signal_verifier import get_accuracy_stats
+    from app.services.signal_verifier import get_accuracy_stats, calibrate_confidence
+    from app.services.factor_scoring import build_factor_scores_json
+    from app.services.prompt_versioner import get_current_version
+    from app.services.news_price_impact_service import get_sector_news_impact_stats
     accuracy = get_accuracy_stats(db, days=30)
     accuracy_text = "아직 검증된 시그널 없음"
     if accuracy["total"] > 0:
@@ -622,6 +773,31 @@ async def analyze_stock(
             f"매도 적중률: {accuracy['sell_accuracy']}%, "
             f"평균 수익률: {accuracy['avg_return']}%"
         )
+
+    # REQ-AI-003: 오류 패턴 분포 피드백
+    error_dist = accuracy.get("error_distribution", {})
+    error_text = ""
+    if error_dist:
+        error_parts = [f"{k} {v}건" for k, v in error_dist.items()]
+        error_text = f"\n최근 오류 패턴: {', '.join(error_parts)}"
+        error_text += "\n※ 위 오류 패턴을 참고하여 같은 실수를 반복하지 마세요."
+
+    # REQ-AI-009: 섹터별 뉴스 임팩트 통계
+    impact_stats = None
+    impact_text = ""
+    if sector:
+        impact_stats = get_sector_news_impact_stats(db, stock.sector_id)
+        if impact_stats.get("sample_sufficient"):
+            impact_text = (
+                f"\n\n## 섹터 뉴스 반응 통계 (최근 30일)\n"
+                f"- 이 섹터 뉴스 발생 후 평균 5일 수익률: {impact_stats['avg_return_5d']}%\n"
+                f"- 양수 수익률 비율: {impact_stats['win_rate']}%\n"
+                f"- 분석 대상 기사 수: {impact_stats['total_articles']}건\n"
+                f"※ 과거 통계를 참고하되, 현재 시장 상황이 다를 수 있음에 유의하세요."
+            )
+
+    # REQ-AI-008: 프롬프트 버전
+    current_prompt_version = get_current_version(db, template_key="signal")
 
     # Pre-compute values that would break f-string syntax
     trend_label = {'improving': '개선 중', 'worsening': '악화 중', 'stable': '안정적'}.get(
@@ -639,7 +815,7 @@ async def analyze_stock(
 - 섹터: {sector.name if sector else '미분류'}
 
 ## 0. 과거 시그널 성과 (자기 피드백)
-{accuracy_text}
+{accuracy_text}{error_text}
 ※ 적중률이 낮다면 더 보수적으로, 높다면 현재 전략을 유지하세요.
 
 ## 1. 최근 뉴스 동향 (최근 3일)
@@ -685,6 +861,7 @@ async def analyze_stock(
 {json.dumps(peers, ensure_ascii=False, indent=2) if peers else '동종업계 비교 데이터 없음'}
 ※ 동종업계 대비 밸류에이션/센티먼트/주가 흐름을 비교하여 상대적 매력도를 평가하세요.
   섹터 전체가 하락 중인데 해당 종목만 상승하면 과열 경계, 섹터 반등 시 후발주자면 기회로 판단.
+{impact_text}
 
 ## 8. 데일리 브리핑 판단 참고
 {_format_briefing_hint(briefing_hint) if briefing_hint else '(독립 분석 — 브리핑 참고 정보 없음)'}
@@ -734,10 +911,74 @@ async def analyze_stock(
         price_at_signal=price_at_signal,
     )
 
+    # REQ-AI-004: Bayesian confidence 보정 (컬럼 없어도 안전)
+    if accuracy["total"] >= 10:
+        signal.confidence = calibrate_confidence(signal.confidence, accuracy)
+
     db.add(signal)
     db.commit()
     db.refresh(signal)
+
+    # Phase B 필드 할당 (마이그레이션 미적용 시에도 안전하게 처리)
+    try:
+        # REQ-AI-006: 다중 팩터 스코어링
+        factor_json, comp_score = build_factor_scores_json(
+            news_data=news,
+            market_data=market_data or {},
+            financials=financial_data or {},
+            impact_stats=impact_stats,
+        )
+        signal.factor_scores = factor_json
+        signal.composite_score = comp_score
+        # REQ-AI-008: 프롬프트 버전 기록
+        signal.prompt_version = current_prompt_version
+
+        # REQ-AI-014: 멀티 타임프레임 추세 정렬 저장
+        from app.services.factor_scoring import analyze_multi_timeframe
+        mtf = analyze_multi_timeframe(market_data or {})
+        signal.trend_alignment = mtf["trend_alignment"]
+        # REQ-AI-014: divergent 추세 시 confidence 감산
+        if mtf["confidence_adjustment"] != 0:
+            signal.confidence = max(0.0, min(1.0, signal.confidence + mtf["confidence_adjustment"]))
+
+        # REQ-AI-020: 시장 변동성 레벨 저장
+        try:
+            from app.services.market_context import get_market_volatility
+            vol_info = await get_market_volatility()
+            signal.volatility_level = vol_info["volatility_level"]
+            # 극단적 변동성 시 confidence 추가 감산
+            if vol_info["confidence_adjustment"] != 0:
+                signal.confidence = max(0.0, min(1.0, signal.confidence + vol_info["confidence_adjustment"]))
+        except Exception as vol_e:
+            logger.warning("시장 변동성 레벨 계산 실패 (시그널 생성 계속): %s", vol_e)
+
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.warning("Phase B 필드 저장 실패 (마이그레이션 미적용 가능): %s", e)
     logger.info(f"Fund signal created: {stock.name} → {signal.signal} (confidence: {signal.confidence})")
+
+    # WebSocket 브로드캐스트: 새 펀드 시그널 전파
+    try:
+        from app.event_bus import broadcast_event
+        await broadcast_event("signals", {
+            "type": "fund_signal",
+            "id": signal.id,
+            "stock_id": signal.stock_id,
+            "signal": signal.signal,
+            "confidence": signal.confidence,
+            "created_at": str(signal.created_at),
+        })
+    except Exception:
+        logger.debug("시그널 WebSocket 브로드캐스트 실패", exc_info=True)
+
+    # REQ-AI-013: 페이퍼 트레이딩 자동 매매
+    try:
+        from app.services.paper_trading import execute_signal_trade
+        await execute_signal_trade(db, signal)
+    except Exception as e:
+        logger.warning("페이퍼 트레이딩 자동 매매 실패: %s", e)
+
     return signal
 
 
@@ -821,6 +1062,100 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
     candidate_data = await _gather_pick_candidates(db, recent_news)
     candidate_text = json.dumps(candidate_data, ensure_ascii=False, indent=2) if candidate_data else '후보 종목 데이터 없음'
 
+    # REQ-AI-020: 시장 변동성 레벨 (브리핑 상단 표시)
+    volatility_text = ""
+    try:
+        from app.services.market_context import get_market_volatility, format_volatility_for_briefing
+        vol_info = await get_market_volatility()
+        volatility_text = "\n## 시장 변동성 현황\n" + format_volatility_for_briefing(vol_info) + "\n"
+    except Exception as vol_e:
+        logger.warning("브리핑용 시장 변동성 데이터 수집 실패 (브리핑 계속 진행): %s", vol_e)
+
+    # REQ-AI-016/017: 섹터 모멘텀 분석 + 로테이션 감지
+    sector_momentum_text = ""
+    try:
+        from app.services.sector_momentum import (
+            detect_momentum_sectors,
+            detect_capital_inflow,
+            detect_sector_rotation,
+            format_sector_momentum_for_briefing,
+        )
+        momentum_sectors = detect_momentum_sectors(db)
+        inflow_sectors = detect_capital_inflow(db)
+        rotation_events = detect_sector_rotation(db)
+        sector_momentum_text = "\n" + format_sector_momentum_for_briefing(
+            momentum_sectors, inflow_sectors, rotation_events, db
+        ) + "\n"
+    except Exception as sm_e:
+        logger.warning("섹터 모멘텀 분석 실패 (브리핑 계속 진행): %s", sm_e)
+
+    # REQ-AI-018: 어닝 프리뷰 (실적 공시 예정 D-5)
+    earnings_text = ""
+    try:
+        from app.services.earnings_analyzer import (
+            get_upcoming_earnings,
+            analyze_earnings_preview,
+            format_earnings_for_briefing,
+        )
+        upcoming = get_upcoming_earnings(db)
+        if upcoming:
+            previews = []
+            for item in upcoming[:5]:  # 최대 5개 종목
+                preview = analyze_earnings_preview(db, item["stock_id"])
+                previews.append(preview)
+            earnings_text = "\n" + format_earnings_for_briefing(previews) + "\n"
+    except Exception as earn_e:
+        logger.warning("어닝 프리뷰 분석 실패 (브리핑 계속 진행): %s", earn_e)
+
+    # REQ-AI-024: 원자재 크로스 검증 컨텍스트
+    commodity_context_text = ""
+    try:
+        from app.services.market_context import format_commodity_context_for_briefing
+        all_sector_ids = [s["id"] for s in sector_info]
+        commodity_context_text = "\n" + format_commodity_context_for_briefing(db, all_sector_ids) + "\n"
+    except Exception as comm_e:
+        logger.warning("원자재 컨텍스트 수집 실패 (브리핑 계속 진행): %s", comm_e)
+
+    # REQ-AI-022: 과거 유사 시장 패턴 매칭
+    historical_pattern_text = ""
+    try:
+        from app.services.market_context import format_historical_patterns_for_briefing
+        # vol_info에서 변동성 레벨, sector_momentum에서 모멘텀 섹터 추출
+        _vol_level = vol_info.get("volatility_level") if vol_info else None
+        # KOSPI 5일 수익률: sector_momentum의 전체 평균으로 추정
+        _kospi_ret_5d = None
+        _momentum_ids: list[int] = []
+        try:
+            from app.models.sector_momentum import SectorMomentum
+            from sqlalchemy import func as _sa_func
+            from datetime import date as _date_type
+            _today = _date_type.today()
+            _avg_row = (
+                db.query(_sa_func.avg(SectorMomentum.avg_return_5d))
+                .filter(SectorMomentum.date == _today)
+                .scalar()
+            )
+            _kospi_ret_5d = float(_avg_row) if _avg_row is not None else None
+            _momentum_rows = (
+                db.query(SectorMomentum.sector_id)
+                .filter(
+                    SectorMomentum.date == _today,
+                    SectorMomentum.momentum_tag == "momentum_sector",
+                )
+                .all()
+            )
+            _momentum_ids = [r[0] for r in _momentum_rows]
+        except Exception:
+            pass  # 모멘텀 데이터 없어도 패턴 매칭 시도 가능
+
+        _pattern_text = format_historical_patterns_for_briefing(
+            db, _kospi_ret_5d, _vol_level, _momentum_ids
+        )
+        if _pattern_text:
+            historical_pattern_text = "\n" + _pattern_text + "\n"
+    except Exception as hist_e:
+        logger.warning("과거 패턴 매칭 실패 (브리핑 계속 진행): %s", hist_e)
+
     # REQ-NPI-014~015: 후보 종목별 뉴스-가격 반응 통계 주입
     news_impact_text = ""
     try:
@@ -845,6 +1180,26 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
             news_impact_text = "\n## 뉴스 반응 통계 (30일)\n" + "\n".join(impact_lines) + "\n"
     except Exception as e:
         logger.warning(f"뉴스 반응 통계 수집 실패 (브리핑 계속 진행): {e}")
+
+    # REQ-021: 방어 모드 상태 확인 및 브리핑 경고 문구
+    defensive_mode_text = ""
+    try:
+        from app.services.paper_trading import check_defensive_mode, get_or_create_portfolio
+        is_defensive = check_defensive_mode(db)
+        if is_defensive:
+            portfolio = get_or_create_portfolio(db)
+            entered_at = portfolio.defensive_mode_entered_at
+            entered_str = entered_at.strftime('%Y-%m-%d %H:%M') if entered_at else "알 수 없음"
+            defensive_mode_text = (
+                f"\n## [경고] 방어 모드 활성화 중\n"
+                f"- 포트폴리오 누적 수익률이 -10% 이하로 하락하여 방어 모드가 활성화되었습니다.\n"
+                f"- 방어 모드 진입 시각: {entered_str}\n"
+                f"- 신규 매수 시그널이 차단됩니다.\n"
+                f"- 기존 포지션의 손절 기준이 -5%에서 -3%로 강화됩니다.\n"
+                f"- 누적 수익률이 -5% 이상으로 회복되면 자동 해제됩니다.\n"
+            )
+    except Exception as e:
+        logger.warning(f"방어 모드 상태 확인 실패 (브리핑 계속 진행): {e}")
 
     prompt = f"""당신은 국내 최고 자산운용사의 CIO(최고투자책임자)이자 20년 경력 전문 펀드매니저입니다.
 오늘 날짜: {today.strftime('%Y년 %m월 %d일')}
@@ -894,7 +1249,25 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
 - dividend_yield: 배당수익률(%)
 
 {candidate_text}
-{news_impact_text}
+{volatility_text}{sector_momentum_text}{earnings_text}{commodity_context_text}{historical_pattern_text}{news_impact_text}{defensive_mode_text}
+## Chain-of-Thought 분석 (5단계)
+아래 5단계를 **반드시 순서대로** 수행하고, 각 단계의 분석 결과를 JSON의 "cot_reasoning" 필드에 포함하세요.
+
+[STEP 1: 시장 환경 진단]
+현재 시장 변동성, 섹터 로테이션, 매크로 리스크를 종합하여 시장 환경을 진단하시오.
+
+[STEP 2: 종목별 팩터 분석]
+각 후보 종목에 대해 4개 팩터(뉴스, 기술적, 수급, 밸류에이션) 점수를 기반으로 강약점을 분석하시오.
+
+[STEP 3: 추세 정렬 검증]
+다중 시간축(5일/20일/60일) 추세 방향이 일치하는지 확인하시오.
+
+[STEP 4: 리스크 평가]
+과거 유사 시장 상황의 적중률, 섹터 중복 리스크, 어닝 이벤트 유무를 평가하시오.
+
+[STEP 5: 최종 추천 및 근거]
+매수 추천 종목과 구체적 근거를 제시하시오. 각 추천에 대해 "가장 큰 리스크"도 명시하시오.
+
 반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트 없이 JSON만 출력하세요.
 {{
   "market_overview": "오늘 시장의 핵심 이슈를 7-10문장으로 상세 분석. (1) 글로벌 매크로 환경(금리, 환율, 유가, 지정학 리스크), (2) 국내 시장 흐름(코스피/코스닥 동향, 거래대금, 외국인/기관 동향), (3) 핵심 뉴스 2-3개를 구체적으로 인용하며 시장 영향 분석, (4) 당일 시장 전망. 일반 텍스트로 작성.",
@@ -915,7 +1288,9 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
 
   "risk_assessment": "5-7문장. (1) 현재 가장 큰 매크로 리스크와 그 영향을 구체적 수치로 분석, (2) 포트폴리오 방어 전략, (3) 주의해야 할 섹터/종목. 뉴스 제목을 직접 인용하며 분석.",
 
-  "strategy": "5-7문장. (1) 오늘 시장에서 취해야 할 구체적 액션(비중 조절, 섹터 로테이션 등), (2) 단기(1주) 전략, (3) 중기(1개월) 관점. 추상적 조언이 아닌 실행 가능한 구체적 전략 제시."
+  "strategy": "5-7문장. (1) 오늘 시장에서 취해야 할 구체적 액션(비중 조절, 섹터 로테이션 등), (2) 단기(1주) 전략, (3) 중기(1개월) 관점. 추상적 조언이 아닌 실행 가능한 구체적 전략 제시.",
+
+  "cot_reasoning": "위 5단계 Chain-of-Thought 분석 내용을 여기에 작성. 반드시 [STEP 1], [STEP 2], [STEP 3], [STEP 4], [STEP 5] 헤더를 모두 포함하여 단계별 분석 결과를 기술."
 }}
 
 **핵심 규칙 (절대 위반 금지):**
@@ -924,18 +1299,24 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
 - "매수" 또는 "적극매수"는 **상승 추세가 확인된 종목만** 가능합니다.
 - 단순히 "많이 떨어져서 싸다"는 매수 근거가 아닙니다. 이것은 "떨어지는 칼날 잡기"입니다.
 - **매수 추천 필수 조건 (모두 충족해야 함):**
-  (1) change_rate(당일 등락률)이 0% 이상이거나, 최소 -1% 이내일 것
+  (1) change_rate(당일 등락률)이 -3% 이상일 것 (단, -1% 이하는 "조건부 매수 후보"로 분류)
   (2) price_5d_trend(5일 추세)가 양수이거나 하락 후 반등 신호가 있을 것
   (3) 외국인 또는 기관 순매수가 양수일 것 (foreign_net_5d 또는 institution_net_5d > 0)
   (4) 밸류에이션 매력이 있을 것 (PER이 업종 평균 이하 또는 PBR 1배 미만)
-- 위 4가지 중 3가지 이상 충족하지 못하면 "관망"으로 설정하세요.
+- 위 4가지 중 3가지 이상 충족하면 매수 후보로 포함하세요. 4가지 모두 충족하면 "적극매수" 후보, 3가지 충족하면 "조건부 매수" 후보로 분류하세요. 2가지 이하 충족 시 "관망"으로 설정하세요.
 
 ## 절대 금지 사항
-1. **당일 -3% 이상 하락 종목 → 무조건 "관망" 또는 "회피"**. 급락 중 매수 추천은 투자자에게 큰 손실을 줍니다.
+1. **당일 -5% 이상 하락 종목 → 무조건 "관망" 또는 "회피"**. -3%~-5% 구간은 반등 가능성을 수급과 기술적 지표로 판단. 급락 중 매수 추천은 투자자에게 큰 손실을 줍니다.
 2. **하락 추세 종목(5일, 20일 모두 마이너스) + 수급 악화(외국인/기관 매도) → "회피"**
 3. 뉴스에 언급됐다는 이유만으로 추천 금지. 밸류에이션 + 수급 + 추세를 종합 판단.
 4. PER이 업종 평균 대비 50% 이상 높거나 ROE 5% 미만 → "관망" 또는 "회피".
 5. 하락장에서 함부로 매수 추천 금지. 시장 전체가 약세이면 대부분 "관망"이 맞습니다.
+
+## 조건부 매수 후보 처리
+- 4가지 조건 중 3가지만 충족하는 종목은 "조건부 매수"로 표시하세요.
+- 미충족 조건을 명시하세요 (예: "[수급 미충족] 외국인/기관 순매도 중이나, 밸류에이션/추세/등락률 조건 충족")
+- 조건부 매수의 confidence는 0.5~0.65 범위로 설정하세요.
+- 4가지 모두 충족 시 confidence 0.7 이상 가능.
 
 ## 기타 규칙
 6. stock_picks는 반드시 후보 종목 데이터의 수치를 직접 인용하여 분석. 데이터 없이 추측 금지.
@@ -947,20 +1328,27 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
 
     response = await _ask_ai(prompt)
     if not response:
-        # Check which providers were configured
+        # 설정된 키 확인
         from app.config import settings as _s
         configured = []
-        if _s.OPENROUTER_API_KEY:
-            configured.append(f"OpenRouter(key={_s.OPENROUTER_API_KEY[:8]}...)")
-        if _s.GEMINI_API_KEY:
-            configured.append(f"Gemini(key={_s.GEMINI_API_KEY[:8]}...)")
+        for idx, key in enumerate([_s.GEMINI_API_KEY, _s.GEMINI_API_KEY_2, _s.GEMINI_API_KEY_3], 1):
+            if key:
+                configured.append(f"Gemini-{idx}(key={key[:8]}...)")
         raise RuntimeError(
-            f"모든 AI 프로바이더가 실패했습니다. 설정된 프로바이더: {configured or '없음'}. "
+            f"모든 Gemini API 키가 실패했습니다. 설정된 키: {configured or '없음'}. "
             "서버 로그에서 상세 에러를 확인하세요."
         )
     parsed = _parse_json_response(response)
     if not parsed:
         raise RuntimeError(f"AI 응답 JSON 파싱 실패. 원본 응답(앞 500자): {response[:500]}")
+
+    # REQ-023: CoT 5단계 완성도 검증
+    # cot_reasoning 필드 또는 원본 응답에서 STEP 1~5 존재 여부 확인
+    cot_text = parsed.get("cot_reasoning", "") or ""
+    # cot_reasoning 필드에 없으면 원본 응답 전체에서 검색
+    cot_check_target = cot_text if cot_text.strip() else response
+    cot_result = validate_cot_steps(cot_check_target)
+    parsed = apply_cot_penalty(parsed, cot_result)
 
     def _to_str(val) -> str | None:
         if val is None:
@@ -981,36 +1369,53 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
     db.add(briefing)
     db.commit()
     db.refresh(briefing)
-    logger.info(f"Daily briefing generated for {today}")
+    # REQ-023: CoT 프롬프트 버전 및 검증 결과 로깅
+    logger.info(
+        "Daily briefing generated for %s (prompt=cot_v1, cot_complete=%s)",
+        today, cot_result["complete"],
+    )
 
     # 브리핑 추천 종목 → 백그라운드에서 투자 시그널 생성
     stock_picks_data = parsed.get("stock_picks")
+    # REQ-023: CoT 불완전 분석 정보를 시그널 생성에 전달
+    cot_validation = parsed.get("_cot_validation")
     if stock_picks_data:
         asyncio.get_event_loop().create_task(
-            _generate_signals_background(stock_picks_data)
+            _generate_signals_background(stock_picks_data, cot_validation)
         )
 
     return briefing
 
 
-async def _generate_signals_background(stock_picks_data) -> None:
+async def _generate_signals_background(
+    stock_picks_data, cot_validation: dict | None = None,
+) -> None:
     """백그라운드에서 브리핑 추천 종목의 투자 시그널을 생성한다.
 
     별도 DB 세션을 사용하여 메인 요청과 독립적으로 실행.
+
+    Args:
+        cot_validation: REQ-023 CoT 검증 결과. 불완전 시 confidence 감산에 사용.
     """
     from app.database import SessionLocal
 
     db = SessionLocal()
     try:
-        await _generate_signals_from_picks(db, stock_picks_data)
+        await _generate_signals_from_picks(db, stock_picks_data, cot_validation)
     except Exception as e:
         logger.error(f"백그라운드 시그널 생성 실패: {e}")
     finally:
         db.close()
 
 
-async def _generate_signals_from_picks(db: Session, stock_picks) -> None:
-    """브리핑의 stock_picks에서 종목명을 추출하여 자동 투자 시그널 생성."""
+async def _generate_signals_from_picks(
+    db: Session, stock_picks, cot_validation: dict | None = None,
+) -> None:
+    """브리핑의 stock_picks에서 종목명을 추출하여 자동 투자 시그널 생성.
+
+    Args:
+        cot_validation: REQ-023 CoT 검증 결과. 불완전 시 생성된 시그널 confidence 0.1 감산.
+    """
     if not stock_picks:
         return
 
@@ -1056,11 +1461,24 @@ async def _generate_signals_from_picks(db: Session, stock_picks) -> None:
             logger.warning(f"브리핑 추천 종목 '{name}'을 DB에서 찾을 수 없습니다")
 
     # 각 종목에 대해 시그널 생성 (순차 실행 — AI API rate limit 고려)
+    # REQ-023: CoT 불완전 분석 시 confidence 0.1 감산
+    is_incomplete_cot = (
+        cot_validation is not None
+        and cot_validation.get("status") == "incomplete_analysis"
+    )
     generated = 0
     for stock, hint in matched:
         try:
             signal = await analyze_stock(db, stock.id, briefing_hint=hint)
             if signal:
+                # REQ-023: CoT 불완전 분석 시 confidence 감산 및 태그
+                if is_incomplete_cot:
+                    signal.confidence = max(0.0, signal.confidence - 0.1)
+                    db.commit()
+                    logger.info(
+                        "REQ-023: CoT 불완전 분석으로 %s confidence 0.1 감산 → %.2f",
+                        stock.name, signal.confidence,
+                    )
                 generated += 1
                 logger.info(f"브리핑 추천 → 시그널 생성: {stock.name} → {signal.signal} ({signal.confidence})")
         except Exception as e:
