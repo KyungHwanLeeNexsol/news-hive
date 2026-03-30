@@ -1,3 +1,8 @@
+---
+description: Core constitutional principles for MoAI orchestrator - HARD rules that must always be followed
+globs:
+---
+
 # MoAI Constitution
 
 Core principles that MUST always be followed. These are HARD rules.
@@ -40,6 +45,17 @@ Rules:
 - XML tags are reserved for agent-to-agent data transfer
 - Use Markdown for all user-facing communication
 - Format code blocks with appropriate language identifiers
+
+## Worktree Isolation
+
+When spawning agents with `isolation: "worktree"`, prompts must use relative paths.
+
+Rules:
+- Use project-root-relative paths for all write-target files in agent prompts
+- Do NOT include absolute paths to the main project directory in agent prompts
+- Do NOT include `cd /absolute/path &&` in Bash commands within agent prompts
+- The agent's CWD is automatically set to the worktree root by Claude Code
+- See .claude/rules/moai/workflow/worktree-integration.md for complete rules
 
 ## Quality Gates
 

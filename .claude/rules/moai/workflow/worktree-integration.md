@@ -1,5 +1,6 @@
 ---
-paths: "**/.claude/agents/**,**/.moai/worktrees/**"
+description: Worktree integration guide with path isolation rules for agents using isolation worktree
+globs: "**/.claude/agents/**,**/.claude/worktrees/**"
 ---
 
 # Worktree Integration Guide
@@ -96,7 +97,7 @@ background: true   # Returns immediately; results delivered on next turn
 
 Use with `isolation: worktree` for optimal parallel execution in team mode.
 
-Kill background agent: Press `Ctrl+F` in Claude Code interface.
+Kill background agent: Press `Ctrl+X Ctrl+K` in Claude Code interface (v2.1.83+).
 
 ## Worktree Selection Rules [HARD]
 
@@ -124,8 +125,8 @@ Is this a one-shot sub-agent task?
 
 ### HARD Rules
 
-- [HARD] Implementation agents in team mode (team-backend-dev, team-frontend-dev, team-tester, team-designer) MUST use `isolation: "worktree"` when spawned via Task()
-- [HARD] Read-only agents (team-researcher, team-analyst, team-architect, team-quality) MUST NOT use `isolation: "worktree"` — their `permissionMode: plan` already prevents writes
+- [HARD] Implementation agents in team mode (team-coder, team-tester, team-designer) MUST use `isolation: "worktree"` when spawned via Task()
+- [HARD] Read-only agents (team-reader, team-validator) MUST NOT use `isolation: "worktree"` — their `permissionMode: plan` already prevents writes
 - [HARD] One-shot sub-agents that write files (expert-backend, expert-frontend, manager-ddd, manager-tdd) SHOULD use `isolation: "worktree"` when making cross-file changes
 - [HARD] GitHub workflow agents (fixer agents in /moai github issues) MUST use `isolation: "worktree"` for branch isolation
 
@@ -201,6 +202,56 @@ Hook scripts are located at:
 - `.claude/hooks/moai/handle-worktree-remove.sh`
 
 Currently the handlers log worktree creation and removal for session tracking.
+
+## Prompt Path Rules for Worktree-Isolated Agents
+
+When the orchestrator generates prompts for agents spawned with `isolation: "worktree"`, paths in the prompt determine where the agent operates. Incorrect paths bypass worktree isolation entirely.
+
+### HARD Rules
+
+- [HARD] Do NOT include absolute paths to the main project directory in agent prompts for write-target files
+- [HARD] Do NOT include `cd /absolute/project/path &&` in Bash commands within agent prompts
+- [HARD] Reference write-target files by project-root-relative paths (e.g., `src/domains/auth/handler.go`) and let the agent resolve from its own CWD
+- [HARD] `$CLAUDE_PROJECT_DIR` in hook commands is acceptable — Claude Code resolves this to the correct directory for the agent's context
+
+### Path Categories
+
+| Category | Example | Absolute Path OK? | Reason |
+|----------|---------|-------------------|--------|
+| Write-target files | Source code, tests | NO — use relative | Agent CWD is worktree root; relative paths resolve correctly |
+| Read-only references | Skills, configs via `${CLAUDE_SKILL_DIR}` | YES | Content is identical in main repo; read-only access is safe |
+| SPEC documents | `.moai/specs/SPEC-XXX/spec.md` | Relative preferred | SPEC files are copied to worktree during checkout |
+| Bash commands | `go test ./...` | NO `cd` prefix | Agent CWD is already set to worktree root |
+
+### How It Works
+
+When `isolation: "worktree"` is set, Claude Code:
+1. Creates a temporary worktree from the current branch
+2. Sets the agent's CWD to the worktree root
+3. The agent constructs absolute paths from its own CWD
+
+```
+Main repo:  /Users/user/project/src/auth/handler.go
+Worktree:   /Users/user/project/.claude/worktrees/abc123/src/auth/handler.go
+```
+
+Both share the same project structure. `src/auth/handler.go` resolves correctly in either context.
+
+### Anti-Pattern Examples
+
+```
+# WRONG: Absolute path in prompt bypasses worktree
+"Read /Users/user/project/src/auth/handler.go and fix the bug"
+
+# WRONG: cd to main project in Bash command
+"Run: cd /Users/user/project && go test ./..."
+
+# CORRECT: Relative path — agent resolves from its own CWD
+"The bug is in src/auth/handler.go. Read the file and fix it."
+
+# CORRECT: No cd prefix — agent CWD is already worktree root
+"Run: go test ./..."
+```
 
 ## Troubleshooting
 

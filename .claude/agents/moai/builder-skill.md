@@ -9,7 +9,7 @@ description: |
   JA: スキル作成, 新スキル, スキル最適化, 知識ドメイン, YAMLフロントマター
   ZH: 创建技能, 新技能, 技能优化, 知识领域, YAML前置信息
 tools: Read, Write, Edit, Grep, Glob, WebFetch, WebSearch, Bash, TodoWrite, Agent, Skill, mcp__sequential-thinking__sequentialthinking, mcp__context7__resolve-library-id, mcp__context7__get-library-docs
-model: opus
+model: sonnet
 maxTurns: 50
 permissionMode: bypassPermissions
 memory: user

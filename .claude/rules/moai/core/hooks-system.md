@@ -8,37 +8,55 @@ Claude Code hooks for extending functionality with custom scripts.
 
 ## Hook Events
 
-All 17 available hook event types:
+25 hook event types (+ 1 special event, 26 total):
 
 | Event | Matcher | Can Block | Description |
 |-------|---------|-----------|-------------|
-| UserPromptSubmit | No | Yes | Runs when user submits a prompt, before processing |
 | SessionStart | No | No | Runs when a new session begins |
-| Setup | No | No | Runs via --init, --init-only, or --maintenance flags (v2.1.10+) |
-| PreCompact | No | No | Runs before context compaction |
+| SessionEnd | Reason | No | Runs when session terminates |
 | PreToolUse | Tool name | Yes | Runs before a tool executes |
 | PostToolUse | Tool name | No | Runs after a tool completes successfully |
 | PostToolUseFailure | Tool name | No | Runs after a tool execution fails |
-| PermissionRequest | Tool name | Yes | Runs when permission dialog appears |
-| Notification | Type | No | Runs when Claude Code sends notifications |
-| InstructionsLoaded | No | No | Runs when CLAUDE.md or .claude/rules/*.md files are loaded (v2.1.69+) |
+| PreCompact | No | No | Runs before context compaction |
+| PostCompact | No | No | Runs after context compaction completes (v2.1.76+) |
+| Stop | No | No | Runs when conversation stops |
+| StopFailure | No | No | Runs when a turn ends due to an API error (v2.1.78+) |
 | SubagentStart | Agent type | No | Runs when a subagent spawns |
 | SubagentStop | No | No | Runs when a subagent terminates |
-| Stop | No | No | Runs when conversation stops |
+| Notification | Type | No | Runs when Claude Code sends notifications |
+| UserPromptSubmit | No | Yes | Runs when user submits a prompt, before processing |
+| PermissionRequest | Tool name | Yes | Runs when permission dialog appears |
 | TeammateIdle | No | Yes | Runs when agent team teammate is about to go idle |
 | TaskCompleted | No | Yes | Runs when a task is being marked complete |
-| SessionEnd | Reason | No | Runs when session terminates |
+| TaskCreated | No | No | Runs when a task is created via TaskCreate (v2.1.84+) |
+| WorktreeCreate | No | No | Runs when a worktree is created for agent isolation (v2.1.49+) |
+| WorktreeRemove | No | No | Runs when a worktree is removed after agent terminates (v2.1.49+) |
 | ConfigChange | No | No | Runs when settings.json is modified (v2.1.49+) |
+| CwdChanged | No | No | Runs when working directory changes (v2.1.83+) |
+| FileChanged | No | No | Runs when a file is changed externally (v2.1.83+) |
+| InstructionsLoaded | No | No | Runs when CLAUDE.md or .claude/rules/*.md files are loaded (v2.1.69+) |
+| Elicitation | No | No | Runs when an elicitation dialog is presented to the user (v2.1.84+) |
+| ElicitationResult | No | No | Runs when the user responds to an elicitation dialog (v2.1.84+) |
+
+**Special Event:**
+
+| Event | Matcher | Can Block | Description |
+|-------|---------|-----------|-------------|
+| Setup | No | No | Runs via --init, --init-only, or --maintenance flags (v2.1.10+) |
 
 ### Event Categories
 
-**Lifecycle Events**: SessionStart, Setup, SessionEnd, Stop, PreCompact, ConfigChange, InstructionsLoaded
+**Lifecycle Events**: SessionStart, SessionEnd, Setup, ConfigChange, InstructionsLoaded
 
-**Prompt Events**: UserPromptSubmit, PermissionRequest, Notification
+**Context Events**: PreCompact, PostCompact, FileChanged, CwdChanged, WorktreeCreate, WorktreeRemove
+
+**Prompt and Notification Events**: UserPromptSubmit, PermissionRequest, Notification, Elicitation, ElicitationResult
 
 **Tool Events**: PreToolUse, PostToolUse, PostToolUseFailure
 
-**Agent Events**: SubagentStart, SubagentStop, TeammateIdle, TaskCompleted
+**Agent and Task Events**: SubagentStart, SubagentStop, TeammateIdle, TaskCompleted, TaskCreated
+
+**Conversation State Events**: Stop, StopFailure
 
 ## Hook Event stdin/stdout Reference
 
@@ -118,6 +136,20 @@ Execute a hook only once per session, then automatically skip subsequent trigger
 - Configuration: Add `once: true` to any hook definition
 - Useful for one-time session initialization, first-write validation, or setup tasks
 - Available since v2.1.0
+
+### Conditional Hook Execution (if field)
+
+Filter when hooks run using permission rule syntax (v2.1.84+).
+
+The `if` field accepts permission rule patterns to prevent unnecessary hook execution and reduce process spawning overhead. Use tool patterns like `Bash(git *)` for git commands, `Write|Edit` for write operations, or `Bash(npm *)` for npm commands.
+
+Example configurations:
+- `"if": "Bash(git *)"` - Only run for git bash commands
+- `"if": "Write|Edit"` - Only run for write/edit operations
+- `"if": "Bash(npm *)"` - Only run for npm commands
+- `"if": "Bash(pytest *)"` - Only run for pytest commands
+
+This field significantly reduces performance overhead by skipping hook evaluation for non-matching operations.
 
 ## Agent-Specific Hooks
 

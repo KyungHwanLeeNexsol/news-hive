@@ -2,20 +2,17 @@
 name: moai-design-craft
 description: >
   Intent-First design craft specialist covering design direction, domain vocabulary,
-  design memory, and post-build critique. Use when establishing design intent before
-  implementation, extracting design patterns from existing code, auditing code against
-  a design system, or performing a post-build craft review and rebuild.
-  Do NOT use for design token management (use moai-domain-uiux) or Figma/Pencil tool
-  mechanics (use moai-design-tools).
+  design memory, and post-build critique. Use when establishing design intent or
+  auditing code against design principles.
 license: Apache-2.0
 compatibility: Designed for Claude Code
 allowed-tools: Read, Grep, Glob
 user-invocable: false
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
   category: "domain"
   status: "active"
-  updated: "2026-03-23"
+  updated: "2026-03-28"
   modularized: "true"
   tags: "design, craft, intent-first, design-direction, domain-exploration, design-memory, critique"
   related-skills: "moai-domain-uiux, moai-design-tools, moai-domain-frontend"
@@ -53,7 +50,7 @@ The three craft operations:
 
 - `modules/intent-first.md` — Intent-First process: domain exploration, design direction, vocabulary
 - `modules/design-memory.md` — `.moai/design/system.md` read/write protocol
-- `modules/critique-workflow.md` — Post-build critique: observe → diagnose → rebuild
+- `modules/critique-workflow.md` — Post-build critique: observe → diagnose → rebuild, hard rules and rejection criteria
 
 ## Quick Reference
 
@@ -92,5 +89,5 @@ When `/moai review --critique` is invoked:
 
 ---
 
-Version: 1.0.0
-Last Updated: 2026-03-23
+Version: 1.1.0
+Last Updated: 2026-03-28

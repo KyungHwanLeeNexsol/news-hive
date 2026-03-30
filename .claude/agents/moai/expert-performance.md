@@ -9,7 +9,7 @@ description: |
   JA: パフォーマンス, プロファイリング, 最適化, ベンチマーク, メモリ, バンドル, レイテンシ
   ZH: 性能, 性能分析, 优化, 基准测试, 内存, 包体, 延迟
 tools: Read, Write, Edit, Grep, Glob, WebFetch, WebSearch, Bash, TodoWrite, Agent, Skill, mcp__sequential-thinking__sequentialthinking, mcp__context7__resolve-library-id, mcp__context7__get-library-docs
-model: opus
+model: sonnet
 permissionMode: default
 maxTurns: 80
 memory: project

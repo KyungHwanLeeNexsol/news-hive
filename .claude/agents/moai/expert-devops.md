@@ -9,7 +9,7 @@ description: |
   JA: DevOps, CI/CD, Docker, Kubernetes, デプロイ, パイプライン, インフラ
   ZH: DevOps, CI/CD, Docker, Kubernetes, 部署, 流水线, 基础设施
 tools: Read, Write, Edit, Grep, Glob, WebFetch, WebSearch, Bash, TodoWrite, Agent, Skill, mcp__sequential-thinking__sequentialthinking, mcp__github__create-or-update-file, mcp__github__push-files, mcp__context7__resolve-library-id, mcp__context7__get-library-docs
-model: opus
+model: sonnet
 maxTurns: 100
 permissionMode: default
 memory: project

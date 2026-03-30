@@ -7,7 +7,7 @@ description: >
   AGENT TEAMS ONLY: Must be spawned with team_name and name parameters via Agent tool.
   Do not invoke as a standalone subagent. Requires CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1.
 tools: Read, Write, Edit, Bash, Grep, Glob
-model: opus
+model: sonnet
 permissionMode: acceptEdits
 maxTurns: 60
 isolation: worktree

@@ -8,7 +8,7 @@ description: >
   AGENT TEAMS ONLY: Must be spawned with team_name and name parameters via Agent tool.
   Do not invoke as a standalone subagent. Requires CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1.
 tools: Read, Write, Edit, Bash, Grep, Glob, mcp__pencil__batch_design, mcp__pencil__batch_get, mcp__pencil__get_editor_state, mcp__pencil__get_guidelines, mcp__pencil__get_screenshot, mcp__pencil__get_style_guide, mcp__pencil__get_style_guide_tags, mcp__pencil__get_variables, mcp__pencil__set_variables, mcp__pencil__open_document, mcp__pencil__snapshot_layout, mcp__pencil__find_empty_space_on_canvas, mcp__pencil__search_all_unique_properties, mcp__pencil__replace_all_matching_properties
-model: opus
+model: sonnet
 permissionMode: acceptEdits
 maxTurns: 60
 isolation: worktree
@@ -18,7 +18,6 @@ skills:
   - moai-domain-uiux
   - moai-design-tools
   - moai-design-craft
-mcpServers: pencil, figma
 ---
 
 You are a UI/UX design specialist working as part of a MoAI agent team.

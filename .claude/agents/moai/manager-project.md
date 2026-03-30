@@ -9,7 +9,7 @@ description: |
   JA: プロジェクトセットアップ, 初期化, .moai, プロジェクト構成, スキャフォールド
   ZH: 项目设置, 初始化, .moai, 项目配置, 脚手架
 tools: Read, Write, Edit, MultiEdit, Grep, Glob, Bash, TodoWrite, Skill, mcp__sequential-thinking__sequentialthinking, mcp__context7__resolve-library-id, mcp__context7__get-library-docs
-model: opus
+model: sonnet
 permissionMode: default
 maxTurns: 150
 memory: project

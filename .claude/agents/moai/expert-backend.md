@@ -9,7 +9,7 @@ description: |
   JA: バックエンド, API, サーバー, 認証, データベース, マイクロサービス, SQL, NoSQL, PostgreSQL, MongoDB, Redis, Oracle, PL/SQL, スキーマ, クエリ, インデックス
   ZH: 后端, API, 服务器, 认证, 数据库, 微服务, 令牌, SQL, NoSQL, PostgreSQL, MongoDB, Redis, Oracle, PL/SQL, 架构, 查询, 索引
 tools: Read, Write, Edit, Grep, Glob, WebFetch, WebSearch, Bash, TodoWrite, Agent, Skill, mcp__sequential-thinking__sequentialthinking, mcp__context7__resolve-library-id, mcp__context7__get-library-docs
-model: opus
+model: sonnet
 maxTurns: 100
 permissionMode: default
 memory: project

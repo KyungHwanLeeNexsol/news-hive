@@ -10,7 +10,7 @@ description: |
   JA: DDD, リファクタリング, レガシーコード, 動作保存, 特性テスト, ドメイン駆動リファクタリング
   ZH: DDD, 重构, 遗留代码, 行为保存, 特性测试, 领域驱动重构
 tools: Read, Write, Edit, MultiEdit, Bash, Grep, Glob, TodoWrite, Skill, mcp__sequential-thinking__sequentialthinking, mcp__context7__resolve-library-id, mcp__context7__get-library-docs
-model: opus
+model: sonnet
 permissionMode: default
 maxTurns: 150
 memory: project
