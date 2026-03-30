@@ -168,7 +168,7 @@ export default function ChatPage() {
   }, []);
 
   return (
-    <div className="flex flex-col" style={{ height: 'calc(100vh - 48px)' }}>
+    <div className="flex flex-col overflow-hidden" style={{ height: 'calc(100vh - 48px)' }}>
       {/* 상단 바 */}
       {messages.length > 0 && (
         <div className="flex justify-end px-4 py-2 border-b border-[#f0f0f0]">
