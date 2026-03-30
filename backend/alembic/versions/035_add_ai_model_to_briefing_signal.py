@@ -8,8 +8,8 @@ Create Date: 2026-03-30
 from alembic import op
 import sqlalchemy as sa
 
-revision = "035_add_ai_model"
-down_revision = "034_change_verification_code_to_token"
+revision = "035"
+down_revision = "034"
 branch_labels = None
 depends_on = None
 
