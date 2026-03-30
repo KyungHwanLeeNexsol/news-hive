@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 # AI helper (OpenRouter primary + Gemini fallback)
 # ---------------------------------------------------------------------------
 
-from app.services.ai_client import ask_ai as _ask_ai
+from app.services.ai_client import ask_ai as _ask_ai, ask_ai_with_model as _ask_ai_with_model
 
 
 def _parse_json_response(text: str) -> dict | None:
@@ -890,7 +890,7 @@ async def analyze_stock(
   예: 브리핑에서 "관망"이면 시그널도 "hold"가 기본. "회피"면 "sell" 또는 "hold". "적극매수"/"매수"면 "buy".
 """
 
-    response = await _ask_ai(prompt)
+    response, ai_model_used = await _ask_ai_with_model(prompt)
     parsed = _parse_json_response(response)
     if not parsed:
         return None
@@ -909,6 +909,7 @@ async def analyze_stock(
         financial_summary=parsed.get("financial_summary"),
         market_summary=parsed.get("market_summary"),
         price_at_signal=price_at_signal,
+        ai_model=ai_model_used,
     )
 
     # REQ-AI-004: Bayesian confidence 보정 (컬럼 없어도 안전)
@@ -1326,7 +1327,7 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
 10. 한자(漢字) 절대 사용 금지. 순수 한글만 사용하세요.
 """
 
-    response = await _ask_ai(prompt)
+    response, ai_model_used = await _ask_ai_with_model(prompt)
     if not response:
         # 설정된 키 확인
         from app.config import settings as _s
@@ -1364,6 +1365,7 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
         stock_picks=_to_str(parsed.get("stock_picks")),
         risk_assessment=_to_str(parsed.get("risk_assessment")),
         strategy=_to_str(parsed.get("strategy")),
+        ai_model=ai_model_used,
     )
 
     db.add(briefing)

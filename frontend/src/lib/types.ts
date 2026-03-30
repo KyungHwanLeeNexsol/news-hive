@@ -210,6 +210,7 @@ export interface FundSignal {
   is_correct: boolean | null;
   return_pct: number | null;
   verified_at: string | null;
+  ai_model: string | null;
 }
 
 export interface ConfidenceBucket {
@@ -236,6 +237,7 @@ export interface DailyBriefing {
   risk_assessment: string | null;
   strategy: string | null;
   created_at: string;
+  ai_model: string | null;
 }
 
 export interface StockNewsImpactStats {

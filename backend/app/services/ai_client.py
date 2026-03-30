@@ -80,8 +80,8 @@ async def _call_zai(prompt: str) -> str | None:
 
 # @MX:ANCHOR: [AUTO] 모든 AI 호출의 진입점 — 키 순환 순서가 일일 사용량 분산에 영향
 # @MX:REASON: Gemini 3키 라운드로빈 + Z.AI fallback 구조, 변경 시 전체 AI 기능에 영향
-async def ask_ai(prompt: str, max_retries: int = 3) -> str | None:
-    """AI에 프롬프트를 전송하고 응답 텍스트를 반환한다.
+async def ask_ai_with_model(prompt: str, max_retries: int = 3) -> tuple[str | None, str]:
+    """AI에 프롬프트를 전송하고 (응답 텍스트, 사용된 모델명) 튜플을 반환한다.
 
     1. Gemini 3개 키 라운드로빈 시도
     2. 전부 rate limit 소진 시 Z.AI(GLM) fallback
@@ -105,7 +105,7 @@ async def ask_ai(prompt: str, max_retries: int = 3) -> str | None:
                     result = await _call_gemini(prompt, keys[key_idx])
                     if result:
                         api_circuit_breaker.record_success("gemini")
-                        return result
+                        return result, settings.GEMINI_MODEL
                 except Exception as e:
                     err_str = str(e)
                     is_rate_limit = any(k in err_str for k in ("429", "RESOURCE_EXHAUSTED", "rate_limit"))
@@ -139,7 +139,7 @@ async def ask_ai(prompt: str, max_retries: int = 3) -> str | None:
             result = await _call_zai(prompt)
             if result:
                 logger.info(f"Z.AI({settings.ZAI_MODEL}) fallback 성공")
-                return result
+                return result, settings.ZAI_MODEL
         except Exception as e:
             logger.error(f"Z.AI fallback 실패: {e}")
 
@@ -147,4 +147,10 @@ async def ask_ai(prompt: str, max_retries: int = 3) -> str | None:
         raise RuntimeError(f"모든 AI 키 실패 — Gemini: {gemini_errors}; Z.AI: 미설정 또는 실패")
 
     logger.warning("Gemini 키 없음, Z.AI 키 없음 — AI 호출 불가")
-    return None
+    return None, "unknown"
+
+
+async def ask_ai(prompt: str, max_retries: int = 3) -> str | None:
+    """AI에 프롬프트를 전송하고 응답 텍스트를 반환한다 (모델명 불필요한 호출용)."""
+    result, _ = await ask_ai_with_model(prompt, max_retries)
+    return result

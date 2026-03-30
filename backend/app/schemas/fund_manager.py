@@ -18,6 +18,7 @@ class FundSignalResponse(BaseModel):
     financial_summary: str | None = None
     market_summary: str | None = None
     created_at: datetime
+    ai_model: str | None = None
     # 적중률 추적 필드
     price_at_signal: int | None = None
     price_after_1d: int | None = None
@@ -54,6 +55,7 @@ class DailyBriefingResponse(BaseModel):
     risk_assessment: str | None = None
     strategy: str | None = None
     created_at: datetime
+    ai_model: str | None = None
 
     model_config = {"from_attributes": True}
 
