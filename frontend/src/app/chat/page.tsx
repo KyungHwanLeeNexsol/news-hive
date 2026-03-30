@@ -59,6 +59,18 @@ export default function ChatPage() {
     setMessages([]);
     setSessionId(undefined);
     try {
+      // 이전 버전 키(chat_messages, chat_session_id)에서 게스트 키로 1회 마이그레이션
+      if (!user) {
+        const legacyMessages = localStorage.getItem('chat_messages');
+        const legacySession = localStorage.getItem('chat_session_id');
+        if (legacyMessages && !localStorage.getItem(storageKeyMessages)) {
+          localStorage.setItem(storageKeyMessages, legacyMessages);
+        }
+        if (legacySession && !localStorage.getItem(storageKeySession)) {
+          localStorage.setItem(storageKeySession, legacySession);
+        }
+      }
+
       const savedMessages = localStorage.getItem(storageKeyMessages);
       const savedSession = localStorage.getItem(storageKeySession);
       if (savedMessages) {
