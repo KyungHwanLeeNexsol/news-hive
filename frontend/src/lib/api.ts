@@ -629,18 +629,13 @@ export async function registerUser(data: {
 }
 
 /**
- * 이메일 인증 코드 확인.
+ * 이메일 인증 링크 토큰 확인 (GET).
  */
-export async function verifyEmail(
-  email: string,
-  code: string,
-): Promise<{ message: string }> {
-  const res = await fetch(`${API_BASE}/auth/verify-email`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, code }),
-    cache: 'no-store',
-  });
+export async function verifyEmail(token: string): Promise<{ message: string }> {
+  const res = await fetch(
+    `${API_BASE}/auth/verify-email?token=${encodeURIComponent(token)}`,
+    { method: 'GET', cache: 'no-store' },
+  );
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail ?? '인증에 실패했습니다.');

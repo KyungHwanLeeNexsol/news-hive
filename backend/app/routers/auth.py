@@ -87,10 +87,9 @@ class RegisterRequest(BaseModel):
 
 
 class VerifyEmailRequest(BaseModel):
-    """이메일 인증 코드 확인 요청."""
+    """이메일 인증 토큰 확인 요청 (하위 호환 유지)."""
 
-    email: EmailStr
-    code: str
+    token: str
 
 
 class ResendVerificationRequest(BaseModel):
@@ -177,9 +176,9 @@ def create_refresh_token_db(user_id: int, db: Session) -> str:
     return token_value
 
 
-def _generate_verification_code() -> str:
-    """6자리 숫자 인증 코드를 생성한다."""
-    return "".join(random.choices(string.digits, k=6))
+def _generate_verification_token() -> str:
+    """URL-safe 랜덤 인증 토큰을 생성한다 (43자)."""
+    return secrets.token_urlsafe(32)
 
 
 # # @MX:ANCHOR: 사용자 인증 의존성 — 보호된 사용자 API 전반에서 사용됨
@@ -292,42 +291,38 @@ async def register(req: RegisterRequest, db: Session = Depends(get_db)) -> dict:
     db.add(new_user)
     db.flush()  # user.id 확보 (commit 전)
 
-    # 인증 코드 생성 및 저장 (10분 유효)
-    code = _generate_verification_code()
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    # 인증 토큰 생성 및 저장 (24시간 유효)
+    token = _generate_verification_token()
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
     verification = EmailVerificationCode(
         user_id=new_user.id,
-        code=code,
+        code=token,
         expires_at=expires_at,
     )
     db.add(verification)
     db.commit()
 
-    # 인증 이메일 발송 (실패해도 회원가입은 완료된 것으로 처리)
+    # 인증 링크 생성 후 이메일 발송 (실패해도 회원가입은 완료된 것으로 처리)
+    verify_link = f"{settings.FRONTEND_URL.rstrip('/')}/auth/verify?token={token}"
     try:
-        await send_verification_email(req.email, code)
+        await send_verification_email(req.email, verify_link)
     except Exception:
         logger.exception("회원가입 인증 이메일 발송 실패: %s", req.email)
 
     return {"message": "이메일을 확인하세요", "user_id": new_user.id}
 
 
-@router.post("/verify-email")
-async def verify_email(req: VerifyEmailRequest, db: Session = Depends(get_db)) -> dict:
-    """이메일 인증 코드 확인.
+@router.get("/verify-email")
+async def verify_email(token: str, db: Session = Depends(get_db)) -> dict:
+    """이메일 인증 링크 클릭 처리.
 
-    미사용·미만료 코드를 찾아 사용 처리 후 user.email_verified = True.
+    URL 쿼리 파라미터로 전달된 토큰을 검증하고 user.email_verified = True 처리.
     """
-    user = db.query(User).filter(User.email == req.email).first()
-    if user is None:
-        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
-
     now = datetime.now(timezone.utc)
     verification = (
         db.query(EmailVerificationCode)
         .filter(
-            EmailVerificationCode.user_id == user.id,
-            EmailVerificationCode.code == req.code,
+            EmailVerificationCode.code == token,
             EmailVerificationCode.used.is_(False),
             EmailVerificationCode.expires_at > now,
         )
@@ -335,9 +330,10 @@ async def verify_email(req: VerifyEmailRequest, db: Session = Depends(get_db)) -
     )
     if verification is None:
         raise HTTPException(
-            status_code=400, detail="인증 코드가 올바르지 않거나 만료되었습니다."
+            status_code=400, detail="인증 링크가 올바르지 않거나 만료되었습니다."
         )
 
+    user = verification.user
     verification.used = True
     user.email_verified = True
     db.commit()
@@ -375,24 +371,25 @@ async def resend_verification(
             status_code=429, detail="잠시 후 다시 시도해 주세요. (60초 대기)"
         )
 
-    # 새 코드 생성
-    code = _generate_verification_code()
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    # 새 토큰 생성 (24시간 유효)
+    token = _generate_verification_token()
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
     verification = EmailVerificationCode(
         user_id=user.id,
-        code=code,
+        code=token,
         expires_at=expires_at,
     )
     db.add(verification)
     db.commit()
 
+    verify_link = f"{settings.FRONTEND_URL.rstrip('/')}/auth/verify?token={token}"
     try:
-        await send_verification_email(req.email, code)
+        await send_verification_email(req.email, verify_link)
     except Exception:
-        logger.exception("인증 코드 재발송 실패: %s", req.email)
+        logger.exception("인증 링크 재발송 실패: %s", req.email)
         raise HTTPException(status_code=500, detail="이메일 발송에 실패했습니다.")
 
-    return {"message": "인증 코드를 재발송했습니다"}
+    return {"message": "인증 링크를 재발송했습니다"}
 
 
 @router.post("/user/login", response_model=TokenResponse)

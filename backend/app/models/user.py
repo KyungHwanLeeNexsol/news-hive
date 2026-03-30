@@ -51,7 +51,7 @@ class User(Base):
 
 
 class EmailVerificationCode(Base):
-    """이메일 인증 6자리 코드 모델."""
+    """이메일 인증 URL 토큰 모델 (링크 클릭 방식)."""
 
     __tablename__ = "email_verification_codes"
 
@@ -59,8 +59,8 @@ class EmailVerificationCode(Base):
     user_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    # 6자리 인증 코드
-    code: Mapped[str] = mapped_column(String(6), nullable=False)
+    # URL-safe 랜덤 토큰 (secrets.token_urlsafe(32) — 43자)
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     # 사용 완료 여부
     used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

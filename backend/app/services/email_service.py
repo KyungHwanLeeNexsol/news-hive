@@ -15,8 +15,8 @@ _SMTP_HOST = "smtp.gmail.com"
 _SMTP_PORT = 587
 
 
-def _build_verification_html(code: str) -> str:
-    """인증 코드 이메일 HTML 템플릿 생성."""
+def _build_verification_html(verify_link: str) -> str:
+    """인증 링크 버튼 이메일 HTML 템플릿 생성."""
     return f"""
 <!DOCTYPE html>
 <html lang="ko">
@@ -52,29 +52,40 @@ def _build_verification_html(code: str) -> str:
           <tr>
             <td style="padding:40px 40px 32px;">
               <h2 style="margin:0 0 8px;font-size:22px;color:#1a1a2e;font-weight:600;">
-                이메일 인증 코드
+                이메일 인증
               </h2>
               <p style="margin:0 0 28px;color:#718096;font-size:15px;line-height:1.6;">
-                아래 6자리 인증 코드를 입력창에 입력해 주세요.
+                아래 버튼을 클릭하면 이메일 인증이 완료됩니다.
               </p>
 
-              <!-- 인증 코드 박스 -->
-              <div style="background-color:#f7fafc;border:2px solid #e2e8f0;
-                          border-radius:10px;padding:24px;text-align:center;
-                          margin-bottom:24px;">
-                <span style="font-size:42px;font-weight:700;letter-spacing:10px;
-                             color:#1a1a2e;font-variant-numeric:tabular-nums;">
-                  {code}
-                </span>
+              <!-- 인증 버튼 -->
+              <div style="text-align:center;margin-bottom:28px;">
+                <a href="{verify_link}"
+                   style="display:inline-block;background-color:#1261c4;color:#ffffff;
+                          font-size:16px;font-weight:600;text-decoration:none;
+                          padding:14px 40px;border-radius:8px;letter-spacing:0.3px;">
+                  이메일 인증하기
+                </a>
               </div>
 
               <!-- 만료 안내 -->
               <div style="background-color:#fff5f5;border-left:4px solid #e94560;
                           border-radius:4px;padding:14px 16px;margin-bottom:24px;">
                 <p style="margin:0;color:#c53030;font-size:14px;font-weight:500;">
-                  &#9201; 이 코드는 <strong>10분 내에 입력하세요</strong>
+                  &#9201; 이 링크는 <strong>24시간 후 만료</strong>됩니다
                 </p>
               </div>
+
+              <!-- 링크 직접 복사 안내 -->
+              <p style="margin:0 0 8px;color:#a0aec0;font-size:12px;line-height:1.6;">
+                버튼이 작동하지 않는 경우 아래 링크를 브라우저에 직접 붙여넣으세요:
+              </p>
+              <p style="margin:0 0 16px;word-break:break-all;">
+                <a href="{verify_link}"
+                   style="color:#1261c4;font-size:12px;text-decoration:none;">
+                  {verify_link}
+                </a>
+              </p>
 
               <p style="margin:0;color:#a0aec0;font-size:13px;line-height:1.6;">
                 본인이 요청하지 않으셨다면 이 이메일을 무시하셔도 됩니다.
@@ -102,12 +113,12 @@ def _build_verification_html(code: str) -> str:
 """
 
 
-async def send_verification_email(to_email: str, code: str) -> None:
-    """회원가입 이메일 인증 코드 발송.
+async def send_verification_email(to_email: str, verify_link: str) -> None:
+    """회원가입 이메일 인증 링크 발송.
 
     Args:
         to_email: 수신자 이메일 주소
-        code: 6자리 인증 코드
+        verify_link: 인증 URL (버튼 클릭 시 이동할 링크)
 
     Raises:
         aiosmtplib.SMTPException: SMTP 연결 또는 발송 실패 시 (SMTP 설정된 경우만)
@@ -115,14 +126,14 @@ async def send_verification_email(to_email: str, code: str) -> None:
     # SMTP 미설정 시 개발 모드 폴백 - 로그에만 출력
     if not settings.SMTP_USER:
         logger.info(
-            "[Dev] 이메일 인증 코드 발송 생략 (SMTP 미설정) | to=%s | code=%s",
+            "[Dev] 이메일 인증 링크 발송 생략 (SMTP 미설정) | to=%s | link=%s",
             to_email,
-            code,
+            verify_link,
         )
         return
 
-    subject = f"[NewsHive] 이메일 인증 코드: {code}"
-    html_body = _build_verification_html(code)
+    subject = "[NewsHive] 이메일 인증을 완료해 주세요"
+    html_body = _build_verification_html(verify_link)
 
     # MIME 멀티파트 메시지 구성
     message = MIMEMultipart("alternative")
