@@ -245,6 +245,73 @@ async def _gather_context(stock_id: int, stock_name: str, db: Session) -> tuple[
     return full_context, sources_used
 
 
+async def _gather_market_context(db: Session) -> tuple[str, list[str]]:
+    """종목 미특정 시장 전체 질문용 컨텍스트를 수집한다.
+
+    오늘의 AI 브리핑 + 최근 뉴스 헤드라인을 주입하여
+    AI가 현재 시장 상황 기반으로 답변하도록 한다.
+    """
+    from datetime import date as date_type
+    from app.models.daily_briefing import DailyBriefing
+    from app.models.news import NewsArticle
+
+    context_parts: list[str] = []
+    sources_used: list[str] = []
+
+    # 1) 오늘의 AI 브리핑 (있으면)
+    try:
+        today = date_type.today()
+        briefing = db.query(DailyBriefing).filter(DailyBriefing.briefing_date == today).first()
+        if not briefing:
+            # 가장 최근 브리핑 사용 (최대 2일 이내)
+            from datetime import timedelta
+            briefing = (
+                db.query(DailyBriefing)
+                .filter(DailyBriefing.briefing_date >= today - timedelta(days=2))
+                .order_by(DailyBriefing.briefing_date.desc())
+                .first()
+            )
+        if briefing:
+            parts = [f"[AI 브리핑 — {briefing.briefing_date}]"]
+            if briefing.market_overview:
+                parts.append(f"시장 전망: {briefing.market_overview[:600]}")
+            if briefing.risk_assessment:
+                parts.append(f"리스크 평가: {briefing.risk_assessment[:300]}")
+            if briefing.strategy:
+                parts.append(f"전략: {briefing.strategy[:300]}")
+            context_parts.append("\n".join(parts))
+            sources_used.append("daily_briefing")
+    except Exception as e:
+        logger.warning(f"브리핑 컨텍스트 조회 실패: {e}")
+
+    # 2) 최근 뉴스 헤드라인 (12시간 이내, 최대 10건)
+    try:
+        from datetime import datetime as dt, timezone as tz, timedelta
+        cutoff = dt.now(tz.utc) - timedelta(hours=12)
+        recent_news = (
+            db.query(NewsArticle)
+            .filter(NewsArticle.published_at >= cutoff)
+            .order_by(NewsArticle.published_at.desc())
+            .limit(10)
+            .all()
+        )
+        if recent_news:
+            lines = [f"[최근 뉴스 헤드라인 — 최근 12시간]"]
+            for n in recent_news:
+                sentiment_label = {"positive": "긍정", "negative": "부정"}.get(
+                    getattr(n, "sentiment", ""), "중립"
+                )
+                pub = n.published_at.strftime("%H:%M") if n.published_at else ""
+                lines.append(f"• [{sentiment_label}] {n.title} ({pub})")
+            context_parts.append("\n".join(lines))
+            sources_used.append("recent_news")
+    except Exception as e:
+        logger.warning(f"최근 뉴스 컨텍스트 조회 실패: {e}")
+
+    full_context = "\n\n".join(context_parts) if context_parts else ""
+    return full_context, sources_used
+
+
 # ---------------------------------------------------------------------------
 # 프롬프트 구성
 # ---------------------------------------------------------------------------
@@ -299,7 +366,7 @@ def _build_prompt(
     parts = [system]
 
     if has_data:
-        stock_label = f" ({stock_name})" if stock_name else ""
+        stock_label = f" ({stock_name})" if stock_name else " (시장 전체)"
         parts.append(f"\n[분석 대상{stock_label} 컨텍스트]\n{context}")
 
     # 이전 대화 이력 (최근 4건만)
@@ -362,6 +429,9 @@ async def chat_endpoint(req: ChatRequest, db: Session = Depends(get_db)):
     sources_used: list[str] = []
     if stock_id and stock_name:
         context_text, sources_used = await _gather_context(stock_id, stock_name, db)
+    else:
+        # 종목 미특정 시장 전체 질문 → 브리핑·최근뉴스 주입
+        context_text, sources_used = await _gather_market_context(db)
 
     # 프롬프트 구성
     prompt = _build_prompt(req.message, context_text, stock_name, history)
