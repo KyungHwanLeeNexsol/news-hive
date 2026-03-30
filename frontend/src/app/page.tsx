@@ -7,6 +7,7 @@ import type { Sector, NewsArticle, StockListItem, DisclosureItem } from '@/lib/t
 import { formatSectorName } from '@/lib/format';
 import ChangeRate from '@/components/ChangeRate';
 import CommodityTicker from '@/components/CommodityTicker';
+import UpDownBar from '@/components/UpDownBar';
 import { useWatchlist } from '@/lib/watchlist';
 import { useMarketRefresh } from '@/lib/useMarketRefresh';
 
@@ -157,12 +158,10 @@ export default function Dashboard() {
           <table className="naver-table">
             <thead>
               <tr>
-                <th className="text-left" style={{ width: '30%' }}>업종명</th>
-                <th style={{ width: '14%' }}>전일대비</th>
-                <th style={{ width: '10%' }}>전체</th>
-                <th style={{ width: '10%' }}>상승</th>
-                <th style={{ width: '10%' }}>보합</th>
-                <th style={{ width: '10%' }}>하락</th>
+                <th className="text-left" style={{ width: '35%' }}>업종명</th>
+                <th style={{ width: '15%' }}>전일대비</th>
+                <th style={{ width: '8%' }}>전체</th>
+                <th style={{ width: '26%' }}>상승/보합/하락</th>
                 <th style={{ width: '16%' }}>뉴스</th>
               </tr>
             </thead>
@@ -173,15 +172,13 @@ export default function Dashboard() {
                     <td><div className="skeleton skeleton-text" style={{ width: `${50 + Math.random() * 30}%` }} /></td>
                     <td className="text-center"><div className="skeleton skeleton-badge mx-auto" /></td>
                     <td className="text-center"><div className="skeleton skeleton-text-sm mx-auto" style={{ width: '40%' }} /></td>
-                    <td className="text-center"><div className="skeleton skeleton-text-sm mx-auto" style={{ width: '40%' }} /></td>
-                    <td className="text-center"><div className="skeleton skeleton-text-sm mx-auto" style={{ width: '40%' }} /></td>
-                    <td className="text-center"><div className="skeleton skeleton-text-sm mx-auto" style={{ width: '40%' }} /></td>
+                    <td><div className="skeleton" style={{ height: '14px', borderRadius: '4px' }} /></td>
                     <td className="text-center"><div className="skeleton skeleton-text-sm mx-auto" style={{ width: '60%' }} /></td>
                   </tr>
                 ))
               ) : visibleSectors.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="text-center py-8 text-[#999]">
+                  <td colSpan={5} className="text-center py-8 text-[#999]">
                     등록된 업종이 없습니다.
                   </td>
                 </tr>
@@ -201,9 +198,13 @@ export default function Dashboard() {
                       <ChangeRate value={sector.change_rate} />
                     </td>
                     <td className="text-center text-[#333]">{sector.total_stocks ?? sector.stock_count ?? 0}</td>
-                    <td className="text-center text-rise">{sector.rising_stocks ?? '-'}</td>
-                    <td className="text-center text-[#333]">{sector.flat_stocks ?? '-'}</td>
-                    <td className="text-center text-fall">{sector.falling_stocks ?? '-'}</td>
+                    <td className="px-2">
+                      <UpDownBar
+                        rising={sector.rising_stocks ?? 0}
+                        flat={sector.flat_stocks ?? 0}
+                        falling={sector.falling_stocks ?? 0}
+                      />
+                    </td>
                     <td className="text-center">
                       <Link href={`/sectors/${sector.id}`} className="text-[#1261c4] hover:underline text-[12px]">
                         뉴스보기
