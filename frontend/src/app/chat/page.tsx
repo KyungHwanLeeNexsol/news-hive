@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { sendChatMessage } from '@/lib/api';
 import type { ChatResponse } from '@/lib/types';
+import { useAuth } from '@/components/AuthProvider';
 
 // 채팅 메시지 인터페이스
 interface ChatMessage {
@@ -34,12 +35,61 @@ const SUGGESTIONS = [
 ];
 
 export default function ChatPage() {
+  // @MX:NOTE: 로그인 상태에 따라 사용자별 스토리지 키를 분리하여 채팅 히스토리를 격리
+  const { user } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | undefined>(undefined);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // 로그인 사용자별 또는 게스트별 스토리지 키 (user 변경 시 재계산)
+  const storageKeyMessages = useMemo(
+    () => (user ? `chat_messages_${user.id}` : 'chat_messages_guest'),
+    [user],
+  );
+  const storageKeySession = useMemo(
+    () => (user ? `chat_session_id_${user.id}` : 'chat_session_id_guest'),
+    [user],
+  );
+
+  // user가 변경될 때(로그인/로그아웃) 현재 메시지를 초기화하고 새 키로 복원
+  useEffect(() => {
+    setMessages([]);
+    setSessionId(undefined);
+    try {
+      const savedMessages = localStorage.getItem(storageKeyMessages);
+      const savedSession = localStorage.getItem(storageKeySession);
+      if (savedMessages) {
+        const parsed = JSON.parse(savedMessages) as Array<Omit<ChatMessage, 'timestamp'> & { timestamp: string }>;
+        setMessages(parsed.map((m) => ({ ...m, timestamp: new Date(m.timestamp) })));
+      }
+      if (savedSession) setSessionId(savedSession);
+    } catch {
+      // 파싱 오류 무시
+    }
+  }, [storageKeyMessages, storageKeySession]);
+
+  // 메시지 변경 시 현재 사용자 키로 localStorage 저장
+  useEffect(() => {
+    if (messages.length > 0) {
+      localStorage.setItem(storageKeyMessages, JSON.stringify(messages));
+    }
+  }, [messages, storageKeyMessages]);
+
+  // sessionId 변경 시 현재 사용자 키로 localStorage 저장
+  useEffect(() => {
+    if (sessionId) localStorage.setItem(storageKeySession, sessionId);
+  }, [sessionId, storageKeySession]);
+
+  // 대화 초기화
+  const handleClear = useCallback(() => {
+    setMessages([]);
+    setSessionId(undefined);
+    localStorage.removeItem(storageKeyMessages);
+    localStorage.removeItem(storageKeySession);
+  }, [storageKeyMessages, storageKeySession]);
 
   // 새 메시지 추가 시 자동 스크롤
   const scrollToBottom = useCallback(() => {
@@ -66,7 +116,8 @@ export default function ChatPage() {
     setLoading(true);
 
     try {
-      const res: ChatResponse = await sendChatMessage(msg, sessionId);
+      const history = messages.map((m) => ({ role: m.role, content: m.content }));
+      const res: ChatResponse = await sendChatMessage(msg, sessionId, undefined, history);
       setSessionId(res.session_id);
 
       const aiMessage: ChatMessage = {
@@ -106,6 +157,17 @@ export default function ChatPage() {
 
   return (
     <div className="flex flex-col" style={{ height: 'calc(100vh - 48px)' }}>
+      {/* 상단 바 */}
+      {messages.length > 0 && (
+        <div className="flex justify-end px-4 py-2 border-b border-[#f0f0f0]">
+          <button
+            onClick={handleClear}
+            className="text-[12px] text-[#999] hover:text-[#e12343] transition-colors"
+          >
+            대화 초기화
+          </button>
+        </div>
+      )}
       {/* 채팅 영역 */}
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-[800px] mx-auto px-4 py-6">

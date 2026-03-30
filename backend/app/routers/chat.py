@@ -28,6 +28,7 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str | None = None
     stock_code: str | None = None
+    history: list[dict] | None = None  # 프론트엔드 localStorage 대화 이력
 
 
 class ChatResponse(BaseModel):
@@ -299,6 +300,14 @@ async def chat_endpoint(req: ChatRequest, db: Session = Depends(get_db)):
 
     # 세션 관리
     session_id, history = _get_or_create_session(req.session_id)
+
+    # 세션이 비어있고 프론트엔드에서 이전 대화 이력을 전달한 경우 복원
+    if not history and req.history:
+        valid_roles = {"user", "assistant"}
+        for msg in req.history[-_SESSION_MAX_MESSAGES:]:
+            if isinstance(msg, dict) and msg.get("role") in valid_roles and isinstance(msg.get("content"), str):
+                history.append({"role": msg["role"], "content": msg["content"][:1000]})
+        _sessions[session_id]["last_access"] = time.time()
 
     # 종목 감지
     stock_id, stock_name = _detect_stock(req.message, req.stock_code, db)

@@ -51,6 +51,24 @@ class Settings(BaseSettings):
     RATE_LIMIT_PER_MINUTE: int = 60  # 일반 API 분당 요청 제한
     RATE_LIMIT_EXPENSIVE_PER_MINUTE: int = 10  # 고비용 API 분당 요청 제한
 
+    # --- JWT 인증 ---
+    JWT_SECRET: str = "change-me-in-production"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
+    # --- SMTP 이메일 ---
+    SMTP_HOST: str = "smtp.gmail.com"
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""  # Gmail App Password
+    SMTP_FROM_NAME: str = "NewsHive"
+
+    # --- Web Push (VAPID) ---
+    VAPID_PRIVATE_KEY: str = ""
+    VAPID_PUBLIC_KEY: str = ""
+    VAPID_SUBJECT: str = "mailto:admin@newshive.app"
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 

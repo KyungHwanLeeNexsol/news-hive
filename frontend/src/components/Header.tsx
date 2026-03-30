@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useAuth } from '@/components/AuthProvider';
 
 const navItems = [
   { href: '/', label: '업종 현황' },
@@ -15,6 +16,7 @@ const navItems = [
 
 export default function Header() {
   const pathname = usePathname();
+  const { user, isLoggedIn, loading, logout } = useAuth();
 
   return (
     <header className="bg-white border-b border-gray-300">
@@ -28,7 +30,9 @@ export default function Header() {
             </svg>
             NewsHive
           </Link>
-          <nav className="flex h-full">
+
+          {/* 네비게이션 메뉴 — 가능한 공간 모두 차지 */}
+          <nav className="flex h-full flex-1">
             {navItems.map((item) => {
               const isActive = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href);
               return (
@@ -44,6 +48,33 @@ export default function Header() {
               );
             })}
           </nav>
+
+          {/* 사용자 인증 영역 — 로딩 중에는 아무것도 렌더링하지 않아 레이아웃 흔들림 방지 */}
+          {!loading && (
+            <div className="flex items-center gap-2 ml-auto shrink-0">
+              {isLoggedIn ? (
+                <>
+                  <span className="text-[13px] text-gray-600 font-medium hidden sm:block">
+                    {user?.name}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => logout()}
+                    className="px-3 py-1.5 text-[13px] font-semibold text-gray-600 hover:text-gray-900 border border-gray-300 rounded-md transition hover:bg-gray-50"
+                  >
+                    로그아웃
+                  </button>
+                </>
+              ) : (
+                <Link
+                  href="/auth/login"
+                  className="px-3 py-1.5 text-[13px] font-semibold text-white bg-[#1261c4] hover:bg-[#0e52a8] rounded-md transition"
+                >
+                  로그인
+                </Link>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </header>
