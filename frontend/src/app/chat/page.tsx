@@ -462,11 +462,10 @@ export default function ChatPage() {
 
       {/* 오른쪽 채팅 영역 */}
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-        {/* 상단 바 */}
-        <div className="flex items-center gap-3 px-4 py-2 border-b border-[#f0f0f0] bg-white">
-          {/* 모바일 햄버거 */}
+        {/* 모바일 전용 상단 바 (햄버거만 표시, 데스크탑은 숨김) */}
+        <div className="flex md:hidden items-center px-4 py-2 border-b border-[#f0f0f0] bg-white">
           <button
-            className="md:hidden flex-shrink-0 w-8 h-8 flex items-center justify-center rounded hover:bg-[#f0f0f0] text-[#666]"
+            className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded hover:bg-[#f0f0f0] text-[#666]"
             onClick={() => setSidebarOpen(true)}
           >
             <svg
@@ -484,9 +483,6 @@ export default function ChatPage() {
               <line x1="3" y1="18" x2="21" y2="18" />
             </svg>
           </button>
-          <span className="text-[13px] font-medium text-[#555] truncate">
-            {activeSession?.title ?? 'AI 투자 분석'}
-          </span>
         </div>
 
         {/* 메시지 영역 */}
