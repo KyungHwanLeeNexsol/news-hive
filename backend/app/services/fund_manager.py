@@ -1321,7 +1321,7 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
 ## 기타 규칙
 6. stock_picks는 반드시 후보 종목 데이터의 수치를 직접 인용하여 분석. 데이터 없이 추측 금지.
 7. target_price(목표가)는 현재가 대비 +5%~+20%, stop_loss(손절가)는 현재가 대비 -3%~-10%.
-8. stock_picks는 3-5개 종목, "적극매수"는 최대 1개만 가능. 매수 매력이 없으면 전부 "관망"도 가능.
+8. stock_picks는 반드시 3-5개 종목 포함 (빈 배열 [] 절대 금지). "적극매수"는 최대 1개. 매수 매력 없으면 전부 "관망"/"회피"로. 시장이 불안해도 후보 종목은 항상 분석해야 함.
 9. sector_highlights는 3-5개 섹터 배열.
 10. 한자(漢字) 절대 사용 금지. 순수 한글만 사용하세요.
 """
@@ -1375,14 +1375,14 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
         today, cot_result["complete"],
     )
 
-    # 브리핑 추천 종목 → 백그라운드에서 투자 시그널 생성
+    # 브리핑 추천 종목 → 투자 시그널 생성
+    # NOTE: asyncio.run() 컨텍스트(스케줄러)에서 create_task()는 이벤트 루프가 닫히면 실행되지 않음
+    # 따라서 await으로 직접 호출하여 시그널이 실제로 생성되도록 수정
     stock_picks_data = parsed.get("stock_picks")
     # REQ-023: CoT 불완전 분석 정보를 시그널 생성에 전달
     cot_validation = parsed.get("_cot_validation")
     if stock_picks_data:
-        asyncio.get_event_loop().create_task(
-            _generate_signals_background(stock_picks_data, cot_validation)
-        )
+        await _generate_signals_from_picks(db, stock_picks_data, cot_validation)
 
     return briefing
 
