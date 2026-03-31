@@ -5,6 +5,7 @@ Stock fundamentals: polling.finance.naver.com realtime JSON API.
 Price history: sise_day.naver daily OHLCV scraping.
 """
 
+import asyncio
 import json
 import logging
 import re
