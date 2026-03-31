@@ -1106,3 +1106,60 @@ async def fetch_investor_trading(stock_code: str, days: int = 5) -> list[Investo
     except Exception as e:
         logger.debug(f"Investor trading fetch failed for {stock_code}: {e}")
         return []
+
+
+# KOSPI/KOSDAQ 지수 일별 시세 URL
+INDEX_DAY_URL = "https://finance.naver.com/sise/sise_index_day.naver?code={code}&page={page}"
+
+
+async def fetch_index_price_history(index_code: str = "KOSPI", pages: int = 2) -> list[dict]:
+    """네이버 금융에서 시장 지수(KOSPI/KOSDAQ)의 일별 시세를 가져온다.
+
+    Args:
+        index_code: 지수 코드 ("KOSPI" 또는 "KOSDAQ")
+        pages: 조회할 페이지 수 (1페이지 = 약 10거래일)
+
+    Returns:
+        [{"date": "YYYY.MM.DD", "close": float}, ...] 최신순 정렬
+    """
+    results: list[dict] = []
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            urls = [INDEX_DAY_URL.format(code=index_code, page=pg) for pg in range(1, pages + 1)]
+            responses = await asyncio.gather(
+                *[client.get(url, headers=HEADERS) for url in urls],
+                return_exceptions=True,
+            )
+
+        for resp in responses:
+            if isinstance(resp, Exception):
+                continue
+            try:
+                resp.raise_for_status()
+            except Exception:
+                continue
+
+            content = resp.content.decode("euc-kr", errors="replace")
+            soup = BeautifulSoup(content, "html.parser")
+            table = soup.select_one("table.type_1")
+            if not table:
+                continue
+
+            for row in table.select("tr"):
+                cols = row.select("td")
+                if len(cols) < 2:
+                    continue
+                date_text = cols[0].get_text(strip=True)
+                close_text = cols[1].get_text(strip=True).replace(",", "")
+                if not date_text or "." not in date_text:
+                    continue
+                try:
+                    results.append({"date": date_text, "close": float(close_text)})
+                except ValueError:
+                    continue
+
+    except Exception as e:
+        logger.debug(f"Index price history fetch failed for {index_code}: {e}")
+
+    return results

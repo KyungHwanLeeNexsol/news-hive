@@ -324,9 +324,20 @@ async def backtest_signals(
     else:
         sharpe_ratio = 0.0
 
-    # KOSPI 벤치마크 수익률 (간이: 첫 시그널 ~ 마지막 시그널 기간의 대략적 추정)
-    # 실제 KOSPI 데이터가 없으므로 0으로 표시
+    # KOSPI 벤치마크 수익률: 첫 시그널~마지막 시그널 기간의 KOSPI 등락률
     kospi_return = 0.0
+    try:
+        from app.services.naver_finance import fetch_index_price_history
+        needed_pages = max(1, days // 10 + 1)
+        kospi_history = await fetch_index_price_history("KOSPI", pages=needed_pages)
+        if len(kospi_history) >= 2:
+            # 최신순 정렬 → 가장 오래된 값이 last, 최신이 first
+            latest_close = kospi_history[0]["close"]
+            oldest_close = kospi_history[-1]["close"]
+            if oldest_close > 0:
+                kospi_return = round((latest_close - oldest_close) / oldest_close * 100, 2)
+    except Exception as _e:
+        logger.debug("KOSPI 벤치마크 조회 실패: %s", _e)
 
     # 일별 타임라인
     daily_data: dict[str, dict] = {}
