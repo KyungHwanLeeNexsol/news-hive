@@ -1051,7 +1051,16 @@ async def fetch_investor_trading(stock_code: str, days: int = 5) -> list[Investo
         soup = BeautifulSoup(resp.text, "html.parser")
 
         # 매매동향 테이블 파싱
-        table = soup.select_one("table.type2")
+        # frgn.naver 페이지에는 table.type2가 2개 존재:
+        # - 첫 번째: 증권사별 순위 테이블 (날짜 없음)
+        # - 두 번째: 날짜별 투자자 매매동향 테이블 (날짜 있음) ← 이것을 사용
+        tables = soup.select("table.type2")
+        table = None
+        for t in tables:
+            first_row_tds = t.select("tr td")
+            if first_row_tds and "." in first_row_tds[0].get_text(strip=True):
+                table = t
+                break
         if not table:
             return []
 
