@@ -665,41 +665,51 @@ async def fetch_stock_price_history(stock_code: str, pages: int = 5) -> list[Pri
         except Exception:
             pass
 
+    def _parse_page_html(content_bytes: bytes) -> list[PriceRecord]:
+        """HTML 바이트에서 가격 레코드 파싱 (동기)."""
+        content = content_bytes.decode("euc-kr", errors="replace")
+        soup = BeautifulSoup(content, "html.parser")
+        records: list[PriceRecord] = []
+        for row in soup.select("table.type2 tr"):
+            cols = row.select("td")
+            if len(cols) < 7:
+                continue
+            date_text = cols[0].get_text(strip=True)
+            if not date_text or "." not in date_text:
+                continue
+            close = _parse_int_safe(cols[1].get_text())
+            open_price = _parse_int_safe(cols[3].get_text())
+            high = _parse_int_safe(cols[4].get_text())
+            low = _parse_int_safe(cols[5].get_text())
+            volume = _parse_int_safe(cols[6].get_text())
+            if close > 0:
+                records.append(PriceRecord(
+                    date=date_text,
+                    close=close,
+                    open=open_price,
+                    high=high,
+                    low=low,
+                    volume=volume,
+                ))
+        return records
+
     results: list[PriceRecord] = []
     try:
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-            for pg in range(1, pages + 1):
-                url = SISE_DAY_URL.format(code=stock_code, page=pg)
-                resp = await client.get(url, headers=HEADERS)
-                resp.raise_for_status()
-
-                content = resp.content.decode("euc-kr", errors="replace")
-                soup = BeautifulSoup(content, "html.parser")
-
-                for row in soup.select("table.type2 tr"):
-                    cols = row.select("td")
-                    if len(cols) < 7:
-                        continue
-                    date_text = cols[0].get_text(strip=True)
-                    if not date_text or "." not in date_text:
-                        continue
-
-                    close = _parse_int_safe(cols[1].get_text())
-                    # cols[2] = 전일비 (skip, redundant)
-                    open_price = _parse_int_safe(cols[3].get_text())
-                    high = _parse_int_safe(cols[4].get_text())
-                    low = _parse_int_safe(cols[5].get_text())
-                    volume = _parse_int_safe(cols[6].get_text())
-
-                    if close > 0:
-                        results.append(PriceRecord(
-                            date=date_text,
-                            close=close,
-                            open=open_price,
-                            high=high,
-                            low=low,
-                            volume=volume,
-                        ))
+            # 모든 페이지를 병렬로 동시 요청 (순차 → 병렬로 성능 개선)
+            urls = [SISE_DAY_URL.format(code=stock_code, page=pg) for pg in range(1, pages + 1)]
+            responses = await asyncio.gather(
+                *[client.get(url, headers=HEADERS) for url in urls],
+                return_exceptions=True,
+            )
+            for resp in responses:
+                if isinstance(resp, Exception):
+                    continue
+                try:
+                    resp.raise_for_status()
+                    results.extend(_parse_page_html(resp.content))
+                except Exception:
+                    continue
 
         if results:
             _price_cache.data[stock_code] = results
