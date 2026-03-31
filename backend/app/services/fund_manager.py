@@ -2092,7 +2092,22 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
         )
     parsed = _parse_json_response(response)
     if not parsed:
-        raise RuntimeError(f"AI 응답 JSON 파싱 실패. 원본 응답(앞 500자): {response[:500]}")
+        # AI가 Markdown 형식으로 응답한 경우 JSON 변환 재시도 (1회)
+        logger.warning("[브리핑] AI가 JSON 대신 Markdown으로 응답. JSON 변환 재시도...")
+        retry_prompt = (
+            "다음은 당신이 방금 작성한 브리핑입니다:\n\n"
+            f"{response}\n\n"
+            "위 내용을 아래 JSON 스키마로 변환해주세요. "
+            "JSON 외 다른 텍스트 없이 JSON 객체만 출력하세요.\n"
+            + prompt.split("반드시 아래 JSON 형식으로만 응답하세요.")[1]
+            if "반드시 아래 JSON 형식으로만 응답하세요." in prompt
+            else prompt
+        )
+        retry_response, _ = await _ask_ai_with_model(retry_prompt)
+        if retry_response:
+            parsed = _parse_json_response(retry_response)
+        if not parsed:
+            raise RuntimeError(f"AI 응답 JSON 파싱 실패. 원본 응답(앞 500자): {response[:500]}")
 
     # REQ-023: CoT 5단계 완성도 검증
     # cot_reasoning 필드 또는 원본 응답에서 STEP 1~5 존재 여부 확인
