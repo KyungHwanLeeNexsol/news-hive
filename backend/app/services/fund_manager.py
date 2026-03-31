@@ -845,14 +845,15 @@ async def _gather_leading_candidates(
     # STEP 2: 시장 데이터 선 수집 (Pre-fetch) - 탐지기 병렬 실행 전 모든 종목 데이터 일괄 수집
     # 3개 탐지기가 동시에 같은 종목을 중복 요청하는 경쟁 조건 방지 (150 → 450 API 호출 문제 해결)
     market_data_cache: dict[str, dict] = {}
-    semaphore = asyncio.Semaphore(5)
+    semaphore = asyncio.Semaphore(10)  # pre-fetch: pages=3이므로 동시성 10으로 향상
 
     async def _prefetch_one(code: str) -> None:
         async with semaphore:
             if code in market_data_cache:
                 return
             try:
-                market_data_cache[code] = await _gather_market_data(code)
+                # pre-fetch: BB압축(20일) + 조용한 축적(20일)에는 3페이지(30일)로 충분
+                market_data_cache[code] = await _gather_market_data(code, pages=3)
             except Exception as _pfe:
                 logger.debug("[선행탐지] pre-fetch 실패 %s: %s", code, _pfe)
                 market_data_cache[code] = {}
@@ -1150,7 +1151,7 @@ def _gather_macro_alerts(db: Session) -> list[dict]:
     ]
 
 
-async def _gather_market_data(stock_code: str) -> dict:
+async def _gather_market_data(stock_code: str, *, pages: int = 10) -> dict:
     """Gather market data from KIS API and Naver Finance + technical indicators."""
     from app.services.kis_api import fetch_kis_stock_price
     from app.services.naver_finance import fetch_stock_fundamentals, fetch_stock_price_history, fetch_investor_trading
@@ -1159,7 +1160,7 @@ async def _gather_market_data(stock_code: str) -> dict:
     kis_data, fundamentals, price_history, investor_data = await asyncio.gather(
         fetch_kis_stock_price(stock_code),
         fetch_stock_fundamentals(stock_code),
-        fetch_stock_price_history(stock_code, pages=10),  # 10페이지 = ~100일 (기술적 지표용)
+        fetch_stock_price_history(stock_code, pages=pages),
         fetch_investor_trading(stock_code, days=20),
         return_exceptions=True,
     )
