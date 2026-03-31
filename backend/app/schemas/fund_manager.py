@@ -19,6 +19,8 @@ class FundSignalResponse(BaseModel):
     market_summary: str | None = None
     created_at: datetime
     ai_model: str | None = None
+    # SPEC-AI-004: 공시 기반 시그널 유형
+    signal_type: str | None = None
     # 적중률 추적 필드
     price_at_signal: int | None = None
     price_after_1d: int | None = None

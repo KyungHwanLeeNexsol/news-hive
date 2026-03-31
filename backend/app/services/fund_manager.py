@@ -810,6 +810,80 @@ async def _detect_sector_laggards(
     return results
 
 
+async def _gather_disclosure_candidates(db: Session) -> list[dict]:
+    """공시 기반 미반영 호재 후보 수집 (SPEC-AI-004, REQ-DISC-007).
+
+    unreflected_gap >= 15이고 최근 24시간 내 공시에서 FundSignal(signal_type="disclosure_impact")가
+    생성된 종목을 후보로 반환. AI 브리핑에 공시 맥락을 주입하기 위한 데이터.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+
+    try:
+        # 최근 24시간 내 미반영 갭 공시
+        disclosures = (
+            db.query(Disclosure)
+            .join(Stock, Disclosure.stock_id == Stock.id)
+            .filter(
+                Disclosure.impact_score >= 20,
+                Disclosure.unreflected_gap >= 15,
+                Disclosure.disclosed_at >= cutoff,
+            )
+            .order_by(Disclosure.unreflected_gap.desc())
+            .limit(5)
+            .all()
+        )
+    except Exception as e:
+        logger.warning("[공시후보] DB 쿼리 실패: %s", e)
+        return []
+
+    if not disclosures:
+        return []
+
+    candidates = []
+    for disc in disclosures:
+        if not disc.stock_id:
+            continue
+
+        stock = db.query(Stock).filter(Stock.id == disc.stock_id).first()
+        if not stock:
+            continue
+
+        # 시세 데이터 조회
+        market_data: dict = {}
+        if stock.stock_code:
+            try:
+                market_data = await _gather_market_data(stock.stock_code)
+            except Exception:
+                pass
+
+        candidates.append({
+            "name": stock.name,
+            "code": stock.stock_code or "",
+            "sector": stock.sector.name if stock.sector else "미분류",
+            "news_count": 0,
+            "disclosure_type": disc.report_type,
+            "impact_score": disc.impact_score,
+            "unreflected_gap": disc.unreflected_gap,
+            "reflected_pct": disc.reflected_pct,
+            "disclosure_summary": disc.report_name,
+            "leading_signals": [
+                {
+                    "type": "disclosure_impact",
+                    "strength": "strong" if (disc.unreflected_gap or 0) >= 25 else "moderate",
+                    "detail": (
+                        f"공시: {disc.report_name[:50]}, "
+                        f"충격 {disc.impact_score:.0f}점, "
+                        f"미반영 갭 {disc.unreflected_gap:.1f}점"
+                    ),
+                }
+            ],
+            **{k: v for k, v in market_data.items() if v is not None},
+        })
+
+    logger.info("[공시후보] %d개 후보 수집", len(candidates))
+    return candidates
+
+
 async def _gather_leading_candidates(
     db: Session,
     recent_news: list | None = None,
@@ -1774,10 +1848,33 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
         market_sentiment.get('trend', 'stable'), '안정적 →'
     )
 
-    # SPEC-AI-003: 선행 매수 신호 후보 수집 (뉴스 후보보다 먼저 실행)
+    # SPEC-AI-003 + SPEC-AI-004: 선행 매수 신호 후보 + 공시 기반 후보 병렬 수집
     leading_data: list[dict] = []
     try:
-        leading_data = await _gather_leading_candidates(db, recent_news)
+        leading_candidates, disclosure_candidates = await asyncio.gather(
+            _gather_leading_candidates(db, recent_news),
+            _gather_disclosure_candidates(db),
+            return_exceptions=True,
+        )
+        if isinstance(leading_candidates, Exception):
+            logger.warning("선행 매수 신호 탐지 실패: %s", leading_candidates)
+            leading_candidates = []
+        if isinstance(disclosure_candidates, Exception):
+            logger.warning("공시 후보 탐지 실패: %s", disclosure_candidates)
+            disclosure_candidates = []
+
+        # 공시 후보를 선행 후보 앞에 배치 (미반영 갭 우선순위)
+        seen_merge: set[str] = set()
+        for c in disclosure_candidates:
+            code = c.get("code") or c.get("stock_code")
+            if code and code not in seen_merge:
+                seen_merge.add(code)
+                leading_data.append(c)
+        for c in leading_candidates:
+            code = c.get("code") or c.get("stock_code")
+            if code and code not in seen_merge:
+                seen_merge.add(code)
+                leading_data.append(c)
     except Exception as _le:
         logger.warning("선행 매수 신호 탐지 실패 (브리핑 계속 진행): %s", _le)
 

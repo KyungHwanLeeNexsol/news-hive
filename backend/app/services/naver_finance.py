@@ -991,6 +991,86 @@ async def fetch_naver_stock_list(
         return cached, 0
 
 
+async def fetch_current_price(stock_code: str) -> int | None:
+    """특정 종목의 현재가 반환 (SPEC-AI-004).
+
+    KOSPI/KOSDAQ 통합 검색으로 현재가를 반환한다.
+    """
+    for market in ("KOSPI", "KOSDAQ"):
+        try:
+            items, _ = await fetch_naver_stock_list(market=market, page=1, page_size=50)
+            for item in items:
+                if item.stock_code == stock_code:
+                    return item.current_price
+        except Exception:
+            continue
+
+    # 모바일 API fallback: 개별 종목 조회
+    mobile_url = (
+        f"https://m.stock.naver.com/api/stock/{stock_code}/integration"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            resp = await client.get(mobile_url, headers=HEADERS)
+            resp.raise_for_status()
+        data = resp.json()
+        price_str = (
+            data.get("dealTrendInfos", [{}])[0].get("closePrice", "")
+            or data.get("stockInfo", {}).get("closePrice", "")
+        )
+        if price_str:
+            return _parse_comma_int(str(price_str))
+    except Exception as e:
+        logger.debug("fetch_current_price fallback 실패 (%s): %s", stock_code, e)
+
+    return None
+
+
+async def fetch_current_price_with_change(stock_code: str) -> dict | None:
+    """특정 종목의 현재가 + 등락률 반환 (SPEC-AI-004).
+
+    Returns:
+        {"current_price": int, "change_rate": float} 또는 None
+    """
+    for market in ("KOSPI", "KOSDAQ"):
+        try:
+            items, _ = await fetch_naver_stock_list(market=market, page=1, page_size=50)
+            for item in items:
+                if item.stock_code == stock_code:
+                    return {
+                        "current_price": item.current_price,
+                        "change_rate": item.change_rate,
+                    }
+        except Exception:
+            continue
+
+    # 모바일 API fallback
+    mobile_url = (
+        f"https://m.stock.naver.com/api/stock/{stock_code}/integration"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            resp = await client.get(mobile_url, headers=HEADERS)
+            resp.raise_for_status()
+        data = resp.json()
+        stock_info = data.get("stockInfo", {})
+        price_str = stock_info.get("closePrice", "")
+        rate_str = stock_info.get("fluctuationsRatio", "0")
+        if price_str:
+            try:
+                rate = float(str(rate_str).replace(",", ""))
+            except (ValueError, TypeError):
+                rate = 0.0
+            return {
+                "current_price": _parse_comma_int(str(price_str)),
+                "change_rate": rate,
+            }
+    except Exception as e:
+        logger.debug("fetch_current_price_with_change fallback 실패 (%s): %s", stock_code, e)
+
+    return None
+
+
 async def fetch_sector_stock_codes(naver_code: str) -> list[str]:
     """Fetch stock codes belonging to a Naver sector (for stock-to-sector mapping).
 

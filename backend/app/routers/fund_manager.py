@@ -394,3 +394,83 @@ async def backtest_signals(
         "timeline": timeline,
         "by_stock": by_stock,
     }
+
+
+# ---- 공시 기반 시그널 (SPEC-AI-004) ----
+
+@router.get("/disclosure-signals", response_model=list[FundSignalResponse])
+async def get_disclosure_signals(
+    limit: int = Query(20, ge=1, le=50),
+    signal_type: str | None = Query(
+        None,
+        description="disclosure_impact / sector_ripple / gap_pullback_candidate",
+    ),
+    db: Session = Depends(get_db),
+):
+    """공시 기반 활성 시그널 목록 조회 (REQ-DISC-017)."""
+    q = (
+        db.query(FundSignal)
+        .options(selectinload(FundSignal.stock).selectinload(Stock.sector))
+        .filter(
+            FundSignal.signal_type.in_(
+                ["disclosure_impact", "sector_ripple", "gap_pullback_candidate"]
+            )
+        )
+    )
+    if signal_type:
+        q = q.filter(FundSignal.signal_type == signal_type)
+
+    signals = q.order_by(FundSignal.created_at.desc()).limit(limit).all()
+    return [_enrich_signal(s) for s in signals]
+
+
+@router.get("/backtest-by-type", response_model=dict)
+async def backtest_by_signal_type(
+    days: int = Query(30, ge=7, le=90),
+    db: Session = Depends(get_db),
+):
+    """시그널 유형별 백테스트 통계 (REQ-DISC-016, REQ-DISC-017)."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+    signal_types: list[str | None] = [
+        None,
+        "disclosure_impact",
+        "sector_ripple",
+        "gap_pullback_candidate",
+    ]
+    result: dict = {}
+
+    for stype in signal_types:
+        q = db.query(FundSignal).filter(
+            FundSignal.created_at >= cutoff,
+            FundSignal.is_correct.isnot(None),
+        )
+        if stype is None:
+            q = q.filter(FundSignal.signal_type.is_(None))
+            key = "ai_signal"
+        else:
+            q = q.filter(FundSignal.signal_type == stype)
+            key = stype
+
+        signals = q.all()
+        total = len(signals)
+        if total == 0:
+            result[key] = {
+                "total_signals": 0,
+                "win_rate": 0.0,
+                "avg_return_pct": 0.0,
+                "winning_signals": 0,
+            }
+            continue
+
+        correct = sum(1 for s in signals if s.is_correct is True)
+        returns = [s.return_pct for s in signals if s.return_pct is not None]
+
+        result[key] = {
+            "total_signals": total,
+            "win_rate": round(correct / total, 4),
+            "avg_return_pct": round(sum(returns) / len(returns), 2) if returns else 0.0,
+            "winning_signals": correct,
+        }
+
+    return result
