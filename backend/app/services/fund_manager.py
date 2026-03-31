@@ -364,13 +364,11 @@ async def _scan_market_stocks(db: Session) -> list[dict]:
 
     all_items = []
 
-    # KOSPI 1-3페이지 + KOSDAQ 1-2페이지 (총 약 250종목)
+    # KOSPI 1-2페이지 + KOSDAQ 1페이지 (총 약 150종목, 타임아웃 방지)
     fetch_tasks = [
         fetch_naver_stock_list("KOSPI", 1),
         fetch_naver_stock_list("KOSPI", 2),
-        fetch_naver_stock_list("KOSPI", 3),
         fetch_naver_stock_list("KOSDAQ", 1),
-        fetch_naver_stock_list("KOSDAQ", 2),
     ]
 
     results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
@@ -849,7 +847,7 @@ async def _gather_leading_candidates(
     market_data_cache: dict[str, dict] = {}
     semaphore = asyncio.Semaphore(5)
 
-    # STEP 3: 4개 탐지기 병렬 실행 (45초 타임아웃)
+    # STEP 3: 4개 탐지기 병렬 실행 (90초 타임아웃)
     try:
         detection_results = await asyncio.wait_for(
             asyncio.gather(
@@ -859,10 +857,10 @@ async def _gather_leading_candidates(
                 _detect_sector_laggards(scanned_stocks, db, market_data_cache, semaphore),
                 return_exceptions=True,
             ),
-            timeout=45.0,
+            timeout=90.0,
         )
     except asyncio.TimeoutError:
-        logger.warning("[선행탐지] 탐지 타임아웃 (45초 초과)")
+        logger.warning("[선행탐지] 탐지 타임아웃 (90초 초과)")
         detection_results = [[], [], [], []]
 
     # STEP 4: 실패한 탐지기는 빈 리스트로 처리 (REQ-AI-045)
