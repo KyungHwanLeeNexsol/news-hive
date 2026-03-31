@@ -842,12 +842,29 @@ async def _gather_leading_candidates(
     if not scanned_stocks:
         logger.info("[선행탐지] 스캔된 종목 없음, 탐지 계속 진행 (news_divergence는 자체 DB 쿼리 사용)")
 
-    # STEP 2: 시장 데이터 공유 캐시 + 공유 세마포어 초기화
-    # 세마포어를 한 번만 생성하여 모든 탐지기가 공유 → 총 5개 동시 API 호출 보장
+    # STEP 2: 시장 데이터 선 수집 (Pre-fetch) - 탐지기 병렬 실행 전 모든 종목 데이터 일괄 수집
+    # 3개 탐지기가 동시에 같은 종목을 중복 요청하는 경쟁 조건 방지 (150 → 450 API 호출 문제 해결)
     market_data_cache: dict[str, dict] = {}
     semaphore = asyncio.Semaphore(5)
 
-    # STEP 3: 4개 탐지기 병렬 실행 (90초 타임아웃)
+    async def _prefetch_one(code: str) -> None:
+        async with semaphore:
+            if code in market_data_cache:
+                return
+            try:
+                market_data_cache[code] = await _gather_market_data(code)
+            except Exception as _pfe:
+                logger.debug("[선행탐지] pre-fetch 실패 %s: %s", code, _pfe)
+                market_data_cache[code] = {}
+
+    if scanned_stocks:
+        await asyncio.gather(
+            *[_prefetch_one(s["stock_code"]) for s in scanned_stocks],
+            return_exceptions=True,
+        )
+        logger.info("[선행탐지] pre-fetch 완료: %d종목", len(market_data_cache))
+
+    # STEP 3: 4개 탐지기 병렬 실행 (캐시 조회만 하므로 빠름, 60초 타임아웃)
     try:
         detection_results = await asyncio.wait_for(
             asyncio.gather(
@@ -857,10 +874,10 @@ async def _gather_leading_candidates(
                 _detect_sector_laggards(scanned_stocks, db, market_data_cache, semaphore),
                 return_exceptions=True,
             ),
-            timeout=90.0,
+            timeout=60.0,
         )
     except asyncio.TimeoutError:
-        logger.warning("[선행탐지] 탐지 타임아웃 (90초 초과)")
+        logger.warning("[선행탐지] 탐지 타임아웃 (60초 초과)")
         detection_results = [[], [], [], []]
 
     # STEP 4: 실패한 탐지기는 빈 리스트로 처리 (REQ-AI-045)
