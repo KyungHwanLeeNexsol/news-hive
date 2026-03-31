@@ -36,23 +36,29 @@ def _parse_json_response(text: str) -> dict | None:
     """Extract JSON from a Gemini response that may include markdown code blocks."""
     if not text:
         return None
-    # Strip markdown code block
     cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
-        cleaned = re.sub(r"\s*```$", "", cleaned)
+    # 마크다운 코드블록에서 JSON 추출 (닫는 ``` 뒤에 추가 텍스트가 있어도 처리)
+    code_block = re.search(r"```(?:json)?\s*\n?([\s\S]*?)\n?\s*```", cleaned)
+    if code_block:
+        candidate = code_block.group(1).strip()
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+    # 코드블록 없으면 직접 파싱 시도
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
-        # Try to find JSON object in the text
-        match = re.search(r"\{[\s\S]*\}", cleaned)
-        if match:
-            try:
-                return json.loads(match.group())
-            except json.JSONDecodeError:
-                pass
-        logger.warning(f"Failed to parse JSON from Gemini response: {cleaned[:200]}")
-        return None
+        pass
+    # JSON 오브젝트만 추출 시도
+    match = re.search(r"\{[\s\S]*\}", cleaned)
+    if match:
+        try:
+            return json.loads(match.group())
+        except json.JSONDecodeError:
+            pass
+    logger.warning(f"Failed to parse JSON from Gemini response: {cleaned[:200]}")
+    return None
 
 
 # ---------------------------------------------------------------------------
