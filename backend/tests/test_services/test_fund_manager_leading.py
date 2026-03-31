@@ -153,7 +153,7 @@ class TestDetectQuietAccumulation:
             }
         }
 
-        result = await _detect_quiet_accumulation(scanned, cache)
+        result = await _detect_quiet_accumulation(scanned, cache, asyncio.Semaphore(5))
 
         assert len(result) == 1
         assert result[0]["stock_code"] == "111111"
@@ -174,7 +174,7 @@ class TestDetectQuietAccumulation:
             }
         }
 
-        result = await _detect_quiet_accumulation(scanned, cache)
+        result = await _detect_quiet_accumulation(scanned, cache, asyncio.Semaphore(5))
 
         assert len(result) == 0, "기관 순매도 시 탐지하지 않는다"
 
@@ -193,7 +193,7 @@ class TestDetectQuietAccumulation:
             }
         }
 
-        result = await _detect_quiet_accumulation(scanned, cache)
+        result = await _detect_quiet_accumulation(scanned, cache, asyncio.Semaphore(5))
 
         assert len(result) == 0, "change_rate > 2.0 종목은 제외"
 
@@ -212,7 +212,7 @@ class TestDetectQuietAccumulation:
             }
         }
 
-        result = await _detect_quiet_accumulation(scanned, cache)
+        result = await _detect_quiet_accumulation(scanned, cache, asyncio.Semaphore(5))
 
         assert len(result) == 1
         signal = result[0]["leading_signals"][0]
@@ -233,7 +233,7 @@ class TestDetectQuietAccumulation:
             }
         }
 
-        result = await _detect_quiet_accumulation(scanned, cache)
+        result = await _detect_quiet_accumulation(scanned, cache, asyncio.Semaphore(5))
 
         assert len(result) == 1
         signal = result[0]["leading_signals"][0]
@@ -367,7 +367,7 @@ class TestDetectBBCompression:
                     "avg_volume_20d": 100000,
                 },
             ):
-                result = await _detect_bb_compression(scanned, cache)
+                result = await _detect_bb_compression(scanned, cache, asyncio.Semaphore(5))
 
         # 현재 bb_width가 20일 평균의 50% 미만이면 탐지
         # (구체적 검증은 구현에 따라 달라지므로 타입 검증)
@@ -396,7 +396,7 @@ class TestDetectBBCompression:
             new_callable=AsyncMock,
             return_value=price_history,
         ):
-            result = await _detect_bb_compression(scanned, cache)
+            result = await _detect_bb_compression(scanned, cache, asyncio.Semaphore(5))
 
         assert len(result) == 0, "sma_20_slope < 0 → 하향 추세, 제외"
 
@@ -419,7 +419,7 @@ class TestDetectBBCompression:
                 return_value={"volume_ratio": 0.5, "sma_20_slope": 0.1},
             ):
                 # 예외가 발생하지 않아야 한다
-                result = await _detect_bb_compression(scanned, cache)
+                result = await _detect_bb_compression(scanned, cache, asyncio.Semaphore(5))
 
         assert isinstance(result, list)
 
@@ -455,7 +455,7 @@ class TestDetectSectorLaggards:
             "app.services.sector_momentum.detect_momentum_sectors",
             return_value=momentum_sectors,
         ):
-            result = await _detect_sector_laggards(scanned, db, cache)
+            result = await _detect_sector_laggards(scanned, db, cache, asyncio.Semaphore(5))
 
         assert len(result) == 1
         signal = result[0]["leading_signals"][0]
@@ -484,7 +484,7 @@ class TestDetectSectorLaggards:
             "app.services.sector_momentum.detect_momentum_sectors",
             return_value=momentum_sectors,
         ):
-            result = await _detect_sector_laggards(scanned, db, cache)
+            result = await _detect_sector_laggards(scanned, db, cache, asyncio.Semaphore(5))
 
         assert len(result) == 1
         signal = result[0]["leading_signals"][0]

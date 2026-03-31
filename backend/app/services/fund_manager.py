@@ -401,6 +401,7 @@ async def _scan_market_stocks(db: Session) -> list[dict]:
 async def _detect_quiet_accumulation(
     scanned_stocks: list[dict],
     market_data_cache: dict[str, dict],
+    semaphore: asyncio.Semaphore,
 ) -> list[dict]:
     """조용한 수급 축적 탐지 (REQ-AI-032, REQ-AI-033).
 
@@ -413,9 +414,6 @@ async def _detect_quiet_accumulation(
     Returns:
         탐지된 후보 목록 (leading_signals 포함)
     """
-    import time as _time
-
-    semaphore = asyncio.Semaphore(5)
     results = []
 
     async def _process(stock: dict) -> dict | None:
@@ -573,6 +571,7 @@ async def _detect_news_price_divergence(
 async def _detect_bb_compression(
     scanned_stocks: list[dict],
     market_data_cache: dict[str, dict],
+    semaphore: asyncio.Semaphore,
 ) -> list[dict]:
     """볼린저밴드 수축 탐지 (REQ-AI-036, REQ-AI-037).
 
@@ -589,7 +588,6 @@ async def _detect_bb_compression(
     from app.services.naver_finance import fetch_stock_price_history
     import statistics
 
-    semaphore = asyncio.Semaphore(5)
     results = []
 
     async def _process(stock: dict) -> dict | None:
@@ -696,6 +694,7 @@ async def _detect_sector_laggards(
     scanned_stocks: list[dict],
     db: Session,
     market_data_cache: dict[str, dict],
+    semaphore: asyncio.Semaphore,
 ) -> list[dict]:
     """섹터 로테이션 낙오자 탐지 (REQ-AI-038, REQ-AI-039).
 
@@ -729,18 +728,21 @@ async def _detect_sector_laggards(
     scanned_codes = {s["stock_code"] for s in scanned_stocks}
     scanned_map = {s["stock_code"]: s for s in scanned_stocks}
 
-    # 모멘텀 섹터 종목 중 scanned에 포함된 종목 조회
+    # 모멘텀 섹터 + scanned 종목 교집합만 조회 (DB 부하 최소화)
+    scanned_codes_list = list(scanned_codes)
     try:
         stocks_in_sector = (
             db.query(StockModel)
-            .filter(StockModel.sector_id.in_(sector_id_set))
+            .filter(
+                StockModel.sector_id.in_(sector_id_set),
+                StockModel.stock_code.in_(scanned_codes_list),
+            )
             .all()
         )
     except Exception as e:
         logger.warning("[선행탐지] 섹터 종목 조회 실패: %s", e)
         return []
 
-    semaphore = asyncio.Semaphore(5)
     results = []
 
     async def _process(stock_obj) -> dict | None:
@@ -836,17 +838,19 @@ async def _gather_leading_candidates(
     if not scanned_stocks:
         logger.info("[선행탐지] 스캔된 종목 없음, 탐지 계속 진행 (news_divergence는 자체 DB 쿼리 사용)")
 
-    # STEP 2: 시장 데이터 공유 캐시 초기화
+    # STEP 2: 시장 데이터 공유 캐시 + 공유 세마포어 초기화
+    # 세마포어를 한 번만 생성하여 모든 탐지기가 공유 → 총 5개 동시 API 호출 보장
     market_data_cache: dict[str, dict] = {}
+    semaphore = asyncio.Semaphore(5)
 
     # STEP 3: 4개 탐지기 병렬 실행 (45초 타임아웃)
     try:
         detection_results = await asyncio.wait_for(
             asyncio.gather(
-                _detect_quiet_accumulation(scanned_stocks, market_data_cache),
+                _detect_quiet_accumulation(scanned_stocks, market_data_cache, semaphore),
                 _detect_news_price_divergence(scanned_stocks, db, recent_news),
-                _detect_bb_compression(scanned_stocks, market_data_cache),
-                _detect_sector_laggards(scanned_stocks, db, market_data_cache),
+                _detect_bb_compression(scanned_stocks, market_data_cache, semaphore),
+                _detect_sector_laggards(scanned_stocks, db, market_data_cache, semaphore),
                 return_exceptions=True,
             ),
             timeout=45.0,
@@ -931,11 +935,10 @@ async def _gather_leading_candidates(
                     return_exceptions=True,
                 )
             else:
-                _, financial_data = await asyncio.gather(
-                    asyncio.sleep(0),  # 캐시 히트 시 시장 데이터 재조회 불필요
-                    _gather_financial_data(code),
-                    return_exceptions=True,
-                )
+                try:
+                    financial_data = await _gather_financial_data(code)
+                except Exception as _fe:
+                    financial_data = _fe
 
             if isinstance(market_data, Exception):
                 market_data = market_data_cache.get(code, {})
@@ -943,10 +946,15 @@ async def _gather_leading_candidates(
                 financial_data = {}
 
             # 기존 candidate dict 구조 구성
-            from sqlalchemy.orm import selectinload
             from app.models.stock import Stock as StockModel
+            from sqlalchemy.orm import joinedload
 
-            stock_obj = db.query(StockModel).filter(StockModel.stock_code == code).first()
+            stock_obj = (
+                db.query(StockModel)
+                .options(joinedload(StockModel.sector))
+                .filter(StockModel.stock_code == code)
+                .first()
+            )
 
             candidate: dict = {
                 "name": base_candidate.get("name", ""),
