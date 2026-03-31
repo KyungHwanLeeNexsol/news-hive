@@ -442,8 +442,11 @@ async def _detect_quiet_accumulation(
         foreign_net = data.get("foreign_net_5d", 0) or 0
         institution_net = data.get("institution_net_5d", 0) or 0
 
-        # REQ-AI-032: 외국인 AND 기관 동시 순매수 조건
-        if not (foreign_net > 0 and institution_net > 0):
+        # REQ-AI-032: 외국인 OR 기관 중 하나 이상 순매수 (AND → OR로 완화, 하락장 대응)
+        # strong: 둘 다 순매수, moderate: 하나만 순매수
+        both_buying = foreign_net > 0 and institution_net > 0
+        one_buying = foreign_net > 0 or institution_net > 0
+        if not one_buying:
             return None
 
         # REQ-AI-033: 신호 강도 판단
@@ -451,7 +454,7 @@ async def _detect_quiet_accumulation(
         net_buy_total = foreign_net + institution_net
         ratio = net_buy_total / avg_volume if avg_volume > 0 else 0
 
-        strength = "strong" if ratio >= 0.1 else "moderate"
+        strength = "strong" if both_buying and ratio >= 0.1 else "moderate"
         detail = (
             f"외국인 5일 순매수 {foreign_net:,}주 + 기관 {institution_net:,}주 "
             f"(거래량 대비 {ratio:.1%}), 등락률 {change_rate:.1f}%"
@@ -615,8 +618,8 @@ async def _detect_bb_compression(
             return None
 
         volume_ratio = data.get("volume_ratio", 1.0) or 1.0
-        # volume_ratio >= 0.7 → 거래량 수축 아님
-        if volume_ratio >= 0.7:
+        # volume_ratio >= 0.9 → 거래량 수축 아님 (0.7 → 0.9로 완화)
+        if volume_ratio >= 0.9:
             return None
 
         # 20일 평균 BB폭 계산 (가격 히스토리에서 슬라이딩 윈도우)
@@ -658,8 +661,8 @@ async def _detect_bb_compression(
 
         avg_20d_bb_width = sum(bb_widths) / len(bb_widths)
 
-        # REQ-AI-036: 현재 BB폭 < 20일 평균의 50%
-        if current_bb_width >= avg_20d_bb_width * 0.5:
+        # REQ-AI-036: 현재 BB폭 < 20일 평균의 70% (50% → 70%로 완화)
+        if current_bb_width >= avg_20d_bb_width * 0.7:
             return None
 
         detail = (
@@ -2061,8 +2064,8 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
 1. **당일 -5% 이상 하락 종목 → 무조건 "관망" 또는 "회피"**. -3%~-5% 구간은 반등 가능성을 수급과 기술적 지표로 판단. 급락 중 매수 추천은 투자자에게 큰 손실을 줍니다.
 2. **하락 추세 종목(5일, 20일 모두 마이너스) + 수급 악화(외국인/기관 매도) → "회피"**
 3. 뉴스에 언급됐다는 이유만으로 추천 금지. 밸류에이션 + 수급 + 추세를 종합 판단.
-4. PER이 업종 평균 대비 50% 이상 높거나 ROE 5% 미만 → "관망" 또는 "회피".
-5. 하락장에서 함부로 매수 추천 금지. 시장 전체가 약세이면 대부분 "관망"이 맞습니다.
+4. PER이 업종 평균 대비 50% 이상 높거나 ROE 5% 미만 → 일반적으로 "관망" 또는 "회피". 단, leading_signals가 있는 선행 신호 종목(아직 가격 미반영)은 ROE 기준을 완화하여 성장성·기술적 신호를 우선 반영하세요.
+5. 하락장에서 함부로 매수 추천 금지. 시장 전체가 약세이면 대부분 "관망"이 맞습니다. 단, 선행 신호 종목은 하락장에서도 "조건부 매수"가 가능합니다.
 
 ## 조건부 매수 후보 처리
 - 4가지 조건 중 3가지만 충족하는 종목은 "조건부 매수"로 표시하세요.
