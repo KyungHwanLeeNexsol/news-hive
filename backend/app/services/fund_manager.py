@@ -318,6 +318,688 @@ def _gather_disclosures(db: Session, stock_id: int, days: int = 7) -> list[dict]
     ]
 
 
+# ---------------------------------------------------------------------------
+# SPEC-AI-003: 선행 매수 신호 탐지 (Pre-emptive Buy Signal Detection)
+# ---------------------------------------------------------------------------
+
+# @MX:ANCHOR: SPEC-AI-003 선행 탐지 파이프라인의 진입점. 5개 서브 함수가 이 흐름에 의존.
+# @MX:REASON: _scan_market_stocks, _detect_* 4개 함수가 이 캐시 구조를 공유.
+# @MX:SPEC: SPEC-AI-003
+
+# 선행 신호 가중치 테이블 (REQ-AI-040)
+_LEADING_SIGNAL_WEIGHTS: dict[str, int] = {
+    "quiet_accumulation": 30,
+    "news_divergence": 25,
+    "bb_compression": 20,
+    "sector_laggard": 25,
+}
+_LEADING_SIGNAL_STRONG_BONUS: dict[str, int] = {
+    "quiet_accumulation": 15,
+    "news_divergence": 15,
+    "bb_compression": 10,
+    "sector_laggard": 10,
+}
+_MULTI_SIGNAL_BONUS: int = 10
+
+
+async def _scan_market_stocks(db: Session) -> list[dict]:
+    """KOSPI/KOSDAQ 전종목 스캔 후 1차 필터링.
+
+    REQ-AI-030: +3% 초과 / -5% 미만 종목 제외 (후행 추격 방지).
+    시가총액 1,000억 미만 제외 (유동성 리스크).
+
+    Args:
+        db: SQLAlchemy 세션 (현재 미사용, 향후 DB 필터링 확장 대비)
+
+    Returns:
+        필터링된 종목 목록 [{stock_code, name, current_price, change_rate, market_cap, volume}]
+    """
+    from app.services.naver_finance import fetch_naver_stock_list
+
+    all_items = []
+
+    # KOSPI 1-3페이지 + KOSDAQ 1-2페이지 (총 약 250종목)
+    fetch_tasks = [
+        fetch_naver_stock_list("KOSPI", 1),
+        fetch_naver_stock_list("KOSPI", 2),
+        fetch_naver_stock_list("KOSPI", 3),
+        fetch_naver_stock_list("KOSDAQ", 1),
+        fetch_naver_stock_list("KOSDAQ", 2),
+    ]
+
+    results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+    for res in results:
+        if isinstance(res, Exception):
+            logger.warning("[선행탐지] 전종목 스캔 페이지 조회 실패: %s", res)
+            continue
+        items, _ = res
+        all_items.extend(items)
+
+    # 1차 필터링
+    scanned = []
+    for item in all_items:
+        # REQ-AI-030: 등락률 필터 (+3% 초과 OR -5% 미만 제외)
+        if item.change_rate > 3.0 or item.change_rate < -5.0:
+            continue
+        # 시가총액 하한: 1,000억 미만 제외
+        if item.market_cap < 1000:
+            continue
+
+        scanned.append({
+            "stock_code": item.stock_code,
+            "name": item.name,
+            "current_price": item.current_price,
+            "change_rate": item.change_rate,
+            "market_cap": item.market_cap,
+            "volume": item.volume,
+        })
+
+    logger.info("[선행탐지] 전종목 스캔: %d종목 필터링 통과 (전체 %d종목)", len(scanned), len(all_items))
+    return scanned
+
+
+async def _detect_quiet_accumulation(
+    scanned_stocks: list[dict],
+    market_data_cache: dict[str, dict],
+) -> list[dict]:
+    """조용한 수급 축적 탐지 (REQ-AI-032, REQ-AI-033).
+
+    외국인+기관 동시 순매수 중이나 가격 미반영 (-2% ~ +2%) 종목을 탐지.
+
+    Args:
+        scanned_stocks: _scan_market_stocks 결과
+        market_data_cache: 공유 시장 데이터 캐시 (중복 API 호출 방지)
+
+    Returns:
+        탐지된 후보 목록 (leading_signals 포함)
+    """
+    import time as _time
+
+    semaphore = asyncio.Semaphore(5)
+    results = []
+
+    async def _process(stock: dict) -> dict | None:
+        # REQ-AI-032: -2% <= change_rate <= +2% 필터
+        change_rate = stock.get("change_rate", 0.0)
+        if not (-2.0 <= change_rate <= 2.0):
+            return None
+
+        stock_code = stock["stock_code"]
+
+        # 캐시 우선 조회
+        if stock_code not in market_data_cache:
+            async with semaphore:
+                try:
+                    data = await _gather_market_data(stock_code)
+                    market_data_cache[stock_code] = data
+                except Exception as e:
+                    logger.warning("[선행탐지] %s 시장데이터 조회 실패: %s", stock_code, e)
+                    return None
+
+        data = market_data_cache.get(stock_code, {})
+        foreign_net = data.get("foreign_net_5d", 0) or 0
+        institution_net = data.get("institution_net_5d", 0) or 0
+
+        # REQ-AI-032: 외국인 AND 기관 동시 순매수 조건
+        if not (foreign_net > 0 and institution_net > 0):
+            return None
+
+        # REQ-AI-033: 신호 강도 판단
+        avg_volume = data.get("avg_volume_20d", 1) or 1
+        net_buy_total = foreign_net + institution_net
+        ratio = net_buy_total / avg_volume if avg_volume > 0 else 0
+
+        strength = "strong" if ratio >= 0.1 else "moderate"
+        detail = (
+            f"외국인 5일 순매수 {foreign_net:,}주 + 기관 {institution_net:,}주 "
+            f"(거래량 대비 {ratio:.1%}), 등락률 {change_rate:.1f}%"
+        )
+
+        return {
+            "stock_code": stock_code,
+            "name": stock["name"],
+            "current_price": stock.get("current_price"),
+            "change_rate": change_rate,
+            "market_cap": stock.get("market_cap"),
+            "volume": stock.get("volume"),
+            "leading_signals": [
+                {"type": "quiet_accumulation", "strength": strength, "detail": detail}
+            ],
+        }
+
+    tasks = [_process(s) for s in scanned_stocks]
+    outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for outcome in outcomes:
+        if isinstance(outcome, Exception):
+            logger.warning("[선행탐지] quiet_accumulation 처리 오류: %s", outcome)
+        elif outcome is not None:
+            results.append(outcome)
+
+    logger.info("[선행탐지] quiet_accumulation: %d개 감지", len(results))
+    return results
+
+
+async def _detect_news_price_divergence(
+    scanned_stocks: list[dict],
+    db: Session,
+    recent_news: list,
+) -> list[dict]:
+    """뉴스-가격 괴리 탐지 (REQ-AI-034, REQ-AI-035).
+
+    최근 3시간 내 긍정 뉴스가 있으나 가격이 아직 미반응 (change_rate < 1%) 종목 탐지.
+
+    Args:
+        scanned_stocks: _scan_market_stocks 결과
+        db: SQLAlchemy 세션
+        recent_news: 최근 뉴스 목록 (현재 미사용, DB 직접 쿼리)
+
+    Returns:
+        탐지된 후보 목록 (leading_signals 포함)
+    """
+    from app.models.news_relation import NewsStockRelation
+    from app.models.news import NewsArticle
+    from datetime import datetime, timedelta, timezone
+
+    # 최근 3시간 이내 긍정 감성 뉴스-종목 관계 조회
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=3)
+    positive_sentiments = ("positive", "strong_positive")
+
+    try:
+        relations = (
+            db.query(NewsStockRelation)
+            .join(NewsArticle, NewsStockRelation.news_id == NewsArticle.id)
+            .filter(
+                NewsArticle.collected_at >= cutoff,
+                NewsStockRelation.relation_sentiment.in_(positive_sentiments),
+                NewsStockRelation.stock_id.isnot(None),
+            )
+            .all()
+        )
+    except Exception as e:
+        logger.warning("[선행탐지] 뉴스-가격 괴리 DB 쿼리 실패: %s", e)
+        return []
+
+    # 종목코드 → 긍정 뉴스 수 집계 (stock 관계 통해 stock_code 획득)
+    from app.models.stock import Stock as StockModel
+
+    # stock_id → stock_code 매핑
+    stock_ids = list({r.stock_id for r in relations if r.stock_id})
+    if not stock_ids:
+        return []
+
+    stocks = db.query(StockModel).filter(StockModel.id.in_(stock_ids)).all()
+    stock_id_to_code = {s.id: s.stock_code for s in stocks}
+
+    news_count_by_code: dict[str, int] = {}
+    for rel in relations:
+        code = stock_id_to_code.get(rel.stock_id)
+        if code:
+            news_count_by_code[code] = news_count_by_code.get(code, 0) + 1
+
+    # scanned_stocks와 교차 검증
+    scanned_map = {s["stock_code"]: s for s in scanned_stocks}
+
+    results = []
+    for code, count in news_count_by_code.items():
+        stock = scanned_map.get(code)
+        if not stock:
+            continue
+
+        # REQ-AI-034: change_rate < 1% (가격 미반응)
+        if stock.get("change_rate", 0) >= 1.0:
+            continue
+
+        # REQ-AI-035: 긍정 뉴스 2건 이상 → 강함
+        strength = "strong" if count >= 2 else "moderate"
+        detail = f"최근 3시간 내 긍정 뉴스 {count}건, 등락률 {stock.get('change_rate', 0):.1f}%"
+
+        results.append({
+            "stock_code": code,
+            "name": stock["name"],
+            "current_price": stock.get("current_price"),
+            "change_rate": stock.get("change_rate"),
+            "market_cap": stock.get("market_cap"),
+            "volume": stock.get("volume"),
+            "leading_signals": [
+                {"type": "news_divergence", "strength": strength, "detail": detail}
+            ],
+        })
+
+    logger.info("[선행탐지] news_divergence: %d개 감지", len(results))
+    return results
+
+
+async def _detect_bb_compression(
+    scanned_stocks: list[dict],
+    market_data_cache: dict[str, dict],
+) -> list[dict]:
+    """볼린저밴드 수축 탐지 (REQ-AI-036, REQ-AI-037).
+
+    BB 폭이 20일 평균의 50% 미만 + 거래량 수축 + 상향 추세 종목 탐지.
+    bb_compression은 항상 "moderate" 강도 (SPEC 명세).
+
+    Args:
+        scanned_stocks: _scan_market_stocks 결과
+        market_data_cache: 공유 시장 데이터 캐시
+
+    Returns:
+        탐지된 후보 목록 (leading_signals 포함)
+    """
+    from app.services.naver_finance import fetch_stock_price_history
+    import statistics
+
+    semaphore = asyncio.Semaphore(5)
+    results = []
+
+    async def _process(stock: dict) -> dict | None:
+        stock_code = stock["stock_code"]
+
+        # 시장 데이터 캐시 조회 (없으면 수집)
+        if stock_code not in market_data_cache:
+            async with semaphore:
+                try:
+                    data = await _gather_market_data(stock_code)
+                    market_data_cache[stock_code] = data
+                except Exception as e:
+                    logger.warning("[선행탐지] %s 시장데이터 조회 실패: %s", stock_code, e)
+                    return None
+
+        data = market_data_cache.get(stock_code, {})
+
+        # REQ-AI-037: sma_20_slope < 0 → 하향 추세 제외
+        sma_20_slope = data.get("sma_20_slope", 0.0) or 0.0
+        if sma_20_slope < 0:
+            return None
+
+        volume_ratio = data.get("volume_ratio", 1.0) or 1.0
+        # volume_ratio >= 0.7 → 거래량 수축 아님
+        if volume_ratio >= 0.7:
+            return None
+
+        # 20일 평균 BB폭 계산 (가격 히스토리에서 슬라이딩 윈도우)
+        try:
+            async with semaphore:
+                price_history = await fetch_stock_price_history(stock_code, pages=3)
+        except Exception as e:
+            logger.warning("[선행탐지] %s 가격 히스토리 조회 실패: %s", stock_code, e)
+            return None
+
+        # 20일 미만 히스토리 → 조용히 건너뜀
+        closes = [p.close for p in price_history if p.close > 0]
+        if len(closes) < 20:
+            return None
+
+        # 현재 BB폭 (캐시 데이터 우선, 없으면 계산)
+        current_bb_width = data.get("bb_width")
+        if current_bb_width is None:
+            # 최근 20일로 BB폭 계산: stddev * 2 * 2 / sma_20
+            recent_closes = closes[:20]
+            sma_20 = sum(recent_closes) / 20
+            if sma_20 > 0:
+                std = statistics.stdev(recent_closes)
+                current_bb_width = (std * 4) / sma_20
+            else:
+                return None
+
+        # 20일 평균 BB폭: 슬라이딩 윈도우 20개 구간의 BB폭 평균
+        bb_widths = []
+        for i in range(min(20, len(closes) - 19)):
+            window = closes[i : i + 20]
+            sma = sum(window) / 20
+            if sma > 0:
+                std = statistics.stdev(window)
+                bb_widths.append((std * 4) / sma)
+
+        if not bb_widths:
+            return None
+
+        avg_20d_bb_width = sum(bb_widths) / len(bb_widths)
+
+        # REQ-AI-036: 현재 BB폭 < 20일 평균의 50%
+        if current_bb_width >= avg_20d_bb_width * 0.5:
+            return None
+
+        detail = (
+            f"BB폭 {current_bb_width:.3f} (20일 평균 {avg_20d_bb_width:.3f}의 "
+            f"{current_bb_width/avg_20d_bb_width:.0%}), "
+            f"거래량비 {volume_ratio:.2f}"
+        )
+
+        return {
+            "stock_code": stock_code,
+            "name": stock["name"],
+            "current_price": stock.get("current_price"),
+            "change_rate": stock.get("change_rate"),
+            "market_cap": stock.get("market_cap"),
+            "volume": stock.get("volume"),
+            "leading_signals": [
+                # bb_compression은 항상 "moderate" (SPEC 4.4 명세)
+                {"type": "bb_compression", "strength": "moderate", "detail": detail}
+            ],
+        }
+
+    tasks = [_process(s) for s in scanned_stocks]
+    outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for outcome in outcomes:
+        if isinstance(outcome, Exception):
+            logger.warning("[선행탐지] bb_compression 처리 오류: %s", outcome)
+        elif outcome is not None:
+            results.append(outcome)
+
+    logger.info("[선행탐지] bb_compression: %d개 감지", len(results))
+    return results
+
+
+async def _detect_sector_laggards(
+    scanned_stocks: list[dict],
+    db: Session,
+    market_data_cache: dict[str, dict],
+) -> list[dict]:
+    """섹터 로테이션 낙오자 탐지 (REQ-AI-038, REQ-AI-039).
+
+    모멘텀 섹터 내 5일 수익률이 섹터 평균 미만인 종목을 탐지.
+
+    Args:
+        scanned_stocks: _scan_market_stocks 결과
+        db: SQLAlchemy 세션
+        market_data_cache: 공유 시장 데이터 캐시
+
+    Returns:
+        탐지된 후보 목록 (leading_signals 포함)
+    """
+    from app.services.sector_momentum import detect_momentum_sectors
+    from app.models.stock import Stock as StockModel
+
+    try:
+        momentum_sectors = detect_momentum_sectors(db)
+    except Exception as e:
+        logger.warning("[선행탐지] 섹터 모멘텀 조회 실패: %s", e)
+        return []
+
+    if not momentum_sectors:
+        return []
+
+    # sector_id → avg_return 맵
+    sector_avg_map = {s["sector_id"]: s["avg_return"] for s in momentum_sectors}
+    sector_id_set = set(sector_avg_map.keys())
+
+    # scanned_stocks 코드 집합
+    scanned_codes = {s["stock_code"] for s in scanned_stocks}
+    scanned_map = {s["stock_code"]: s for s in scanned_stocks}
+
+    # 모멘텀 섹터 종목 중 scanned에 포함된 종목 조회
+    try:
+        stocks_in_sector = (
+            db.query(StockModel)
+            .filter(StockModel.sector_id.in_(sector_id_set))
+            .all()
+        )
+    except Exception as e:
+        logger.warning("[선행탐지] 섹터 종목 조회 실패: %s", e)
+        return []
+
+    semaphore = asyncio.Semaphore(5)
+    results = []
+
+    async def _process(stock_obj) -> dict | None:
+        code = stock_obj.stock_code
+        if code not in scanned_codes:
+            return None
+
+        sector_avg = sector_avg_map.get(stock_obj.sector_id, 0.0)
+        stock = scanned_map[code]
+
+        # 캐시에서 5일 수익률 조회 (없으면 수집)
+        if code not in market_data_cache:
+            async with semaphore:
+                try:
+                    data = await _gather_market_data(code)
+                    market_data_cache[code] = data
+                except Exception as e:
+                    logger.warning("[선행탐지] %s 시장데이터 조회 실패: %s", code, e)
+                    return None
+
+        data = market_data_cache.get(code, {})
+        stock_5d_return = data.get("price_5d_trend", 0.0) or 0.0
+
+        # REQ-AI-038: 종목 5일 수익률 < 섹터 평균
+        if stock_5d_return >= sector_avg:
+            return None
+
+        # REQ-AI-039: 괴리 >= 3%p → 강함
+        gap = sector_avg - stock_5d_return
+        strength = "strong" if gap >= 3.0 else "moderate"
+        detail = (
+            f"섹터 5일 수익률 {sector_avg:.1f}% vs 종목 {stock_5d_return:.1f}% "
+            f"(괴리 {gap:.1f}%p)"
+        )
+
+        return {
+            "stock_code": code,
+            "name": stock["name"],
+            "current_price": stock.get("current_price"),
+            "change_rate": stock.get("change_rate"),
+            "market_cap": stock.get("market_cap"),
+            "volume": stock.get("volume"),
+            "leading_signals": [
+                {"type": "sector_laggard", "strength": strength, "detail": detail}
+            ],
+        }
+
+    tasks = [_process(s) for s in stocks_in_sector]
+    outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for outcome in outcomes:
+        if isinstance(outcome, Exception):
+            logger.warning("[선행탐지] sector_laggard 처리 오류: %s", outcome)
+        elif outcome is not None:
+            results.append(outcome)
+
+    logger.info("[선행탐지] sector_laggard: %d개 감지", len(results))
+    return results
+
+
+async def _gather_leading_candidates(
+    db: Session,
+    recent_news: list | None = None,
+) -> list[dict]:
+    """선행 매수 신호 탐지 오케스트레이터 (SPEC-AI-003).
+
+    4개 선행 지표를 병렬 실행하여 후보를 수집, 점수 합산 후 상위 10개 반환.
+    REQ-AI-040: 복수 지표 종목 가중 점수 합산.
+    REQ-AI-041: 최대 10개 제한.
+    REQ-AI-045: 부분 실패 시 성공한 지표 결과만 사용.
+
+    Args:
+        db: SQLAlchemy 세션
+        recent_news: 최근 뉴스 목록 (news_divergence 탐지에 사용)
+
+    Returns:
+        기존 _gather_pick_candidates와 동일한 dict 구조 + leading_signals 필드
+    """
+    import time as _time
+
+    if recent_news is None:
+        recent_news = []
+
+    t_start = _time.monotonic()
+
+    # STEP 1: 전종목 스캔
+    try:
+        scanned_stocks = await _scan_market_stocks(db)
+    except Exception as e:
+        logger.warning("[선행탐지] 전종목 스캔 실패: %s", e)
+        scanned_stocks = []
+
+    if not scanned_stocks:
+        logger.info("[선행탐지] 스캔된 종목 없음, 탐지 계속 진행 (news_divergence는 자체 DB 쿼리 사용)")
+
+    # STEP 2: 시장 데이터 공유 캐시 초기화
+    market_data_cache: dict[str, dict] = {}
+
+    # STEP 3: 4개 탐지기 병렬 실행 (45초 타임아웃)
+    try:
+        detection_results = await asyncio.wait_for(
+            asyncio.gather(
+                _detect_quiet_accumulation(scanned_stocks, market_data_cache),
+                _detect_news_price_divergence(scanned_stocks, db, recent_news),
+                _detect_bb_compression(scanned_stocks, market_data_cache),
+                _detect_sector_laggards(scanned_stocks, db, market_data_cache),
+                return_exceptions=True,
+            ),
+            timeout=45.0,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("[선행탐지] 탐지 타임아웃 (45초 초과)")
+        detection_results = [[], [], [], []]
+
+    # STEP 4: 실패한 탐지기는 빈 리스트로 처리 (REQ-AI-045)
+    detector_names = ["quiet_accumulation", "news_divergence", "bb_compression", "sector_laggard"]
+    cleaned_results = []
+    for name, result in zip(detector_names, detection_results):
+        if isinstance(result, Exception):
+            logger.warning("[선행탐지] %s 실패: %s", name, result)
+            cleaned_results.append([])
+        else:
+            cleaned_results.append(result)
+            logger.info("[선행탐지] %s: %d개 감지", name, len(result))
+
+    # STEP 5: 종목별 신호 병합 및 점수 계산
+    stock_signals: dict[str, dict] = {}  # stock_code → {candidate, signals, score}
+
+    for detector_results in cleaned_results:
+        for candidate in detector_results:
+            code = candidate.get("stock_code")
+            if not code:
+                continue
+
+            if code not in stock_signals:
+                stock_signals[code] = {
+                    "candidate": dict(candidate),
+                    "signals": list(candidate.get("leading_signals", [])),
+                    "score": 0,
+                }
+            else:
+                # 기존 후보에 신호 추가 (복수 지표)
+                existing_signals = stock_signals[code]["signals"]
+                for sig in candidate.get("leading_signals", []):
+                    # 중복 타입 방지
+                    if not any(s["type"] == sig["type"] for s in existing_signals):
+                        existing_signals.append(sig)
+
+    # STEP 6: 점수 계산
+    for code, entry in stock_signals.items():
+        signals = entry["signals"]
+        score = 0
+
+        for sig in signals:
+            sig_type = sig.get("type", "")
+            base = _LEADING_SIGNAL_WEIGHTS.get(sig_type, 0)
+            score += base
+            if sig.get("strength") == "strong":
+                score += _LEADING_SIGNAL_STRONG_BONUS.get(sig_type, 0)
+
+        # 복수 신호 가산 (2개 이상)
+        if len(signals) > 1:
+            score += _MULTI_SIGNAL_BONUS * (len(signals) - 1)
+
+        entry["score"] = score
+
+    # STEP 7: 점수 내림차순 정렬, 상위 10개
+    sorted_entries = sorted(stock_signals.values(), key=lambda x: x["score"], reverse=True)
+    top_entries = sorted_entries[:10]
+
+    if not top_entries:
+        return []
+
+    # STEP 8: 기존 4-criteria 검증 적용 + 시세/재무 데이터 보강
+    candidates = []
+    for entry in top_entries:
+        base_candidate = entry["candidate"]
+        code = base_candidate.get("stock_code")
+        if not code:
+            continue
+
+        try:
+            market_data = market_data_cache.get(code)
+            if not market_data:
+                market_data, financial_data = await asyncio.gather(
+                    _gather_market_data(code),
+                    _gather_financial_data(code),
+                    return_exceptions=True,
+                )
+            else:
+                _, financial_data = await asyncio.gather(
+                    asyncio.sleep(0),  # 캐시 히트 시 시장 데이터 재조회 불필요
+                    _gather_financial_data(code),
+                    return_exceptions=True,
+                )
+
+            if isinstance(market_data, Exception):
+                market_data = market_data_cache.get(code, {})
+            if isinstance(financial_data, Exception):
+                financial_data = {}
+
+            # 기존 candidate dict 구조 구성
+            from sqlalchemy.orm import selectinload
+            from app.models.stock import Stock as StockModel
+
+            stock_obj = db.query(StockModel).filter(StockModel.stock_code == code).first()
+
+            candidate: dict = {
+                "name": base_candidate.get("name", ""),
+                "code": code,
+                "sector": stock_obj.sector.name if stock_obj and stock_obj.sector else "미분류",
+                "news_count": 0,
+                "leading_signals": entry["signals"],
+                "leading_score": entry["score"],
+            }
+
+            # 시세 데이터 병합
+            if market_data:
+                for field in (
+                    "current_price", "change_rate", "volume", "price_5d_trend",
+                    "price_20d_trend", "volatility", "supply_demand",
+                    "foreign_net_5d", "institution_net_5d",
+                    "per", "pbr", "market_cap", "foreign_ratio",
+                    "high_52w", "low_52w",
+                ):
+                    val = market_data.get(field)
+                    if val is not None:
+                        candidate[field] = val
+
+            # 재무 데이터 병합
+            if financial_data:
+                for field in (
+                    "roe", "operating_margin", "revenue_growth",
+                    "op_profit_growth", "dividend_yield", "industry_per",
+                ):
+                    val = financial_data.get(field)
+                    if val is not None:
+                        candidate[field] = val
+
+            # None 값 제거
+            candidate = {k: v for k, v in candidate.items() if v is not None}
+            # leading_signals는 None이어도 유지
+            if "leading_signals" not in candidate:
+                candidate["leading_signals"] = entry["signals"]
+
+            candidates.append(candidate)
+
+        except Exception as e:
+            logger.warning("[선행탐지] 후보 '%s' 데이터 보강 실패: %s", code, e)
+
+    elapsed = _time.monotonic() - t_start
+    logger.info(
+        "[선행탐지] 완료: %d개 선행 후보 (%.1f초)",
+        len(candidates),
+        elapsed,
+    )
+    return candidates
+
+
 async def _gather_pick_candidates(db: Session, recent_news: list) -> list[dict]:
     """뉴스에 언급된 종목들의 시세 + 밸류에이션 + 수급 + 재무 데이터를 수집.
 
@@ -1059,8 +1741,42 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
         market_sentiment.get('trend', 'stable'), '안정적 →'
     )
 
+    # SPEC-AI-003: 선행 매수 신호 후보 수집 (뉴스 후보보다 먼저 실행)
+    leading_data: list[dict] = []
+    try:
+        leading_data = await _gather_leading_candidates(db, recent_news)
+    except Exception as _le:
+        logger.warning("선행 매수 신호 탐지 실패 (브리핑 계속 진행): %s", _le)
+
     # 뉴스에 언급된 종목들의 실시간 시세 + 밸류에이션 데이터 수집
-    candidate_data = await _gather_pick_candidates(db, recent_news)
+    news_candidate_data = await _gather_pick_candidates(db, recent_news)
+
+    # REQ-AI-042: 선행 후보 우선 + 뉴스 후보 병합 (최대 10개, 중복 제거)
+    seen_codes: set[str] = set()
+    candidate_data: list[dict] = []
+
+    for c in leading_data:
+        code = c.get("code") or c.get("stock_code")
+        if code and code not in seen_codes:
+            seen_codes.add(code)
+            candidate_data.append(c)
+
+    for c in news_candidate_data:
+        code = c.get("code") or c.get("stock_code")
+        if code and code not in seen_codes:
+            seen_codes.add(code)
+            candidate_data.append(c)
+
+    candidate_data = candidate_data[:10]
+
+    leading_count = len(leading_data)
+    news_count = len(news_candidate_data)
+    total_count = len(candidate_data)
+    logger.info(
+        "[선행탐지] 최종 병합: 선행 %d개 + 뉴스 %d개 = %d개",
+        leading_count, news_count, total_count,
+    )
+
     candidate_text = json.dumps(candidate_data, ensure_ascii=False, indent=2) if candidate_data else '후보 종목 데이터 없음'
 
     # REQ-AI-020: 시장 변동성 레벨 (브리핑 상단 표시)
@@ -1248,6 +1964,11 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
 - supply_demand: 수급 판단 요약
 - high_52w/low_52w: 52주 최고/최저가
 - dividend_yield: 배당수익률(%)
+- **leading_signals: 선행 매수 신호 목록** (REQ-AI-044)
+  - type: "quiet_accumulation"(조용한수급축적) | "news_divergence"(뉴스가격괴리) | "bb_compression"(볼린저밴드수축) | "sector_laggard"(섹터낙오자)
+  - strength: "strong"(강함) | "moderate"(보통)
+  - detail: 신호 상세 설명
+  - **leading_signals가 있는 종목은 아직 가격이 움직이지 않은 선행 신호 기반 후보입니다. 진입 근거를 선행 지표 중심으로 분석하세요.**
 
 {candidate_text}
 {volatility_text}{sector_momentum_text}{earnings_text}{commodity_context_text}{historical_pattern_text}{news_impact_text}{defensive_mode_text}
