@@ -188,7 +188,35 @@ async def execute_signal_trade(db: Session, signal: FundSignal) -> VirtualTrade 
 
     invest_amount = entry_price * quantity
 
-    # 매매 실행 — 시그널에 목표가/손절가가 없으면 기본 비율로 자동 계산
+    # SPEC-AI-005: 동적 TP/SL 계산 (시그널에 유효한 값이 없는 경우)
+    final_target = signal.target_price
+    final_stop = signal.stop_loss
+
+    if not final_target or not final_stop:
+        try:
+            from app.services.dynamic_tp_sl import calculate_dynamic_tp_sl
+            confidence = float(signal.confidence) if signal.confidence else 0.7
+            sector_id = stock.sector_id
+            dynamic_result = await calculate_dynamic_tp_sl(
+                stock_code=stock.stock_code,
+                entry_price=entry_price,
+                confidence=confidence,
+                sector_id=sector_id,
+                db=db,
+            )
+            final_target = final_target or dynamic_result["target_price"]
+            final_stop = final_stop or dynamic_result["stop_loss"]
+            logger.info(
+                "동적 TP/SL 적용: %s, method=%s, target=%d, stop=%d",
+                stock.name, dynamic_result["method"], final_target, final_stop,
+            )
+        except Exception as e:
+            # 동적 계산 실패 시 레거시 고정 비율 폴백
+            logger.warning("동적 TP/SL 계산 실패, 고정 비율 사용 (%s): %s", stock.name, e)
+            final_target = final_target or int(entry_price * (1 + DEFAULT_TARGET_PCT))
+            final_stop = final_stop or int(entry_price * (1 - DEFAULT_STOP_LOSS_PCT))
+
+    # 매매 실행
     trade = VirtualTrade(
         portfolio_id=portfolio.id,
         stock_id=signal.stock_id,
@@ -196,8 +224,8 @@ async def execute_signal_trade(db: Session, signal: FundSignal) -> VirtualTrade 
         entry_price=entry_price,
         quantity=quantity,
         direction="long",
-        target_price=signal.target_price or int(entry_price * (1 + DEFAULT_TARGET_PCT)),
-        stop_loss=signal.stop_loss or int(entry_price * (1 - DEFAULT_STOP_LOSS_PCT)),
+        target_price=final_target,
+        stop_loss=final_stop,
     )
     portfolio.current_cash -= invest_amount
 
@@ -287,14 +315,51 @@ async def check_exit_conditions(db: Session) -> dict:
             if defensive_stop > effective_stop_loss:
                 effective_stop_loss = defensive_stop
 
+        # SPEC-AI-005: 트레일링 스탑 처리
+        try:
+            from app.services.dynamic_tp_sl import (
+                calculate_trailing_stop,
+                should_activate_trailing_stop,
+                _fetch_atr,
+            )
+            # 트레일링 스탑 활성화 조건 확인 (+5% 수익)
+            if not getattr(trade, "trailing_stop_active", False):
+                if should_activate_trailing_stop(trade.entry_price, current_price):
+                    trade.trailing_stop_active = True
+                    trade.high_water_mark = current_price
+                    # ATR 기반 초기 트레일링 스탑 설정
+                    atr = await _fetch_atr(stock.stock_code)
+                    if atr:
+                        trade.trailing_stop_price = calculate_trailing_stop(current_price, atr)
+                    logger.info("트레일링 스탑 활성화: %s @ %d원", stock.name, current_price)
+            elif getattr(trade, "trailing_stop_active", False):
+                # 트레일링 스탑 활성 → high_water_mark 갱신 + 스탑 가격 업데이트
+                prev_hwm = trade.high_water_mark or trade.entry_price
+                new_hwm = max(prev_hwm, current_price)
+                if new_hwm > prev_hwm:
+                    trade.high_water_mark = new_hwm
+                    atr = await _fetch_atr(stock.stock_code)
+                    if atr:
+                        new_stop = calculate_trailing_stop(new_hwm, atr)
+                        # 단조증가 보장: 새 손절가가 기존보다 높을 때만 업데이트
+                        prev_stop = trade.trailing_stop_price or 0
+                        if new_stop > prev_stop:
+                            trade.trailing_stop_price = new_stop
+
+                # 트레일링 스탑 이탈 확인
+                if trade.trailing_stop_price and current_price <= trade.trailing_stop_price:
+                    exit_reason = "trailing_stop"
+        except Exception as _te:
+            logger.debug("트레일링 스탑 처리 오류 (무시): %s", _te)
+
         # 목표가 도달
-        if current_price >= effective_target:
+        if not exit_reason and current_price >= effective_target:
             exit_reason = "target_hit"
         # 손절가 이탈 (방어 모드 시 강화된 기준 적용)
-        elif current_price <= effective_stop_loss:
+        elif not exit_reason and current_price <= effective_stop_loss:
             exit_reason = "stop_loss"
         # 타임아웃
-        elif (now - trade.entry_date).days >= MAX_HOLD_DAYS:
+        elif not exit_reason and (now - trade.entry_date).days >= MAX_HOLD_DAYS:
             exit_reason = "timeout"
 
         if exit_reason:

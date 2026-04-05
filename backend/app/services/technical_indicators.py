@@ -151,6 +151,59 @@ def _bollinger_bands(prices: list[float], period: int = 20, std_dev: float = 2.0
     return upper, middle, lower
 
 
+def calculate_atr(prices: list[dict], period: int = 14) -> float | None:
+    """ATR (Average True Range) 계산 - Wilder's Smoothing 방식.
+
+    Args:
+        prices: [{high, low, close}, ...] 형태의 가격 데이터 (최신순)
+        period: ATR 기간 (기본값 14일)
+
+    Returns:
+        ATR 값 (float) 또는 데이터 부족 시 None
+
+    Notes:
+        - 최소 period+1 개 데이터 필요
+        - True Range = max(H-L, |H-prev_close|, |L-prev_close|)
+        - 초기 ATR = TR의 SMA, 이후 Wilder's EMA: prev*(period-1)/period + tr/period
+    """
+    # 데이터 부족 시 None 반환
+    if not prices or len(prices) < period + 1:
+        return None
+
+    # 최신순 → 과거순으로 역전 (계산은 오래된 데이터부터)
+    reversed_prices = list(reversed(prices))
+
+    # True Range 계산
+    true_ranges: list[float] = []
+    for i in range(1, len(reversed_prices)):
+        curr = reversed_prices[i]
+        prev = reversed_prices[i - 1]
+
+        high = float(curr.get("high", 0))
+        low = float(curr.get("low", 0))
+        prev_close = float(prev.get("close", 0))
+
+        # TR = max(H-L, |H-prev_close|, |L-prev_close|)
+        tr = max(
+            high - low,
+            abs(high - prev_close),
+            abs(low - prev_close),
+        )
+        true_ranges.append(tr)
+
+    if len(true_ranges) < period:
+        return None
+
+    # 초기 ATR = 첫 period개 TR의 SMA
+    atr = sum(true_ranges[:period]) / period
+
+    # Wilder's smoothing으로 ATR 업데이트
+    for tr in true_ranges[period:]:
+        atr = atr * (period - 1) / period + tr / period
+
+    return atr
+
+
 def calculate_technical_indicators(
     prices: list[dict],
     current_price: float | None = None,

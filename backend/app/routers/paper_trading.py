@@ -198,6 +198,148 @@ def get_disclosure_paper_performance(db: Session = Depends(get_db)):
     }
 
 
+@router.get("/tp-sl-stats")
+def get_tp_sl_stats(db: Session = Depends(get_db)):
+    """TP/SL 방식별 성과 통계 (SPEC-AI-005).
+
+    ai_provided / atr_dynamic / sector_default / legacy_fixed 방식별로
+    승률과 평균 수익률을 집계하여 반환한다.
+    needs_review=true이면 동적 방식의 성과가 고정 방식보다 낮음을 의미한다.
+    """
+    from app.models.fund_signal import FundSignal
+
+    portfolio = get_or_create_portfolio(db)
+
+    # tp_sl_method별 성과 조회
+    methods = ["ai_provided", "atr_dynamic", "sector_default", "legacy_fixed"]
+    by_method: dict[str, dict] = {}
+
+    for method in methods:
+        # 해당 방식의 시그널과 연결된 청산된 거래 조회
+        signal_ids_query = (
+            db.query(FundSignal.id)
+            .filter(FundSignal.tp_sl_method == method)
+        )
+        signal_ids = [row[0] for row in signal_ids_query.all()]
+
+        if not signal_ids:
+            by_method[method] = {
+                "total_trades": 0,
+                "win_rate": 0.0,
+                "avg_return_pct": 0.0,
+            }
+            continue
+
+        trades = (
+            db.query(VirtualTrade)
+            .filter(
+                VirtualTrade.signal_id.in_(signal_ids),
+                VirtualTrade.portfolio_id == portfolio.id,
+                VirtualTrade.is_open.is_(False),
+                VirtualTrade.pnl.isnot(None),
+            )
+            .all()
+        )
+
+        wins = [t for t in trades if (t.pnl or 0) > 0]
+        returns = [t.return_pct for t in trades if t.return_pct is not None]
+
+        by_method[method] = {
+            "total_trades": len(trades),
+            "win_rate": round(len(wins) / len(trades), 4) if trades else 0.0,
+            "avg_return_pct": round(sum(returns) / len(returns), 2) if returns else 0.0,
+        }
+
+    # 동적 방식 vs 고정 방식 비교
+    dynamic_win_rate = by_method.get("atr_dynamic", {}).get("win_rate", 0.0)
+    fixed_win_rate = by_method.get("legacy_fixed", {}).get("win_rate", 0.0)
+    needs_review = (
+        by_method["atr_dynamic"]["total_trades"] >= 5
+        and dynamic_win_rate < fixed_win_rate
+    )
+
+    return {
+        "by_method": by_method,
+        "needs_review": needs_review,
+        "review_reason": (
+            f"동적 방식 승률({dynamic_win_rate:.1%}) < 고정 방식 승률({fixed_win_rate:.1%})"
+            if needs_review else None
+        ),
+    }
+
+
+@router.get("/tp-sl-backtest")
+def get_tp_sl_backtest(db: Session = Depends(get_db)):
+    """고정 vs 동적 TP/SL 백테스트 비교 (SPEC-AI-005).
+
+    기존 시그널 데이터를 바탕으로 고정 방식과 동적 방식의
+    가상 성과를 비교하여 반환한다.
+    """
+    from app.models.fund_signal import FundSignal
+
+    portfolio = get_or_create_portfolio(db)
+
+    # 청산된 모든 거래 조회
+    all_trades = (
+        db.query(VirtualTrade)
+        .filter(
+            VirtualTrade.portfolio_id == portfolio.id,
+            VirtualTrade.is_open.is_(False),
+            VirtualTrade.pnl.isnot(None),
+        )
+        .all()
+    )
+
+    if not all_trades:
+        return {
+            "fixed_method": {"total": 0, "win_rate": 0.0, "avg_return_pct": 0.0},
+            "dynamic_method": {"total": 0, "win_rate": 0.0, "avg_return_pct": 0.0},
+            "comparison": "데이터 없음",
+        }
+
+    # 시그널에서 tp_sl_method 매핑
+    signal_ids = [t.signal_id for t in all_trades]
+    method_map = {
+        row[0]: row[1]
+        for row in db.query(FundSignal.id, FundSignal.tp_sl_method)
+        .filter(FundSignal.id.in_(signal_ids))
+        .all()
+    }
+
+    fixed_trades = [t for t in all_trades if method_map.get(t.signal_id) in ("legacy_fixed", None)]
+    dynamic_trades = [t for t in all_trades if method_map.get(t.signal_id) in ("atr_dynamic", "sector_default", "ai_provided")]
+
+    def _stats(trades: list) -> dict:
+        if not trades:
+            return {"total": 0, "win_rate": 0.0, "avg_return_pct": 0.0}
+        wins = [t for t in trades if (t.pnl or 0) > 0]
+        returns = [t.return_pct for t in trades if t.return_pct is not None]
+        return {
+            "total": len(trades),
+            "win_rate": round(len(wins) / len(trades), 4),
+            "avg_return_pct": round(sum(returns) / len(returns), 2) if returns else 0.0,
+        }
+
+    fixed_stats = _stats(fixed_trades)
+    dynamic_stats = _stats(dynamic_trades)
+
+    # 비교 판정
+    if dynamic_stats["total"] < 5:
+        comparison = "동적 방식 데이터 부족 (5건 미만)"
+    elif dynamic_stats["win_rate"] > fixed_stats["win_rate"]:
+        comparison = f"동적 방식 우수 (+{(dynamic_stats['win_rate'] - fixed_stats['win_rate']):.1%})"
+    elif dynamic_stats["win_rate"] < fixed_stats["win_rate"]:
+        comparison = f"고정 방식 우수 (+{(fixed_stats['win_rate'] - dynamic_stats['win_rate']):.1%})"
+    else:
+        comparison = "동등"
+
+    return {
+        "fixed_method": fixed_stats,
+        "dynamic_method": dynamic_stats,
+        "comparison": comparison,
+    }
+
+
 @router.post("/reset")
 def reset_portfolio(db: Session = Depends(get_db)):
     """포트폴리오 초기화 (모든 매매 기록 삭제, 자본금 리셋)."""

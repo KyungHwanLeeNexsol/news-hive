@@ -62,5 +62,11 @@ class FundSignal(Base):
         Integer, ForeignKey("disclosures.id"), nullable=True
     )
 
+    # SPEC-AI-005: 동적 TP/SL 방식 추적
+    # 값: ai_provided | atr_dynamic | sector_default | legacy_fixed
+    tp_sl_method: Mapped[str | None] = mapped_column(
+        String(20), nullable=True, default="legacy_fixed"
+    )
+
     stock = relationship("Stock")
     disclosure = relationship("Disclosure", foreign_keys=[disclosure_id])

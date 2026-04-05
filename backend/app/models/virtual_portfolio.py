@@ -57,6 +57,11 @@ class VirtualTrade(Base):
     target_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
     stop_loss: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # SPEC-AI-005: 트레일링 스탑 필드
+    trailing_stop_active: Mapped[bool] = mapped_column(Boolean, default=False)  # 트레일링 스탑 활성 여부
+    trailing_stop_price: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 트레일링 스탑 가격
+    high_water_mark: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 최고가 (워터마크)
+
     is_open: Mapped[bool] = mapped_column(Boolean, default=True)  # 포지션 오픈 여부
 
     portfolio = relationship("VirtualPortfolio", back_populates="trades")

@@ -1663,10 +1663,14 @@ async def analyze_stock(
   "market_summary": "기술적 분석(SMA/RSI/MACD/볼린저) 및 수급 동향 종합 (2-3문장)"
 }}
 
+목표가/손절가 설정 예시 (반드시 구체적 정수로 기입):
+- 예시1: 현재가 50,000원 → target_price: 55000, stop_loss: 47500
+- 예시2: 현재가 12,300원 → target_price: 14000, stop_loss: 11500
+
 주의사항:
 - confidence가 0.7 이상이어야 buy/sell 시그널을 내세요. 확신이 부족하면 hold.
 - 데이터가 부족하면 그만큼 confidence를 낮추세요.
-- 목표가/손절가는 현재가 대비 합리적인 범위 내에서 설정하세요.
+- target_price와 stop_loss는 반드시 0이 아닌 구체적 정수로 기입. null/0 금지.
 - 투자 판단 근거는 구체적인 데이터를 인용하여 전문적으로 작성하세요.
 - 브리핑 판단 참고가 있다면, 동일한 데이터로 동일 시점에 분석한 결과이므로 특별한 반대 근거가 없는 한 브리핑의 방향성(매수/관망/회피)과 일관되게 판단하세요.
   예: 브리핑에서 "관망"이면 시그널도 "hold"가 기본. "회피"면 "sell" 또는 "hold". "적극매수"/"매수"면 "buy".
@@ -1680,12 +1684,50 @@ async def analyze_stock(
     # 시그널 발행 시점 주가 기록 (적중률 추적용)
     price_at_signal = market_data.get("current_price") if market_data else None
 
+    confidence_val = min(max(float(parsed.get("confidence", 0.5)), 0.0), 1.0)
+
+    # AI가 제공한 목표가/손절가 추출 (0 또는 None은 무효 처리)
+    ai_target = parsed.get("target_price")
+    ai_stop = parsed.get("stop_loss")
+    ai_target = int(ai_target) if ai_target and int(ai_target) > 0 else None
+    ai_stop = int(ai_stop) if ai_stop and int(ai_stop) > 0 else None
+
+    # TP/SL 방식 결정: AI 제공 > 동적 계산
+    tp_sl_method = "legacy_fixed"
+    final_target = ai_target
+    final_stop = ai_stop
+
+    if ai_target and ai_stop:
+        # AI가 유효한 값을 제공한 경우
+        tp_sl_method = "ai_provided"
+    elif price_at_signal:
+        # AI 미제공 시 동적 계산으로 폴백
+        try:
+            from app.services.dynamic_tp_sl import calculate_dynamic_tp_sl
+            dynamic_result = await calculate_dynamic_tp_sl(
+                stock_code=stock.stock_code,
+                entry_price=price_at_signal,
+                confidence=confidence_val,
+                sector_id=stock.sector_id,
+                db=db,
+            )
+            final_target = dynamic_result["target_price"]
+            final_stop = dynamic_result["stop_loss"]
+            tp_sl_method = dynamic_result["method"]
+        except Exception as _e:
+            # 동적 계산 실패 시 기존 고정 비율 사용
+            import logging as _log
+            _log.getLogger(__name__).warning("동적 TP/SL 계산 실패, 고정 비율 사용: %s", _e)
+            final_target = int(price_at_signal * 1.10)
+            final_stop = int(price_at_signal * 0.95)
+            tp_sl_method = "legacy_fixed"
+
     signal = FundSignal(
         stock_id=stock_id,
         signal=parsed.get("signal", "hold"),
-        confidence=min(max(float(parsed.get("confidence", 0.5)), 0.0), 1.0),
-        target_price=parsed.get("target_price") or (int(price_at_signal * 1.10) if price_at_signal else None),
-        stop_loss=parsed.get("stop_loss") or (int(price_at_signal * 0.95) if price_at_signal else None),
+        confidence=confidence_val,
+        target_price=final_target,
+        stop_loss=final_stop,
         reasoning=parsed.get("reasoning", "분석 실패"),
         news_summary=parsed.get("news_summary"),
         financial_summary=parsed.get("financial_summary"),
@@ -1693,6 +1735,11 @@ async def analyze_stock(
         price_at_signal=price_at_signal,
         ai_model=ai_model_used,
     )
+    # SPEC-AI-005: TP/SL 방식 기록 (컬럼 없는 환경 대비 안전 처리)
+    try:
+        signal.tp_sl_method = tp_sl_method
+    except Exception:
+        pass
 
     # REQ-AI-004: Bayesian confidence 보정 (컬럼 없어도 안전)
     if accuracy["total"] >= 10:
@@ -2126,8 +2173,8 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
       "stock": "종목명 (반드시 위 후보 종목 데이터에 있는 종목명과 동일하게)",
       "action": "적극매수 또는 매수 또는 관망 또는 회피",
       "reason": "5-7문장으로 상세 분석. 반드시 다음 4가지를 모두 포함: [밸류에이션] PER {{}}, 업종평균 PER {{}}, PBR {{}}, ROE {{}}%로 업종 대비 저평가/고평가 판단. [주가흐름/수급] 5일 {{}}%, 20일 {{}}% 변동, 외국인 {{}}주/기관 {{}}주 순매수로 수급 양호/불량. [카탈리스트] 해당 종목과 관련된 뉴스/공시의 구체적 내용과 주가 영향 분석. [리스크] 매크로 리스크, 업황 리스크, 밸류에이션 리스크 등 구체적 위험 요소.",
-      "target_price": 0,
-      "stop_loss": 0
+      "target_price": 현재가 대비 +5%~+20% 범위의 목표가 정수 (0 또는 null 금지),
+      "stop_loss": 현재가 대비 -3%~-10% 범위의 손절가 정수 (0 또는 null 금지)
     }}
   ],
 
@@ -2165,7 +2212,9 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
 
 ## 기타 규칙
 6. stock_picks는 반드시 후보 종목 데이터의 수치를 직접 인용하여 분석. 데이터 없이 추측 금지.
-7. target_price(목표가)는 현재가 대비 +5%~+20%, stop_loss(손절가)는 현재가 대비 -3%~-10%.
+7. target_price와 stop_loss는 반드시 0이 아닌 구체적 정수로 기입. null/0 금지.
+   예시1: 현재가 50,000원 → target_price: 55000, stop_loss: 47500
+   예시2: 현재가 12,300원 → target_price: 14000, stop_loss: 11500
 8. stock_picks는 후보 종목 데이터가 제공된 경우 3-5개 종목 포함. 후보 종목 데이터가 없으면 빈 배열 [] 허용. 데이터 없는 종목명 추측/창작 절대 금지. 데이터 있을 경우 "적극매수"는 최대 1개. 매수 매력 없으면 전부 "관망"/"회피"로.
 9. sector_highlights는 3-5개 섹터 배열.
 10. 한자(漢字) 절대 사용 금지. 순수 한글만 사용하세요.
