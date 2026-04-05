@@ -4,16 +4,42 @@ on:
   push:
     branches: [main]
 
+# 동일 브랜치에서 새 push 시 이전 실행 자동 취소
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # ──────────────────────────────────────────────
-  # Job 1: 백엔드 테스트
-  # ──────────────────────────────────────────────
+  # 변경 감지: backend / frontend 변경 여부 판별
+  # ──────────────────��───────────────────────────
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+            frontend:
+              - 'frontend/**'
+
+  # ───��──────────────────────────────────────────
+  # Job 1: 백엔드 테스트 (backend 변경 시만 실행)
+  # ─────────���────────────────────────────��───────
   backend-test:
     name: Backend Tests
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
 
     services:
-      # PostgreSQL 서비스 컨테이너
       postgres:
         image: postgres:16-alpine
         env:
@@ -24,20 +50,19 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd="pg_isready -U postgres"
-          --health-interval=10s
-          --health-timeout=5s
+          --health-interval=5s
+          --health-timeout=3s
           --health-retries=5
 
-      # Redis 서비스 컨테이너
       redis:
         image: redis:7-alpine
         ports:
           - 6379:6379
         options: >-
           --health-cmd="redis-cli ping"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=3
 
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/newshive_test
@@ -69,11 +94,13 @@ jobs:
           cd backend
           python -m pytest tests/ -x -q --tb=short
 
-  # ──────────────────────────────────────────────
-  # Job 2: 백엔드 린트 (ruff)
-  # ──────────────────────────────────────────────
+  # ─��──────────────────────────────────────��─────
+  # Job 2: 백엔드 린트 (backend 변경 시만 실행)
+  # ───────────────────────────────────────────���──
   backend-lint:
     name: Backend Lint
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -93,11 +120,13 @@ jobs:
           cd backend
           ruff check app/
 
-  # ──────────────────────────────────────────────
-  # Job 3: 프론트엔드 타입 체크 + 빌드 검증
-  # ──────────────────────────────────────────────
+  # ───────��───────────────────────────────���──────
+  # Job 3: 프론트엔드 체크 (frontend 변경 시만 실���)
+  # ─────────────────────────────────────────���────
   frontend-check:
     name: Frontend Check
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -125,4 +154,3 @@ jobs:
         run: |
           cd frontend
           npm run build
-
