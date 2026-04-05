@@ -340,6 +340,15 @@ def get_tp_sl_backtest(db: Session = Depends(get_db)):
     }
 
 
+@router.post("/migrate-tp-sl")
+async def migrate_legacy_tp_sl(db: Session = Depends(get_db)):
+    """레거시 포지션의 TP/SL을 ATR 기반으로 재계산 (일회성, SPEC-AI-005)."""
+    from app.services.dynamic_tp_sl import recalculate_legacy_positions
+
+    result = await recalculate_legacy_positions(db)
+    return result
+
+
 @router.post("/reset")
 def reset_portfolio(db: Session = Depends(get_db)):
     """포트폴리오 초기화 (모든 매매 기록 삭제, 자본금 리셋)."""
