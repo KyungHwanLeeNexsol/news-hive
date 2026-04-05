@@ -43,34 +43,8 @@ jobs:
     if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
 
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: newshive_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd="pg_isready -U postgres"
-          --health-interval=5s
-          --health-timeout=3s
-          --health-retries=5
-
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd="redis-cli ping"
-          --health-interval=5s
-          --health-timeout=3s
-          --health-retries=3
-
-    env:
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/newshive_test
-      REDIS_URL: redis://localhost:6379/0
+    # SQLite 인메모리 DB 사용 (conftest.py 기본값)
+    # PostgreSQL/Redis 서비스 컨테이너 불필요 → 시작 시간 ~2분 절감
 
     steps:
       - name: Checkout
@@ -88,15 +62,10 @@ jobs:
           cd backend
           pip install -r requirements.txt
 
-      - name: Run database migrations
+      - name: Run tests (parallel)
         run: |
           cd backend
-          alembic upgrade head
-
-      - name: Run tests
-        run: |
-          cd backend
-          python -m pytest tests/ -x -q --tb=short
+          python -m pytest tests/ -n 4 -q --tb=short
 
   # ─��──────────────────────────────────────��─────
   # Job 2: 백엔드 린트 (backend 변경 시만 실행)
