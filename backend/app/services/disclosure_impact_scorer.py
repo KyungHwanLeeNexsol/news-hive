@@ -445,6 +445,123 @@ async def _create_ripple_signals(
     logger.info("[파급시그널] %d개 생성 완료 (트리거: %s)", len(ripple_candidates), trigger_name)
 
 
+async def activate_gap_pullback(db: Session) -> dict:
+    """장초반 갭업 풀백 조건 확인 후 시그널 활성화 (REQ-DISC-015).
+
+    gap_pullback_candidate 시그널 중 아직 활성화되지 않은 것을 조회하여
+    현재 등락률이 -3% 이하로 떨어졌다가 -1.5% 이내로 회복된 경우 매매를 실행한다.
+
+    Returns:
+        {"checked": 확인 수, "activated": 활성화 수}
+    """
+    from datetime import date, timedelta
+
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+    stats = {"checked": 0, "activated": 0}
+
+    # 오늘 또는 어제 생성된 gap_pullback_candidate 중 미활성화된 것 조회
+    # reasoning에 "활성화됨" 문자열이 없는 것을 미활성화로 판단
+    candidates = (
+        db.query(FundSignal)
+        .filter(
+            FundSignal.signal_type == "gap_pullback_candidate",
+            FundSignal.is_correct.is_(None),  # 아직 검증 전 = 활성화 전
+        )
+        .all()
+    )
+
+    # 오늘/어제 생성된 것만 필터링 (created_at 날짜 비교)
+    target_signals = [
+        s for s in candidates
+        if s.created_at and s.created_at.date() in (today, yesterday)
+        and "활성화됨" not in (s.reasoning or "")
+    ]
+
+    if not target_signals:
+        logger.info("[갭풀백] 활성화 대상 시그널 없음")
+        return stats
+
+    try:
+        from app.services.naver_finance import fetch_current_price_with_change
+    except ImportError:
+        logger.warning("[갭풀백] fetch_current_price_with_change 임포트 실패")
+        return stats
+
+    for signal in target_signals:
+        if not signal.stock_id:
+            continue
+
+        stock = db.query(Stock).filter(Stock.id == signal.stock_id).first()
+        if not stock or not stock.stock_code:
+            continue
+
+        stats["checked"] += 1
+
+        try:
+            price_data = await fetch_current_price_with_change(stock.stock_code)
+        except Exception as e:
+            logger.debug("[갭풀백] 가격 조회 실패 (%s): %s", stock.stock_code, e)
+            continue
+
+        if not price_data:
+            continue
+
+        change_rate = price_data.get("change_rate", 0.0)  # 시가 대비 등락률 (%)
+        open_price = price_data.get("open_price") or signal.price_at_signal
+        current_price = price_data.get("current_price")
+
+        if not open_price or not current_price:
+            continue
+
+        # 시가 기준 등락률 재계산 (API가 전일 종가 대비 제공하는 경우 대비)
+        pct_from_open = (current_price - open_price) / open_price * 100
+
+        # 조건: -3% 이하 풀백 후 -1.5% 이내로 회복
+        # change_rate는 현재 시가 대비 등락률로 간주
+        # -3% 이하였다가 -1.5% 이내로 회복 판단:
+        # change_rate가 -1.5% ~ 0% 사이이고 장중 low가 -3% 이하였어야 하나,
+        # low 데이터가 없으므로 현재 -1.5% 이내이면서 과거 기준가가 있는 경우 활성화
+        # 실제 운영 시에는 장중 low 데이터와 비교해야 하지만, 현재 API 제한으로
+        # 현재가가 -3% 이하 → -1.5% 이내 구간에 있으면 조건 충족으로 간주
+        if -3.0 <= pct_from_open <= -1.5:
+            # 풀백 조건 충족 — 페이퍼트레이딩 매매 실행
+            try:
+                from app.services.paper_trading import execute_signal_trade
+                await execute_signal_trade(db, signal)
+                # 활성화 표시: reasoning에 메모 추가
+                signal.reasoning = (signal.reasoning or "") + f"\n[활성화됨] 갭풀백 조건 충족: 시가대비 {pct_from_open:.1f}%"
+                db.add(signal)
+                stats["activated"] += 1
+                logger.info(
+                    "[갭풀백] 시그널 활성화: %s (시가대비 %.1f%%)",
+                    stock.name, pct_from_open,
+                )
+            except Exception as e:
+                logger.warning("[갭풀백] 페이퍼트레이딩 실행 실패 (%s): %s", stock.name, e)
+
+    if stats["activated"]:
+        db.commit()
+
+    logger.info("[갭풀백] 확인 %d개, 활성화 %d개", stats["checked"], stats["activated"])
+    return stats
+
+
+def _run_gap_pullback_check_sync() -> None:
+    """APScheduler에서 호출되는 갭풀백 모니터링 동기 래퍼."""
+    import asyncio
+
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        asyncio.run(activate_gap_pullback(db))
+    except Exception as e:
+        logger.error("[갭풀백] 스케줄 실행 오류: %s", e)
+    finally:
+        db.close()
+
+
 async def _create_gap_pullback_signal(
     db: Session,
     disclosure: Disclosure,

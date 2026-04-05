@@ -73,6 +73,7 @@ def _enrich_signal(signal: FundSignal) -> FundSignalResponse:
         is_correct=signal.is_correct,
         return_pct=signal.return_pct,
         verified_at=signal.verified_at,
+        disclosure_id=signal.disclosure_id,
     )
 
 
@@ -422,6 +423,56 @@ async def get_disclosure_signals(
 
     signals = q.order_by(FundSignal.created_at.desc()).limit(limit).all()
     return [_enrich_signal(s) for s in signals]
+
+
+@router.get("/backtest-stats", response_model=dict)
+async def backtest_stats_by_disclosure_type(
+    days: int = Query(30, ge=7, le=90),
+    db: Session = Depends(get_db),
+):
+    """공시 기반 시그널 유형별 백테스트 통계 (AC-008).
+
+    hit_rate, avg_return_pct, total_signals, winning_signals를
+    공시 시그널 유형(disclosure_impact / sector_ripple / gap_pullback_candidate)별로 반환한다.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+    disclosure_signal_types = [
+        "disclosure_impact",
+        "sector_ripple",
+        "gap_pullback_candidate",
+    ]
+    result: dict = {}
+
+    for stype in disclosure_signal_types:
+        q = db.query(FundSignal).filter(
+            FundSignal.created_at >= cutoff,
+            FundSignal.signal_type == stype,
+            FundSignal.is_correct.isnot(None),
+        )
+        signals = q.all()
+        total = len(signals)
+
+        if total == 0:
+            result[stype] = {
+                "hit_rate": 0.0,
+                "avg_return_pct": 0.0,
+                "total_signals": 0,
+                "winning_signals": 0,
+            }
+            continue
+
+        winning = sum(1 for s in signals if s.is_correct is True)
+        returns = [s.return_pct for s in signals if s.return_pct is not None]
+
+        result[stype] = {
+            "hit_rate": round(winning / total, 4),
+            "avg_return_pct": round(sum(returns) / len(returns), 2) if returns else 0.0,
+            "total_signals": total,
+            "winning_signals": winning,
+        }
+
+    return result
 
 
 @router.get("/backtest-by-type", response_model=dict)

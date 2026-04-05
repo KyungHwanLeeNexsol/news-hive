@@ -131,6 +131,13 @@ async def verify_signals(db: Session) -> dict:
 
     price_cache: dict[str, int | None] = {}
 
+    # 공시 기반 시그널 유형 목록
+    _DISCLOSURE_SIGNAL_TYPES = frozenset({
+        "disclosure_impact",
+        "sector_ripple",
+        "gap_pullback_candidate",
+    })
+
     for signal in unverified:
         stock = stock_map.get(signal.stock_id)
         if not stock:
@@ -139,6 +146,12 @@ async def verify_signals(db: Session) -> dict:
         age_days = (now - signal.created_at).days
         if age_days < 1:
             continue
+
+        # REQ-DISC-016: gap_pullback_candidate는 활성화된 경우만 검증
+        # reasoning에 "활성화됨" 문자열이 없으면 매매가 실행되지 않은 것 → 검증 스킵
+        if signal.signal_type == "gap_pullback_candidate":
+            if "활성화됨" not in (signal.reasoning or ""):
+                continue
 
         # 현재가 조회 (캐시)
         if stock.stock_code not in price_cache:
@@ -161,7 +174,11 @@ async def verify_signals(db: Session) -> dict:
             updated = True
 
         # 5일 후 최종 검증
-        if age_days >= 5 and signal.price_after_5d is None:
+        # REQ-DISC-018: 공시 기반 시그널은 3일 후 검증 (더 빠른 반영 주기)
+        is_disclosure_signal = signal.signal_type in _DISCLOSURE_SIGNAL_TYPES
+        verify_threshold_days = 3 if is_disclosure_signal else 5
+
+        if age_days >= verify_threshold_days and signal.price_after_5d is None:
             signal.price_after_5d = current_price
 
             # 적중 여부 판단

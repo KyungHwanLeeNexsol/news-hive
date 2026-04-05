@@ -367,6 +367,16 @@ def _run_exit_check():
         db.close()
 
 
+def _run_gap_pullback_check():
+    """갭업 풀백 모니터링 (REQ-DISC-015). 장초반 10:00~11:30 KST 15분 간격 실행."""
+    if not _is_kr_market_open():
+        logger.debug("주말 — 갭풀백 체크 스킵")
+        return
+
+    from app.services.disclosure_impact_scorer import _run_gap_pullback_check_sync
+    _run_gap_pullback_check_sync()
+
+
 @retry_with_backoff(max_attempts=3)
 def _run_ml_feature_capture():
     """일별 ML 피처 스냅샷 생성 (REQ-025)."""
@@ -585,6 +595,29 @@ def start_scheduler():
         id="ml_feature_capture",
         replace_existing=True,
     )
+    # REQ-DISC-015: 갭업 풀백 모니터링 (평일 10:00~11:30 KST, 15분 간격)
+    for _minute_offset in [0, 15, 30, 45]:
+        scheduler.add_job(
+            _run_gap_pullback_check,
+            "cron",
+            day_of_week="mon-fri",
+            hour=10,
+            minute=_minute_offset,
+            timezone="Asia/Seoul",
+            id=f"gap_pullback_check_10{_minute_offset:02d}",
+            replace_existing=True,
+        )
+    for _minute_offset in [0, 15, 30]:
+        scheduler.add_job(
+            _run_gap_pullback_check,
+            "cron",
+            day_of_week="mon-fri",
+            hour=11,
+            minute=_minute_offset,
+            timezone="Asia/Seoul",
+            id=f"gap_pullback_check_11{_minute_offset:02d}",
+            replace_existing=True,
+        )
     scheduler.start()
     logger.info(
         f"Scheduler started: crawling every {interval} min, "
@@ -597,7 +630,8 @@ def start_scheduler():
         f"fast verify every 1h, paper exit check every 1h, "
         f"portfolio snapshot at 16:00 KST, "
         f"sector momentum at 16:30 KST, "
-        f"ML feature capture at 09:00 KST"
+        f"ML feature capture at 09:00 KST, "
+        f"gap pullback check at 10:00~11:30 KST every 15min"
     )
 
 

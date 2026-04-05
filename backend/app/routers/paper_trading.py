@@ -109,6 +109,95 @@ def get_snapshots(days: int = 30, db: Session = Depends(get_db)):
     ]
 
 
+@router.get("/paper-performance")
+def get_disclosure_paper_performance(db: Session = Depends(get_db)):
+    """공시 기반 시그널 페이퍼 트레이딩 성과 집계 (TASK-004).
+
+    signal_type이 공시 관련인 FundSignal과 연결된 VirtualTrade를 조회하여
+    총 매매 건수, 승률, 평균 수익률 등을 집계해 반환한다.
+    """
+    from app.models.fund_signal import FundSignal
+
+    # 공시 기반 시그널 유형 목록
+    disclosure_types = ["disclosure_impact", "sector_ripple", "gap_pullback_candidate"]
+
+    # 공시 관련 FundSignal ID 조회
+    signal_ids = [
+        row[0]
+        for row in db.query(FundSignal.id)
+        .filter(FundSignal.signal_type.in_(disclosure_types))
+        .all()
+    ]
+
+    if not signal_ids:
+        return {
+            "total_trades": 0,
+            "closed_trades": 0,
+            "open_trades": 0,
+            "win_rate": 0.0,
+            "avg_return_pct": 0.0,
+            "total_pnl": 0,
+            "by_signal_type": {},
+        }
+
+    # 해당 시그널에 연결된 VirtualTrade 조회
+    trades = (
+        db.query(VirtualTrade)
+        .filter(VirtualTrade.signal_id.in_(signal_ids))
+        .all()
+    )
+
+    closed = [t for t in trades if not t.is_open and t.pnl is not None]
+    open_trades = [t for t in trades if t.is_open]
+
+    winning = [t for t in closed if (t.pnl or 0) > 0]
+    returns = [t.return_pct for t in closed if t.return_pct is not None]
+    total_pnl = sum(t.pnl or 0 for t in closed)
+
+    # 공시 유형별 세분화
+    # FundSignal.signal_type을 signal_id로 매핑
+    signal_type_map: dict[int, str] = {
+        row[0]: row[1]
+        for row in db.query(FundSignal.id, FundSignal.signal_type)
+        .filter(FundSignal.id.in_(signal_ids))
+        .all()
+    }
+
+    by_type: dict[str, dict] = {stype: {"trades": 0, "closed": 0, "wins": 0, "returns": []} for stype in disclosure_types}
+    for t in trades:
+        stype = signal_type_map.get(t.signal_id)
+        if stype and stype in by_type:
+            by_type[stype]["trades"] += 1
+            if not t.is_open and t.pnl is not None:
+                by_type[stype]["closed"] += 1
+                if (t.pnl or 0) > 0:
+                    by_type[stype]["wins"] += 1
+                if t.return_pct is not None:
+                    by_type[stype]["returns"].append(t.return_pct)
+
+    by_signal_type: dict[str, dict] = {}
+    for stype, data in by_type.items():
+        closed_count = data["closed"]
+        wins = data["wins"]
+        rets = data["returns"]
+        by_signal_type[stype] = {
+            "total_trades": data["trades"],
+            "closed_trades": closed_count,
+            "win_rate": round(wins / closed_count, 4) if closed_count > 0 else 0.0,
+            "avg_return_pct": round(sum(rets) / len(rets), 2) if rets else 0.0,
+        }
+
+    return {
+        "total_trades": len(trades),
+        "closed_trades": len(closed),
+        "open_trades": len(open_trades),
+        "win_rate": round(len(winning) / len(closed), 4) if closed else 0.0,
+        "avg_return_pct": round(sum(returns) / len(returns), 2) if returns else 0.0,
+        "total_pnl": total_pnl,
+        "by_signal_type": by_signal_type,
+    }
+
+
 @router.post("/reset")
 def reset_portfolio(db: Session = Depends(get_db)):
     """포트폴리오 초기화 (모든 매매 기록 삭제, 자본금 리셋)."""
