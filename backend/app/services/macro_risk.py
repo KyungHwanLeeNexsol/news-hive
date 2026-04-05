@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models.macro_alert import MacroAlert
 from app.models.news import NewsArticle
 
@@ -75,8 +76,6 @@ EXCLUDE_CONTEXT = [
 ]
 
 # 설정에서 매크로 리스크 임계치 로드
-from app.config import settings
-
 WINDOW_HOURS = settings.MACRO_RISK_WINDOW_HOURS          # 리스크 뉴스 집계 윈도우 (시간)
 WARNING_THRESHOLD = settings.MACRO_RISK_WARNING_THRESHOLD  # warning 알림 임계치 (기사 수)
 CRITICAL_THRESHOLD = settings.MACRO_RISK_CRITICAL_THRESHOLD  # critical 알림 임계치 (기사 수)

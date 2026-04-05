@@ -16,6 +16,8 @@ from typing import Optional
 import httpx
 from bs4 import BeautifulSoup
 
+from app.config import settings as _settings
+
 logger = logging.getLogger(__name__)
 
 SECTOR_LIST_URL = "https://finance.naver.com/sise/sise_group.naver?type=upjong"
@@ -27,7 +29,6 @@ HEADERS = {
 }
 
 # 설정에서 캐시 TTL 로드
-from app.config import settings as _settings
 _CACHE_TTL_MARKET_OPEN = _settings.PRICE_CACHE_TTL_MARKET_OPEN    # 장중 캐시 TTL (초)
 _CACHE_TTL_MARKET_CLOSED = _settings.PRICE_CACHE_TTL_MARKET_CLOSED  # 장외 캐시 TTL (초)
 

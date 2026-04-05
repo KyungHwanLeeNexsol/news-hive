@@ -543,7 +543,7 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
             params[f"sr{j}"] = ad["source"]
             params[f"pa{j}"] = ad.get("published_at")
             # 감성: AI 분류 결과 우선, 없으면 키워드 기반 6단계 분류
-            params[f"se{j}"] = ad.get("_ai_sentiment") or classify_sentiment(ad["title"])
+            params[f"se{j}"] = ad.get("_ai_sentiment") or classify_sentiment(ad["title"])  # noqa: F823
             params[f"ct{j}"] = ad.get("_content")
             # 긴급도 분류
             params[f"ug{j}"] = _classify_urgency(ad["title"])
