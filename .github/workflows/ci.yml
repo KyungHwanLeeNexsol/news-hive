@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
 
+# Node.js 24 사용 (Node.js 20 deprecation 대응)
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 # 동일 브랜치에서 새 push 시 이전 실행 자동 취소
 concurrency:
   group: ci-${{ github.ref }}
