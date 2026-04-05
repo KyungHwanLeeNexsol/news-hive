@@ -14,6 +14,9 @@
 | 언어 (백엔드) | Python | 3.13+ | 비동기 서비스 |
 | 데이터베이스 | PostgreSQL | 16 | 메인 데이터 저장소 |
 | 스케줄러 | APScheduler | - | 백그라운드 예약 작업 |
+| 테스트 병렬화 | pytest-xdist | - | pytest 테스트 병렬 실행 (11min → 8sec) |
+| CI/CD | GitHub Actions | - | 자동 테스트 및 배포 파이프라인 |
+| Node.js (CI) | Node.js | 24 (LTS) | GitHub Actions 환경 |
 | AI (주) | Google Gemini | 1.5 Flash | 뉴스 분류, 브리핑 생성 |
 | AI (폴백1) | Groq | - | 고속 추론 폴백 |
 | AI (폴백2) | OpenRouter | - | 다양한 모델 폴백 |
@@ -308,6 +311,7 @@ npm run build                     # 프로덕션 빌드
 | psycopg2-binary | PostgreSQL 드라이버 |
 | python-jose | JWT 인증 |
 | yfinance | 원자재/주식 시세 수집 |
+| pytest-xdist | pytest 분산 테스트 실행 |
 
 ## 주요 npm 패키지
 
@@ -320,3 +324,49 @@ npm run build                     # 프로덕션 빌드
 | recharts | 차트 시각화 |
 | date-fns | 날짜 처리 |
 | swr | 데이터 페칭 및 캐싱 |
+
+---
+
+## 기술적 지표 계산
+
+### ATR (Average True Range) - SPEC-AI-005
+
+ATR은 변동성을 측정하는 기술적 지표로, 동적 익절/손절(TP/SL) 거리를 결정하는 데 사용됩니다.
+
+**계산 공식:**
+- True Range (TR) = max(High - Low, |High - Close_prev|, |Low - Close_prev|)
+- ATR(n) = SMA(TR, n) (기본값 n=14)
+
+**용도:**
+- 손절가 설정: Entry Price - (ATR × 1.5)
+- 익절가 설정: Entry Price + (ATR × 2.0)
+- 트레일링 스탑: 최고가 - (ATR × 1.0)
+
+`technical_indicators.py`의 `calculate_atr()` 함수로 구현되며, `dynamic_tp_sl.py`에서 자동으로 호출됩니다.
+
+### RSI, MACD, 볼린저 밴드
+
+다른 기술적 지표들(RSI, MACD, 볼린저 밴드)은 `technical_indicators.py`에서 계산되며, 투자 시그널 생성 및 일일 브리핑에 활용됩니다.
+
+---
+
+## CI/CD 최적화 (최근 개선사항)
+
+### 테스트 병렬화
+
+기존: 11분 소요 → 현재: 8초 소요 (pytest-xdist 사용)
+
+- GitHub Actions에서 pytest-xdist를 활용한 분산 테스트 실행
+- 테스트 스위트를 병렬 워커로 분산 처리
+- SQLite 인메모리 데이터베이스로 각 워커 격리
+
+### 서비스 컨테이너 제거
+
+- PostgreSQL 서비스 컨테이너 제거 (SQLite 인메모리 사용)
+- Redis 서비스 컨테이너 제거
+- 빌드 시간 단축 및 CI 비용 절감
+
+### Node.js 버전 통일
+
+- GitHub Actions에서 Node.js 24 (LTS) 강제 지정
+- 프론트엔드 빌드 일관성 확보

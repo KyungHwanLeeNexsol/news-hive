@@ -29,7 +29,8 @@ news-hive/
 │   │   │   ├── disclosures.py        # DART 공시 조회
 │   │   │   ├── alerts.py             # 매크로 알림
 │   │   │   ├── events.py             # 경제 이벤트
-│   │   │   ├── fund_manager.py       # 투자 시그널 및 브리핑
+│   │   │   ├── fund_manager.py       # 투자 시그널, 브리핑, TP/SL 통계
+│   │   │   ├── paper_trading.py      # 페이퍼 트레이딩 (시뮬레이션 거래, TP/SL 백테스트)
 │   │   │   ├── auth.py               # 관리자 인증
 │   │   │   ├── health.py             # 헬스체크
 │   │   │   ├── market_status.py      # 시장 상태
@@ -42,7 +43,8 @@ news-hive/
 │   │       ├── ai_classifier.py      # AI 기반 뉴스 분류
 │   │       ├── dart_crawler.py       # DART 공시 크롤러
 │   │       ├── naver_finance.py      # Naver Finance 실시간 주가
-│   │       ├── technical_indicators.py # RSI, MACD, 볼린저 밴드 계산
+│   │       ├── technical_indicators.py # RSI, MACD, 볼린저 밴드, ATR 계산
+│   │       ├── dynamic_tp_sl.py      # 동적 익절/손절 (ATR 기반) (SPEC-AI-005)
 │   │       ├── news_price_impact_service.py  # 뉴스-가격 반응 추적 (스냅샷/백필/통계)
 │   │       ├── commodity_service.py  # 원자재 가격 수집 (yfinance, 장 중/장 외 fallback)
 │   │       └── commodity_news_service.py # 원자재 뉴스 매칭 (제목 기반 키워드 매칭)
@@ -54,9 +56,11 @@ news-hive/
 │   │           ├── us_news.py        # 미국 뉴스 소스
 │   │           └── content_scraper.py # 기사 본문 스크래핑
 │   ├── tests/                        # 백엔드 단위 테스트
-│   │   └── test_disclosure_impact_scorer.py  # 공시 충격 점수 계산 테스트 (40개 케이스)
-│   ├── alembic/                      # DB 마이그레이션 (24개 버전)
+│   │   ├── test_disclosure_impact_scorer.py  # 공시 충격 점수 계산 테스트 (40개 케이스)
+│   │   └── test_dynamic_tp_sl.py     # 동적 TP/SL 테스트 (37개 케이스)
+│   ├── alembic/                      # DB 마이그레이션 (38개 버전)
 │   │   ├── versions/                 # 마이그레이션 파일들
+│   │   │   └── 038_add_dynamic_tp_sl.py # 동적 TP/SL 컬럼 추가
 │   │   └── env.py                    # Alembic 환경 설정
 │   ├── seed/
 │   │   ├── sectors.py               # 한국 증시 업종 초기 데이터
@@ -213,3 +217,53 @@ APScheduler (08:30 KST)
 | 갭업 풀백 감지 (금) | 10:00~11:30 KST | disclosure_impact_scorer.py |
 | 갭업 풀백 감지 (토) | 10:00~11:30 KST | disclosure_impact_scorer.py |
 | 갭업 풀백 감지 (일) | 10:00~11:30 KST | disclosure_impact_scorer.py |
+| 페이퍼 트레이딩 리스크 업데이트 | 15분 | paper_trading.py |
+
+---
+
+## 데이터베이스 테이블 (38개 마이그레이션)
+
+| 테이블 | 용도 |
+|--------|------|
+| sectors | 투자 섹터 (건설기계, 반도체 등) |
+| stocks | 개별 종목 |
+| news_articles | 수집된 뉴스 기사 |
+| news_stock_relations | 뉴스-종목/섹터 매핑 |
+| disclosures | DART 공시 |
+| macro_alerts | 매크로 경제 리스크 알림 |
+| economic_events | 경제 일정 이벤트 |
+| fund_signals | 종목별 투자 시그널 (tp_sl_method 컬럼 추가 in migration 038) |
+| daily_briefings | 일일 AI 브리핑 |
+| portfolio_reports | 포트폴리오 보고서 |
+| news_price_impact | 뉴스-가격 반응 추적 (SPEC-NEWS-001) |
+| commodities | 원자재 마스터 (심볼, 카테고리) |
+| commodity_prices | 원자재 가격 히스토리 |
+| sector_commodity_relations | 섹터-원자재 상관관계 매핑 |
+| news_commodity_relations | 뉴스-원자재 연관 매핑 |
+| stock_relations | 종목 간 관계 그래프 (SPEC-RELATION-001) |
+| virtual_trades | 페이퍼 트레이딩 시뮬레이션 거래 (SPEC-AI-005) |
+
+### virtual_trades 테이블 (migration 038)
+
+| 컬럼 | 타입 | 설명 |
+|------|------|------|
+| id | SERIAL PK | 고유 ID |
+| stock_id | INTEGER (FK) | 종목 ID |
+| signal_id | INTEGER (FK, SET NULL) | 투자 시그널 ID |
+| entry_price | FLOAT NOT NULL | 진입 가격 |
+| entry_at | TIMESTAMP NOT NULL | 진입 시각 |
+| exit_price | FLOAT NULL | 청산 가격 |
+| exit_at | TIMESTAMP NULL | 청산 시각 |
+| tp_price | FLOAT NULL | 익절가 |
+| sl_price | FLOAT NULL | 손절가 |
+| tp_sl_method | VARCHAR(20) NOT NULL | TP/SL 방법 (ATR, fixed, trailing) |
+| trailing_stop_activated | BOOLEAN DEFAULT FALSE | 트레일링 스탑 활성화 여부 |
+| trailing_stop_pct | FLOAT NULL | 트레일링 스탑 퍼센트 |
+| trailing_stop_price | FLOAT NULL | 현재 트레일링 스탑 가격 |
+| max_profit_pct | FLOAT NULL | 최대 수익률 (%) |
+| status | VARCHAR(20) NOT NULL | 상태 (pending, active, closed, tp_hit, sl_hit) |
+| reason | TEXT NULL | 종료 이유 |
+| created_at | TIMESTAMP NOT NULL | 생성 시각 |
+| updated_at | TIMESTAMP NOT NULL | 업데이트 시각 |
+
+인덱스: stock_id, signal_id, status (3개)
