@@ -122,16 +122,31 @@ Pre-execution commands: git status, git diff, git branch, git log, find .moai/sp
 
 ## Phase Sequence
 
-### Phase 0: Deployment Readiness Check
+### Phase 0: Pre-Sync Quality Gate
+
+Purpose: Run the gate workflow (workflows/gate.md) as a fast pre-check before the full deployment readiness verification. Catches lint/format/type errors early and auto-fixes them.
+
+#### Step 0.0.1: Gate Execution
+
+- Execute gate workflow equivalent: lint + format + type-check + test in parallel
+- Auto-fix any fixable issues (lint auto-fix, format auto-fix)
+- If unfixable errors remain: Present summary and offer options via AskUserQuestion
+  - Fix errors (Recommended): Delegate to expert-debug subagent for targeted fixes
+  - Skip gate: Proceed to Phase 0.1 (errors will be caught later but at higher cost)
+  - Abort: Exit sync workflow
+
+Output: gate_report with pass/fail per check category.
+
+### Phase 0.1: Deployment Readiness Check
 
 Purpose: Verify the implementation is deployment-ready before quality verification and documentation sync. Catches deployment-blocking issues early.
 
-#### Step 0.1: Test Passage Verification
+#### Step 0.1.1: Test Passage Verification
 
 - Run full test suite for detected project language
 - Verify all tests pass (zero failures required)
 - If tests fail: Present failure summary and offer options via AskUserQuestion
-  - Fix and retry: Delegate to expert-debug subagent
+  - Fix and retry (Recommended): Delegate to expert-debug subagent
   - Continue anyway: Proceed with warning
   - Abort: Exit sync workflow
 
@@ -240,6 +255,39 @@ The sync phase enforces LSP-based quality gates as configured in quality.yaml:
 #### Step 0.5.5: Generate Quality Report
 
 Aggregate all results into a quality report showing status for test-runner, linter, type-checker, and code-review. Determine overall status (PASS or WARN).
+
+### Phase 0.55: Security Scan (Conditional)
+
+Purpose: Run a targeted security audit on changed files before PR creation. Catches security vulnerabilities that code review alone may miss.
+
+**Activation condition**: Execute this phase ONLY when changed files match security-sensitive patterns:
+- Authentication/authorization files (auth, login, session, token, permission, role)
+- Database interaction files (query, model, migration, schema, repository, dao)
+- API endpoint files (handler, controller, route, endpoint, middleware)
+- User input handling files (form, input, validation, sanitize)
+- Configuration files with secrets (.env, config with credentials)
+
+**Skip condition**: If no changed files match security-sensitive patterns, skip to Phase 0.6. Log: "Security scan skipped: no security-sensitive files changed."
+
+#### Step 0.55.1: Security Analysis
+
+Agent: expert-security subagent
+
+Delegate to expert-security with the security workflow (workflows/security.md) in inline mode:
+- Only CRITICAL findings block the sync pipeline
+- HIGH findings are reported as warnings in PR description
+- MEDIUM and LOW findings are logged in sync report
+- Dependency scan runs only if package files (go.mod, package.json, requirements.txt, etc.) changed
+
+#### Step 0.55.2: Security Gate Decision
+
+If CRITICAL findings exist:
+- Present findings via AskUserQuestion:
+  - Fix now (Recommended): Delegate to expert-security subagent for auto-fix, then re-scan
+  - Continue with warning: Proceed to Phase 0.6 with security warnings embedded in PR description
+  - Abort: Exit sync workflow
+
+If no CRITICAL findings: Proceed to Phase 0.6. Include any HIGH/MEDIUM findings in the sync report.
 
 ### Phase 0.6: MX Tag Validation (Multi-Language)
 
@@ -417,8 +465,16 @@ Include in sync quality report:
 - Analyze Git changes: git status, git diff, categorize changed files
 - Read project configuration: git_strategy.mode, conversation_language, spec_git_workflow
 - Determine synchronization mode from $ARGUMENTS
-- Detect worktree context: Check if git directory contains worktrees/ component
 - Detect branch context: Check current branch name
+
+##### Worktree Context Detection
+
+Detect if the current session is running within a MoAI worktree:
+- Check if current git directory path contains `/.moai/worktrees/` component
+- OR check if `.moai/worktrees/registry.json` has an active entry for current SPEC-ID
+- Store result as `is_worktree_context` boolean for use in Phase 3.4
+
+This affects auto-merge behavior: worktree contexts default to auto-merge.
 
 #### Step 1.3: Project Status Verification
 
@@ -906,27 +962,57 @@ This ensures the developer's working directory is on the base branch, ready for 
 
 Remote branch cleanup after merge is handled by the hosting platform's auto-delete setting (GitHub: "Automatically delete head branches", GitLab: "Delete source branch when merge request is accepted", Bitbucket: "Close source branch"). Local branch cleanup is left to the developer (`git branch -d <branch>`).
 
-#### Step 3.4: Auto-Merge (When --merge flag set)
+#### Step 3.4: Auto-Merge Behavior
 
 Only applies when a PR was created in Step 3.2.
 
-Execution conditions [HARD]:
-- Flag must be explicitly set: --merge
-- All CI/CD checks must pass
-- PR must have zero merge conflicts
-- Minimum reviewer approvals obtained (if Team mode)
+##### Auto-Merge Trigger Conditions
 
-Auto-merge execution:
+Auto-merge trigger conditions:
+- `is_worktree_context == true` AND `--no-merge` flag NOT set
+- OR `--merge` flag explicitly set (deprecated, logged as warning)
+
+When auto-merge is triggered:
+1. Verify all CI/CD checks pass (gh pr checks)
+2. Verify zero merge conflicts (gh pr view --json mergeable)
+3. If all checks pass: Execute `gh pr merge --squash --delete-branch`
+4. If checks fail: Report error with recovery command, do NOT merge
+
+##### Flag Behavior
+
+- `--no-merge`: Skip auto-merge even in worktree context. PR is created but not merged.
+- `--merge`: Deprecated. Logs warning: "The --merge flag is deprecated. Auto-merge is now the default for worktree contexts."
+
+##### Auto-Merge Execution
+
 1. Check CI/CD status via `gh pr checks --watch` (wait for completion)
 2. Check merge conflicts via `gh pr view --json mergeable`
 3. If passing and mergeable: Execute `gh pr merge --squash --delete-branch`
 4. Checkout target branch, fetch latest
 5. Verify local is synchronized with remote
 
-Auto-merge failures:
+##### Auto-Merge Failures
+
 - If CI/CD fails: Report failure, display error details, do NOT merge
 - If merge conflicts: Report conflicts, provide manual resolution guidance, do NOT merge
 - If approvals missing (Team mode): Report pending approvals, do NOT merge
+
+##### Post-Merge Automatic Cleanup
+
+Condition: Auto-merge succeeded AND `workflow.worktree.auto_cleanup == true`
+
+Steps:
+1. Detect worktree path for current SPEC-ID from registry
+2. Execute cleanup equivalent to `moai worktree done SPEC-{ID} --auto --delete-branch`:
+   - Remove worktree directory
+   - Remove feature branch (already deleted by --delete-branch in merge)
+   - Update worktree registry
+3. Log cleanup result
+
+Error handling:
+- Cleanup failure does NOT block or affect merge result
+- On failure: Log warning with manual cleanup command
+- Message: "Worktree cleanup warning: {error}. Manual: `moai worktree done SPEC-{ID}`"
 
 ### Phase 4: Completion and Next Steps
 
@@ -989,6 +1075,7 @@ All of the following must be verified:
 
 - Phase 0: Deployment readiness verified (tests, migrations, env changes, backward compatibility)
 - Phase 0.5: Quality verification completed (tests, linter, type checker, deep code review with auto-fix)
+- Phase 0.55: Security scan completed (if security-sensitive files changed)
 - Phase 0.7: Coverage analysis completed (measurement, gap analysis, test generation, verification)
 - Phase 1: Prerequisites verified, project analyzed, divergence analysis completed, sync plan approved by user
 - Phase 2: Safety backup created and verified, documents synchronized, SPEC documents updated per lifecycle level, project documents updated (if applicable), quality verified, SPEC status updated
@@ -997,6 +1084,38 @@ All of the following must be verified:
 
 ---
 
-Version: 3.5.0
-Updated: 2026-03-11
-Source: Extracted from .claude/commands/moai/3-sync.md v3.4.0. Added deep code review with 4-perspective analysis and auto-fix (Phase 0.5.4 enhanced), coverage analysis with test generation (Phase 0.7 new), SPEC divergence analysis, project document updates, SPEC lifecycle awareness, team mode section, LSP quality gates, strategy-aware git delivery, deployment readiness check, and Context Memory generation in git commits (Step 3.1.1 new) for seamless session resumption and decision tracking across development cycles.
+## Test Scenarios
+
+### Normal Flow
+**Prompt**: "/moai sync SPEC-AUTH-001"
+**Expected Result**:
+- Phase 0: Pre-sync quality gate passes (tests, lint)
+- Phase 0.5: Quality verification confirms TRUST 5 compliance
+- Phase 1: Divergence analysis shows implementation matches SPEC
+- Decision Point: User approves sync plan
+- Phase 2: Documentation updated (README, CHANGELOG, API docs)
+- Phase 2.2.1: SPEC status updated to "implemented"
+- Phase 3: Commits created, PR opened with summary
+
+### Partial Implementation Flow
+**Prompt**: "/moai sync SPEC-AUTH-001" (only backend implemented, frontend pending)
+**Expected Result**:
+- Phase 1.5: Divergence detected - 3/5 acceptance criteria met
+- Sync plan notes partial implementation
+- SPEC status updated to "in-progress" (not "implemented")
+- Documentation reflects completed portions only
+- PR description notes remaining work
+
+### Error Flow
+**Prompt**: "/moai sync" (no SPEC specified, uncommitted changes exist)
+**Expected Result**:
+- Auto-detect: Finds uncommitted changes on current branch
+- AskUserQuestion: "Sync changes on current branch?"
+- If user confirms, syncs based on git diff
+- If no changes found, reports "Nothing to sync"
+
+---
+
+Version: 3.6.0
+Updated: 2026-03-30
+Changes: Added test scenarios.

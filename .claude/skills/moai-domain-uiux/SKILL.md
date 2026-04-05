@@ -2,21 +2,17 @@
 name: moai-domain-uiux
 description: >
   UI/UX design systems specialist covering accessibility, icons, theming,
-  design tokens, and user experience patterns.
-  Use when user asks about design systems, WCAG accessibility compliance, ARIA patterns,
-  icon libraries, dark mode theming, design tokens, or user experience research.
-  Do NOT use for React component coding or frontend implementation
-  (use moai-domain-frontend instead) or shadcn/ui specifics
-  (use moai-library-shadcn instead).
+  design tokens, and user experience patterns. Use when working on design
+  systems, WCAG compliance, ARIA patterns, or dark mode theming.
 license: Apache-2.0
 compatibility: Designed for Claude Code
 allowed-tools: Read Grep Glob mcp__context7__resolve-library-id mcp__context7__get-library-docs
 user-invocable: false
 metadata:
-  version: "3.0.0"
+  version: "3.1.0"
   category: "domain"
   status: "active"
-  updated: "2026-03-11"
+  updated: "2026-03-28"
   modularized: "true"
   tags: "domain, uiux, design-systems, accessibility, components, icons, theming"
 
@@ -52,7 +48,7 @@ Module Organization:
 - Accessibility: modules/accessibility-wcag.md (WCAG 2.2 compliance, testing, navigation)
 - Icons: modules/icon-libraries.md (10+ libraries, selection guide, performance optimization)
 - Theming: modules/theming-system.md (theme system, CSS variables, brand customization)
-- Web Interface Guidelines: modules/web-interface-guidelines.md (Vercel Labs comprehensive UI/UX compliance)
+- Web Interface Guidelines: modules/web-interface-guidelines.md (Vercel Labs comprehensive UI/UX compliance, frontend composition rules)
 - Examples: examples.md (practical implementation examples)
 - Reference: reference.md (external documentation links)
 

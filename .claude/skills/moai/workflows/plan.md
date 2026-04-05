@@ -100,6 +100,32 @@ Tasks for the Explore subagent:
 - Go through related test files to understand expected behavior and edge cases
 - Report comprehensive results for Phase 1B context
 
+### Phase 0.4: UltraThink Auto-Activation (Conditional)
+
+Purpose: Automatically activate deep analysis mode for complex SPECs that benefit from structured reasoning.
+
+**Activation condition**: Evaluate task complexity from Phase 1A exploration results or user request:
+- Complexity score >= 7 (multi-domain, cross-cutting concerns)
+- Request involves architectural decisions (new module, system redesign, migration)
+- Request touches security-critical areas (auth, payment, data isolation)
+- User explicitly includes `ultrathink` keyword in request
+
+**UltraThink vs --deepthink distinction**:
+- `ultrathink`: Claude Code native deep analysis mode — activates extended reasoning within the current agent context. Triggered by keyword detection in user input.
+- `--deepthink`: Sequential Thinking MCP tool invocation — programmatic step-by-step analysis via `mcp__sequential-thinking__sequentialthinking`. Triggered by explicit flag.
+
+When UltraThink auto-activates:
+- Log: "UltraThink mode activated: [reason]"
+- Apply extended reasoning to Phase 0.5 research and Phase 1B SPEC creation
+- Produce deeper analysis in research.md with trade-off comparisons and risk assessments
+- Consider alternative approaches and document rejection rationale
+
+When --deepthink flag is present (can combine with UltraThink):
+- Invoke Sequential Thinking MCP for structured step-by-step analysis
+- Each thinking step documented in research.md
+
+**Skip condition**: Simple, well-scoped features (complexity < 5, single domain, clear requirements). Log: "UltraThink skipped: low complexity task."
+
 ### Phase 0.5: Deep Research (Recommended)
 
 Agent: Explore subagent (deep codebase analysis)
@@ -266,10 +292,40 @@ File generation (all three files created simultaneously):
   - Edge case testing scenarios
   - Performance and quality gate criteria
 
+### Delta Markers for Brownfield Projects
+
+When the SPEC modifies existing code (detected via research.md analysis), apply delta markers:
+
+```
+### [DELTA] {Module Name}
+- [EXISTING] {description} - unchanged context, characterization tests only
+- [MODIFY] {description} - existing code to change, requires characterization tests before modification
+- [NEW] {description} - new code to create, full implementation + new tests
+- [REMOVE] {description} - code to delete, requires dependency analysis and migration verification
+```
+
+Delta markers are OPTIONAL and only suggested for brownfield projects. Greenfield projects skip this.
+
+### spec-compact.md Auto-Generation
+
+After all SPEC files are created, auto-generate `.moai/specs/SPEC-{ID}/spec-compact.md`:
+
+Extract from spec.md:
+- All REQ-XXX requirements (EARS format entries)
+- All acceptance criteria (Given/When/Then scenarios)
+- Files to modify list
+- Exclusions (What NOT to Build) section
+
+Exclude: Overview, technical approach, research references, annotation history.
+
+Purpose: Run phase loads spec-compact.md (~30% token savings) instead of full spec.md.
+Fallback: If generation fails, Run phase uses full spec.md.
+
 Quality constraints:
 - Requirement modules limited to 5 or fewer per SPEC
 - Acceptance criteria minimum 2 Given/When/Then scenarios
 - Technical terms and function names remain in English
+- Exclusions section MUST contain at least 1 entry
 
 ### Phase 2.5: GitHub Issue Creation (Conditional)
 
@@ -365,19 +421,41 @@ Agent: manager-git subagent
 - No branch creation, no manager-git invocation
 - SPEC files remain on current branch
 
-### Phase 3.5: MX Tag Planning (Optional)
+### Phase 3.5: MX Tag Planning [MANDATORY]
 
-Purpose: Identify code locations that will need @MX annotations during implementation.
+Purpose: Identify code locations that will need @MX annotations during implementation. This information is passed to run workflow agents as context constraints.
 
-Execution conditions: SPEC involves modifying existing code OR creating new public APIs.
+Execution conditions: Always executed. Depth varies by scope:
+- **Full scan**: SPEC involves modifying existing code OR creating new public APIs
+- **Lightweight scan**: New feature with no existing code interaction (scan public API surface only)
 
 Tasks:
 - Scan target files for high fan_in functions (potential @MX:ANCHOR)
 - Identify dangerous patterns (goroutines, complexity) for @MX:WARN
 - List magic constants and business rules for @MX:NOTE
-- Document MX tag strategy in plan.md
+- Document MX tag strategy in `plan.md`
+- Output: `mx_plan` section in SPEC document with annotation targets and priorities
 
-Skip conditions: New feature with no existing code interaction.
+### Phase 3.6: SPEC Quality Gate
+
+Purpose: Verify SPEC document quality before proceeding to implementation. Catches incomplete or inconsistent specs early.
+
+Tasks:
+- Verify all EARS-format requirements have corresponding acceptance criteria
+- Check that affected files list is complete (cross-reference with codebase)
+- Validate that MX tag plan covers all high-risk areas (fan_in >= 3, goroutines)
+- Run lightweight security check on SPEC scope (flag if auth/crypto/input-validation areas are touched)
+
+Gate decision:
+- **PASS**: All checks satisfied. Proceed to Decision Point 2.
+- **WARNING**: Minor gaps found (e.g., missing acceptance criteria for edge cases). Present findings and offer fix or continue.
+- **FAIL**: Critical gaps (e.g., no acceptance criteria, security-sensitive scope without security considerations). Must fix before proceeding.
+
+Tool: AskUserQuestion (when WARNING or FAIL)
+Options:
+- Fix SPEC issues (Recommended): Return to SPEC editing with specific gaps highlighted
+- Continue with warnings: Proceed knowing gaps exist (WARNING only, not available for FAIL)
+- Abort: Exit plan workflow
 
 ### Decision Point 2: Development Environment Selection
 
@@ -401,39 +479,44 @@ Options:
 
 Triggered when: User selects "Start Implementation" in Decision Point 3.
 
-**Step 1 — Detect active mode:**
+Purpose: After SPEC creation, detect execution environment and present optimal implementation mode.
+
+**Step 1: Detect active LLM mode**
 Read `.moai/config/sections/llm.yaml` → `llm.team_mode` field:
-- `""` (empty) = CC mode (all agents use Claude)
-- `"glm"` = GLM mode (all agents use GLM)
-- `"cg"` = CG mode (Leader=Claude, Workers=GLM)
+- `""` (empty) or `"cc"`: CC mode (Claude-only)
+- `"glm"`: GLM mode (GLM-only)
+- `"cg"`: CG mode (Claude Leader + GLM Workers)
 
-**Step 2 — Detect tmux availability:**
-Bash: `test -n "$TMUX" && echo "tmux" || echo "no-tmux"`
+**Step 2: Detect tmux availability**
+Check `$TMUX` environment variable via Bash: `test -n "$TMUX" && echo "tmux" || echo "no-tmux"`
 
-**Step 3 — Present options when tmux is available:**
-AskUserQuestion with 3 options (descriptions adapt to active_mode):
+**Step 3: Present options based on detection**
+
+When tmux IS available: AskUserQuestion with 3 options (descriptions adapt to active_mode):
 - Option 1 (Recommended): Worktree + {active_mode}
-  - CC: "독립 worktree에서 CC 모드 실행. 모든 에이전트 Claude. 최고 품질."
-  - GLM: "독립 worktree에서 GLM 모드 실행. 모든 에이전트 GLM. 비용 최적화."
-  - CG: "독립 worktree에서 CG 모드 실행. Leader=Claude, Workers=GLM. 품질-비용 균형."
-- Option 2: Team Mode — 현재 세션에서 Agent Teams 실행. Worktree 없이 직접 실행.
-- Option 3: Sub-agent Mode — 순차 실행. 가장 안정적이고 토큰 효율적.
+  - CC: "Create MoAI worktree with tmux session. All agents use Claude. Highest quality."
+  - GLM: "Create MoAI worktree with tmux session. All agents use GLM. Cost optimized."
+  - CG: "Create MoAI worktree with tmux session. Leader=Claude, Workers=GLM. Balanced quality-cost."
+- Option 2: Team Mode (in-process): Use Agent Teams for parallel implementation within current session. Best for multi-domain features.
+- Option 3: Sub-agent Mode (sequential): Use sequential sub-agents. Best for simple, single-domain tasks.
 
-**Step 3 (tmux unavailable):** AskUserQuestion with 2 options:
-- Option 1 (Recommended): Sub-agent Mode — 순차 실행. tmux 없이 가장 안정적.
-- Option 2: Team Mode (in-process) — 현재 세션에서 Agent Teams 실행.
+When tmux is NOT available: AskUserQuestion with 2 options:
+- Option 1 (Recommended): Sub-agent Mode: Use sequential sub-agents for implementation. Tmux is not available for session isolation.
+- Option 2: Team Mode (in-process): Use Agent Teams for parallel implementation within current session.
 
-**Step 4 — Worktree 선택 시 실행:**
-- CC: 추가 env 설정 불필요. worktree 생성 후 새 tmux 세션에서 claude 실행.
-- GLM: 새 tmux 세션에 injectTmuxSessionEnv()로 GLM env 주입 후 실행.
-- CG: 새 tmux 세션에 injectTmuxSessionEnv() 적용 + settings.local.json에서 GLM env 제거(Leader 격리).
-- 새 tmux 세션에서 worktree 디렉터리로 이동 후 `/moai run SPEC-{ID}` 실행.
-- 현재 세션 종료 (worktree 세션이 독립적으로 실행됨).
+**Step 4: Execute selected mode**
+- **Worktree mode**: Execute `moai worktree new SPEC-{ID} --tmux` to create worktree with tmux session. The tmux session will:
+  - CC mode: Create session, cd to worktree, run `/moai run SPEC-{ID}`
+  - GLM mode: Create session, inject GLM env, cd to worktree, run `/moai run SPEC-{ID}`
+  - CG mode: Create session, inject GLM env to session, clear GLM from settings.local.json, cd to worktree, run `/moai run SPEC-{ID}`
+  - Display: "Implementation started in tmux session: moai-{ProjectName}-{SPEC-ID}"
+- **Team mode**: Proceed to `/moai run SPEC-{ID} --team`
+- **Sub-agent mode**: Proceed to `/moai run SPEC-{ID} --solo`
 
-**Step 5 — Gate 결과를 run 워크플로우에 전달:**
-- `execution_mode`: worktree | team | sub-agent
-- `active_mode`: cc | glm | cg
-- `tmux_available`: true | false
+**Step 5: Gate result passing**
+- Pass the selected execution mode to the run workflow
+- If worktree mode: Run workflow executes in the tmux session (no further action needed from plan)
+- If team/sub-agent mode: Continue to run workflow in current session
 
 ---
 
@@ -457,10 +540,13 @@ All of the following must be verified:
 
 - Phase 1: manager-spec analyzed project and proposed SPEC candidates
 - User approval obtained via AskUserQuestion before SPEC creation
-- Phase 2: All 3 SPEC files created (spec.md, plan.md, acceptance.md)
+- Phase 2: All SPEC files created (spec.md, plan.md, acceptance.md, spec-compact.md)
 - Directory naming follows .moai/specs/SPEC-{ID}/ format
 - YAML frontmatter contains all 8 required fields (including issue_number)
 - EARS structure is complete
+- Exclusions section present with at least 1 entry
+- Delta markers applied for brownfield requirements (if applicable)
+- spec-compact.md auto-generated with requirements + acceptance criteria only
 - Phase 2.5: GitHub Issue created and linked (unless --no-issue)
 - Phase 3: Appropriate git action taken based on flags and user choice
 - If --worktree: SPEC committed before worktree creation
@@ -468,6 +554,35 @@ All of the following must be verified:
 
 ---
 
-Version: 2.7.0
-Updated: 2026-03-11
-Changes: Added Phase 2.5 GitHub Issue creation with bidirectional SPEC-Issue linking, --no-issue flag, issue_number SPEC frontmatter field.
+## Test Scenarios
+
+### Normal Flow
+**Prompt**: "/moai plan JWT authentication with refresh token rotation"
+**Expected Result**:
+- Phase 1A: Explore discovers existing auth files if any
+- Phase 1B: manager-spec designs EARS requirements for JWT auth
+- Annotation cycle: 1-3 iterations refining requirements
+- Phase 2: SPEC-AUTH-001 created with spec.md, plan.md, acceptance.md
+- Phase 2.5: GitHub Issue created and linked to SPEC
+- Phase 3: Feature branch feat/SPEC-AUTH-001-jwt-auth created (if --branch)
+
+### Existing Assets Flow
+**Prompt**: "/moai plan add payment gateway" (existing e-commerce codebase)
+**Expected Result**:
+- Explore discovers existing order, product, user models
+- SPEC references existing models as dependencies
+- plan.md identifies extension points in existing architecture
+- No duplicate functionality proposed
+
+### Error Flow
+**Prompt**: "/moai plan" (no description provided)
+**Expected Result**:
+- AskUserQuestion prompts user for feature description
+- After user provides description, normal flow continues
+- If user cancels, graceful exit with no files created
+
+---
+
+Version: 2.8.0
+Updated: 2026-03-30
+Changes: Added test scenarios, Phase 0.9 JIT Language Detection.

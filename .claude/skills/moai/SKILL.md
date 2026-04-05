@@ -1,12 +1,11 @@
 ---
 name: moai
 description: >
-  MoAI super agent - unified orchestrator for autonomous development.
-  Routes natural language or explicit subcommands (plan, run, sync, fix,
-  loop, mx, project, feedback, review, clean, codemaps, coverage, e2e)
-  to specialized agents.
-  Use for any development task from planning to deployment.
-allowed-tools: Task, AskUserQuestion, TaskCreate, TaskUpdate, TaskList, TaskGet, Bash, Read, Write, Edit, Glob, Grep
+  MoAI unified orchestrator for autonomous development. Routes natural
+  language or subcommands (plan, run, sync, fix, loop, mx, project,
+  feedback, review, clean, codemaps, coverage, e2e) to specialized
+  agents.
+allowed-tools: Agent, AskUserQuestion, TaskCreate, TaskUpdate, TaskList, TaskGet, Bash, Read, Write, Edit, Glob, Grep
 argument-hint: "[subcommand] [args] | \"natural language task\""
 ---
 
@@ -70,6 +69,8 @@ When no flag is provided, the system evaluates task complexity and automatically
 - **coverage** (aliases: cov): Analyze test coverage and generate missing tests
 - **e2e** (aliases: e2e-test): Create and run E2E tests
 - **context** (aliases: ctx, memory): Extract and display git-based context memory
+- **gate** (aliases: check, pre-commit): Lightweight pre-commit quality gate (lint+format+type-check+test)
+- **security** (aliases: audit, sec): Dedicated OWASP security audit with dependency scanning
 
 
 ### Priority 2: SPEC-ID Detection
@@ -81,6 +82,8 @@ Only if Priority 1 did not match: Check if the Raw User Input contains a pattern
 Only if BOTH Priority 1 AND Priority 2 did not match: Classify the intent of the ENTIRE Raw User Input as natural language. This priority is NEVER reached when the first word matches a known subcommand.
 
 - Planning and design language (design, architect, plan, spec, requirements, feature request) routes to **plan**
+- Quality gate language (lint, format, check, pre-commit, quality gate) routes to **gate**
+- Security language (security, audit, owasp, vulnerability, injection, xss, csrf) routes to **security**
 - Error and fix language (fix, error, bug, broken, failing, lint) routes to **fix**
 - Iterative and repeat language (keep fixing, until done, repeat, iterate, all errors) routes to **loop**
 - Documentation language (document, sync, docs, readme, changelog, PR) routes to **sync** or **project**
@@ -119,6 +122,21 @@ Purpose: Synchronize documentation with code changes and prepare pull requests.
 Agents: manager-docs (primary), manager-quality, manager-git
 Modes: auto, force, status, project. Flags: --merge, --skip-mx
 For detailed orchestration: Read ${CLAUDE_SKILL_DIR}/workflows/sync.md
+
+### gate - Pre-Commit Quality Gate
+
+Purpose: Lightweight pre-commit quality check running lint, format, type-check, and tests in parallel. Also integrated into run (Phase 2.75) and sync (Phase 0) workflows as automatic pre-checks.
+Agents: Direct execution (no agent delegation)
+Flags: --fix, --staged, --file PATH
+Integration: Automatically invoked by run workflow (Phase 2.75) and sync workflow (Phase 0.0.1) with --fix behavior.
+For detailed orchestration: Read ${CLAUDE_SKILL_DIR}/workflows/gate.md
+
+### security - OWASP Security Audit
+
+Purpose: Dedicated security audit with OWASP Top 10 analysis, dependency scanning, secrets detection, and data isolation checks.
+Agents: expert-security (primary)
+Flags: --full, --deps, --secrets, --file PATH, --branch BRANCH
+For detailed orchestration: Read /Users/goos/MoAI/moai-adk-go/.claude/skills/moai/workflows/security.md
 
 ### fix - Auto-Fix Errors
 
@@ -211,7 +229,12 @@ For detailed orchestration: Read ${CLAUDE_SKILL_DIR}/workflows/feedback.md
 When this skill is activated, execute the following steps in order:
 
 Step 1 - Parse Arguments:
-Extract subcommand keywords and flags from the Raw User Input. Recognized global flags: --resume [ID], --seq, --deepthink, --team, --solo. When --deepthink is detected, activate Sequential Thinking MCP for deep analysis before execution.
+Extract subcommand keywords and flags from the Raw User Input. Recognized global flags: --resume [ID], --seq, --deepthink, --team, --solo. Also detect `ultrathink` keyword in the input text.
+
+**CRITICAL: Two distinct deep analysis modes:**
+- `--deepthink` flag detected → Invoke Sequential Thinking MCP (`mcp__sequential-thinking__sequentialthinking`) for structured step-by-step analysis. This is an MCP tool call.
+- `ultrathink` keyword detected → Activate Claude's native extended reasoning (high effort mode). Do NOT invoke Sequential Thinking MCP. This is native Claude behavior with no MCP dependency.
+- Both can coexist: `ultrathink --deepthink` activates BOTH independently.
 
 Step 2 - Route to Workflow:
 Apply the Intent Router (Priority 1 through Priority 4) to determine the target workflow. If ambiguous, use AskUserQuestion to clarify with the user.

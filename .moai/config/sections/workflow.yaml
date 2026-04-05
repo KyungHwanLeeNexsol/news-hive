@@ -19,48 +19,11 @@ workflow:
             min_complexity_score: 7
             min_domains_for_team: 3
             min_files_for_team: 10
-        # CG Mode: teammates use Gemini, leader uses Claude
         default_model: sonnet
         delegate_mode: true
         enabled: true
         max_teammates: 10
         patterns:
-            # -------------------------------------------------------
-            # Claude-only patterns (deep reasoning required)
-            # -------------------------------------------------------
-            plan_research:
-                description: Parallel SPEC research and design (Claude Opus - deep reasoning)
-                model: opus
-                roles:
-                    - researcher
-                    - analyst
-                    - architect
-            review:
-                description: Multi-perspective code review (Claude Sonnet - nuanced analysis)
-                model: sonnet
-                roles:
-                    - security-reviewer
-                    - perf-reviewer
-                    - quality-reviewer
-                    - ux-reviewer
-            investigation:
-                description: Competing hypothesis debugging (Claude Haiku - fast, cost-effective)
-                model: haiku
-                roles:
-                    - hypothesis-1
-                    - hypothesis-2
-                    - hypothesis-3
-            # -------------------------------------------------------
-            # CG Mode patterns (teammates use Gemini via proxy)
-            # In CG mode, 'inherit' delegates to Gemini for teammates
-            # -------------------------------------------------------
-            implementation:
-                description: Cross-layer feature implementation (Gemini 2.5 Pro in CG mode)
-                model: inherit
-                roles:
-                    - backend-dev
-                    - frontend-dev
-                    - tester
             design_implementation:
                 description: Cross-layer with UI/UX design (Gemini 2.5 Pro in CG mode)
                 model: inherit
@@ -77,22 +40,80 @@ workflow:
                     - ui-layer
                     - data-layer
                     - quality
+            implementation:
+                description: Cross-layer feature implementation (Gemini 2.5 Pro in CG mode)
+                model: inherit
+                roles:
+                    - backend-dev
+                    - frontend-dev
+                    - tester
+            investigation:
+                description: Competing hypothesis debugging (Claude Haiku - fast, cost-effective)
+                model: haiku
+                roles:
+                    - hypothesis-1
+                    - hypothesis-2
+                    - hypothesis-3
+            plan_research:
+                description: Parallel SPEC research and design (Claude Opus - deep reasoning)
+                model: opus
+                roles:
+                    - researcher
+                    - analyst
+                    - architect
+            review:
+                description: Multi-perspective code review (Claude Sonnet - nuanced analysis)
+                model: sonnet
+                roles:
+                    - security-reviewer
+                    - perf-reviewer
+                    - quality-reviewer
+                    - ux-reviewer
         require_plan_approval: true
+        role_profiles:
+            analyst:
+                description: Requirements analysis and validation
+                isolation: none
+                mode: plan
+                model: sonnet
+            architect:
+                description: Solution design and architecture decisions
+                isolation: none
+                mode: plan
+                model: sonnet
+            designer:
+                description: UI/UX design with MCP design tools
+                isolation: worktree
+                mode: acceptEdits
+                model: sonnet
+            implementer:
+                description: Code implementation (backend, frontend, full-stack)
+                isolation: worktree
+                mode: acceptEdits
+                model: sonnet
+            researcher:
+                description: Read-only codebase exploration and analysis
+                isolation: none
+                mode: plan
+                model: haiku
+            reviewer:
+                description: Code review and quality validation
+                isolation: none
+                mode: plan
+                model: haiku
+            tester:
+                description: Test creation and coverage validation
+                isolation: worktree
+                mode: acceptEdits
+                model: sonnet
         teammate_display: auto
-    # SPEC-WORKTREE-002: Worktree automation settings
-    worktree:
-        auto_create: true
-        auto_merge: true
-        auto_cleanup: true
-        tmux_preferred: true
-        session_name_pattern: "moai-{ProjectName}-{SPEC-ID}"
-        # Sparse checkout paths for large monorepos (Claude Code v2.1.76+)
-        # Uncomment and customize to speed up worktree creation
-        # sparse_paths:
-        #     - "src/"
-        #     - "tests/"
-        #     - "config/"
     token_budget:
         plan: 30000
         run: 180000
         sync: 40000
+    worktree:
+        auto_cleanup: true
+        auto_create: true
+        auto_merge: true
+        session_name_pattern: moai-{ProjectName}-{SPEC-ID}
+        tmux_preferred: true
