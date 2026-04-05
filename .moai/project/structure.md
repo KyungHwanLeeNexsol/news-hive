@@ -35,7 +35,7 @@ news-hive/
 │   │   │   ├── market_status.py      # 시장 상태
 │   │   │   └── deploy.py             # GitHub 웹훅 배포
 │   │   └── services/                 # 비즈니스 로직 서비스
-│   │       ├── scheduler.py          # APScheduler 9개 예약 작업
+│   │       ├── scheduler.py          # APScheduler 16개 예약 작업
 │   │       ├── fund_manager.py       # 투자 시그널 + 브리핑 (52KB, 핵심)
 │   │       ├── ai_client.py          # 멀티 프로바이더 AI 폴백 클라이언트
 │   │       ├── news_crawler.py       # 뉴스 수집 오케스트레이터 (Fuzzy 중복 제거)
@@ -53,6 +53,8 @@ news-hive/
 │   │           ├── korean_rss.py     # 한국 경제 미디어 RSS
 │   │           ├── us_news.py        # 미국 뉴스 소스
 │   │           └── content_scraper.py # 기사 본문 스크래핑
+│   ├── tests/                        # 백엔드 단위 테스트
+│   │   └── test_disclosure_impact_scorer.py  # 공시 충격 점수 계산 테스트 (40개 케이스)
 │   ├── alembic/                      # DB 마이그레이션 (24개 버전)
 │   │   ├── versions/                 # 마이그레이션 파일들
 │   │   └── env.py                    # Alembic 환경 설정
@@ -191,7 +193,7 @@ APScheduler (08:30 KST)
 
 ---
 
-## 스케줄러 작업 목록 (9개)
+## 스케줄러 작업 목록 (16개)
 
 | 작업 | 주기 | 담당 서비스 |
 |------|------|------------|
@@ -204,3 +206,10 @@ APScheduler (08:30 KST)
 | 포트폴리오 보고서 | 1주 | fund_manager.py |
 | 뉴스-가격 반응 백필 | 18:30 KST | news_price_impact_service.py |
 | 90일 초과 impact 정리 | 03:00 KST | news_price_impact_service.py |
+| 갭업 풀백 감지 (월) | 10:00~11:30 KST | disclosure_impact_scorer.py |
+| 갭업 풀백 감지 (화) | 10:00~11:30 KST | disclosure_impact_scorer.py |
+| 갭업 풀백 감지 (수) | 10:00~11:30 KST | disclosure_impact_scorer.py |
+| 갭업 풀백 감지 (목) | 10:00~11:30 KST | disclosure_impact_scorer.py |
+| 갭업 풀백 감지 (금) | 10:00~11:30 KST | disclosure_impact_scorer.py |
+| 갭업 풀백 감지 (토) | 10:00~11:30 KST | disclosure_impact_scorer.py |
+| 갭업 풀백 감지 (일) | 10:00~11:30 KST | disclosure_impact_scorer.py |
