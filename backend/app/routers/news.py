@@ -385,7 +385,6 @@ async def _reclassify_unlinked(db: Session) -> int:
 
     Uses keyword matching first, then AI classification as fallback.
     """
-    from sqlalchemy import and_, exists
     from app.models.sector import Sector
     from app.models.stock import Stock
     from app.services.ai_classifier import KeywordIndex, classify_news

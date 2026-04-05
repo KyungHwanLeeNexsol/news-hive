@@ -8,7 +8,6 @@ DELETE /api/stocks/{id}, GET /api/stocks/{id}/news 엔드포인트를 검증한�
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 
 
 # ---------------------------------------------------------------------------

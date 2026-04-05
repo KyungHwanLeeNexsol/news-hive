@@ -507,7 +507,6 @@ async def activate_gap_pullback(db: Session) -> dict:
         if not price_data:
             continue
 
-        change_rate = price_data.get("change_rate", 0.0)  # 시가 대비 등락률 (%)
         open_price = price_data.get("open_price") or signal.price_at_signal
         current_price = price_data.get("current_price")
 

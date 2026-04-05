@@ -7,9 +7,7 @@
 import hashlib  # noqa: F401  (향후 사용 가능성 유지)
 import hmac
 import logging
-import random
 import secrets
-import string
 import time
 from datetime import datetime, timedelta, timezone
 

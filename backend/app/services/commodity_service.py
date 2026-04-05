@@ -6,7 +6,6 @@ yfinance를 사용하여 원자재 선물 가격을 수집하고,
 
 import logging
 import time
-from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 

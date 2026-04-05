@@ -16,8 +16,6 @@ from app.models.fund_signal import FundSignal
 from app.models.sector_momentum import SectorMomentum
 from app.services.market_context import (
     COMMODITY_DIVERGENCE_CONFIDENCE_PENALTY,
-    COMMODITY_DIVERGENCE_DAYS,
-    PATTERN_MIN_HISTORY_DAYS,
     apply_commodity_adjustment,
     calculate_volatility_level,
     check_commodity_divergence,

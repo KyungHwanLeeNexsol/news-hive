@@ -6,7 +6,7 @@ REQ-AI-010: detect_macro_risks가 async로 전환됨.
 """
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 from app.services.macro_risk import (

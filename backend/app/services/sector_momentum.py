@@ -7,7 +7,7 @@ SPEC-AI-002 Phase 2:
 """
 
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 
 from sqlalchemy import and_, func as sa_func
 from sqlalchemy.orm import Session

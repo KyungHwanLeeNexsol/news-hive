@@ -13,7 +13,6 @@ from app.models.commodity import Commodity, SectorCommodityRelation
 from app.models.news import NewsArticle
 from app.models.news_commodity_relation import NewsCommodityRelation
 from app.models.news_relation import NewsStockRelation
-from app.models.stock import Stock
 from app.services.ai_classifier import is_non_financial_article
 
 logger = logging.getLogger(__name__)

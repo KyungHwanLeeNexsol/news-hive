@@ -1,4 +1,3 @@
-from sqlalchemy.orm import Session
 
 from app.models.news import NewsArticle
 from app.schemas.news import NewsArticleResponse, NewsRelationResponse

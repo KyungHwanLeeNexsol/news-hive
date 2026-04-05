@@ -8,9 +8,7 @@ CircuitBreaker의 핵심 동작을 검증한다:
 """
 
 import time
-from unittest.mock import patch
 
-import pytest
 
 from app.services.circuit_breaker import CircuitBreaker
 

@@ -8,9 +8,8 @@ get_stock_impact_stats, cleanup_old_impacts 함수를 검증한다.
 import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
-import pytest
 from sqlalchemy.orm import Session
 
 from app.models.news_price_impact import NewsPriceImpact

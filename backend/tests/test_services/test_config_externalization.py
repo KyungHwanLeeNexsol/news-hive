@@ -4,7 +4,6 @@ config.py에 추가된 새 설정 필드들이 기본값을 가지며,
 각 서비스에서 올바르게 참조되는지 검증한다.
 """
 
-import pytest
 
 from app.config import Settings
 

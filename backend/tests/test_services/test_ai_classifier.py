@@ -6,8 +6,6 @@
 
 import pytest
 
-from app.models.sector import Sector
-from app.models.stock import Stock
 from app.services.ai_classifier import (
     GLOBAL_KEYWORD_SECTOR_MAP,
     KeywordIndex,
@@ -18,7 +16,6 @@ from app.services.ai_classifier import (
     detect_global_impact,
     get_source_credibility,
     is_non_financial_article,
-    SOURCE_CREDIBILITY,
 )
 
 

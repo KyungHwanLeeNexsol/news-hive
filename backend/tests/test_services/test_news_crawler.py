@@ -4,8 +4,6 @@
 오케스트레이션 로직 (crawl_all_news)을 테스트한다.
 """
 
-import asyncio
-from dataclasses import dataclass, field
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

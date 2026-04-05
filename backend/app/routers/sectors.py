@@ -7,7 +7,6 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
-from app.config import settings
 from app.database import get_db
 from app.models.sector import Sector
 from app.models.stock import Stock
@@ -15,7 +14,6 @@ from app.models.news import NewsArticle
 from app.models.news_relation import NewsStockRelation
 from app.models.sector_insight import SectorInsight
 from app.schemas.sector import SectorCreate, SectorResponse, SectorDetailResponse
-from app.schemas.news import NewsArticleResponse
 from app.routers.utils import format_articles
 
 logger = logging.getLogger(__name__)

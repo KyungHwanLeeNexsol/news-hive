@@ -6,7 +6,6 @@
 
 import logging
 
-from sqlalchemy import text as sa_text
 from sqlalchemy.orm import Session
 
 from app.models.stock_relation import StockRelation

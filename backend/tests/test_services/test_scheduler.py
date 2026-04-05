@@ -4,13 +4,10 @@
 외부 의존성은 모두 mock 처리한다.
 """
 
-import asyncio
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from app.services.scheduler import (
-    _cleanup_old_articles,
     _cleanup_old_disclosures,
     _run_commodity_news_crawl,
     _run_commodity_price_fetch,
@@ -29,7 +26,6 @@ from app.services.scheduler import (
     _update_market_caps,
     start_scheduler,
     stop_scheduler,
-    scheduler,
 )
 
 

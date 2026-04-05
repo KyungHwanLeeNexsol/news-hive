@@ -1,5 +1,5 @@
 """2026년 주요 경제 이벤트 시드 데이터."""
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlalchemy.orm import Session
 

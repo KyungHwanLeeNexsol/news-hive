@@ -8,7 +8,6 @@ DELETE /api/sectors/{id}, GET /api/sectors/{id}/news 엔드포인트를 검증�
 
 from unittest.mock import AsyncMock, patch
 
-import pytest
 
 
 # ---------------------------------------------------------------------------

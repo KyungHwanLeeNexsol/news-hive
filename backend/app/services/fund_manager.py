@@ -12,7 +12,6 @@ from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session, selectinload
 
-from app.config import settings
 from app.models.daily_briefing import DailyBriefing
 from app.models.disclosure import Disclosure
 from app.models.fund_signal import FundSignal

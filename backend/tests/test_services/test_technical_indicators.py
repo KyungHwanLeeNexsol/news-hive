@@ -4,7 +4,6 @@
 순수 수학 함수이므로 mock 없이 직접 테스트한다.
 """
 
-import math
 
 import pytest
 

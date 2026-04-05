@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
-from sqlalchemy import func, or_
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.config import settings

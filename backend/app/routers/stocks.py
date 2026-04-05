@@ -18,7 +18,6 @@ from app.schemas.stock import (
     StockCreate, StockResponse, StockListItem, StockDetailResponse,
     PriceRecordResponse, FinancialPeriodResponse, FinancialsResponse,
 )
-from app.schemas.news import NewsArticleResponse
 from app.routers.utils import format_articles
 from app.seed.sectors import seed_sectors
 from app.seed.stocks import seed_all_stocks
@@ -567,7 +566,6 @@ async def get_news_price_correlation(
     일별 가격 변동률 = (종가 - 전일 종가) / 전일 종가 * 100
     7일 롤링 피어슨 상관계수로 뉴스-가격 연관성을 측정한다.
     """
-    import math
 
     stock = db.query(Stock).filter(Stock.id == stock_id).first()
     if not stock:

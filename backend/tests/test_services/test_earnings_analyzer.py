@@ -11,10 +11,6 @@ from datetime import datetime, timedelta
 import pytest
 from sqlalchemy.orm import Session
 
-from app.models.disclosure import Disclosure
-from app.models.fund_signal import FundSignal
-from app.models.news import NewsArticle
-from app.models.news_relation import NewsStockRelation
 from app.services.earnings_analyzer import (
     SURPRISE_CONFIDENCE_BOOST,
     SURPRISE_CONFIDENCE_THRESHOLD,

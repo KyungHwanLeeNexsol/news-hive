@@ -5,7 +5,6 @@ DDD PRESERVE 단계: 구현 전에 예상 동작을 명세하는 테스트.
 """
 
 import asyncio
-from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

@@ -15,7 +15,7 @@ import logging
 import math
 import time
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date
 
 from sqlalchemy import func as sa_func
 from sqlalchemy.orm import Session

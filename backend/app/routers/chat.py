@@ -131,7 +131,6 @@ def _detect_stock(message: str, stock_code: str | None, db: Session) -> tuple[in
 
 async def _gather_context(stock_id: int, stock_name: str, db: Session) -> tuple[str, list[str]]:
     """종목 관련 컨텍스트를 수집하여 (프롬프트 텍스트, 사용된 소스 목록)을 반환한다."""
-    import asyncio
     from app.models.stock import Stock
     from app.models.news import NewsArticle
     from app.models.news_relation import NewsStockRelation
@@ -175,7 +174,7 @@ async def _gather_context(stock_id: int, stock_name: str, db: Session) -> tuple[
                 date_str = n.published_at.strftime("%m/%d") if n.published_at else "N/A"
                 sentiment_str = f" [{n.sentiment}]" if n.sentiment else ""
                 news_lines.append(f"- {date_str}{sentiment_str} {n.title}")
-            context_parts.append(f"[최근 뉴스]\n" + "\n".join(news_lines))
+            context_parts.append("[최근 뉴스]\n" + "\n".join(news_lines))
             sources_used.append("recent_news")
     except Exception as e:
         logger.warning(f"뉴스 조회 실패: {e}")
@@ -212,7 +211,7 @@ async def _gather_context(stock_id: int, stock_name: str, db: Session) -> tuple[
                 parts.append(f"ROE: {latest.roe:.1f}%")
             if latest.eps:
                 parts.append(f"EPS: {latest.eps:,.0f}원")
-            context_parts.append(f"[재무 데이터]\n" + " | ".join(parts))
+            context_parts.append("[재무 데이터]\n" + " | ".join(parts))
             sources_used.append("financial_data")
     except Exception as e:
         logger.warning(f"재무 데이터 조회 실패: {e}")
@@ -296,7 +295,7 @@ async def _gather_market_context(db: Session) -> tuple[str, list[str]]:
             .all()
         )
         if recent_news:
-            lines = [f"[최근 뉴스 헤드라인 — 최근 12시간]"]
+            lines = ["[최근 뉴스 헤드라인 — 최근 12시간]"]
             for n in recent_news:
                 sentiment_label = {"positive": "긍정", "negative": "부정"}.get(
                     getattr(n, "sentiment", ""), "중립"
@@ -376,7 +375,7 @@ def _build_prompt(
         for msg in recent:
             role_label = "사용자" if msg["role"] == "user" else "AI"
             conv_lines.append(f"{role_label}: {msg['content'][:300]}")
-        parts.append(f"\n[이전 대화]\n" + "\n".join(conv_lines))
+        parts.append("\n[이전 대화]\n" + "\n".join(conv_lines))
 
     parts.append(f"\n[사용자 질문]\n{message}")
 

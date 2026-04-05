@@ -11,7 +11,6 @@ from app.models.daily_briefing import DailyBriefing
 from app.models.fund_signal import FundSignal
 from app.models.portfolio_report import PortfolioReport
 from app.models.stock import Stock
-from app.models.sector import Sector
 from app.schemas.fund_manager import (
     AccuracyStatsResponse,
     AnalyzeRequest,
@@ -257,7 +256,6 @@ async def backtest_signals(
     """
     import math
     from collections import defaultdict
-    from sqlalchemy import func as sqlfunc
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 

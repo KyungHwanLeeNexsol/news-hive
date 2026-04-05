@@ -6,7 +6,6 @@ SPEC-AI-002 IMPROVE 단계: REQ-AI-014, REQ-AI-015 새 기능 테스트.
 
 import json
 
-import pytest
 
 from app.services.factor_scoring import (
     compute_technical_score,

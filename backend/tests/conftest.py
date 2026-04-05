@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
-from sqlalchemy import create_engine, event, Text
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 from fastapi.testclient import TestClient

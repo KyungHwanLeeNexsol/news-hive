@@ -4,9 +4,7 @@ Redis 캐시 모듈 및 Rate Limiter 테스트.
 Redis 없이 실행되며, mock을 사용하여 Redis 연동 로직을 검증한다.
 """
 
-import asyncio
 import json
-import time
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 

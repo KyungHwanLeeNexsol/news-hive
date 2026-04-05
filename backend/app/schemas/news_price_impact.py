@@ -1,6 +1,5 @@
 """뉴스-가격 반응 추적 API 스키마."""
 
-from datetime import datetime
 
 from pydantic import BaseModel
 

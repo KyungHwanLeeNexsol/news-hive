@@ -8,8 +8,8 @@ POST /api/fund/verify 등 엔드포인트를 검증한다.
 """
 
 import time
-from datetime import date, datetime
-from unittest.mock import AsyncMock, patch
+from datetime import date
+from unittest.mock import patch
 
 import pytest
 

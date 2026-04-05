@@ -16,7 +16,6 @@ from app.models.sector_rotation_event import SectorRotationEvent
 from app.services.sector_momentum import (
     CAPITAL_INFLOW_DAYS,
     MAX_SIGNALS_PER_SECTOR,
-    MOMENTUM_THRESHOLD,
     ROTATION_CONFIDENCE_ADJUSTMENT,
     calculate_sector_momentum,
     deduplicate_sector_signals,

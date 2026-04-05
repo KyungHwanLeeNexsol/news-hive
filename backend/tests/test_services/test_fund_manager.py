@@ -8,10 +8,9 @@
 - _gather_disclosures: 공시 수집
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
-import pytest
 from sqlalchemy.orm import Session
 
 from app.services.fund_manager import (

@@ -4,7 +4,6 @@ SPEC-AI-002 REQ-AI-018: DART 실적 공시 예정(D-5) 시점에
 어닝 프리뷰 분석을 생성하고, 공시 후 정확도를 추적한다.
 """
 
-import json
 import logging
 from datetime import datetime, timedelta
 

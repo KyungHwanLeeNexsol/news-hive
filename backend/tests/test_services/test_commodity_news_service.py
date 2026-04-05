@@ -9,16 +9,15 @@ commodity_news_service.py의 핵심 기능을 테스트한다:
 """
 import json
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy.orm import Session
 
-from app.models.commodity import Commodity, CommodityPrice, SectorCommodityRelation
+from app.models.commodity import Commodity, SectorCommodityRelation
 from app.models.news import NewsArticle
 from app.models.news_commodity_relation import NewsCommodityRelation
 from app.models.macro_alert import MacroAlert
-from app.models.sector import Sector
 from app.services.commodity_news_service import (
     classify_commodity_news,
     _determine_impact_direction,
@@ -30,7 +29,6 @@ from app.services.commodity_news_service import (
     classify_commodity_news_with_ai,
     crawl_commodity_news,
     COMMODITY_KEYWORDS_KO,
-    COMMODITY_KEYWORDS_EN,
 )
 
 

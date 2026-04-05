@@ -277,7 +277,7 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
             for a in articles:
                 a["_query"] = None
             return ("korean_rss", articles)
-        except Exception as e:
+        except Exception:
             api_circuit_breaker.record_failure("korean_rss")
             raise
 
@@ -291,7 +291,7 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
             for a in articles:
                 a["_query"] = None
             return ("yahoo", articles)
-        except Exception as e:
+        except Exception:
             api_circuit_breaker.record_failure("yahoo")
             raise
 
@@ -722,7 +722,7 @@ async def detect_coverage_gaps(db: Session) -> list[dict]:
         hours_since_last_news가 None이면 해당 종목에 뉴스가 전혀 없음을 의미한다.
     """
     from datetime import datetime, timedelta, timezone
-    from sqlalchemy import func as sa_func, text as sa_text
+    from sqlalchemy import func as sa_func
 
     now = datetime.now(timezone.utc)
     gap_threshold = now - timedelta(hours=72)
