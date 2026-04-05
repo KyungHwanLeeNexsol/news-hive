@@ -270,7 +270,6 @@ async def generate_sector_insight(sector_id: int, db: Session = Depends(get_db))
         return {"content": cached.content, "created_at": str(cached.created_at), "cached": True}
 
     # Collect recent news titles for this sector
-    stock_ids = [s.id for s in db.query(Stock).filter(Stock.sector_id == sector_id).all()]
     since = datetime.utcnow() - timedelta(days=7)
 
     news_ids_subq = (

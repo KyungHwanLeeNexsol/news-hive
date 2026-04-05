@@ -229,7 +229,6 @@ def check_commodity_alerts(db: Session) -> list[MacroAlert]:
         )
         sector_names = []
         for rel in relations:
-            sector = db.query(Commodity).get(rel.sector_id)
             # sector 이름은 Sector 테이블에서 가져와야 함
             from app.models.sector import Sector
             sec = db.query(Sector).get(rel.sector_id)

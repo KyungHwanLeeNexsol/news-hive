@@ -529,7 +529,7 @@ class TestCrawlCommodityNews:
             category="energy", unit="barrel",
         )
         # 이미 존재하는 기사
-        existing = make_news(title="기존 기사", url="https://test.naver.com/existing")
+        make_news(title="기존 기사", url="https://test.naver.com/existing")
 
         mock_results = [
             {

@@ -294,7 +294,7 @@ class TestWebSocketEndpoint:
         """토픽 없이 연결하면 기본 토픽(alerts,signals,news)이 적용된다."""
         client, mgr = self._get_test_client()
 
-        with client.websocket_connect("/ws") as ws:
+        with client.websocket_connect("/ws"):
             # 기본 토픽 3개에 연결됨
             assert mgr.connection_count == 1
             assert "alerts" in mgr.active_connections

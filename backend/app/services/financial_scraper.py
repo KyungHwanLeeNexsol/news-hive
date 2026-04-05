@@ -276,7 +276,7 @@ def _parse_financial_table(soup: BeautifulSoup) -> dict:
     #
     # Group size = cols + 1 (one estimate column per group)
     annual_group_size = annual_cols + 1  # typically 5
-    quarter_group_size = quarter_cols + 1
+    _ = quarter_cols  # quarter_group_size는 현재 사용하지 않으나 향후 분기별 파싱에 필요
 
     # Annual headers: first annual_cols from Group A (skip the estimate)
     annual_headers = all_headers[:annual_cols]

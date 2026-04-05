@@ -52,7 +52,6 @@ def get_upcoming_earnings(db: Session, days_ahead: int = 5) -> list[dict]:
     # 최근 실적 관련 공시를 조회하여 향후 실적 발표 예상 종목 파악
     # DART는 실적 공시 전에 사전 공시(정정, 예고 등)가 올라오는 패턴
     cutoff_dt = (datetime.now() - timedelta(days=days_ahead)).strftime("%Y%m%d")
-    future_dt = (datetime.now() + timedelta(days=days_ahead)).strftime("%Y%m%d")
 
     # 최근 실적 관련 공시가 있는 종목 조회
     disclosures = (

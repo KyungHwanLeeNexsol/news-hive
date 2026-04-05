@@ -174,7 +174,7 @@ class TestBuildSearchQueries:
     def test_includes_stock_keywords(self, db, make_sector, make_stock) -> None:
         """종목의 키워드가 쿼리에 포함되어야 한다."""
         sector = make_sector(name="건설")
-        stock = make_stock(name="대창단조", sector_id=sector.id, keywords=["포크레인", "하부구조물"])
+        make_stock(name="대창단조", sector_id=sector.id, keywords=["포크레인", "하부구조물"])
         db.flush()
 
         from app.models.stock import Stock

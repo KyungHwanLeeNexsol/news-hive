@@ -96,7 +96,7 @@ class TestGetSignals:
 
     def test_signals_with_data(self, client, admin_headers, make_fund_signal):
         """시그널이 있으면 최근 시그널을 반환한다."""
-        sig = make_fund_signal(signal="buy", confidence=0.85)
+        make_fund_signal(signal="buy", confidence=0.85)
         resp = client.get("/api/fund/signals", headers=admin_headers)
         assert resp.status_code == 200
         data = resp.json()

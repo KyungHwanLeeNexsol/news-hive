@@ -256,7 +256,6 @@ def calculate_relevance_score(
     """
     raw_score = 0
     title_lower = title.lower() if title else ""
-    desc_lower = (description or "").lower()
 
     if is_ai_classified:
         # AI가 분류한 경우 기본 점수

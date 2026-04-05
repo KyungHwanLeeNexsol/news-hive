@@ -32,7 +32,7 @@ class TestGetAccuracyStats:
     ) -> None:
         """적중한 매수 시그널 1건 -> 100% 적중률."""
         now = datetime.now(timezone.utc)
-        signal = make_fund_signal(
+        make_fund_signal(
             signal="buy",
             confidence=0.8,
             price_at_signal=10000,

@@ -138,7 +138,7 @@ class TestListStocks:
     )
     def test_list_stocks_with_search_query(self, _mock_batch, client, make_stock):
         """q 파라미터로 종목 이름 검색이 가능하다."""
-        stock = make_stock(name="삼성전자", stock_code="005930")
+        make_stock(name="삼성전자", stock_code="005930")
         resp = client.get("/api/stocks", params={"q": "삼성"})
         assert resp.status_code == 200
         data = resp.json()

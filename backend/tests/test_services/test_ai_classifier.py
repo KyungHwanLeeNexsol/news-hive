@@ -97,7 +97,7 @@ class TestClassifyNews:
         results = classify_news("오늘 날씨가 좋습니다", index)
 
         # 섹터 키워드 매칭만 가능하므로 반도체 관련 키워드가 없으면 빈 리스트
-        sector_matches = [r for r in results if r["stock_id"] is None]
+        [r for r in results if r["stock_id"] is None]
         stock_matches = [r for r in results if r["stock_id"] is not None]
         assert stock_matches == []
 

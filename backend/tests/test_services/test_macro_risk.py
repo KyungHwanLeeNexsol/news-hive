@@ -211,8 +211,6 @@ class TestDeactivateOldAlerts:
         """datetime.now를 naive UTC로 반환하도록 패치 컨텍스트 반환."""
         import app.services.macro_risk as mr_module
 
-        original_now = datetime.now
-        original_dt = datetime
 
         class FakeDatetime(datetime):
             @classmethod

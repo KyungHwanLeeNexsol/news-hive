@@ -180,7 +180,6 @@ def _gather_sentiment_trend(db: Session, stock_id: int | None = None, sector_id:
         return round((counts["positive"] - counts["negative"]) / total * 100, 1)
 
     score_3d = _score(recent_3d)
-    score_7d = _score({k: recent_3d[k] + prev_4d[k] for k in recent_3d})
     score_prev = _score(prev_4d)
 
     # 추세 판단: 최근 3일 점수 vs 이전 4일 점수

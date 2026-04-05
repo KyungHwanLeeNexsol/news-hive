@@ -34,7 +34,7 @@ def seed_sectors(db: Session) -> None:
     existing = {
         s.naver_code: s.name
         for s in db.query(Sector).filter(
-            Sector.naver_code.isnot(None), Sector.is_custom == False
+            Sector.naver_code.isnot(None), Sector.is_custom.is_(False)
         ).all()
     }
     if existing == target:
@@ -48,7 +48,7 @@ def seed_sectors(db: Session) -> None:
 
     # 1. Delete all stocks + relations for non-custom sectors
     non_custom_ids = [
-        s.id for s in db.query(Sector.id).filter(Sector.is_custom == False).all()
+        s.id for s in db.query(Sector.id).filter(Sector.is_custom.is_(False)).all()
     ]
     if non_custom_ids:
         stock_ids = [
