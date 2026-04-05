@@ -72,6 +72,20 @@ This roadmap defines the systematic enhancement strategy across 5 tiers (0-4).
 | SPEC-AI-004 | Disclosure-Based Pre-emptive Signal | completed | SPEC-AI-003 |
 | SPEC-AI-005 | Dynamic Target Price / Stop Loss | completed | SPEC-AI-004 |
 
+### TIER 6: Self-Learning (Priority: Medium — 데이터 수집 후 진행)
+
+| SPEC ID | Title | Status | Dependencies | Trigger Condition |
+|---------|-------|--------|--------------|-------------------|
+| SPEC-AI-006 | TP/SL Parameter Auto-Tuning | planned | SPEC-AI-005 | 종료 거래 100건+ 달성 시 |
+
+**SPEC-AI-006 로드맵**:
+
+- **현재 (2026-04-05~)**: 데이터 수집 단계. SPEC-AI-005 동적 TP/SL 시스템 운영 중. `/api/paper-trading/tp-sl-backtest` API로 수동 검증 가능
+- **1차 검증 (50건+ 종료 거래)**: 고정 vs 동적 방식 승률/수익률 비교. ATR 배수(2.0/1.5)가 부적합하면 수동 조정
+- **2차 자가 학습 구현 (100건+)**: 주간 배치로 최적 ATR 배수 자동 계산, 섹터별/신뢰도별 파라미터 학습, 변경 폭 제한 및 롤백 안전장치 포함
+
+**설계 원칙**: 데이터 없이 자가 학습 로직을 만들지 않는다. 충분한 샘플이 확보된 후 통계적으로 유의미한 개선만 적용한다.
+
 ## Execution Order
 
 ```
@@ -81,6 +95,7 @@ Phase 2: SPEC-CACHE-001 + SPEC-REALTIME-001         ✅ COMPLETED (2026-03-29)
 Phase 3: SPEC-AUTH-001 -> SPEC-VIZ-001              ⚠️ AUTH pending, VIZ completed (2026-03-29)
 Phase 4: SPEC-SCALE-001                             ✅ COMPLETED (2026-03-29)
 Phase 5: SPEC-AI-001~005                            ✅ COMPLETED (2026-04-05)
+Phase 6: SPEC-AI-006                                ⏳ PLANNED (100건+ 거래 데이터 확보 후)
 ```
 
 ## Usage
