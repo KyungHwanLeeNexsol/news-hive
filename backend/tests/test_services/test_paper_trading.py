@@ -17,6 +17,8 @@ from app.services.paper_trading import (
     DEFENSIVE_MODE_ENTER_THRESHOLD,
     DEFENSIVE_MODE_EXIT_THRESHOLD,
     DEFENSIVE_STOP_LOSS_PCT,
+    DEFAULT_TARGET_PCT,
+    DEFAULT_STOP_LOSS_PCT,
 )
 
 
@@ -340,3 +342,171 @@ class TestGetPortfolioStatsDefensive:
 
         assert stats["is_defensive_mode"] is True
         assert stats["defensive_mode_entered_at"] is not None
+
+
+# ---------------------------------------------------------------------------
+# execute_signal_trade 기본 목표가/손절가 자동 설정 테스트
+# ---------------------------------------------------------------------------
+
+class TestExecuteSignalTradeDefaultPrices:
+    """시그널에 target_price/stop_loss가 null일 때 기본값 자동 설정 테스트."""
+
+    @pytest.mark.asyncio
+    async def test_default_target_and_stop_loss_applied(self, db, portfolio, make_stock):
+        """target_price=None, stop_loss=None 시그널로 매수하면 기본 비율로 자동 설정된다."""
+        stock = make_stock(name="기본값테스트종목", stock_code="111111")
+
+        signal = FundSignal(
+            stock_id=stock.id,
+            signal="buy",
+            confidence=0.8,
+            price_at_signal=100_000,
+            target_price=None,  # null → 기본값 적용 대상
+            stop_loss=None,     # null → 기본값 적용 대상
+            reasoning="테스트",
+        )
+        db.add(signal)
+        db.flush()
+
+        result = await execute_signal_trade(db, signal)
+
+        assert result is not None
+        # 기본 목표가: 진입가 * (1 + DEFAULT_TARGET_PCT) = 110,000원
+        assert result.target_price == int(100_000 * (1 + DEFAULT_TARGET_PCT))
+        # 기본 손절가: 진입가 * (1 - DEFAULT_STOP_LOSS_PCT) = 95,000원
+        assert result.stop_loss == int(100_000 * (1 - DEFAULT_STOP_LOSS_PCT))
+
+    @pytest.mark.asyncio
+    async def test_explicit_target_and_stop_loss_preserved(self, db, portfolio, make_stock):
+        """target_price와 stop_loss가 명시된 경우 해당 값이 그대로 사용된다."""
+        stock = make_stock(name="명시값테스트종목", stock_code="222222")
+
+        signal = FundSignal(
+            stock_id=stock.id,
+            signal="buy",
+            confidence=0.8,
+            price_at_signal=100_000,
+            target_price=115_000,  # 명시된 값
+            stop_loss=93_000,      # 명시된 값
+            reasoning="테스트",
+        )
+        db.add(signal)
+        db.flush()
+
+        result = await execute_signal_trade(db, signal)
+
+        assert result is not None
+        assert result.target_price == 115_000
+        assert result.stop_loss == 93_000
+
+
+# ---------------------------------------------------------------------------
+# check_exit_conditions 기존 null 포지션에 기본값 적용 테스트
+# ---------------------------------------------------------------------------
+
+class TestCheckExitConditionsDefaultFallback:
+    """기존 포지션의 target_price/stop_loss가 null일 때 기본값으로 청산 조건 확인 테스트."""
+
+    @pytest.mark.asyncio
+    async def test_target_hit_with_null_target_price(self, db, portfolio, make_stock):
+        """target_price=None 포지션에서도 기본값(+10%) 도달 시 익절 청산된다."""
+        stock = make_stock(name="목표가null테스트", stock_code="333333")
+
+        signal = FundSignal(
+            stock_id=stock.id, signal="buy", confidence=0.9,
+            price_at_signal=100_000, reasoning="테스트",
+        )
+        db.add(signal)
+        db.flush()
+
+        trade = VirtualTrade(
+            portfolio_id=portfolio.id,
+            stock_id=stock.id,
+            signal_id=signal.id,
+            entry_price=100_000,
+            quantity=10,
+            direction="long",
+            target_price=None,   # null — 기본값 +10% = 110,000원으로 대체
+            stop_loss=None,
+            entry_date=datetime.now(timezone.utc),
+        )
+        db.add(trade)
+        db.flush()
+
+        # 현재가 110,000원 → 기본 목표가(110,000) 도달 → 익절
+        with patch("app.services.signal_verifier._get_current_price", new_callable=AsyncMock) as mock_price:
+            mock_price.return_value = 110_000
+
+            stats = await check_exit_conditions(db)
+
+            assert stats["closed"] == 1
+            assert stats["reasons"].get("target_hit") == 1
+
+    @pytest.mark.asyncio
+    async def test_stop_loss_with_null_stop_loss(self, db, portfolio, make_stock):
+        """stop_loss=None 포지션에서도 기본값(-5%) 이탈 시 손절 청산된다."""
+        stock = make_stock(name="손절null테스트", stock_code="444444")
+
+        signal = FundSignal(
+            stock_id=stock.id, signal="buy", confidence=0.9,
+            price_at_signal=100_000, reasoning="테스트",
+        )
+        db.add(signal)
+        db.flush()
+
+        trade = VirtualTrade(
+            portfolio_id=portfolio.id,
+            stock_id=stock.id,
+            signal_id=signal.id,
+            entry_price=100_000,
+            quantity=10,
+            direction="long",
+            target_price=None,
+            stop_loss=None,      # null — 기본값 -5% = 95,000원으로 대체
+            entry_date=datetime.now(timezone.utc),
+        )
+        db.add(trade)
+        db.flush()
+
+        # 현재가 94,500원 → 기본 손절가(95,000) 이탈 → 손절
+        with patch("app.services.signal_verifier._get_current_price", new_callable=AsyncMock) as mock_price:
+            mock_price.return_value = 94_500
+
+            stats = await check_exit_conditions(db)
+
+            assert stats["closed"] == 1
+            assert stats["reasons"].get("stop_loss") == 1
+
+    @pytest.mark.asyncio
+    async def test_no_exit_within_default_range(self, db, portfolio, make_stock):
+        """null 포지션이라도 기본값 범위 내 가격에서는 청산되지 않는다."""
+        stock = make_stock(name="범위내테스트", stock_code="555555")
+
+        signal = FundSignal(
+            stock_id=stock.id, signal="buy", confidence=0.9,
+            price_at_signal=100_000, reasoning="테스트",
+        )
+        db.add(signal)
+        db.flush()
+
+        trade = VirtualTrade(
+            portfolio_id=portfolio.id,
+            stock_id=stock.id,
+            signal_id=signal.id,
+            entry_price=100_000,
+            quantity=10,
+            direction="long",
+            target_price=None,
+            stop_loss=None,
+            entry_date=datetime.now(timezone.utc),
+        )
+        db.add(trade)
+        db.flush()
+
+        # 현재가 102,000원 → 기본 손절가(95,000)와 목표가(110,000) 사이 → 청산 없음
+        with patch("app.services.signal_verifier._get_current_price", new_callable=AsyncMock) as mock_price:
+            mock_price.return_value = 102_000
+
+            stats = await check_exit_conditions(db)
+
+            assert stats["closed"] == 0
