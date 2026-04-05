@@ -72,6 +72,23 @@ function ConfidenceBar({ value }: { value: number }) {
   );
 }
 
+function AiModelBadge({ model }: { model: string | null | undefined }) {
+  if (!model) return null;
+  const isGlm = model.toLowerCase().includes('glm');
+  return (
+    <span
+      className={`text-[10px] px-1.5 py-0.5 rounded font-mono border ${
+        isGlm
+          ? 'bg-[#fff8e1] text-[#f57f17] border-[#ffe082]'
+          : 'bg-[#e8f5e9] text-[#2e7d32] border-[#a5d6a7]'
+      }`}
+      title={isGlm ? 'Gemini rate limit 초과로 GLM 모델 사용 — 분석 품질이 다소 낮을 수 있습니다' : `AI 모델: ${model}`}
+    >
+      {model}
+    </span>
+  );
+}
+
 function VerificationBadge({ signal }: { signal: FundSignal }) {
   if (signal.verified_at && signal.is_correct !== null) {
     return (
@@ -304,10 +321,11 @@ function BriefingTab() {
   return (
     <div>
       <div className="flex items-center justify-between mb-3">
-        <div>
+        <div className="flex items-center gap-2">
           <span className="text-[13px] text-[#999]">
             {b.briefing_date} 브리핑
           </span>
+          <AiModelBadge model={b.ai_model} />
         </div>
         <button
           onClick={() => handleGenerate(true)}
@@ -479,6 +497,7 @@ function SignalsTab() {
                       <span className="badge badge-sector">{signal.sector_name}</span>
                     )}
                     <VerificationBadge signal={signal} />
+                    <AiModelBadge model={signal.ai_model} />
                   </div>
                   <div className="flex items-center gap-3 text-[12px] text-[#999]">
                     {signal.target_price && (

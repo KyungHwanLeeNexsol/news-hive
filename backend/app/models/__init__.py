@@ -14,6 +14,14 @@ from app.models.virtual_portfolio import VirtualPortfolio, VirtualTrade, Portfol
 from app.models.sector_momentum import SectorMomentum
 from app.models.sector_rotation_event import SectorRotationEvent
 from app.models.ml_feature import MLFeatureSnapshot
+from app.models.user import (
+    User,
+    EmailVerificationCode,
+    RefreshToken,
+    UserWatchlist,
+    UserPreferences,
+    PushSubscription,
+)
 
 __all__ = [
     "Sector", "Stock", "NewsArticle", "NewsStockRelation",
@@ -24,4 +32,6 @@ __all__ = [
     "VirtualPortfolio", "VirtualTrade", "PortfolioSnapshot",
     "SectorMomentum", "SectorRotationEvent",
     "MLFeatureSnapshot",
+    "User", "EmailVerificationCode", "RefreshToken",
+    "UserWatchlist", "UserPreferences", "PushSubscription",
 ]

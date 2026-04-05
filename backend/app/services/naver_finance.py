@@ -5,6 +5,7 @@ Stock fundamentals: polling.finance.naver.com realtime JSON API.
 Price history: sise_day.naver daily OHLCV scraping.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -665,41 +666,51 @@ async def fetch_stock_price_history(stock_code: str, pages: int = 5) -> list[Pri
         except Exception:
             pass
 
+    def _parse_page_html(content_bytes: bytes) -> list[PriceRecord]:
+        """HTML 바이트에서 가격 레코드 파싱 (동기)."""
+        content = content_bytes.decode("euc-kr", errors="replace")
+        soup = BeautifulSoup(content, "html.parser")
+        records: list[PriceRecord] = []
+        for row in soup.select("table.type2 tr"):
+            cols = row.select("td")
+            if len(cols) < 7:
+                continue
+            date_text = cols[0].get_text(strip=True)
+            if not date_text or "." not in date_text:
+                continue
+            close = _parse_int_safe(cols[1].get_text())
+            open_price = _parse_int_safe(cols[3].get_text())
+            high = _parse_int_safe(cols[4].get_text())
+            low = _parse_int_safe(cols[5].get_text())
+            volume = _parse_int_safe(cols[6].get_text())
+            if close > 0:
+                records.append(PriceRecord(
+                    date=date_text,
+                    close=close,
+                    open=open_price,
+                    high=high,
+                    low=low,
+                    volume=volume,
+                ))
+        return records
+
     results: list[PriceRecord] = []
     try:
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-            for pg in range(1, pages + 1):
-                url = SISE_DAY_URL.format(code=stock_code, page=pg)
-                resp = await client.get(url, headers=HEADERS)
-                resp.raise_for_status()
-
-                content = resp.content.decode("euc-kr", errors="replace")
-                soup = BeautifulSoup(content, "html.parser")
-
-                for row in soup.select("table.type2 tr"):
-                    cols = row.select("td")
-                    if len(cols) < 7:
-                        continue
-                    date_text = cols[0].get_text(strip=True)
-                    if not date_text or "." not in date_text:
-                        continue
-
-                    close = _parse_int_safe(cols[1].get_text())
-                    # cols[2] = 전일비 (skip, redundant)
-                    open_price = _parse_int_safe(cols[3].get_text())
-                    high = _parse_int_safe(cols[4].get_text())
-                    low = _parse_int_safe(cols[5].get_text())
-                    volume = _parse_int_safe(cols[6].get_text())
-
-                    if close > 0:
-                        results.append(PriceRecord(
-                            date=date_text,
-                            close=close,
-                            open=open_price,
-                            high=high,
-                            low=low,
-                            volume=volume,
-                        ))
+            # 모든 페이지를 병렬로 동시 요청 (순차 → 병렬로 성능 개선)
+            urls = [SISE_DAY_URL.format(code=stock_code, page=pg) for pg in range(1, pages + 1)]
+            responses = await asyncio.gather(
+                *[client.get(url, headers=HEADERS) for url in urls],
+                return_exceptions=True,
+            )
+            for resp in responses:
+                if isinstance(resp, Exception):
+                    continue
+                try:
+                    resp.raise_for_status()
+                    results.extend(_parse_page_html(resp.content))
+                except Exception:
+                    continue
 
         if results:
             _price_cache.data[stock_code] = results
@@ -980,6 +991,86 @@ async def fetch_naver_stock_list(
         return cached, 0
 
 
+async def fetch_current_price(stock_code: str) -> int | None:
+    """특정 종목의 현재가 반환 (SPEC-AI-004).
+
+    KOSPI/KOSDAQ 통합 검색으로 현재가를 반환한다.
+    """
+    for market in ("KOSPI", "KOSDAQ"):
+        try:
+            items, _ = await fetch_naver_stock_list(market=market, page=1, page_size=50)
+            for item in items:
+                if item.stock_code == stock_code:
+                    return item.current_price
+        except Exception:
+            continue
+
+    # 모바일 API fallback: 개별 종목 조회
+    mobile_url = (
+        f"https://m.stock.naver.com/api/stock/{stock_code}/integration"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            resp = await client.get(mobile_url, headers=HEADERS)
+            resp.raise_for_status()
+        data = resp.json()
+        price_str = (
+            data.get("dealTrendInfos", [{}])[0].get("closePrice", "")
+            or data.get("stockInfo", {}).get("closePrice", "")
+        )
+        if price_str:
+            return _parse_comma_int(str(price_str))
+    except Exception as e:
+        logger.debug("fetch_current_price fallback 실패 (%s): %s", stock_code, e)
+
+    return None
+
+
+async def fetch_current_price_with_change(stock_code: str) -> dict | None:
+    """특정 종목의 현재가 + 등락률 반환 (SPEC-AI-004).
+
+    Returns:
+        {"current_price": int, "change_rate": float} 또는 None
+    """
+    for market in ("KOSPI", "KOSDAQ"):
+        try:
+            items, _ = await fetch_naver_stock_list(market=market, page=1, page_size=50)
+            for item in items:
+                if item.stock_code == stock_code:
+                    return {
+                        "current_price": item.current_price,
+                        "change_rate": item.change_rate,
+                    }
+        except Exception:
+            continue
+
+    # 모바일 API fallback
+    mobile_url = (
+        f"https://m.stock.naver.com/api/stock/{stock_code}/integration"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            resp = await client.get(mobile_url, headers=HEADERS)
+            resp.raise_for_status()
+        data = resp.json()
+        stock_info = data.get("stockInfo", {})
+        price_str = stock_info.get("closePrice", "")
+        rate_str = stock_info.get("fluctuationsRatio", "0")
+        if price_str:
+            try:
+                rate = float(str(rate_str).replace(",", ""))
+            except (ValueError, TypeError):
+                rate = 0.0
+            return {
+                "current_price": _parse_comma_int(str(price_str)),
+                "change_rate": rate,
+            }
+    except Exception as e:
+        logger.debug("fetch_current_price_with_change fallback 실패 (%s): %s", stock_code, e)
+
+    return None
+
+
 async def fetch_sector_stock_codes(naver_code: str) -> list[str]:
     """Fetch stock codes belonging to a Naver sector (for stock-to-sector mapping).
 
@@ -1040,7 +1131,16 @@ async def fetch_investor_trading(stock_code: str, days: int = 5) -> list[Investo
         soup = BeautifulSoup(resp.text, "html.parser")
 
         # 매매동향 테이블 파싱
-        table = soup.select_one("table.type2")
+        # frgn.naver 페이지에는 table.type2가 2개 존재:
+        # - 첫 번째: 증권사별 순위 테이블 (날짜 없음)
+        # - 두 번째: 날짜별 투자자 매매동향 테이블 (날짜 있음) ← 이것을 사용
+        tables = soup.select("table.type2")
+        table = None
+        for t in tables:
+            first_row_tds = t.select("tr td")
+            if first_row_tds and "." in first_row_tds[0].get_text(strip=True):
+                table = t
+                break
         if not table:
             return []
 
@@ -1086,3 +1186,60 @@ async def fetch_investor_trading(stock_code: str, days: int = 5) -> list[Investo
     except Exception as e:
         logger.debug(f"Investor trading fetch failed for {stock_code}: {e}")
         return []
+
+
+# KOSPI/KOSDAQ 지수 일별 시세 URL
+INDEX_DAY_URL = "https://finance.naver.com/sise/sise_index_day.naver?code={code}&page={page}"
+
+
+async def fetch_index_price_history(index_code: str = "KOSPI", pages: int = 2) -> list[dict]:
+    """네이버 금융에서 시장 지수(KOSPI/KOSDAQ)의 일별 시세를 가져온다.
+
+    Args:
+        index_code: 지수 코드 ("KOSPI" 또는 "KOSDAQ")
+        pages: 조회할 페이지 수 (1페이지 = 약 10거래일)
+
+    Returns:
+        [{"date": "YYYY.MM.DD", "close": float}, ...] 최신순 정렬
+    """
+    results: list[dict] = []
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            urls = [INDEX_DAY_URL.format(code=index_code, page=pg) for pg in range(1, pages + 1)]
+            responses = await asyncio.gather(
+                *[client.get(url, headers=HEADERS) for url in urls],
+                return_exceptions=True,
+            )
+
+        for resp in responses:
+            if isinstance(resp, Exception):
+                continue
+            try:
+                resp.raise_for_status()
+            except Exception:
+                continue
+
+            content = resp.content.decode("euc-kr", errors="replace")
+            soup = BeautifulSoup(content, "html.parser")
+            table = soup.select_one("table.type_1")
+            if not table:
+                continue
+
+            for row in table.select("tr"):
+                cols = row.select("td")
+                if len(cols) < 2:
+                    continue
+                date_text = cols[0].get_text(strip=True)
+                close_text = cols[1].get_text(strip=True).replace(",", "")
+                if not date_text or "." not in date_text:
+                    continue
+                try:
+                    results.append({"date": date_text, "close": float(close_text)})
+                except ValueError:
+                    continue
+
+    except Exception as e:
+        logger.debug(f"Index price history fetch failed for {index_code}: {e}")
+
+    return results

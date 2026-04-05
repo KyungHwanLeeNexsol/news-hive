@@ -16,8 +16,8 @@ if command -v moai &> /dev/null; then
 fi
 
 # Try detected Go bin path from initialization
-if [ -f "C:/Users/zuge3/go/bin/moai" ]; then
-	exec "C:/Users/zuge3/go/bin/moai" hook worktree-remove < "$temp_file" 2>/dev/null
+if [ -f "C:/Users/Nexsol/go/bin/moai" ]; then
+	exec "C:/Users/Nexsol/go/bin/moai" hook worktree-remove < "$temp_file" 2>/dev/null
 fi
 
 # Try default ~/go/bin/moai

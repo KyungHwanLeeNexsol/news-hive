@@ -47,8 +47,10 @@ export function useWebSocket(
       return `${base}/ws?topics=${topics.join(',')}`;
     }
 
-    // 프로덕션: window.location 기반 자동 구성
+    // 개발 환경에서만 window.location 기반 자동 구성 (프로덕션은 NEXT_PUBLIC_WS_URL 필수)
     if (typeof window === 'undefined') return '';
+    const host = window.location.hostname;
+    if (host !== 'localhost' && host !== '127.0.0.1') return '';
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     return `${proto}//${window.location.host}/ws?topics=${topics.join(',')}`;
   }, [topics]);

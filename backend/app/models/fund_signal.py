@@ -53,5 +53,14 @@ class FundSignal(Base):
     trend_alignment: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # REQ-AI-020: 시장 변동성 레벨 (low / normal / high / extreme)
     volatility_level: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # 사용된 AI 모델명 (gemini-2.5-flash / glm-4.7-flash 등)
+    ai_model: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    # SPEC-AI-004: 공시 기반 시그널 추적
+    signal_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    disclosure_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("disclosures.id"), nullable=True
+    )
 
     stock = relationship("Stock")
+    disclosure = relationship("Disclosure", foreign_keys=[disclosure_id])

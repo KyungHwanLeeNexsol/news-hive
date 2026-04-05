@@ -28,12 +28,14 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str | None = None
     stock_code: str | None = None
+    history: list[dict] | None = None  # 프론트엔드 localStorage 대화 이력
 
 
 class ChatResponse(BaseModel):
     reply: str
     context_used: list[str]
     session_id: str
+    ai_model: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +245,73 @@ async def _gather_context(stock_id: int, stock_name: str, db: Session) -> tuple[
     return full_context, sources_used
 
 
+async def _gather_market_context(db: Session) -> tuple[str, list[str]]:
+    """종목 미특정 시장 전체 질문용 컨텍스트를 수집한다.
+
+    오늘의 AI 브리핑 + 최근 뉴스 헤드라인을 주입하여
+    AI가 현재 시장 상황 기반으로 답변하도록 한다.
+    """
+    from datetime import date as date_type
+    from app.models.daily_briefing import DailyBriefing
+    from app.models.news import NewsArticle
+
+    context_parts: list[str] = []
+    sources_used: list[str] = []
+
+    # 1) 오늘의 AI 브리핑 (있으면)
+    try:
+        today = date_type.today()
+        briefing = db.query(DailyBriefing).filter(DailyBriefing.briefing_date == today).first()
+        if not briefing:
+            # 가장 최근 브리핑 사용 (최대 2일 이내)
+            from datetime import timedelta
+            briefing = (
+                db.query(DailyBriefing)
+                .filter(DailyBriefing.briefing_date >= today - timedelta(days=2))
+                .order_by(DailyBriefing.briefing_date.desc())
+                .first()
+            )
+        if briefing:
+            parts = [f"[AI 브리핑 — {briefing.briefing_date}]"]
+            if briefing.market_overview:
+                parts.append(f"시장 전망: {briefing.market_overview[:600]}")
+            if briefing.risk_assessment:
+                parts.append(f"리스크 평가: {briefing.risk_assessment[:300]}")
+            if briefing.strategy:
+                parts.append(f"전략: {briefing.strategy[:300]}")
+            context_parts.append("\n".join(parts))
+            sources_used.append("daily_briefing")
+    except Exception as e:
+        logger.warning(f"브리핑 컨텍스트 조회 실패: {e}")
+
+    # 2) 최근 뉴스 헤드라인 (12시간 이내, 최대 10건)
+    try:
+        from datetime import datetime as dt, timezone as tz, timedelta
+        cutoff = dt.now(tz.utc) - timedelta(hours=12)
+        recent_news = (
+            db.query(NewsArticle)
+            .filter(NewsArticle.published_at >= cutoff)
+            .order_by(NewsArticle.published_at.desc())
+            .limit(10)
+            .all()
+        )
+        if recent_news:
+            lines = [f"[최근 뉴스 헤드라인 — 최근 12시간]"]
+            for n in recent_news:
+                sentiment_label = {"positive": "긍정", "negative": "부정"}.get(
+                    getattr(n, "sentiment", ""), "중립"
+                )
+                pub = n.published_at.strftime("%H:%M") if n.published_at else ""
+                lines.append(f"• [{sentiment_label}] {n.title} ({pub})")
+            context_parts.append("\n".join(lines))
+            sources_used.append("recent_news")
+    except Exception as e:
+        logger.warning(f"최근 뉴스 컨텍스트 조회 실패: {e}")
+
+    full_context = "\n\n".join(context_parts) if context_parts else ""
+    return full_context, sources_used
+
+
 # ---------------------------------------------------------------------------
 # 프롬프트 구성
 # ---------------------------------------------------------------------------
@@ -255,17 +324,49 @@ def _build_prompt(
     history: list[dict],
 ) -> str:
     """Gemini 호출용 프롬프트를 구성한다."""
+    today = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=9))).strftime("%Y년 %m월 %d일")
+    has_data = bool(context and context != "관련 데이터 없음")
+
     system = (
-        "당신은 한국 주식 시장 전문 AI 분석가입니다.\n"
-        "사용자의 질문에 대해 제공된 데이터를 기반으로 구체적이고 실용적인 분석을 제공하세요.\n"
-        "확실하지 않은 정보는 추측이라고 명시하세요.\n"
-        "한국어로 답변하세요."
+        f"오늘 날짜: {today} (KST)\n\n"
+        "## 역할\n"
+        "당신은 운용자산 5천억 규모 헤지펀드의 수석 퀀트 트레이더입니다.\n"
+        "코스피·코스닥 수급 분석, 모멘텀 팩터, 기술적 패턴, 섹터 로테이션을 통합하여\n"
+        "실행 가능한 매매 판단을 내립니다. 오늘 날짜 기준으로 모든 시간 표현을 사용합니다.\n\n"
+        "## 제공 데이터 구조\n"
+        "종목이 특정되면 [분석 대상 컨텍스트]에 다음 실시간 데이터가 포함됩니다:\n"
+        "• [현재 시세]: 현재가, 전일비, 등락률, 거래량\n"
+        "• [최근 뉴스]: 날짜·감성 레이블(긍정/부정/중립)·헤드라인\n"
+        "• [기술적 지표]: RSI, MACD, 볼린저밴드, 5·20·60일 이동평균, 거래량 추세\n"
+        "• [재무 데이터]: 매출, 영업이익, ROE, EPS\n"
+        "• [최근 AI 시그널]: 이전 AI 매매 판단 및 신뢰도\n\n"
+        "## 데이터 활용 의무\n"
+        "컨텍스트가 제공된 경우 — 반드시 수치를 직접 인용하고 해석한다:\n"
+        "  예) 'RSI 74 → 단기 과매수 구간', '5일선이 20일선 돌파 → 단기 골든크로스'\n"
+        "  예) '뉴스 3건 부정 → 투자심리 악화, 수급 이탈 가능성'\n"
+        "  기술적 지지/저항선과 현재가의 위치, 뉴스 감성과 가격 흐름의 일치·괴리를 분석한다.\n"
+        "컨텍스트가 없는 경우 — 거시 지표(금리·달러·유가), 섹터 로테이션, 역사적 패턴으로 완성한다.\n\n"
+        "## 종목 질문 답변 구조\n"
+        "① 핵심 판단: 매수 / 매도 / 관망 + 확신도(1~10)\n"
+        "② 기술적 근거: 지표 수치 직접 인용\n"
+        "③ 수급·뉴스 팩터: 감성 흐름과 수급 추정\n"
+        "④ 리스크: 주요 하방 시나리오\n"
+        "⑤ 액션 플랜: 진입가 / 목표가 / 손절가\n\n"
+        "## 시장·거시 질문 답변 구조\n"
+        "① 핵심 판단: 방향성과 예상 시기\n"
+        "② 근거: 기술적 레벨 + 거시 지표 + 섹터 흐름\n"
+        "③ 시나리오: 반등 조건 vs 추가 하락 조건\n\n"
+        "## 절대 금지\n"
+        "• '데이터가 없어서', '확인이 어렵습니다', '개인 판단에 따라' → 사용 금지\n"
+        "• '~할 수 있습니다', '~인 것 같습니다', '~로 보입니다' → 단정적으로 표현\n"
+        "• 면책 조항, 투자 위험 경고 문구 → 포함 금지\n"
+        "• 오늘 날짜 이전을 '미래'로 표현 → 금지"
     )
 
     parts = [system]
 
-    if context and context != "관련 데이터 없음":
-        stock_label = f" ({stock_name})" if stock_name else ""
+    if has_data:
+        stock_label = f" ({stock_name})" if stock_name else " (시장 전체)"
         parts.append(f"\n[분석 대상{stock_label} 컨텍스트]\n{context}")
 
     # 이전 대화 이력 (최근 4건만)
@@ -278,7 +379,19 @@ def _build_prompt(
         parts.append(f"\n[이전 대화]\n" + "\n".join(conv_lines))
 
     parts.append(f"\n[사용자 질문]\n{message}")
-    parts.append("\n데이터에 기반한 분석을 제공하세요. 투자 판단은 사용자의 몫임을 언급하세요.")
+
+    # 데이터 유무에 따라 trailing instruction 분기
+    if has_data:
+        parts.append(
+            "\n컨텍스트의 수치를 직접 인용하며 매매 판단(매수/매도/관망, 확신도)을 첫 줄에 제시하고, "
+            "기술적·수급·펀더멘털 분석 순으로 근거를 구체적으로 제시하세요. "
+            "액션 플랜(진입가/목표가/손절가)으로 마무리합니다."
+        )
+    else:
+        parts.append(
+            "\n거시 지표와 시장 구조 분석을 기반으로 핵심 판단을 첫 줄에 제시하고, "
+            "구체적인 가격 레벨·예상 시기·핵심 조건을 포함하여 설명하세요."
+        )
 
     return "\n".join(parts)
 
@@ -295,10 +408,18 @@ async def chat_endpoint(req: ChatRequest, db: Session = Depends(get_db)):
     사용자 메시지에서 종목을 감지하고, 관련 데이터를 수집하여
     Gemini에게 분석을 요청한 후 응답을 반환한다.
     """
-    from app.services.ai_client import ask_ai
+    from app.services.ai_client import ask_ai_with_model
 
     # 세션 관리
     session_id, history = _get_or_create_session(req.session_id)
+
+    # 세션이 비어있고 프론트엔드에서 이전 대화 이력을 전달한 경우 복원
+    if not history and req.history:
+        valid_roles = {"user", "assistant"}
+        for msg in req.history[-_SESSION_MAX_MESSAGES:]:
+            if isinstance(msg, dict) and msg.get("role") in valid_roles and isinstance(msg.get("content"), str):
+                history.append({"role": msg["role"], "content": msg["content"][:1000]})
+        _sessions[session_id]["last_access"] = time.time()
 
     # 종목 감지
     stock_id, stock_name = _detect_stock(req.message, req.stock_code, db)
@@ -308,13 +429,17 @@ async def chat_endpoint(req: ChatRequest, db: Session = Depends(get_db)):
     sources_used: list[str] = []
     if stock_id and stock_name:
         context_text, sources_used = await _gather_context(stock_id, stock_name, db)
+    else:
+        # 종목 미특정 시장 전체 질문 → 브리핑·최근뉴스 주입
+        context_text, sources_used = await _gather_market_context(db)
 
     # 프롬프트 구성
     prompt = _build_prompt(req.message, context_text, stock_name, history)
 
     # AI 호출
+    ai_model_used: str | None = None
     try:
-        reply = await ask_ai(prompt)
+        reply, ai_model_used = await ask_ai_with_model(prompt)
         if not reply:
             reply = "죄송합니다. AI 응답을 생성하지 못했습니다. 잠시 후 다시 시도해주세요."
     except Exception as e:
@@ -329,4 +454,5 @@ async def chat_endpoint(req: ChatRequest, db: Session = Depends(get_db)):
         reply=reply,
         context_used=sources_used,
         session_id=session_id,
+        ai_model=ai_model_used,
     )

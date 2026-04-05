@@ -1,4 +1,4 @@
-import type { Sector, Stock, StockListItem, NewsArticle, NewsRelation, StockDetail, FinancialPeriod, PriceRecord, SentimentTrendItem, SectorInsight, DisclosureItem, DisclosureDetail, MacroAlert, EconomicEvent, FundSignal, DailyBriefing, PortfolioReport, AccuracyStats, StockNewsImpactStats, Commodity, CommodityHistoryPoint, SectorCommodity, CommodityNewsArticle, PaperTradingStats, PaperPosition, PaperTrade, PaperSnapshot, ChatResponse, BacktestResult, NewsPriceCorrelation } from "./types";
+import type { Sector, Stock, StockListItem, NewsArticle, NewsRelation, StockDetail, FinancialPeriod, PriceRecord, SentimentTrendItem, SectorInsight, DisclosureItem, DisclosureDetail, MacroAlert, EconomicEvent, FundSignal, DailyBriefing, PortfolioReport, AccuracyStats, StockNewsImpactStats, Commodity, CommodityHistoryPoint, SectorCommodity, CommodityNewsArticle, PaperTradingStats, PaperPosition, PaperTrade, PaperSnapshot, ChatResponse, BacktestResult, NewsPriceCorrelation, User, AuthTokens } from "./types";
 
 const API_BASE = "/api";
 
@@ -547,11 +547,12 @@ export async function sendChatMessage(
   message: string,
   sessionId?: string,
   stockCode?: string,
+  history?: Array<{ role: string; content: string }>,
 ): Promise<ChatResponse> {
   const res = await fetchWithRetry(`${API_BASE}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, session_id: sessionId, stock_code: stockCode }),
+    body: JSON.stringify({ message, session_id: sessionId, stock_code: stockCode, history }),
   });
   if (!res.ok) throw new Error('Failed to send chat message');
   return res.json();
@@ -601,4 +602,304 @@ export async function fetchSectorCommodityNews(
     return { articles: data, total };
   }
   return { articles: data.articles ?? [], total: data.total ?? 0 };
+}
+
+// ── 사용자 인증 API ──
+
+/**
+ * 회원가입 요청.
+ * 성공 시 이메일 인증 코드 발송.
+ */
+export async function registerUser(data: {
+  email: string;
+  password: string;
+  name: string;
+}): Promise<{ message: string; user_id: number }> {
+  const res = await fetch(`${API_BASE}/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? '회원가입에 실패했습니다.');
+  }
+  return res.json();
+}
+
+/**
+ * 이메일 인증 링크 토큰 확인 (GET).
+ */
+export async function verifyEmail(token: string): Promise<{ message: string }> {
+  const res = await fetch(
+    `${API_BASE}/auth/verify-email?token=${encodeURIComponent(token)}`,
+    { method: 'GET', cache: 'no-store' },
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? '인증에 실패했습니다.');
+  }
+  return res.json();
+}
+
+/**
+ * 이메일 인증 코드 재발송.
+ */
+export async function resendVerification(
+  email: string,
+): Promise<{ message: string }> {
+  const res = await fetch(`${API_BASE}/auth/resend-verification`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? '재발송에 실패했습니다.');
+  }
+  return res.json();
+}
+
+/**
+ * 이메일/비밀번호 로그인.
+ * access_token, refresh_token, user 정보를 반환한다.
+ */
+export async function loginUser(
+  email: string,
+  password: string,
+): Promise<AuthTokens> {
+  const res = await fetch(`${API_BASE}/auth/user/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? '로그인에 실패했습니다.');
+  }
+  return res.json();
+}
+
+/**
+ * 액세스 토큰 갱신.
+ */
+export async function refreshAccessToken(
+  refreshToken: string,
+): Promise<{ access_token: string; token_type: string }> {
+  const res = await fetch(`${API_BASE}/auth/user/refresh`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refresh_token: refreshToken }),
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? '토큰 갱신에 실패했습니다.');
+  }
+  return res.json();
+}
+
+/**
+ * 로그아웃 — 서버 측 refresh_token 무효화.
+ */
+export async function logoutUser(
+  refreshToken: string,
+  accessToken: string,
+): Promise<void> {
+  await fetch(`${API_BASE}/auth/user/logout`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({ refresh_token: refreshToken }),
+    cache: 'no-store',
+  });
+}
+
+/**
+ * 현재 로그인 사용자 정보 조회.
+ */
+export async function getCurrentUser(accessToken: string): Promise<User> {
+  const res = await fetch(`${API_BASE}/auth/user/me`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? '사용자 정보를 불러오지 못했습니다.');
+  }
+  return res.json();
+}
+
+// ─── 사용자 관심종목 (서버사이드) ────────────────────────────────────────────
+
+/**
+ * 서버에서 로그인 사용자의 관심종목 목록을 조회한다.
+ */
+export async function fetchUserWatchlist(accessToken: string): Promise<
+  Array<{ stock_id: number; stock_code: string; stock_name: string; sector_name: string | null }>
+> {
+  const res = await fetch(`${API_BASE}/user/watchlist`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? '관심종목을 불러오지 못했습니다.');
+  }
+  return res.json();
+}
+
+/**
+ * 서버에 관심종목을 추가한다.
+ */
+export async function addToUserWatchlist(
+  stockId: number,
+  accessToken: string,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/user/watchlist`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({ stock_id: stockId }),
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? '관심종목 추가에 실패했습니다.');
+  }
+}
+
+/**
+ * 서버에서 관심종목을 삭제한다.
+ */
+export async function removeFromUserWatchlist(
+  stockId: number,
+  accessToken: string,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/user/watchlist/${stockId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${accessToken}` },
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? '관심종목 삭제에 실패했습니다.');
+  }
+}
+
+/**
+ * localStorage 관심종목을 서버에 일괄 동기화한다.
+ * 최초 로그인 시 기기 간 동기화에 사용.
+ */
+export async function syncWatchlist(
+  stockIds: number[],
+  accessToken: string,
+): Promise<{ added: number; total: number }> {
+  const res = await fetch(`${API_BASE}/user/watchlist/sync`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({ stock_ids: stockIds }),
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? '관심종목 동기화에 실패했습니다.');
+  }
+  return res.json();
+}
+
+// ─── Web Push 알림 ────────────────────────────────────────────────────────────
+
+/**
+ * VAPID 공개 키를 가져온다. Service Worker push 구독 시 사용.
+ */
+export async function getVapidPublicKey(): Promise<string> {
+  const res = await fetch(`${API_BASE}/push/vapid-public-key`, {
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    throw new Error('VAPID 키를 불러오지 못했습니다.');
+  }
+  const data = await res.json();
+  return data.public_key ?? data.publicKey ?? (data as string);
+}
+
+/**
+ * 브라우저 Push 구독 정보를 서버에 등록한다.
+ */
+export async function subscribePushNotifications(
+  subscription: PushSubscriptionJSON,
+  accessToken: string,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/push/subscribe`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify(subscription),
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? 'Push 구독에 실패했습니다.');
+  }
+}
+
+/**
+ * 브라우저 Push 구독을 서버에서 해제한다.
+ */
+export async function unsubscribePushNotifications(
+  endpoint: string,
+  accessToken: string,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/push/unsubscribe`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({ endpoint }),
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? 'Push 구독 해제에 실패했습니다.');
+  }
+}
+
+// ─── 개인화 피드 ──────────────────────────────────────────────────────────────
+
+/**
+ * 로그인 사용자의 관심종목 기반 개인화 뉴스 피드를 조회한다.
+ * 비로그인 사용자에게는 서버가 일반 뉴스를 반환하며 personalized=false.
+ */
+export async function fetchPersonalizedFeed(
+  accessToken: string,
+  limit = 20,
+  offset = 0,
+): Promise<{ articles: NewsArticle[]; total: number; personalized: boolean }> {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  const res = await fetch(`${API_BASE}/news/personalized?${params}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? '개인화 피드를 불러오지 못했습니다.');
+  }
+  return res.json();
 }

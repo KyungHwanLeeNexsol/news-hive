@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { fetchNews, searchNews, refreshNews } from "@/lib/api";
 import { formatSectorName } from "@/lib/format";
@@ -35,6 +35,9 @@ export default function NewsPage() {
   const [page, setPage] = useState(1);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
+  // 백그라운드 수집 폴링 상태: null | "collecting" | "done"
+  const [collectStatus, setCollectStatus] = useState<null | "collecting" | "done">(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Search state
   const [searchInput, setSearchInput] = useState("");
@@ -65,22 +68,70 @@ export default function NewsPage() {
     setPage(1);
   }
 
-  async function handleRefresh() {
-    setRefreshing(true);
-    try {
-      await refreshNews();
-      const r = query
-        ? await searchNews(query, 0, PAGE_SIZE)
-        : await fetchNews(0, PAGE_SIZE);
-      setNews(r.articles);
-      setTotal(r.total);
-      setPage(1);
-    } catch {
-      // ignore
-    } finally {
-      setRefreshing(false);
+  function stopPolling(): void {
+    if (pollRef.current !== null) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
     }
   }
+
+  async function handleRefresh(): Promise<void> {
+    // 이미 폴링 중이면 중복 실행 방지
+    if (refreshing) return;
+    stopPolling();
+    setRefreshing(true);
+    setCollectStatus(null);
+
+    try {
+      await refreshNews(); // 즉시 반환 — 백엔드에서 백그라운드 수집 시작
+    } catch {
+      setRefreshing(false);
+      return;
+    }
+
+    // 현재 총 기사 수 기준선 저장
+    const baseTotal = total;
+    setCollectStatus("collecting");
+    setRefreshing(false);
+
+    // 최대 3분(18회 × 10초) 폴링
+    let attempts = 0;
+    const MAX_ATTEMPTS = 18;
+
+    pollRef.current = setInterval(() => {
+      attempts += 1;
+      const fetcher = query
+        ? searchNews(query, 0, PAGE_SIZE)
+        : fetchNews(0, PAGE_SIZE);
+
+      fetcher
+        .then((r) => {
+          if (r.total > baseTotal) {
+            // 새 기사 도착 — 목록 갱신
+            setNews(r.articles);
+            setTotal(r.total);
+            setPage(1);
+            setCollectStatus("done");
+            stopPolling();
+            // 3초 후 상태 메시지 숨김
+            setTimeout(() => setCollectStatus(null), 3000);
+          } else if (attempts >= MAX_ATTEMPTS) {
+            // 타임아웃 — 조용히 종료
+            setCollectStatus(null);
+            stopPolling();
+          }
+        })
+        .catch(() => {
+          if (attempts >= MAX_ATTEMPTS) {
+            setCollectStatus(null);
+            stopPolling();
+          }
+        });
+    }, 10_000);
+  }
+
+  // 페이지 언마운트 시 폴링 정리
+  useEffect(() => stopPolling, []);
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
 
@@ -88,13 +139,25 @@ export default function NewsPage() {
     <div className="section-box">
       <div className="section-title">
         <span>{query ? `"${query}" 검색 결과 (${total}건)` : `전체 뉴스 (${total}건)`}</span>
-        <button
-          onClick={handleRefresh}
-          disabled={refreshing}
-          className="px-3 py-1 text-[12px] bg-[#1261c4] text-white rounded hover:bg-[#0f54a8] disabled:opacity-50"
-        >
-          {refreshing ? "수집 중..." : "뉴스 새로고침"}
-        </button>
+        <div className="flex items-center gap-2">
+          {collectStatus === "collecting" && (
+            <span className="text-[12px] text-[#888] animate-pulse">
+              수집 중… 새 뉴스 도착 시 자동 갱신
+            </span>
+          )}
+          {collectStatus === "done" && (
+            <span className="text-[12px] text-[#1261c4]">
+              새 뉴스가 업데이트됐어요!
+            </span>
+          )}
+          <button
+            onClick={() => void handleRefresh()}
+            disabled={refreshing || collectStatus === "collecting"}
+            className="px-3 py-1 text-[12px] bg-[#1261c4] text-white rounded hover:bg-[#0f54a8] disabled:opacity-50"
+          >
+            {refreshing ? "요청 중..." : "뉴스 새로고침"}
+          </button>
+        </div>
       </div>
 
       {/* Search bar */}

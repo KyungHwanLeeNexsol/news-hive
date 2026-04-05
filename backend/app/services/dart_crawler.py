@@ -226,10 +226,35 @@ async def fetch_dart_disclosures(
             f"Saved {saved} new DART disclosures "
             f"({name_matched} matched to stocks)"
         )
+        # SPEC-AI-004: 신규 공시 충격 스코어링
+        await _score_new_disclosures(db)
     else:
         logger.info("No new DART disclosures found")
 
     return saved
+
+
+async def _score_new_disclosures(db: Session) -> None:
+    """신규 저장된 공시(impact_score가 NULL인 것)에 대해 충격 스코어 계산."""
+    from app.services.disclosure_impact_scorer import process_disclosure_impact
+
+    unscored = (
+        db.query(Disclosure)
+        .filter(Disclosure.impact_score.is_(None))
+        .order_by(Disclosure.id.desc())
+        .limit(50)
+        .all()
+    )
+
+    for disclosure in unscored:
+        try:
+            await process_disclosure_impact(db, disclosure)
+        except Exception as e:
+            logger.warning("공시 충격 스코어링 실패 (id=%d): %s", disclosure.id, e)
+
+    if unscored:
+        db.commit()
+        logger.info("공시 충격 스코어링 완료: %d건", len(unscored))
 
 
 def backfill_disclosure_stock_ids(db: Session) -> int:

@@ -636,8 +636,11 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
                     source=ad.get("source"),
                 )
 
-                # 관련성 점수 30 미만인 relation은 저장하지 않음
-                if score < 30:
+                # 전파된 간접 관계(propagated)는 엄격한 점수 필터(30),
+                # 직접 분류된 관계(keyword/AI)는 완화된 기준(15) 적용
+                is_propagated = rel.get("propagation_type") == "propagated"
+                min_score = 30 if is_propagated else 15
+                if score < min_score:
                     continue
 
                 seen_pairs.add(pair)

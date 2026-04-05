@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, Integer, Text, func
+from sqlalchemy import Date, DateTime, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -17,6 +17,7 @@ class DailyBriefing(Base):
     stock_picks: Mapped[str | None] = mapped_column(Text, nullable=True)  # 오늘의 주목 종목
     risk_assessment: Mapped[str | None] = mapped_column(Text, nullable=True)  # 리스크 평가
     strategy: Mapped[str | None] = mapped_column(Text, nullable=True)  # 오늘의 전략
+    ai_model: Mapped[str | None] = mapped_column(String(50), nullable=True)  # 사용된 AI 모델명
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

@@ -128,19 +128,3 @@ jobs:
           cd frontend
           npm run build
 
-  # ──────────────────────────────────────────────
-  # Job 4: 배포 트리거 (main 브랜치 push 시에만)
-  # ──────────────────────────────────────────────
-  deploy:
-    name: Trigger Deploy
-    runs-on: ubuntu-latest
-    needs: [backend-test, backend-lint, frontend-check]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
-    steps:
-      - name: Trigger deployment webhook
-        run: |
-          curl -sf -X POST \
-            -H "X-Hub-Signature-256: sha256=$(echo -n '' | openssl dgst -sha256 -hmac '${{ secrets.DEPLOY_WEBHOOK_SECRET }}' | awk '{print $2}')" \
-            "${{ secrets.DEPLOY_WEBHOOK_URL }}" \
-            || echo "::warning::Deploy webhook 호출 실패 (서버 미설정일 수 있음)"

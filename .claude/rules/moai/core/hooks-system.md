@@ -8,7 +8,7 @@ Claude Code hooks for extending functionality with custom scripts.
 
 ## Hook Events
 
-26 hook event types (+ 1 special event, 27 total):
+25 hook event types (+ 1 special event, 26 total):
 
 | Event | Matcher | Can Block | Description |
 |-------|---------|-----------|-------------|
@@ -37,7 +37,6 @@ Claude Code hooks for extending functionality with custom scripts.
 | InstructionsLoaded | No | No | Runs when CLAUDE.md or .claude/rules/*.md files are loaded (v2.1.69+) |
 | Elicitation | No | No | Runs when an elicitation dialog is presented to the user (v2.1.84+) |
 | ElicitationResult | No | No | Runs when the user responds to an elicitation dialog (v2.1.84+) |
-| PermissionDenied | No | No | Runs after auto mode classifier denies a tool call; return {retry: true} to retry (v2.1.89+) |
 
 **Special Event:**
 
@@ -51,7 +50,7 @@ Claude Code hooks for extending functionality with custom scripts.
 
 **Context Events**: PreCompact, PostCompact, FileChanged, CwdChanged, WorktreeCreate, WorktreeRemove
 
-**Prompt and Notification Events**: UserPromptSubmit, PermissionRequest, PermissionDenied, Notification, Elicitation, ElicitationResult
+**Prompt and Notification Events**: UserPromptSubmit, PermissionRequest, Notification, Elicitation, ElicitationResult
 
 **Tool Events**: PreToolUse, PostToolUse, PostToolUseFailure
 
@@ -65,7 +64,6 @@ Claude Code hooks for extending functionality with custom scripts.
 |-------|-------|--------|-------|
 | UserPromptSubmit | `prompt` | `additionalContext`, `reason` | Exit 2 blocks prompt |
 | PermissionRequest | `toolName`, `toolInput` | `reason` | Exit 0 = allow, exit 2 = deny |
-| PermissionDenied | `toolName`, `toolInput` | `{retry: true}` | Return retry to allow model to retry (v2.1.89+) |
 | PostToolUseFailure | `toolName`, `toolInput`, `error`, `is_interrupt` | `systemMessage` | Non-blocking |
 | Notification | `type`, `message` | - | Types: permission_prompt, idle_prompt, auth_success, elicitation_dialog |
 | Setup | `trigger` | `systemMessage` | trigger: init, init-only, or maintenance (v2.1.10+) |
@@ -92,8 +90,6 @@ Default hook type. Executes a shell command, communicates via stdin/stdout JSON.
 - stdin: JSON with event data
 - stdout: JSON with response (optional `systemMessage`, `additionalContext`, `reason`)
 - Exit codes: 0 = success, 1 = error (shown to user), 2 = block/reject (for blocking events)
-- PreToolUse permission decisions: `allow`, `deny`, `ask`, `defer` (defer pauses headless sessions for --resume, v2.1.89+)
-- Hook stdout over 50K characters is saved to disk; only a file path + preview is injected into context (v2.1.89+)
 
 ### Prompt Hooks (type: "prompt")
 

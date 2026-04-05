@@ -210,6 +210,7 @@ export interface FundSignal {
   is_correct: boolean | null;
   return_pct: number | null;
   verified_at: string | null;
+  ai_model: string | null;
 }
 
 export interface ConfidenceBucket {
@@ -236,6 +237,7 @@ export interface DailyBriefing {
   risk_assessment: string | null;
   strategy: string | null;
   created_at: string;
+  ai_model: string | null;
 }
 
 export interface StockNewsImpactStats {
@@ -364,6 +366,7 @@ export interface ChatResponse {
   reply: string;
   context_used: string[];
   session_id: string;
+  ai_model: string | null;
 }
 
 // ── 백테스트 ──
@@ -394,6 +397,23 @@ export interface BacktestResult {
   summary: BacktestSummary;
   timeline: BacktestTimeline[];
   by_stock: BacktestByStock[];
+}
+
+// ── 사용자 인증 ──
+
+export interface User {
+  id: number;
+  email: string;
+  name: string;
+  email_verified: boolean;
+  created_at: string;
+}
+
+export interface AuthTokens {
+  access_token: string;
+  refresh_token: string;
+  token_type: string;
+  user: User;
 }
 
 // ── 뉴스-주가 상관관계 ──
