@@ -206,8 +206,12 @@ def _calculate_news_time_weight(published_at: datetime | None) -> float:
     if not published_at:
         return 0.4  # 발행일 불명 시 기본 가중치
     now = datetime.now(timezone.utc)
-    # published_at에 tzinfo가 없으면 UTC로 간주
-    if published_at.tzinfo is None:
+    # tzinfo 불일치 방지: 양쪽 모두 naive 또는 aware로 맞춤
+    if now.tzinfo is None and published_at.tzinfo is not None:
+        # now가 naive (테스트 mock 등)인 경우 published_at도 naive로 변환
+        published_at = published_at.replace(tzinfo=None)
+    elif now.tzinfo is not None and published_at.tzinfo is None:
+        # published_at이 naive이면 UTC로 간주
         published_at = published_at.replace(tzinfo=timezone.utc)
     hours_ago = (now - published_at).total_seconds() / 3600
     if hours_ago <= 24:

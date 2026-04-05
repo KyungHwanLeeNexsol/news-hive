@@ -603,7 +603,6 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
             # 뉴스 전파: 직접 관계를 기반으로 관련 종목/섹터에 전파
             try:
                 from app.services.relation_propagator import propagate_news
-                from app.services.ai_classifier import classify_sentiment
 
                 article_sentiment = classify_sentiment(ad.get("title", ""))
                 propagated = propagate_news(

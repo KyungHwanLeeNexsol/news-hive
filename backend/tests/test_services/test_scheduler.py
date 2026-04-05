@@ -330,9 +330,10 @@ class TestRunRelationInference:
 class TestRunExitCheck:
     """_run_exit_check 청산 조건 확인 테스트."""
 
+    @patch("app.services.scheduler._is_kr_market_open", return_value=True)
     @patch("app.services.scheduler.asyncio.run")
     @patch("app.services.scheduler.SessionLocal")
-    def test_calls_check_exit_conditions(self, mock_session_cls, mock_arun) -> None:
+    def test_calls_check_exit_conditions(self, mock_session_cls, mock_arun, mock_market_open) -> None:
         mock_db = MagicMock()
         mock_session_cls.return_value = mock_db
         mock_arun.return_value = {"closed": 2, "reasons": "stop_loss: 1, target_hit: 1"}
@@ -342,10 +343,11 @@ class TestRunExitCheck:
         mock_arun.assert_called_once()
         mock_db.close.assert_called_once()
 
+    @patch("app.services.scheduler._is_kr_market_open", return_value=True)
     @patch("app.services.job_retry.time.sleep")
     @patch("app.services.scheduler.asyncio.run")
     @patch("app.services.scheduler.SessionLocal")
-    def test_handles_exception(self, mock_session_cls, mock_arun, mock_sleep) -> None:
+    def test_handles_exception(self, mock_session_cls, mock_arun, mock_sleep, mock_market_open) -> None:
         mock_db = MagicMock()
         mock_session_cls.return_value = mock_db
         mock_arun.side_effect = Exception("exit check error")

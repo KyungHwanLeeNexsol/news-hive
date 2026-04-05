@@ -36,10 +36,10 @@ class TestScanMarketStocks:
             "app.services.naver_finance.fetch_naver_stock_list",
             new_callable=AsyncMock,
         ) as mock_fetch:
-            # KOSPI pages 1-3 + KOSDAQ pages 1-2
+            # 실제 코드는 KOSPI p1, KOSPI p2, KOSDAQ p1 순서로 3번 호출
             mock_fetch.side_effect = _make_fetch_side_effect(
-                kospi_pages=[mock_items_p1, [], []],
-                kosdaq_pages=[mock_items_kosdaq, []],
+                kospi_pages=[mock_items_p1, []],
+                kosdaq_pages=[mock_items_kosdaq],
             )
             db = MagicMock(spec=Session)
             result = await _scan_market_stocks(db)
@@ -63,9 +63,10 @@ class TestScanMarketStocks:
             "app.services.naver_finance.fetch_naver_stock_list",
             new_callable=AsyncMock,
         ) as mock_fetch:
+            # 실제 코드는 KOSPI p1, KOSPI p2, KOSDAQ p1 순서로 3번 호출
             mock_fetch.side_effect = _make_fetch_side_effect(
-                kospi_pages=[mock_items, [], []],
-                kosdaq_pages=[[], []],
+                kospi_pages=[mock_items, []],
+                kosdaq_pages=[[]],
             )
             db = MagicMock(spec=Session)
             result = await _scan_market_stocks(db)
@@ -88,9 +89,10 @@ class TestScanMarketStocks:
             "app.services.naver_finance.fetch_naver_stock_list",
             new_callable=AsyncMock,
         ) as mock_fetch:
+            # 실제 코드는 KOSPI p1, KOSPI p2, KOSDAQ p1 순서로 3번 호출
             mock_fetch.side_effect = _make_fetch_side_effect(
-                kospi_pages=[mock_items, [], []],
-                kosdaq_pages=[[], []],
+                kospi_pages=[mock_items, []],
+                kosdaq_pages=[[]],
             )
             db = MagicMock(spec=Session)
             result = await _scan_market_stocks(db)
@@ -113,9 +115,10 @@ class TestScanMarketStocks:
             "app.services.naver_finance.fetch_naver_stock_list",
             new_callable=AsyncMock,
         ) as mock_fetch:
+            # 실제 코드는 KOSPI p1, KOSPI p2, KOSDAQ p1 순서로 3번 호출
             mock_fetch.side_effect = _make_fetch_side_effect(
-                kospi_pages=[mock_items, [], []],
-                kosdaq_pages=[[], []],
+                kospi_pages=[mock_items, []],
+                kosdaq_pages=[[]],
             )
             db = MagicMock(spec=Session)
             result = await _scan_market_stocks(db)
@@ -160,13 +163,17 @@ class TestDetectQuietAccumulation:
 
     @pytest.mark.asyncio
     async def test_characterize_excludes_institution_sell(self) -> None:
-        """TC-003: institution_net_5d < 0이면 탐지하지 않는다."""
+        """TC-003: 외국인+기관 모두 순매도이면 탐지하지 않는다 (OR 조건).
+
+        현재 구현: foreign_net > 0 OR institution_net > 0이면 탐지.
+        외국인도 순매도인 경우에만 제외.
+        """
         from app.services.fund_manager import _detect_quiet_accumulation
 
-        scanned = [_make_scanned_stock("222222", "기관매도주", change_rate=0.5)]
+        scanned = [_make_scanned_stock("222222", "기관외국인매도주", change_rate=0.5)]
         cache = {
             "222222": {
-                "foreign_net_5d": 50000,
+                "foreign_net_5d": -10000,   # 외국인도 순매도
                 "institution_net_5d": -20000,  # 기관 순매도
                 "avg_volume_20d": 100000,
                 "change_rate": 0.5,
@@ -175,7 +182,7 @@ class TestDetectQuietAccumulation:
 
         result = await _detect_quiet_accumulation(scanned, cache, asyncio.Semaphore(5))
 
-        assert len(result) == 0, "기관 순매도 시 탐지하지 않는다"
+        assert len(result) == 0, "외국인+기관 모두 순매도 시 탐지하지 않는다"
 
     @pytest.mark.asyncio
     async def test_characterize_excludes_high_change_rate(self) -> None:

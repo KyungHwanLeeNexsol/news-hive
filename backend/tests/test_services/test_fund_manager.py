@@ -338,7 +338,8 @@ class TestGatherStockNews:
             result = _gather_stock_news(db, stock.id)
 
         assert len(result) == 1
-        assert result[0]["title"] == "삼성전자 실적 호조"
+        # 가중치 접두사가 포함된 형식으로 반환됨 (예: "[가중치: 1.0] 삼성전자 실적 호조")
+        assert "삼성전자 실적 호조" in result[0]["title"]
         assert result[0]["sentiment"] == "positive"
 
     def test_respects_days_filter(
@@ -370,7 +371,8 @@ class TestGatherStockNews:
             result = _gather_stock_news(db, stock.id, days=3)
 
         assert len(result) == 1
-        assert result[0]["title"] == "최근 뉴스"
+        # 가중치 접두사가 포함된 형식으로 반환됨
+        assert "최근 뉴스" in result[0]["title"]
 
     def test_includes_content_snippet(
         self, db: Session, make_stock, make_news, make_news_relation,
@@ -441,7 +443,8 @@ class TestGatherSectorNews:
             result = _gather_sector_news(db, sector.id)
 
         assert len(result) == 1
-        assert result[0]["title"] == "반도체 업황 호조"
+        # 가중치 접두사가 포함된 형식으로 반환됨
+        assert "반도체 업황 호조" in result[0]["title"]
 
 
 class TestGatherDisclosures:
