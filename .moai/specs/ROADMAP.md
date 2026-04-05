@@ -62,6 +62,16 @@ This roadmap defines the systematic enhancement strategy across 5 tiers (0-4).
 |---------|-------|--------|--------------|
 | SPEC-SCALE-001 | Scalability Infrastructure | completed | SPEC-CACHE-001, SPEC-TEST-001 |
 
+### TIER 5: AI Enhancement (Priority: High)
+
+| SPEC ID | Title | Status | Dependencies |
+|---------|-------|--------|--------------|
+| SPEC-AI-001 | AI Fund Prediction Enhancement Master | completed | none |
+| SPEC-AI-002 | AI Fund Prediction Phase 2 | completed | SPEC-AI-001 |
+| SPEC-AI-003 | Pre-emptive Buy Signal Detection | completed | SPEC-AI-002 |
+| SPEC-AI-004 | Disclosure-Based Pre-emptive Signal | completed | SPEC-AI-003 |
+| SPEC-AI-005 | Dynamic Target Price / Stop Loss | completed | SPEC-AI-004 |
+
 ## Execution Order
 
 ```
@@ -69,7 +79,8 @@ Phase 0: SPEC-COMMODITY-001 -> SPEC-COMMODITY-002  ✅ COMPLETED
 Phase 1: SPEC-TEST-001 + SPEC-FIX-001              ✅ COMPLETED (2026-03-29)
 Phase 2: SPEC-CACHE-001 + SPEC-REALTIME-001         ✅ COMPLETED (2026-03-29)
 Phase 3: SPEC-AUTH-001 -> SPEC-VIZ-001              ⚠️ AUTH pending, VIZ completed (2026-03-29)
-Phase 4: SPEC-SCALE-001                             ✅ COMPLETED (2026-03-29, APScheduler改善 approach)
+Phase 4: SPEC-SCALE-001                             ✅ COMPLETED (2026-03-29)
+Phase 5: SPEC-AI-001~005                            ✅ COMPLETED (2026-04-05)
 ```
 
 ## Usage
