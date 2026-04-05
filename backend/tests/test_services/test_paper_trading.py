@@ -19,6 +19,8 @@ from app.services.paper_trading import (
     DEFENSIVE_STOP_LOSS_PCT,
     DEFAULT_TARGET_PCT,
     DEFAULT_STOP_LOSS_PCT,
+    MAX_OPEN_POSITIONS,
+    MAX_DAILY_TRADES,
 )
 
 
@@ -510,3 +512,102 @@ class TestCheckExitConditionsDefaultFallback:
             stats = await check_exit_conditions(db)
 
             assert stats["closed"] == 0
+
+
+# ---------------------------------------------------------------------------
+# 동시 보유 포지션 수 제한 테스트
+# ---------------------------------------------------------------------------
+
+class TestMaxOpenPositions:
+    """MAX_OPEN_POSITIONS 초과 시 신규 매수 차단 테스트."""
+
+    @pytest.mark.asyncio
+    async def test_buy_blocked_when_max_positions_reached(self, db, portfolio, make_stock):
+        """오픈 포지션 수가 MAX_OPEN_POSITIONS에 도달하면 매수가 차단된다."""
+        for i in range(MAX_OPEN_POSITIONS):
+            stock = make_stock(name=f"포지션테스트종목{i}", stock_code=f"A{i:05d}")
+            sig = FundSignal(
+                stock_id=stock.id, signal="buy", confidence=0.9,
+                price_at_signal=10000, reasoning="테스트",
+            )
+            db.add(sig)
+            db.flush()
+            trade = VirtualTrade(
+                portfolio_id=portfolio.id,
+                stock_id=stock.id,
+                signal_id=sig.id,
+                entry_price=10000,
+                quantity=10,
+                direction="long",
+            )
+            db.add(trade)
+            portfolio.current_cash -= 100000
+        db.flush()
+
+        new_stock = make_stock(name="추가매수종목", stock_code="B00001")
+        new_signal = FundSignal(
+            stock_id=new_stock.id, signal="buy", confidence=0.8,
+            price_at_signal=50000, reasoning="테스트",
+        )
+        db.add(new_signal)
+        db.flush()
+
+        result = await execute_signal_trade(db, new_signal)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_buy_allowed_under_max_positions(self, db, portfolio, make_stock):
+        """오픈 포지션 수가 MAX_OPEN_POSITIONS 미만이면 매수가 허용된다."""
+        stock = make_stock(name="정상매수종목", stock_code="C00001")
+        signal = FundSignal(
+            stock_id=stock.id, signal="buy", confidence=0.8,
+            price_at_signal=50000, reasoning="테스트",
+        )
+        db.add(signal)
+        db.flush()
+
+        result = await execute_signal_trade(db, signal)
+        assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# 일일 신규 매수 한도 테스트
+# ---------------------------------------------------------------------------
+
+class TestMaxDailyTrades:
+    """MAX_DAILY_TRADES 초과 시 신규 매수 차단 테스트."""
+
+    @pytest.mark.asyncio
+    async def test_buy_blocked_when_daily_limit_reached(self, db, portfolio, make_stock):
+        """당일 매수 건수가 MAX_DAILY_TRADES에 도달하면 추가 매수가 차단된다."""
+        for i in range(MAX_DAILY_TRADES):
+            stock = make_stock(name=f"일일한도종목{i}", stock_code=f"D{i:05d}")
+            sig = FundSignal(
+                stock_id=stock.id, signal="buy", confidence=0.9,
+                price_at_signal=10000, reasoning="테스트",
+            )
+            db.add(sig)
+            db.flush()
+            trade = VirtualTrade(
+                portfolio_id=portfolio.id,
+                stock_id=stock.id,
+                signal_id=sig.id,
+                entry_price=10000,
+                quantity=10,
+                direction="long",
+                entry_date=datetime.now(timezone.utc),
+            )
+            db.add(trade)
+            portfolio.current_cash -= 100000
+        db.flush()
+
+        new_stock = make_stock(name="일일초과종목", stock_code="D99999")
+        new_signal = FundSignal(
+            stock_id=new_stock.id, signal="buy", confidence=0.8,
+            price_at_signal=50000, reasoning="테스트",
+        )
+        db.add(new_signal)
+        db.flush()
+
+        result = await execute_signal_trade(db, new_signal)
+        assert result is None

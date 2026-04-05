@@ -334,9 +334,23 @@ def _run_relation_inference():
         db.close()
 
 
+def _is_kr_market_open() -> bool:
+    """한국 주식시장 거래일 여부를 간이 판정한다 (주말 제외)."""
+    from datetime import timezone, timedelta
+
+    kst = timezone(timedelta(hours=9))
+    now_kst = datetime.now(kst)
+    # 토요일(5), 일요일(6)은 휴장
+    return now_kst.weekday() < 5
+
+
 @retry_with_backoff(max_attempts=3)
 def _run_exit_check():
-    """장중 청산 조건 확인 (1시간 간격)."""
+    """장중 청산 조건 확인 (1시간 간격). 주말에는 스킵."""
+    if not _is_kr_market_open():
+        logger.debug("주말 — 페이퍼 트레이딩 Exit 체크 스킵")
+        return
+
     _start = _time.monotonic()
     from app.services.paper_trading import check_exit_conditions
 
