@@ -4,6 +4,38 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Added (SPEC-AI-004: 공시 기반 미반영 호재 탐지 - 진행 중)
+
+- **공시 충격 스코어러**: `disclosure_impact_scorer.py` - 공시 유형/규모별 예상 시장 충격 자동 계산
+- **DB 마이그레이션**: `036_spec_ai_004_disclosure_impact.py` - Disclosure 모델에 충격 스코어, 반영도, 미반영 갭 필드 추가
+- **AI 모델 추적**: `035_add_ai_model_to_briefing_signal.py` - BriefingSignal에 사용된 AI 모델명 기록
+
+### Added (사용자 인증 시스템)
+
+- **User 모델**: `backend/app/models/user.py` - 이메일 인증 기반 회원 관리
+- **인증 라우터**: `backend/app/routers/auth.py` - 회원가입, 로그인, 토큰 갱신 엔드포인트
+- **사용자 라우터**: `backend/app/routers/user.py` - 프로필 조회/수정, 관심종목 관리
+- **이메일 서비스**: `backend/app/services/email_service.py` - 인증 토큰 발송
+- **DB 마이그레이션**: `033_add_user_auth_tables.py`, `034_change_verification_code_to_token.py`
+- **Frontend 인증**: 로그인/회원가입/이메일 인증 페이지 + AuthProvider 컴포넌트
+
+### Added (푸시 알림)
+
+- **푸시 서비스**: `backend/app/services/push_service.py` - Web Push 알림 발송
+- **푸시 라우터**: `backend/app/routers/push.py` - 구독 관리 엔드포인트
+- **Service Worker**: `frontend/public/sw.js` - 브라우저 푸시 수신
+
+### Changed (기존 기능 개선)
+
+- **AI 클라이언트**: `ai_client.py` 리팩토링 - 모델 선택 로직 개선
+- **채팅 페이지**: 대화형 분석 UI 대폭 개선 (`frontend/src/app/chat/page.tsx`)
+- **메인 페이지/워치리스트/펀드/뉴스 페이지**: 인증 연동 및 UI 개선
+- **네이버 파이낸스**: `naver_finance.py` 크롤링 안정성 강화
+
+### Infrastructure
+
+- **MoAI ADK**: v2.8.0 -> v2.9.1 업데이트 (hook 스크립트, skill, rule 갱신)
+
 ### Added (SPEC-AI-003: 선행 매수 신호 탐지)
 
 - **선행 지표 탐지 엔진**: 4개 독립 신호 탐지 함수로 가격 상승 이전 시점 포착
