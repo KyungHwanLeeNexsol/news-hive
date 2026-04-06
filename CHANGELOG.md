@@ -4,6 +4,21 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Added — SPEC-FOLLOW-002: 증권사 리포트 수집 및 키워드 알림 확장
+
+- `SecuritiesReport` 모델 추가: 네이버 리서치 종목분석 리포트 저장 테이블
+- Alembic 마이그레이션 041: `securities_reports` 테이블 생성 (url UNIQUE, stock_id FK)
+- `securities_report_crawler.py`: 네이버 리서치 크롤러 (서킷 브레이커 "naver_research", 30분 간격)
+- `keyword_matcher.py` 확장: 리포트 키워드 매칭 루프 추가, type_label 3원 분기
+- `scheduler.py` 확장: `_run_securities_report_crawl` 잡 등록
+- 테스트 2종 추가: `test_securities_report_crawler.py`, `test_keyword_matcher_report.py`
+
+### 구현 비고 (SPEC-FOLLOW-002)
+
+- PDF 본문 수집 제외 (REQ-FOLLOW-002-N3 준수)
+- 서킷 브레이커 "naver_research" 키 — 동적 생성으로 circuit_breaker.py 수정 불필요
+- `company_name` 컬럼: String(200) — SPEC 7.1 정합
+
 ### Added (SPEC-FOLLOW-001: 기업 팔로잉 시스템 - 완료)
 
 - **팔로잉 기능**: `backend/app/models/following.py` - StockFollowing, StockKeyword, KeywordNotification 모델 추가

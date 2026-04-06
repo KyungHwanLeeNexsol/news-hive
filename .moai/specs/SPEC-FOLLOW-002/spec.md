@@ -1,7 +1,7 @@
 ---
 id: SPEC-FOLLOW-002
 title: Securities Report Collection and Keyword Notification
-status: planned
+status: implemented
 priority: high
 created: "2026-04-06"
 depends_on: [SPEC-FOLLOW-001]
