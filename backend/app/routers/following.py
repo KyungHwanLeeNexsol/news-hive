@@ -400,12 +400,51 @@ async def telegram_webhook(
     if settings.TELEGRAM_WEBHOOK_SECRET:
         if x_telegram_bot_api_secret_token != settings.TELEGRAM_WEBHOOK_SECRET:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid webhook secret")
-    from app.services.telegram_service import send_telegram_message
+    from app.services.telegram_service import send_telegram_message, answer_callback_query
 
     _cleanup_expired_codes()
 
     try:
-        # 텔레그램 Update 파싱
+        # 인라인 버튼 클릭 처리 (callback_query)
+        if "callback_query" in payload:
+            cb = payload["callback_query"]
+            cb_id = cb.get("id", "")
+            cb_data = cb.get("data", "")
+            cb_chat_id = str(cb.get("from", {}).get("id", ""))
+
+            if cb_data.startswith("del_kw:") and cb_chat_id:
+                try:
+                    keyword_id = int(cb_data.split(":", 1)[1])
+                    user = db.query(User).filter(User.telegram_chat_id == cb_chat_id).first()
+                    if not user:
+                        await answer_callback_query(cb_id, "연동된 계정을 찾을 수 없습니다")
+                        return {"ok": True}
+
+                    kw = (
+                        db.query(StockKeyword)
+                        .join(StockFollowing, StockKeyword.following_id == StockFollowing.id)
+                        .filter(
+                            StockKeyword.id == keyword_id,
+                            StockFollowing.user_id == user.id,
+                        )
+                        .first()
+                    )
+                    if kw:
+                        kw_text = kw.keyword
+                        db.delete(kw)
+                        db.commit()
+                        await answer_callback_query(cb_id, f"'{kw_text}' 키워드가 삭제되었습니다")
+                        await send_telegram_message(
+                            cb_chat_id,
+                            f"✅ <b>{kw_text}</b> 키워드가 삭제되었습니다.",
+                        )
+                    else:
+                        await answer_callback_query(cb_id, "키워드를 찾을 수 없거나 권한이 없습니다")
+                except (ValueError, IndexError):
+                    await answer_callback_query(cb_id, "잘못된 요청입니다")
+            return {"ok": True}
+
+        # 텔레그램 Update 파싱 (연동 코드)
         message = payload.get("message", {})
         text = (message.get("text") or "").strip().upper()
         chat = message.get("chat", {})

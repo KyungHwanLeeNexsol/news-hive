@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import html
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -54,10 +55,13 @@ def match_keywords_and_notify(db: Session) -> dict:
             .all()
         )
 
-        # 신규 공시 조회
+        # 신규 공시 조회 (당일 기준)
         recent_disclosures = (
             db.query(Disclosure)
-            .filter(Disclosure.created_at > since)
+            .filter(
+                Disclosure.created_at > since,
+                Disclosure.created_at >= today_start_utc,
+            )
             .all()
         )
 
@@ -73,6 +77,12 @@ def match_keywords_and_notify(db: Session) -> dict:
         for kw, user_id, stock_id in keyword_rows:
             user_keywords.setdefault(user_id, []).append((kw.id, kw.keyword, stock_id))
 
+        # stock_id → 기업명 매핑 (알림 메시지 기업명 표시용)
+        from app.models.stock import Stock
+        stock_name_map: dict[int, str] = {
+            s.id: s.name for s in db.query(Stock.id, Stock.name).all()
+        }
+
         if not user_keywords:
             # 팔로잉 키워드가 없으면 스킵
             _last_run = datetime.now(timezone.utc)
@@ -85,7 +95,7 @@ def match_keywords_and_notify(db: Session) -> dict:
             search_text = (article.title + " " + extra).lower()
 
             for user_id, kw_list in user_keywords.items():
-                for kw_id, keyword, _stock_id in kw_list:
+                for kw_id, keyword, stock_id in kw_list:
                     # 최소 2자 이상 키워드만 매칭
                     if len(keyword) < 2:
                         continue
@@ -118,6 +128,7 @@ def match_keywords_and_notify(db: Session) -> dict:
                         content_title=article.title,
                         content_url=article.url,
                         keyword_text=keyword,
+                        company_name=stock_name_map.get(stock_id, ""),
                     )
                     if channel != "none":
                         stats["notified"] += 1
@@ -129,7 +140,7 @@ def match_keywords_and_notify(db: Session) -> dict:
             search_text = (disclosure.report_name + " " + disclosure.corp_name + " " + extra).lower()
 
             for user_id, kw_list in user_keywords.items():
-                for kw_id, keyword, _stock_id in kw_list:
+                for kw_id, keyword, stock_id in kw_list:
                     if len(keyword) < 2:
                         continue
                     if keyword.lower() not in search_text:
@@ -161,6 +172,7 @@ def match_keywords_and_notify(db: Session) -> dict:
                         content_title=disclosure.report_name,
                         content_url=disclosure.url,
                         keyword_text=keyword,
+                        company_name=stock_name_map.get(stock_id, ""),
                     )
                     if channel != "none":
                         stats["notified"] += 1
@@ -171,7 +183,10 @@ def match_keywords_and_notify(db: Session) -> dict:
 
         recent_reports = (
             db.query(SecuritiesReport)
-            .filter(SecuritiesReport.collected_at > since)
+            .filter(
+                SecuritiesReport.collected_at > since,
+                SecuritiesReport.collected_at >= today_start_utc,
+            )
             .all()
         )
         for report in recent_reports:
@@ -180,7 +195,7 @@ def match_keywords_and_notify(db: Session) -> dict:
             ).lower()
 
             for user_id, kw_list in user_keywords.items():
-                for kw_id, keyword, _stock_id in kw_list:
+                for kw_id, keyword, stock_id in kw_list:
                     if len(keyword) < 2:
                         continue
                     if keyword.lower() not in search_text:
@@ -212,6 +227,7 @@ def match_keywords_and_notify(db: Session) -> dict:
                         content_title=report.title,
                         content_url=report.url,
                         keyword_text=keyword,
+                        company_name=stock_name_map.get(stock_id, ""),
                     )
                     if channel != "none":
                         stats["notified"] += 1
@@ -237,6 +253,7 @@ def _dispatch_notification(
     content_title: str,
     content_url: str,
     keyword_text: str,
+    company_name: str = "",
 ) -> str:
     """알림을 발송하고 채널명을 반환한다.
 
@@ -244,11 +261,12 @@ def _dispatch_notification(
         db: SQLAlchemy 세션
         user_id: 알림 수신 사용자 ID
         keyword_id: 매칭된 키워드 ID
-        content_type: 콘텐츠 유형 (news|disclosure)
+        content_type: 콘텐츠 유형 (news|disclosure|report)
         content_id: 콘텐츠 ID
         content_title: 콘텐츠 제목
         content_url: 콘텐츠 URL
         keyword_text: 매칭된 키워드 텍스트
+        company_name: 팔로잉 종목명 (메시지 헤더에 표시)
 
     Returns:
         사용된 채널명: "telegram" | "web_push" | "none"
@@ -265,11 +283,22 @@ def _dispatch_notification(
 
     # 알림 메시지 구성 (SPEC-FOLLOW-002: 리포트 타입 추가)
     type_label = {"news": "뉴스", "disclosure": "공시", "report": "리포트"}.get(content_type, "알림")
+    header = f"[키워드 알림] {keyword_text}"
+    if company_name:
+        header = f"[키워드 알림] {keyword_text} | {company_name}"
+    safe_url = html.escape(content_url)
     message = (
-        f"<b>[키워드 알림] {keyword_text}</b>\n\n"
+        f"<b>{header}</b>\n\n"
         f"<b>{type_label}</b>: {content_title}\n"
-        f"<a href='{content_url}'>자세히 보기</a>"
+        f"<a href=\"{safe_url}\">자세히 보기</a>"
     )
+
+    # 인라인 키보드: 키워드 삭제 버튼
+    reply_markup = {
+        "inline_keyboard": [[
+            {"text": "이 키워드 삭제", "callback_data": f"del_kw:{keyword_id}"}
+        ]]
+    }
 
     # 텔레그램 우선 발송
     if user.telegram_chat_id:
@@ -277,7 +306,7 @@ def _dispatch_notification(
             from app.services.telegram_service import send_telegram_message
 
             # BackgroundScheduler는 동기 컨텍스트이므로 asyncio.run() 사용
-            success = asyncio.run(send_telegram_message(user.telegram_chat_id, message))
+            success = asyncio.run(send_telegram_message(user.telegram_chat_id, message, reply_markup=reply_markup))
             if success:
                 channel = "telegram"
         except Exception as e:

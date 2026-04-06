@@ -210,13 +210,17 @@ def _parse_report_rows(html: str) -> list[dict]:
             if href.endswith(".pdf") or "pdf" in href.lower():
                 continue
 
+            # JavaScript 링크 및 빈 링크 제외
+            if not href or href.startswith("javascript:"):
+                continue
+
             # URL을 절대경로로 변환
             if href.startswith("http"):
-                url = href
+                url = href.strip()
             elif href.startswith("/"):
-                url = f"https://finance.naver.com{href}"
+                url = f"https://finance.naver.com{href.strip()}"
             else:
-                url = f"https://finance.naver.com/{href}"
+                url = f"https://finance.naver.com/{href.strip()}"
 
             securities_firm = firm_td.get_text(strip=True)
             target_price_text = target_td.get_text(strip=True) if target_td else None
