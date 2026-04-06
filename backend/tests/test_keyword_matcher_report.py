@@ -118,7 +118,7 @@ def test_report_keyword_match_notifies() -> None:
 
     call_count = 0
 
-    def query_side(model):
+    def query_side(*args):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -172,7 +172,7 @@ def test_report_keyword_no_duplicate() -> None:
 
     call_count = 0
 
-    def query_side(model):
+    def query_side(*args):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -223,7 +223,7 @@ def test_existing_news_disclosure_matching_unaffected() -> None:
 
     call_count = 0
 
-    def query_side(model):
+    def query_side(*args):
         nonlocal call_count
         call_count += 1
         if call_count == 1:

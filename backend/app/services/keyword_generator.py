@@ -139,7 +139,7 @@ async def generate_keywords(
         response = await ask_ai(prompt)
         if not response:
             logger.warning(f"AI 키워드 생성 응답 없음: {company_name}({stock_code})")
-            return None
+            return empty_result
 
         # JSON 파싱 (마크다운 코드 블록 제거)
         cleaned = response.strip()

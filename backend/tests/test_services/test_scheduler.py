@@ -32,11 +32,12 @@ from app.services.scheduler import (
 class TestRunCrawlJob:
     """_run_crawl_job이 올바른 서비스를 호출하는지 검증."""
 
+    @patch("app.services.scheduler._run_keyword_matching")
     @patch("app.services.scheduler._cleanup_old_articles")
     @patch("app.services.scheduler.asyncio.run")
     @patch("app.services.scheduler.SessionLocal")
     def test_calls_crawl_and_sentiment(
-        self, mock_session_cls, mock_arun, mock_cleanup,
+        self, mock_session_cls, mock_arun, mock_cleanup, mock_kw_match,
     ) -> None:
         """crawl_all_news를 호출하고 sentiment 없는 기사를 backfill한다."""
         mock_db = MagicMock()
@@ -125,11 +126,12 @@ class TestRunSignalVerification:
 class TestRunDartCrawl:
     """_run_dart_crawl이 disclosure 크롤러를 호출하는지 검증."""
 
+    @patch("app.services.scheduler._run_keyword_matching")
     @patch("app.services.scheduler._cleanup_old_disclosures")
     @patch("app.services.scheduler.asyncio.run")
     @patch("app.services.scheduler.SessionLocal")
     def test_calls_dart_crawler(
-        self, mock_session_cls, mock_arun, mock_cleanup,
+        self, mock_session_cls, mock_arun, mock_cleanup, mock_kw_match,
     ) -> None:
         """fetch_dart_disclosures를 호출하고 backfill을 수행한다."""
         mock_db = MagicMock()
