@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/components/AuthProvider';
 import { useRouter } from 'next/navigation';
@@ -66,6 +66,9 @@ export default function FollowingPage() {
   const [telegramLoading, setTelegramLoading] = useState(false);
   const [telegramLinkCode, setTelegramLinkCode] = useState<TelegramLinkCode | null>(null);
   const [telegramError, setTelegramError] = useState('');
+
+  // 텔레그램 섹션 ref (스크롤 이동용)
+  const telegramSectionRef = useRef<HTMLDivElement>(null);
 
   // 비로그인 시 로그인 페이지로 리디렉션
   useEffect(() => {
@@ -245,129 +248,148 @@ export default function FollowingPage() {
           </div>
         </div>
 
-        {/* 종목 추가 입력 영역 */}
-        <div className="px-4 py-3 border-b border-[#f0f0f0] bg-[#fafafa]">
-          <div className="flex items-center gap-2">
-            <input
-              type="text"
-              value={addCode}
-              onChange={(e) => {
-                setAddCode(e.target.value);
-                setAddError('');
-                setAddSuccess('');
-              }}
-              onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
-              placeholder="종목코드 6자리 입력 (예: 005930)"
-              maxLength={6}
-              className="flex-1 px-3 py-1.5 text-[13px] border border-[#ddd] rounded focus:outline-none focus:border-[#1261c4] bg-white"
-            />
+        {/* 텔레그램 미연동 시 게이트 */}
+        {telegramStatus !== null && !telegramStatus.linked ? (
+          <div className="px-4 py-12 text-center">
+            <p className="text-[14px] font-semibold text-[#333] mb-1">텔레그램 연동 후 이용 가능합니다</p>
+            <p className="text-[12px] text-[#999] mb-4">
+              팔로잉 알림은 텔레그램으로 전송됩니다. 먼저 아래에서 텔레그램 연동을 완료해 주세요.
+            </p>
             <button
               type="button"
-              onClick={handleAdd}
-              disabled={addLoading || !addCode.trim()}
-              className="px-4 py-1.5 text-[13px] font-semibold bg-[#1261c4] text-white rounded hover:bg-[#0e4f9e] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              onClick={() => telegramSectionRef.current?.scrollIntoView({ behavior: 'smooth' })}
+              className="px-4 py-2 text-[13px] font-semibold bg-[#1261c4] text-white rounded hover:bg-[#0e4f9e] transition-colors"
             >
-              {addLoading ? '추가 중...' : '팔로잉 추가'}
+              텔레그램 연동하기 ↓
             </button>
           </div>
-          {/* 오류 / 성공 메시지 */}
-          {addError && <p className="mt-1.5 text-[12px] text-[#e12343]">{addError}</p>}
-          {addSuccess && <p className="mt-1.5 text-[12px] text-[#1261c4]">{addSuccess}</p>}
-        </div>
-
-        {/* 팔로잉 목록 */}
-        {listLoading ? (
-          // 스켈레톤 로딩
-          <div className="divide-y divide-[#f0f0f0]">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <div key={`sk-${i}`} className="px-4 py-3 flex items-center gap-3">
-                <div className="skeleton skeleton-text" style={{ width: '120px' }} />
-                <div className="skeleton skeleton-text-sm" style={{ width: '60px' }} />
-                <div className="ml-auto skeleton skeleton-text-sm" style={{ width: '80px' }} />
-              </div>
-            ))}
-          </div>
-        ) : followingList.length === 0 ? (
-          // 빈 상태
-          <div className="px-4 py-16 text-center">
-            <p className="text-[#999] text-[14px] mb-2">팔로잉 중인 종목이 없습니다. 종목을 추가해 보세요.</p>
-            <p className="text-[#bbb] text-[12px]">위의 입력창에 종목코드를 입력하여 팔로잉을 시작하세요.</p>
-          </div>
         ) : (
-          // 팔로잉 카드 목록
-          <div className="divide-y divide-[#f0f0f0]">
-            {followingList.map((item) => (
-              <div key={item.following_id} className="px-4 py-3 flex items-center gap-3 hover:bg-[#f7f8fa]">
-                {/* 종목 정보 */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
+          <>
+            {/* 종목 추가 입력 영역 */}
+            <div className="px-4 py-3 border-b border-[#f0f0f0] bg-[#fafafa]">
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={addCode}
+                  onChange={(e) => {
+                    setAddCode(e.target.value);
+                    setAddError('');
+                    setAddSuccess('');
+                  }}
+                  onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
+                  placeholder="종목코드 6자리 입력 (예: 005930)"
+                  maxLength={6}
+                  className="flex-1 px-3 py-1.5 text-[13px] border border-[#ddd] rounded focus:outline-none focus:border-[#1261c4] bg-white"
+                />
+                <button
+                  type="button"
+                  onClick={handleAdd}
+                  disabled={addLoading || !addCode.trim()}
+                  className="px-4 py-1.5 text-[13px] font-semibold bg-[#1261c4] text-white rounded hover:bg-[#0e4f9e] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {addLoading ? '추가 중...' : '팔로잉 추가'}
+                </button>
+              </div>
+              {/* 오류 / 성공 메시지 */}
+              {addError && <p className="mt-1.5 text-[12px] text-[#e12343]">{addError}</p>}
+              {addSuccess && <p className="mt-1.5 text-[12px] text-[#1261c4]">{addSuccess}</p>}
+            </div>
+
+            {/* 팔로잉 목록 */}
+            {listLoading ? (
+              // 스켈레톤 로딩
+              <div className="divide-y divide-[#f0f0f0]">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <div key={`sk-${i}`} className="px-4 py-3 flex items-center gap-3">
+                    <div className="skeleton skeleton-text" style={{ width: '120px' }} />
+                    <div className="skeleton skeleton-text-sm" style={{ width: '60px' }} />
+                    <div className="ml-auto skeleton skeleton-text-sm" style={{ width: '80px' }} />
+                  </div>
+                ))}
+              </div>
+            ) : followingList.length === 0 ? (
+              // 빈 상태
+              <div className="px-4 py-16 text-center">
+                <p className="text-[#999] text-[14px] mb-2">팔로잉 중인 종목이 없습니다. 종목을 추가해 보세요.</p>
+                <p className="text-[#bbb] text-[12px]">위의 입력창에 종목코드를 입력하여 팔로잉을 시작하세요.</p>
+              </div>
+            ) : (
+              // 팔로잉 카드 목록
+              <div className="divide-y divide-[#f0f0f0]">
+                {followingList.map((item) => (
+                  <div key={item.following_id} className="px-4 py-3 flex items-center gap-3 hover:bg-[#f7f8fa]">
+                    {/* 종목 정보 */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Link
+                          href={`/following/${item.stock_code}`}
+                          className="text-[14px] font-semibold text-[#333] hover:text-[#1261c4] hover:underline"
+                        >
+                          {item.stock_name}
+                        </Link>
+                        {/* 종목코드 배지 */}
+                        <span className="text-[11px] px-1.5 py-0.5 rounded bg-[#e8f4fd] text-[#1261c4]">
+                          {item.stock_code}
+                        </span>
+                        {/* 키워드 수 배지 */}
+                        <span className="text-[11px] px-1.5 py-0.5 rounded bg-[#f5f5f5] text-[#666]">
+                          키워드 {item.keyword_count}개
+                        </span>
+                      </div>
+                      {/* 마지막 알림 시간 */}
+                      <p className="text-[11px] text-[#999] mt-0.5">
+                        마지막 알림: {formatRelativeTime(item.last_notification_at)}
+                      </p>
+                    </div>
+
+                    {/* 키워드 관리 링크 */}
                     <Link
                       href={`/following/${item.stock_code}`}
-                      className="text-[14px] font-semibold text-[#333] hover:text-[#1261c4] hover:underline"
+                      className="px-3 py-1 text-[12px] font-medium rounded bg-[#f5f5f5] text-[#666] hover:bg-[#e5e5e5] transition-colors shrink-0"
                     >
-                      {item.stock_name}
+                      키워드 관리
                     </Link>
-                    {/* 종목코드 배지 */}
-                    <span className="text-[11px] px-1.5 py-0.5 rounded bg-[#e8f4fd] text-[#1261c4]">
-                      {item.stock_code}
-                    </span>
-                    {/* 키워드 수 배지 */}
-                    <span className="text-[11px] px-1.5 py-0.5 rounded bg-[#f5f5f5] text-[#666]">
-                      키워드 {item.keyword_count}개
-                    </span>
-                  </div>
-                  {/* 마지막 알림 시간 */}
-                  <p className="text-[11px] text-[#999] mt-0.5">
-                    마지막 알림: {formatRelativeTime(item.last_notification_at)}
-                  </p>
-                </div>
 
-                {/* 키워드 관리 링크 */}
-                <Link
-                  href={`/following/${item.stock_code}`}
-                  className="px-3 py-1 text-[12px] font-medium rounded bg-[#f5f5f5] text-[#666] hover:bg-[#e5e5e5] transition-colors shrink-0"
-                >
-                  키워드 관리
-                </Link>
-
-                {/* 팔로잉 해제 버튼 */}
-                {confirmDelete === item.stock_code ? (
-                  // 삭제 확인 UI
-                  <div className="flex items-center gap-1 shrink-0">
-                    <span className="text-[12px] text-[#666]">해제할까요?</span>
-                    <button
-                      type="button"
-                      onClick={() => handleUnfollow(item.stock_code)}
-                      disabled={deleteLoading}
-                      className="px-2 py-1 text-[11px] font-semibold bg-[#e12343] text-white rounded hover:bg-[#c01030] disabled:opacity-50 transition-colors"
-                    >
-                      확인
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setConfirmDelete(null)}
-                      className="px-2 py-1 text-[11px] font-medium bg-[#f5f5f5] text-[#666] rounded hover:bg-[#e5e5e5] transition-colors"
-                    >
-                      취소
-                    </button>
+                    {/* 팔로잉 해제 버튼 */}
+                    {confirmDelete === item.stock_code ? (
+                      // 삭제 확인 UI
+                      <div className="flex items-center gap-1 shrink-0">
+                        <span className="text-[12px] text-[#666]">해제할까요?</span>
+                        <button
+                          type="button"
+                          onClick={() => handleUnfollow(item.stock_code)}
+                          disabled={deleteLoading}
+                          className="px-2 py-1 text-[11px] font-semibold bg-[#e12343] text-white rounded hover:bg-[#c01030] disabled:opacity-50 transition-colors"
+                        >
+                          확인
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDelete(null)}
+                          className="px-2 py-1 text-[11px] font-medium bg-[#f5f5f5] text-[#666] rounded hover:bg-[#e5e5e5] transition-colors"
+                        >
+                          취소
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDelete(item.stock_code)}
+                        className="px-3 py-1 text-[12px] font-medium rounded border border-[#ddd] text-[#999] hover:border-[#e12343] hover:text-[#e12343] transition-colors shrink-0"
+                      >
+                        해제
+                      </button>
+                    )}
                   </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setConfirmDelete(item.stock_code)}
-                    className="px-3 py-1 text-[12px] font-medium rounded border border-[#ddd] text-[#999] hover:border-[#e12343] hover:text-[#e12343] transition-colors shrink-0"
-                  >
-                    해제
-                  </button>
-                )}
+                ))}
               </div>
-            ))}
-          </div>
+            )}
+          </>
         )}
       </div>
 
       {/* 텔레그램 연동 섹션 */}
-      <div className="section-box mb-3">
+      <div ref={telegramSectionRef} className="section-box mb-3">
         <div className="flex items-center gap-3 px-4 py-2.5 border-b border-[#e5e5e5]">
           <span className="text-[15px] font-semibold text-[#333]">텔레그램 알림 연동</span>
           {/* 연동 상태 배지 */}
@@ -413,11 +435,12 @@ export default function FollowingPage() {
 
               {/* 연동 코드 발급 후 안내 */}
               {telegramLinkCode ? (
-                <div className="bg-[#f0f7ff] border border-[#1261c4] rounded p-3">
-                  <p className="text-[13px] font-semibold text-[#1261c4] mb-1">연동 코드가 발급되었습니다</p>
-                  <p className="text-[12px] text-[#333] mb-2">{telegramLinkCode.instruction}</p>
-                  <div className="flex items-center gap-2">
-                    <code className="bg-white px-3 py-1.5 rounded border border-[#1261c4] text-[16px] font-bold text-[#1261c4] tracking-widest">
+                <div className="bg-[#f0f7ff] border border-[#1261c4] rounded p-4">
+                  <p className="text-[13px] font-semibold text-[#1261c4] mb-3">연동 코드가 발급되었습니다</p>
+
+                  {/* 코드 표시 */}
+                  <div className="flex items-center gap-2 mb-4">
+                    <code className="bg-white px-3 py-1.5 rounded border border-[#1261c4] text-[18px] font-bold text-[#1261c4] tracking-[0.2em]">
                       {telegramLinkCode.code}
                     </code>
                     <button
@@ -427,6 +450,50 @@ export default function FollowingPage() {
                     >
                       복사
                     </button>
+                  </div>
+
+                  {/* 단계별 연동 가이드 */}
+                  <div className="bg-white rounded border border-[#c5daf6] p-3">
+                    <p className="text-[12px] font-semibold text-[#333] mb-2">연동 방법</p>
+                    <ol className="space-y-2">
+                      <li className="flex items-start gap-2">
+                        <span className="shrink-0 w-4 h-4 rounded-full bg-[#1261c4] text-white text-[10px] font-bold flex items-center justify-center mt-0.5">1</span>
+                        <span className="text-[12px] text-[#444]">
+                          텔레그램 앱에서{' '}
+                          <a
+                            href="https://t.me/newshive_notify_bot"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[#1261c4] font-semibold underline"
+                          >
+                            @newshive_notify_bot
+                          </a>
+                          {' '}을 검색하거나 링크를 클릭하세요
+                        </span>
+                      </li>
+                      <li className="flex items-start gap-2">
+                        <span className="shrink-0 w-4 h-4 rounded-full bg-[#1261c4] text-white text-[10px] font-bold flex items-center justify-center mt-0.5">2</span>
+                        <span className="text-[12px] text-[#444]">
+                          봇 채팅창에{' '}
+                          <strong className="text-[#1261c4]">{telegramLinkCode.code}</strong>
+                          {' '}를 그대로 입력하고 전송하세요
+                        </span>
+                      </li>
+                      <li className="flex items-start gap-2">
+                        <span className="shrink-0 w-4 h-4 rounded-full bg-[#1261c4] text-white text-[10px] font-bold flex items-center justify-center mt-0.5">3</span>
+                        <span className="text-[12px] text-[#444]">
+                          봇에서 &quot;텔레그램 연동이 완료되었습니다&quot; 메시지가 오면 아래 버튼을 누르세요
+                        </span>
+                      </li>
+                    </ol>
+                    <button
+                      type="button"
+                      onClick={() => { loadTelegramStatus(); setTelegramLinkCode(null); }}
+                      className="mt-3 w-full py-1.5 text-[12px] font-semibold bg-[#1261c4] text-white rounded hover:bg-[#0e4f9e] transition-colors"
+                    >
+                      연동 완료 확인
+                    </button>
+                    <p className="mt-2 text-[11px] text-[#999] text-center">⏱ 코드 유효시간: 10분 (만료 시 재발급 필요)</p>
                   </div>
                 </div>
               ) : (
