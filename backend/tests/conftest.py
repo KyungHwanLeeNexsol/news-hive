@@ -38,6 +38,7 @@ from app.models.stock_relation import StockRelation
 from app.models.virtual_portfolio import VirtualPortfolio
 from app.models.factor_weight import FactorWeightHistory
 from app.models.improvement_log import ImprovementLog
+from app.models.securities_report import SecuritiesReport  # noqa: F401 — SPEC-FOLLOW-002
 
 
 # 테스트 DB URL: 기본 SQLite 인메모리, 환경변수로 PostgreSQL 오버라이드 가능
