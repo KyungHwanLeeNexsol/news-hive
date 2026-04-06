@@ -7,7 +7,7 @@ import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Header, Query, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -308,6 +308,7 @@ async def ai_generate_keywords(
                 new_keywords[category].append(KeywordResponse.model_validate(kw))
             except Exception:
                 # UNIQUE 제약 위반 등 예외 무시
+                logger.exception("AI 키워드 저장 실패 (category=%s, keyword=%s)", category, kw_text)
                 db.rollback()
 
     db.commit()
@@ -375,12 +376,19 @@ def unlink_telegram(
 async def telegram_webhook(
     payload: dict,
     db: Session = Depends(get_db),
+    x_telegram_bot_api_secret_token: str | None = Header(default=None),
 ) -> dict:
     """텔레그램 Bot 웹훅 엔드포인트.
 
     사용자가 봇에 연동 코드를 전송하면 telegram_chat_id를 저장한다.
-    이 엔드포인트는 텔레그램 서버에서 호출하므로 인증이 없다.
+    TELEGRAM_WEBHOOK_SECRET 설정 시 X-Telegram-Bot-Api-Secret-Token 헤더 검증.
     """
+    from app.config import settings
+
+    # 웹훅 시크릿 검증 (설정된 경우에만)
+    if settings.TELEGRAM_WEBHOOK_SECRET:
+        if x_telegram_bot_api_secret_token != settings.TELEGRAM_WEBHOOK_SECRET:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid webhook secret")
     from app.services.telegram_service import send_telegram_message
 
     _cleanup_expired_codes()

@@ -75,6 +75,7 @@ class Settings(BaseSettings):
 
     # --- 텔레그램 봇 (SPEC-FOLLOW-001) ---
     TELEGRAM_BOT_TOKEN: str = ""  # BotFather에서 발급받은 봇 토큰
+    TELEGRAM_WEBHOOK_SECRET: str = ""  # 웹훅 시크릿 (setWebhook secret_token 파라미터와 동일하게 설정)
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
