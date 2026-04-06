@@ -407,7 +407,8 @@ async def chat_endpoint(req: ChatRequest, db: Session = Depends(get_db)):
     사용자 메시지에서 종목을 감지하고, 관련 데이터를 수집하여
     Gemini에게 분석을 요청한 후 응답을 반환한다.
     """
-    from app.services.ai_client import ask_ai_with_model
+    # OpenAI fallback 경유 wrapper 사용 (Gemini 한도 소진 시 자동 전환)
+    from app.services.ai_client import ask_ai_with_openai_fallback as ask_ai_with_model
 
     # 세션 관리
     session_id, history = _get_or_create_session(req.session_id)

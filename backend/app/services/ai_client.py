@@ -155,7 +155,7 @@ async def ask_ai_with_openai_fallback(prompt: str, max_retries: int = 3) -> tupl
     try:
         text = await _call_openai(prompt)
         if text:
-            logger.info(f"OpenAI fallback 성공 ({settings.OPENAI_MODEL})")
+            logger.warning(f"OpenAI fallback 성공 ({settings.OPENAI_MODEL})")
             return text, settings.OPENAI_MODEL
     except Exception as e:
         logger.warning(f"OpenAI fallback 실패: {e}")
