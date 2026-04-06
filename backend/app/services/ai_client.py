@@ -1,11 +1,12 @@
-"""AI 클라이언트 — Gemini 3키 라운드로빈.
+"""AI 클라이언트 — Gemini 다키 라운드로빈.
 
 모든 AI 호출은 `ask_ai()`를 통해 수행한다.
-Gemini API 키 3개를 순환하며 호출한다. 전부 rate limit 소진 시 None을 반환한다.
+Gemini API 키를 순환하며 호출한다. 전부 rate limit 소진 시 None을 반환한다.
 """
 
 import asyncio
 import logging
+import time
 
 from app.config import settings
 from app.services.circuit_breaker import api_circuit_breaker
@@ -14,6 +15,12 @@ logger = logging.getLogger(__name__)
 
 # 라운드로빈 카운터 (모듈 수준 상태)
 _call_counter: int = 0
+
+# 동시 API 호출 제한: 최대 3개 (Gemini 15 RPM 보호)
+_ai_semaphore = asyncio.Semaphore(3)
+
+# 키별 rate limit 쿨다운: {key_idx: monotonic_time_available_after}
+_key_rate_limited_until: dict[int, float] = {}
 
 
 def _get_gemini_keys() -> list[str]:
@@ -70,31 +77,43 @@ async def ask_ai_with_model(prompt: str, max_retries: int = 3) -> tuple[str | No
     _call_counter += 1
 
     gemini_errors = []
-    for i in range(n_keys):
-        key_idx = (start_idx + i) % n_keys
-        key_name = f"Gemini-{key_idx + 1}"
 
-        for attempt in range(max_retries):
-            try:
-                result = await _call_gemini(prompt, keys[key_idx])
-                if result:
-                    api_circuit_breaker.record_success("gemini")
-                    return result, settings.GEMINI_MODEL
-            except Exception as e:
-                err_str = str(e)
-                is_rate_limit = any(k in err_str for k in ("429", "RESOURCE_EXHAUSTED", "rate_limit"))
-                if is_rate_limit:
-                    logger.warning(f"{key_name} rate limited, 다음 키로 전환")
-                    gemini_errors.append(f"{key_name}: rate_limited")
-                    break
-                elif attempt < max_retries - 1:
-                    wait = 2 * (2 ** attempt)
-                    logger.info(f"{key_name} 오류, {wait}초 후 재시도 (attempt {attempt + 1})")
-                    await asyncio.sleep(wait)
-                else:
-                    logger.warning(f"{key_name} 실패: {e}")
-                    gemini_errors.append(f"{key_name}: {type(e).__name__}: {e}")
-                    break
+    async with _ai_semaphore:
+        for i in range(n_keys):
+            key_idx = (start_idx + i) % n_keys
+            key_name = f"Gemini-{key_idx + 1}"
+
+            # rate limit 쿨다운 중인 키 skip
+            cooldown_until = _key_rate_limited_until.get(key_idx, 0.0)
+            if cooldown_until > time.monotonic():
+                remaining = cooldown_until - time.monotonic()
+                logger.debug(f"{key_name} 쿨다운 중 ({remaining:.0f}초 남음), 다음 키로")
+                gemini_errors.append(f"{key_name}: cooldown")
+                continue
+
+            for attempt in range(max_retries):
+                try:
+                    result = await _call_gemini(prompt, keys[key_idx])
+                    if result:
+                        api_circuit_breaker.record_success("gemini")
+                        return result, settings.GEMINI_MODEL
+                except Exception as e:
+                    err_str = str(e)
+                    is_rate_limit = any(k in err_str for k in ("429", "RESOURCE_EXHAUSTED", "rate_limit"))
+                    if is_rate_limit:
+                        # 65초 쿨다운 설정 (1분 RPM 윈도우 + 5초 버퍼)
+                        _key_rate_limited_until[key_idx] = time.monotonic() + 65
+                        logger.warning(f"{key_name} rate limited (65초 쿨다운), 다음 키로 전환")
+                        gemini_errors.append(f"{key_name}: rate_limited")
+                        break
+                    elif attempt < max_retries - 1:
+                        wait = 2 * (2 ** attempt)
+                        logger.info(f"{key_name} 오류, {wait}초 후 재시도 (attempt {attempt + 1})")
+                        await asyncio.sleep(wait)
+                    else:
+                        logger.warning(f"{key_name} 실패: {e}")
+                        gemini_errors.append(f"{key_name}: {type(e).__name__}: {e}")
+                        break
 
     # 전체 실패
     api_circuit_breaker.record_failure("gemini")
