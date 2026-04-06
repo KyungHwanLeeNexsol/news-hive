@@ -19,7 +19,7 @@ _call_counter: int = 0
 def _get_gemini_keys() -> list[str]:
     """설정된 Gemini API 키 목록을 반환한다."""
     keys = []
-    for key in [settings.GEMINI_API_KEY, settings.GEMINI_API_KEY_2, settings.GEMINI_API_KEY_3]:
+    for key in [settings.GEMINI_API_KEY, settings.GEMINI_API_KEY_2, settings.GEMINI_API_KEY_3, settings.GEMINI_API_KEY_4]:
         if key:
             keys.append(key)
     return keys

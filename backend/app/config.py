@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_API_KEY_2: str = ""
     GEMINI_API_KEY_3: str = ""
+    GEMINI_API_KEY_4: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
 
     # Z.AI (GLM) — Gemini rate limit 소진 시 fallback
