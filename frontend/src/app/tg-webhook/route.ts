@@ -1,6 +1,8 @@
 /**
  * Telegram 웹훅 프록시 라우트.
  * Telegram → Vercel(HTTPS) → FastAPI 백엔드로 중계한다.
+ * /api/* 경로는 next.config.ts rewrite로 FastAPI에 프록시되므로
+ * 이 라우트는 /tg-webhook 경로를 사용한다.
  */
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -23,6 +25,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     body,
   });
 
-  const data = await response.json();
+  const data: unknown = await response.json();
   return NextResponse.json(data, { status: response.status });
 }
