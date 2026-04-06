@@ -206,7 +206,7 @@ async def scrape_article_content(url: str) -> str | None:
         return text
 
     # Fallback: use Gemini AI to extract article text from raw HTML
-    text = await _extract_with_ai(html)
+    text = await _extract_with_ai(html, source_url=url)
     if text:
         return text
 
@@ -268,18 +268,80 @@ def _extract_with_bs4(html: str) -> str | None:
     return text
 
 
-async def _extract_with_ai(html: str) -> str | None:
-    """Use AI to extract article content from HTML."""
+# P4: 도메인별 AI 추출 실패 카운터 (5회 연속 실패 시 24h 블랙리스트)
+_ai_extract_failures: dict[str, tuple[int, float]] = {}  # {host: (count, blacklist_until_ts)}
+_AI_EXTRACT_FAIL_THRESHOLD = 5
+_AI_EXTRACT_BLACKLIST_TTL = 24 * 3600  # 24h
 
-    # Truncate HTML to avoid token limits (keep first ~30K chars)
-    truncated = html[:30000]
 
-    # Strip script/style tags to reduce noise
-    truncated = re.sub(r"<script[^>]*>.*?</script>", "", truncated, flags=re.DOTALL | re.IGNORECASE)
-    truncated = re.sub(r"<style[^>]*>.*?</style>", "", truncated, flags=re.DOTALL | re.IGNORECASE)
+def _ai_extract_blacklisted(url: str) -> bool:
+    import time as _t
+    from urllib.parse import urlparse
+    try:
+        host = urlparse(url).hostname or ""
+    except Exception:
+        return False
+    info = _ai_extract_failures.get(host)
+    if not info:
+        return False
+    count, until = info
+    if count < _AI_EXTRACT_FAIL_THRESHOLD:
+        return False
+    if _t.time() > until:
+        # 만료 → 카운터 리셋
+        _ai_extract_failures.pop(host, None)
+        return False
+    return True
+
+
+def _ai_extract_record_failure(url: str) -> None:
+    import time as _t
+    from urllib.parse import urlparse
+    try:
+        host = urlparse(url).hostname or ""
+    except Exception:
+        return
+    if not host:
+        return
+    count, _ = _ai_extract_failures.get(host, (0, 0.0))
+    count += 1
+    until = _t.time() + _AI_EXTRACT_BLACKLIST_TTL if count >= _AI_EXTRACT_FAIL_THRESHOLD else 0.0
+    _ai_extract_failures[host] = (count, until)
+
+
+def _ai_extract_record_success(url: str) -> None:
+    from urllib.parse import urlparse
+    try:
+        host = urlparse(url).hostname or ""
+    except Exception:
+        return
+    _ai_extract_failures.pop(host, None)
+
+
+async def _extract_with_ai(html: str, source_url: str | None = None) -> str | None:
+    """Use AI to extract article content from HTML.
+
+    P4 최적화: 트렁케이션 12K, 노이즈 태그 추가 제거, 도메인 블랙리스트.
+    """
+    # 도메인 블랙리스트 체크
+    if source_url and _ai_extract_blacklisted(source_url):
+        logger.debug(f"AI 추출 블랙리스트 도메인 스킵: {source_url}")
+        return None
+
+    # 노이즈 태그 제거 (입력 토큰 절감)
+    cleaned = html
+    for tag in ("script", "style", "nav", "header", "footer", "aside", "form", "noscript", "iframe", "svg"):
+        cleaned = re.sub(rf"<{tag}[^>]*>.*?</{tag}>", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    # HTML 주석 제거
+    cleaned = re.sub(r"<!--.*?-->", "", cleaned, flags=re.DOTALL)
+    # 연속 공백 압축
+    cleaned = re.sub(r"\s+", " ", cleaned)
+
+    # 트렁케이션 12K (이전 30K → 60% 토큰 절감)
+    truncated = cleaned[:12000]
 
     prompt = f"""다음 HTML에서 뉴스 기사 본문만 추출해주세요.
-광고, 메뉴, 사이드바, 관련기사 등은 제외하고 기사 본문 텍스트만 반환해주세요.
+광고, 메뉴, 관련기사 등은 제외하고 기사 본문 텍스트만 반환해주세요.
 마크다운이나 HTML 태그 없이 순수 텍스트로 반환해주세요.
 기사 본문을 찾을 수 없으면 "EMPTY"라고만 반환해주세요.
 
@@ -291,10 +353,16 @@ HTML:
 
         text = await ask_ai(prompt)
         if not text or text == "EMPTY" or len(text) < 50:
+            if source_url:
+                _ai_extract_record_failure(source_url)
             return None
+        if source_url:
+            _ai_extract_record_success(source_url)
         return text
     except Exception as e:
         logger.warning(f"AI content extraction failed: {e}")
+        if source_url:
+            _ai_extract_record_failure(source_url)
         return None
 
 

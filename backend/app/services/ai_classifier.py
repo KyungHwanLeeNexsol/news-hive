@@ -489,10 +489,12 @@ async def classify_sentiment_with_ai(
     import json as _json
     from app.services.ai_client import ask_ai
 
-    # neutral인 기사만 AI 분석 대상
+    # neutral인 기사만 AI 분석 대상 (이미 _ai_sentiment 설정된 것은 P3에서 처리됨 — 스킵)
     neutral_articles = [
         (i, a) for i, a in enumerate(articles)
-        if classify_sentiment(a.get("title", "")) == "neutral" and a.get("_relations")
+        if classify_sentiment(a.get("title", "")) == "neutral"
+        and a.get("_relations")
+        and not a.get("_ai_sentiment")
     ]
     if not neutral_articles:
         return
@@ -631,8 +633,8 @@ async def translate_articles_batch(articles: list[dict]) -> None:
     if not en_articles:
         return
 
-    # Process in chunks of 5 (smaller chunks to avoid rate limits)
-    chunk_size = 5
+    # 청크당 20개 (Gemini 2.5 flash는 토큰 여유 충분 — 호출 수 4배 감소)
+    chunk_size = 20
     for chunk_start in range(0, len(en_articles), chunk_size):
         chunk = en_articles[chunk_start:chunk_start + chunk_size]
 
@@ -677,9 +679,9 @@ async def translate_articles_batch(articles: list[dict]) -> None:
         except Exception as e:
             logger.info(f"Translation skipped, keeping English titles: chunk {chunk_start // chunk_size + 1}: {e}")
 
-        # Delay between chunks to avoid rate limits
+        # 청크 간 짧은 지연 (rate limit 보호)
         if chunk_start + chunk_size < len(en_articles):
-            await _asyncio.sleep(5)
+            await _asyncio.sleep(1)
 
     translated_count = sum(1 for _, a in en_articles if "original_title" in a)
     if translated_count:
@@ -803,7 +805,7 @@ async def classify_news_with_ai(
             desc = (a.get("description") or "")[:200]
             items.append({"id": j + 1, "title": title, "desc": desc})
 
-        prompt = f"""다음 뉴스 기사들이 어떤 투자 섹터와 관련있는지 분류해주세요.
+        prompt = f"""다음 뉴스 기사들의 (1) 관련 투자 섹터와 (2) 감성을 동시에 분류해주세요.
 
 등록된 섹터 목록:
 {sector_list}
@@ -811,10 +813,12 @@ async def classify_news_with_ai(
 기사 목록:
 {_json.dumps(items, ensure_ascii=False)}
 
-각 기사에 대해 관련 섹터 ID를 판단해주세요.
-관련 없으면 빈 배열로 두세요.
-반드시 아래 JSON 배열 형식으로만 응답해주세요:
-[{{"id": 1, "sectors": [섹터ID1, 섹터ID2]}}, ...]"""
+각 기사에 대해:
+- sectors: 관련 섹터 ID 배열 (관련 없으면 빈 배열)
+- sentiment: strong_positive/positive/mixed/neutral/negative/strong_negative 중 하나
+
+반드시 아래 JSON 배열 형식으로만 응답해주세요. 다른 텍스트 금지:
+[{{"id": 1, "sectors": [섹터ID1, 섹터ID2], "sentiment": "positive"}}, ...]"""
 
         try:
             text = await ask_ai(prompt, max_retries=3)
@@ -830,9 +834,9 @@ async def classify_news_with_ai(
             for item in results:
                 idx = item.get("id", 0) - 1
                 if 0 <= idx < len(chunk):
+                    orig_idx, article = chunk[idx]
                     sector_ids = item.get("sectors", [])
                     if sector_ids:
-                        orig_idx, article = chunk[idx]
                         relations = []
                         for sid in sector_ids:
                             if sid in sector_map:
@@ -845,6 +849,10 @@ async def classify_news_with_ai(
                         if relations:
                             article["_relations"] = relations
                             classified_count += 1
+                    # P3: 감성도 같은 호출에서 추출 (별도 sentiment AI 호출 절감)
+                    sentiment = item.get("sentiment", "")
+                    if sentiment in _VALID_SENTIMENTS and sentiment != "neutral":
+                        article["_ai_sentiment"] = sentiment
         except Exception as e:
             logger.info(f"AI classification chunk {chunk_start // chunk_size + 1} failed: {e}")
 
