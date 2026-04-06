@@ -156,6 +156,9 @@ def _run_securities_report_crawl():
         _record_job_duration("securities_report_crawl", _time.monotonic() - _start)
         db.close()
 
+    # 증권사 리포트 크롤링 후 키워드 매칭 실행 (SPEC-FOLLOW-002)
+    _run_keyword_matching()
+
 
 @retry_with_backoff(max_attempts=3)
 def _update_market_caps():
