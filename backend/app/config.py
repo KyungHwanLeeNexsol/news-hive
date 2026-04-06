@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     ZAI_API_KEY: str = ""
     ZAI_MODEL: str = "glm-4.7-flash"
 
+    # OpenAI — Gemini 전체 실패 시 최종 fallback
+    OPENAI_API_KEY: str = ""
+    OPENAI_MODEL: str = "gpt-4o-mini"
+
     KIS_APP_KEY: str = ""
     KIS_APP_SECRET: str = ""
 

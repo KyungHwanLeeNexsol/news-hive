@@ -121,7 +121,52 @@ async def ask_ai_with_model(prompt: str, max_retries: int = 3) -> tuple[str | No
     return None, "unknown"
 
 
+async def _call_openai(prompt: str) -> str | None:
+    """OpenAI API 호출 (Gemini 전체 실패 시 fallback).
+
+    gpt-4o-mini를 사용하여 비용을 최소화한다.
+    """
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    response = await client.chat.completions.create(
+        model=settings.OPENAI_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7,
+    )
+    text = response.choices[0].message.content
+    return text.strip() if text else None
+
+
+async def ask_ai_with_openai_fallback(prompt: str, max_retries: int = 3) -> tuple[str | None, str]:
+    """Gemini 우선 시도, 전체 실패 시 OpenAI fallback.
+
+    Returns:
+        (응답 텍스트, 사용된 모델명) 튜플
+    """
+    result, model = await ask_ai_with_model(prompt, max_retries)
+    if result:
+        return result, model
+
+    # Gemini 전체 실패 → OpenAI fallback
+    if not settings.OPENAI_API_KEY:
+        return None, "unknown"
+
+    try:
+        text = await _call_openai(prompt)
+        if text:
+            logger.info(f"OpenAI fallback 성공 ({settings.OPENAI_MODEL})")
+            return text, settings.OPENAI_MODEL
+    except Exception as e:
+        logger.warning(f"OpenAI fallback 실패: {e}")
+
+    return None, "unknown"
+
+
 async def ask_ai(prompt: str, max_retries: int = 3) -> str | None:
-    """AI에 프롬프트를 전송하고 응답 텍스트를 반환한다 (모델명 불필요한 호출용)."""
-    result, _ = await ask_ai_with_model(prompt, max_retries)
+    """AI에 프롬프트를 전송하고 응답 텍스트를 반환한다.
+
+    Gemini 우선, 전체 실패 시 OpenAI로 자동 fallback.
+    """
+    result, _ = await ask_ai_with_openai_fallback(prompt, max_retries)
     return result

@@ -21,7 +21,7 @@ from app.models.news_relation import NewsStockRelation
 from app.models.portfolio_report import PortfolioReport
 from app.models.sector import Sector
 from app.models.stock import Stock
-from app.services.ai_client import ask_ai as _ask_ai, ask_ai_with_model as _ask_ai_with_model
+from app.services.ai_client import ask_ai as _ask_ai, ask_ai_with_openai_fallback as _ask_ai_with_model
 
 logger = logging.getLogger(__name__)
 
