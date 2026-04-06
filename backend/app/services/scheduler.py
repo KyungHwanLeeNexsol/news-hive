@@ -67,6 +67,9 @@ def _run_crawl_job():
         _record_job_duration("news_crawl", _time.monotonic() - _start)
         db.close()
 
+    # 뉴스 크롤링 후 키워드 매칭 실행 (SPEC-FOLLOW-001)
+    _run_keyword_matching()
+
 
 def _cleanup_old_articles(db):
     """Delete news articles older than 7 days."""
@@ -130,6 +133,9 @@ def _run_dart_crawl():
     finally:
         _record_job_duration("dart_crawl", _time.monotonic() - _start)
         db.close()
+
+    # DART 공시 크롤링 후 키워드 매칭 실행 (SPEC-FOLLOW-001)
+    _run_keyword_matching()
 
 
 
@@ -375,6 +381,26 @@ def _run_gap_pullback_check():
 
     from app.services.disclosure_impact_scorer import _run_gap_pullback_check_sync
     _run_gap_pullback_check_sync()
+
+
+def _run_keyword_matching():
+    """신규 뉴스/공시에서 팔로잉 키워드 매칭 후 알림 발송 (SPEC-FOLLOW-001)."""
+    _start = _time.monotonic()
+    from app.services.keyword_matcher import match_keywords_and_notify
+
+    db = SessionLocal()
+    try:
+        stats = match_keywords_and_notify(db)
+        if stats["notified"] > 0 or stats["matched"] > 0:
+            logger.info(
+                f"키워드 매칭 완료: 매칭 {stats['matched']}건, "
+                f"알림 {stats['notified']}건, 중복 스킵 {stats['skipped_duplicates']}건"
+            )
+    except Exception as e:
+        logger.error(f"키워드 매칭 실패: {e}")
+    finally:
+        _record_job_duration("keyword_matching", _time.monotonic() - _start)
+        db.close()
 
 
 # ---------------------------------------------------------------------------
@@ -744,6 +770,17 @@ def start_scheduler():
             id=f"gap_pullback_check_11{_minute_offset:02d}",
             replace_existing=True,
         )
+
+    # SPEC-FOLLOW-001: 팔로잉 키워드 매칭 (10분 간격)
+    scheduler.add_job(
+        _run_keyword_matching,
+        "interval",
+        minutes=10,
+        id="keyword_matching",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
 
     # SPEC-AI-006: 자기개선 루프 작업
     # 실패 패턴 집계: 매일 18:30 KST = 09:30 UTC

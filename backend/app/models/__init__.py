@@ -22,6 +22,11 @@ from app.models.user import (
     UserPreferences,
     PushSubscription,
 )
+from app.models.following import (
+    StockFollowing,
+    StockKeyword,
+    KeywordNotification,
+)
 
 __all__ = [
     "Sector", "Stock", "NewsArticle", "NewsStockRelation",
@@ -34,4 +39,5 @@ __all__ = [
     "MLFeatureSnapshot",
     "User", "EmailVerificationCode", "RefreshToken",
     "UserWatchlist", "UserPreferences", "PushSubscription",
+    "StockFollowing", "StockKeyword", "KeywordNotification",
 ]

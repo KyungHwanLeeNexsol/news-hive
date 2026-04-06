@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     VAPID_PUBLIC_KEY: str = ""
     VAPID_SUBJECT: str = "mailto:admin@newshive.app"
 
+    # --- 텔레그램 봇 (SPEC-FOLLOW-001) ---
+    TELEGRAM_BOT_TOKEN: str = ""  # BotFather에서 발급받은 봇 토큰
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 

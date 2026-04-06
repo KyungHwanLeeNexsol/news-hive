@@ -49,6 +49,16 @@ class User(Base):
         "PushSubscription", back_populates="user", cascade="all, delete-orphan"
     )
 
+    # 텔레그램 연동 chat ID (연동 시 저장)
+    telegram_chat_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    followings = relationship(
+        "StockFollowing", back_populates="user", cascade="all, delete-orphan"
+    )
+    notifications = relationship(
+        "KeywordNotification", back_populates="user", cascade="all, delete-orphan"
+    )
+
 
 class EmailVerificationCode(Base):
     """이메일 인증 URL 토큰 모델 (링크 클릭 방식)."""

@@ -161,6 +161,7 @@ app.add_middleware(RateLimiterMiddleware)
 # Import and register routers
 from app.routers import sectors, stocks, news, disclosures, alerts, events, fund_manager, auth, commodities, paper_trading, chat  # noqa: E402
 from app.routers import user as user_router, push as push_router  # noqa: E402
+from app.routers import following as following_router  # noqa: E402
 
 app.include_router(sectors.router)
 app.include_router(stocks.router)
@@ -176,6 +177,7 @@ app.include_router(paper_trading.router)
 app.include_router(chat.router)
 app.include_router(user_router.router)
 app.include_router(push_router.router)
+app.include_router(following_router.router)
 
 # WebSocket 엔드포인트 등록
 from app.websocket import router as ws_router  # noqa: E402
