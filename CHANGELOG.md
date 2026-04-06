@@ -4,6 +4,65 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Added (SPEC-FOLLOW-001: 기업 팔로잉 시스템 - 완료)
+
+- **팔로잉 기능**: `backend/app/models/following.py` - StockFollowing, StockKeyword, KeywordNotification 모델 추가
+  - StockFollowing: 사용자-종목 팔로잉 관계
+  - StockKeyword: 카테고리별 키워드 (product, competitor, upstream, market, custom)
+  - KeywordNotification: 알림 히스토리
+- **키워드 생성 서비스**: `backend/app/services/keyword_generator.py` - AI 기반 자동 키워드 생성
+  - 4가지 카테고리에서 핵심 키워드 추출
+  - Gemini + Z.AI 다중 프로바이더 지원
+  - 생성된 키워드의 수동 편집 가능
+- **키워드 매칭 및 알림**: `backend/app/services/keyword_matcher.py`
+  - 뉴스/공시 제목+본문에서 사용자 키워드 매칭
+  - 중복 알림 방지
+  - 매칭 결과 DB 기록
+- **텔레그램 통합**: `backend/app/services/telegram_service.py`
+  - Telegram Bot API를 통한 실시간 알림 발송
+  - 채팅 ID 기반 사용자 연동
+  - HTML 포맷 메시지 지원
+- **팔로잉 라우터**: `backend/app/routers/following.py` - 12개 엔드포인트
+  - 종목 팔로잉 CRUD: POST/DELETE/GET `/api/following/stocks`
+  - 키워드 관리: GET/POST/DELETE `/api/following/stocks/{code}/keywords`
+  - AI 키워드 생성: POST `/api/following/stocks/{code}/keywords/ai-generate`
+  - 텔레그램 연동: POST/GET/DELETE `/api/following/telegram/*`
+  - 알림 히스토리: GET `/api/following/notifications`
+- **사용자 모델 확장**: `backend/app/models/user.py`
+  - telegram_chat_id 컬럼 추가 - 텔레그램 연동 시 저장
+- **DB 마이그레이션**: `backend/alembic/versions/040_spec_follow_001_following.py`
+  - stock_followings 테이블 (user_id, stock_id, UNIQUE 제약)
+  - stock_keywords 테이블 (카테고리, 소스 추적)
+  - keyword_notifications 테이블 (알림 히스토리, 중복 방지)
+  - users.telegram_chat_id 컬럼
+- **스케줄러 통합**: `backend/app/services/scheduler.py`
+  - 10분 간격 키워드 매칭 작업 추가
+  - 신규 뉴스/공시 수집 직후 실행
+- **설정**: `backend/app/config.py`
+  - TELEGRAM_BOT_TOKEN 환경변수 추가
+- **프론트엔드 페이지**:
+  - `/following` - 팔로잉 종목 목록 및 텔레그램 연동 상태
+  - `/following/[stock_code]` - 키워드 관리 및 알림 히스토리
+  - 네비게이션 메뉴에 "팔로잉" 항목 추가
+- **테스트 커버리지**:
+  - `backend/tests/test_following.py` - 13개 엔드포인트 테스트
+  - `backend/tests/test_keyword_generator.py` - AI 키워드 생성 테스트
+  - `backend/tests/test_keyword_matcher.py` - 키워드 매칭 로직 테스트
+  - `backend/tests/test_telegram_service.py` - 텔레그램 서비스 테스트
+
+### 구현 비고 (SPEC-FOLLOW-001)
+
+- 텔레그램 연동 코드는 Redis가 아닌 in-memory dict 사용 (MVP 범위, 재시작 시 초기화됨)
+- Telegram webhook X-Telegram-Bot-Api-Secret-Token 검증 미구현 (단계적 개선 예정)
+- 키워드 매칭 로깅 개선 필요 (현재 except 블록에 로깅 누락)
+
+### Deployment Notes (SPEC-FOLLOW-001)
+
+- DB 마이그레이션 필요: `alembic upgrade head` (revision 040)
+- 신규 환경변수: `TELEGRAM_BOT_TOKEN` (BotFather에서 발급)
+- 하위 호환성: 기존 API 엔드포인트 변경 없음 (신규 라우터 추가만)
+- 스케줄러 자동 등록: 앱 시작 시 keyword_matching 작업 자동으로 시작됨
+
 ### Added (SPEC-AI-004: 공시 기반 미반영 호재 탐지 - 진행 중)
 
 - **공시 충격 스코어러**: `disclosure_impact_scorer.py` - 공시 유형/규모별 예상 시장 충격 자동 계산
