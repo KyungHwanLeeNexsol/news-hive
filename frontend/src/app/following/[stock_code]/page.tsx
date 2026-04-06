@@ -347,7 +347,7 @@ export default function StockKeywordPage() {
                 return (
                   <span
                     key={item.id}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#f0f4ff] border border-[#c5d7f7] rounded-full text-[13px] text-[#1261c4]"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-[#e0e0e0] rounded-full text-[13px] text-[#333]"
                   >
                     {item.keyword}
                     {/* 카테고리 뱃지 */}
