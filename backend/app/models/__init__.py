@@ -27,6 +27,7 @@ from app.models.following import (
     StockKeyword,
     KeywordNotification,
 )
+from app.models.securities_report import SecuritiesReport
 
 __all__ = [
     "Sector", "Stock", "NewsArticle", "NewsStockRelation",
@@ -40,4 +41,5 @@ __all__ = [
     "User", "EmailVerificationCode", "RefreshToken",
     "UserWatchlist", "UserPreferences", "PushSubscription",
     "StockFollowing", "StockKeyword", "KeywordNotification",
+    "SecuritiesReport",
 ]

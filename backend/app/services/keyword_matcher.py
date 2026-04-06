@@ -158,6 +158,57 @@ def match_keywords_and_notify(db: Session) -> dict:
                         stats["notified"] += 1
                     break
 
+        # 리포트 매칭 (SPEC-FOLLOW-002)
+        from app.models.securities_report import SecuritiesReport
+
+        recent_reports = (
+            db.query(SecuritiesReport)
+            .filter(SecuritiesReport.collected_at > since)
+            .all()
+        )
+        for report in recent_reports:
+            search_text = (
+                report.title + " " + report.company_name + " " + (report.opinion or "")
+            ).lower()
+
+            for user_id, kw_list in user_keywords.items():
+                for kw_id, keyword, _stock_id in kw_list:
+                    if len(keyword) < 2:
+                        continue
+                    if keyword.lower() not in search_text:
+                        continue
+
+                    stats["matched"] += 1
+
+                    # 중복 알림 확인
+                    existing = (
+                        db.query(KeywordNotification)
+                        .filter(
+                            KeywordNotification.user_id == user_id,
+                            KeywordNotification.content_type == "report",
+                            KeywordNotification.content_id == report.id,
+                        )
+                        .first()
+                    )
+                    if existing:
+                        stats["skipped_duplicates"] += 1
+                        break
+
+                    # 알림 발송
+                    channel = _dispatch_notification(
+                        db=db,
+                        user_id=user_id,
+                        keyword_id=kw_id,
+                        content_type="report",
+                        content_id=report.id,
+                        content_title=report.title,
+                        content_url=report.url,
+                        keyword_text=keyword,
+                    )
+                    if channel != "none":
+                        stats["notified"] += 1
+                    break
+
         db.commit()
 
     except Exception as e:
@@ -204,8 +255,8 @@ def _dispatch_notification(
     if not user:
         return channel
 
-    # 알림 메시지 구성
-    type_label = "뉴스" if content_type == "news" else "공시"
+    # 알림 메시지 구성 (SPEC-FOLLOW-002: 리포트 타입 추가)
+    type_label = {"news": "뉴스", "disclosure": "공시", "report": "리포트"}.get(content_type, "알림")
     message = (
         f"<b>[키워드 알림] {keyword_text}</b>\n\n"
         f"<b>{type_label}</b>: {content_title}\n"

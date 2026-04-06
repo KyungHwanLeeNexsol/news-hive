@@ -140,6 +140,24 @@ def _run_dart_crawl():
 
 
 @retry_with_backoff(max_attempts=3)
+def _run_securities_report_crawl():
+    """증권사 리포트 크롤링 동기 래퍼 (SPEC-FOLLOW-002)."""
+    _start = _time.monotonic()
+    from app.services.securities_report_crawler import fetch_securities_reports
+
+    db = SessionLocal()
+    try:
+        count = asyncio.run(fetch_securities_reports(db))
+        logger.info(f"Securities report crawl completed: {count} new reports")
+    except Exception as e:
+        logger.error(f"Securities report crawl failed: {e}")
+        raise
+    finally:
+        _record_job_duration("securities_report_crawl", _time.monotonic() - _start)
+        db.close()
+
+
+@retry_with_backoff(max_attempts=3)
 def _update_market_caps():
     """Fetch market cap from Naver Mobile API and update DB stocks."""
     _start = _time.monotonic()
@@ -624,6 +642,14 @@ def start_scheduler():
         id="dart_crawl",
         replace_existing=True,
         next_run_time=datetime.now(),
+    )
+    # SPEC-FOLLOW-002: 증권사 리포트 크롤링 (30분 간격)
+    scheduler.add_job(
+        _run_securities_report_crawl,
+        "interval",
+        minutes=30,
+        id="securities_report_crawl",
+        replace_existing=True,
     )
     # 시가총액 업데이트 (설정 기반 주기)
     scheduler.add_job(
