@@ -27,7 +27,7 @@ async def generate_keywords(
     company_name: str,
     existing_keywords: list[str],
     db: Session,
-) -> dict[str, list[str]]:
+) -> dict[str, list[str]] | None:
     """AI를 사용하여 4개 카테고리별 투자 모니터링 키워드를 생성한다.
 
     Args:
@@ -38,7 +38,8 @@ async def generate_keywords(
 
     Returns:
         카테고리별 키워드 딕셔너리.
-        실패 시 각 카테고리에 빈 리스트 반환.
+        AI 서비스 자체가 불가한 경우 None 반환.
+        JSON 파싱 실패 등 부분 실패는 빈 카테고리를 포함한 dict 반환.
         예: {"product": [...], "competitor": [...], "upstream": [...], "market": [...]}
     """
     # 빈 응답 기본값
@@ -67,7 +68,7 @@ async def generate_keywords(
         response = await ask_ai(prompt)
         if not response:
             logger.warning(f"AI 키워드 생성 응답 없음: {company_name}({stock_code})")
-            return empty_result
+            return None
 
         # JSON 파싱 (마크다운 코드 블록 제거)
         cleaned = response.strip()

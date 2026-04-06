@@ -64,6 +64,9 @@ export default function StockKeywordPage() {
   // 삭제 중인 키워드 ID
   const [deletingId, setDeletingId] = useState<number | null>(null);
 
+  // 기업명 상태
+  const [stockName, setStockName] = useState('');
+
   // 비로그인 시 로그인 페이지로 리디렉션
   useEffect(() => {
     if (!authLoading && !isLoggedIn) {
@@ -97,6 +100,20 @@ export default function StockKeywordPage() {
     }
   }, [accessToken, stockCode, loadKeywords]);
 
+  // 기업명 조회
+  useEffect(() => {
+    if (!stockCode) return;
+    fetch(`/api/stocks?q=${encodeURIComponent(stockCode)}&limit=1`)
+      .then((r) => r.json())
+      .then((data: unknown) => {
+        if (Array.isArray(data) && data.length > 0) {
+          const item = data[0] as { name: string; stock_code: string };
+          if (item.stock_code === stockCode) setStockName(item.name);
+        }
+      })
+      .catch(() => {});
+  }, [stockCode]);
+
   // AI 키워드 생성
   const handleAiGenerate = async () => {
     if (!accessToken || !stockCode) return;
@@ -116,8 +133,8 @@ export default function StockKeywordPage() {
         setAiMessage(data.message || `${totalCount}개의 키워드가 생성되었습니다.`);
         // 목록 새로고침
         loadKeywords();
-      } else if (res.status === 429) {
-        setAiError('AI 키워드 생성 한도를 초과했습니다. 잠시 후 다시 시도해 주세요.');
+      } else if (res.status === 429 || res.status === 503) {
+        setAiError('AI 서비스가 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.');
       } else {
         setAiError('AI 키워드 생성에 실패했습니다. 다시 시도해 주세요.');
       }
@@ -227,8 +244,11 @@ export default function StockKeywordPage() {
           <span className="text-[#ddd]">|</span>
           <div className="flex items-center gap-2">
             <span className="text-[15px] font-semibold text-[#333]">
-              {stockCode}
+              {stockName || stockCode}
             </span>
+            {stockName && (
+              <span className="text-[12px] text-[#999]">{stockCode}</span>
+            )}
             <span className="text-[11px] px-1.5 py-0.5 rounded bg-[#f5f5f5] text-[#666]">
               키워드 {totalKeywordCount}개
             </span>

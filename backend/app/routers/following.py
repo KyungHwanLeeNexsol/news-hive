@@ -287,6 +287,13 @@ async def ai_generate_keywords(
         db=db,
     )
 
+    # AI 서비스 불가 시 503 반환
+    if generated is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI 서비스를 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+        )
+
     # 생성된 키워드를 DB에 저장
     new_keywords: dict[str, list[KeywordResponse]] = {
         "product": [], "competitor": [], "upstream": [], "market": [], "custom": []
