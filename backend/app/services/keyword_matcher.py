@@ -38,11 +38,19 @@ def match_keywords_and_notify(db: Session) -> dict:
     # 마지막 실행 이후 기간 결정 (첫 실행이면 최근 1시간)
     since = _last_run if _last_run else datetime.now(timezone.utc) - timedelta(hours=1)
 
+    # 당일 기준 시작 시각 (KST 00:00 → UTC)
+    kst = timezone(timedelta(hours=9))
+    today_start_kst = datetime.now(kst).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start_utc = today_start_kst.astimezone(timezone.utc)
+
     try:
-        # 신규 뉴스 조회
+        # 신규 뉴스 조회 (당일 발행 뉴스만)
         recent_news = (
             db.query(NewsArticle)
-            .filter(NewsArticle.collected_at > since)
+            .filter(
+                NewsArticle.collected_at > since,
+                NewsArticle.published_at >= today_start_utc,
+            )
             .all()
         )
 
