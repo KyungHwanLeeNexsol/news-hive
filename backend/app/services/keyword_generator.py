@@ -20,6 +20,67 @@ logger = logging.getLogger(__name__)
 _CATEGORIES = ("product", "competitor", "upstream", "market")
 
 
+def _build_reference_context(stock_code: str, db: Session) -> str:
+    """DB에서 최신 공시 보고서 및 애널리스트 리포트를 조회하여 컨텍스트 문자열을 반환한다.
+
+    Args:
+        stock_code: 종목 코드 (6자리)
+        db: SQLAlchemy 세션
+
+    Returns:
+        프롬프트에 삽입할 참고 자료 문자열. 데이터가 없으면 빈 문자열.
+    """
+    from app.models.stock import Stock
+    from app.models.disclosure import Disclosure
+    from app.models.securities_report import SecuritiesReport
+
+    try:
+        # 종목 ID 조회
+        stock = db.query(Stock).filter(Stock.stock_code == stock_code).first()
+        if not stock:
+            return ""
+
+        lines: list[str] = []
+
+        # 최신 정기공시 보고서 (사업/분기/반기보고서) 최대 3건
+        disclosures = (
+            db.query(Disclosure)
+            .filter(
+                Disclosure.stock_id == stock.id,
+                Disclosure.report_type == "정기공시",
+            )
+            .order_by(Disclosure.rcept_dt.desc())
+            .limit(3)
+            .all()
+        )
+        if disclosures:
+            lines.append("## 최신 공시 보고서")
+            for d in disclosures:
+                summary = (d.ai_summary or "")[:300]
+                lines.append(f"- [{d.rcept_dt}] {d.report_name}" + (f": {summary}" if summary else ""))
+
+        # 최신 애널리스트 리포트 최대 5건
+        reports = (
+            db.query(SecuritiesReport)
+            .filter(SecuritiesReport.stock_id == stock.id)
+            .order_by(SecuritiesReport.collected_at.desc())
+            .limit(5)
+            .all()
+        )
+        if reports:
+            lines.append("## 최신 애널리스트 리포트")
+            for r in reports:
+                price_str = f", 목표주가 {r.target_price:,}원" if r.target_price else ""
+                opinion_str = f" ({r.opinion}{price_str})" if r.opinion else ""
+                lines.append(f"- [{r.securities_firm}] {r.title}{opinion_str}")
+
+        return "\n".join(lines) if lines else ""
+
+    except Exception as e:
+        logger.warning(f"참고 자료 조회 실패 ({stock_code}): {e}")
+        return ""
+
+
 # @MX:ANCHOR: [AUTO] generate_keywords — 라우터와 스케줄러에서 호출되는 AI 키워드 생성 진입점
 # @MX:REASON: 라우터(수동 트리거)와 스케줄러(자동 갱신) 2곳 이상에서 호출됨
 async def generate_keywords(
@@ -34,7 +95,7 @@ async def generate_keywords(
         stock_code: 종목 코드 (6자리)
         company_name: 기업명
         existing_keywords: 이미 등록된 키워드 목록 (중복 제거용)
-        db: SQLAlchemy 세션 (향후 확장을 위해 전달, 현재 직접 사용 안함)
+        db: SQLAlchemy 세션
 
     Returns:
         카테고리별 키워드 딕셔너리.
@@ -45,8 +106,18 @@ async def generate_keywords(
     # 빈 응답 기본값
     empty_result: dict[str, list[str]] = {cat: [] for cat in _CATEGORIES}
 
+    # DB에서 공시/리포트 컨텍스트 조회
+    reference_context = _build_reference_context(stock_code, db)
+    reference_section = (
+        f"\n\n참고 자료 (최신 공시 보고서 및 애널리스트 리포트):\n{reference_context}\n"
+        if reference_context
+        else ""
+    )
+
     prompt = f"""당신은 한국 주식 투자 전문가입니다.
-종목 코드 {stock_code}, 기업명 '{company_name}'에 대한 투자 모니터링 키워드를 생성해주세요.
+종목 코드 {stock_code}, 기업명 '{company_name}'에 대한 투자 모니터링 키워드를 생성해주세요.{reference_section}
+위 참고 자료(공시 보고서, 애널리스트 리포트)를 대조·분석하여, 해당 기업의 현재 핵심 이슈와 투자 포인트를 반영한 키워드를 도출하세요.
+자료가 없는 경우 기업과 산업에 대한 전문 지식을 활용하세요.
 
 다음 4개 카테고리별로 각 3~5개의 한국어 키워드를 제안하세요:
 - product: 이 기업의 주요 제품/서비스 관련 키워드
