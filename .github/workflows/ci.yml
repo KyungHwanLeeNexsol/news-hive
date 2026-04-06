@@ -1,4 +1,4 @@
-name: CI Pipeline
+name: CI/CD Pipeline
 
 on:
   push:
@@ -15,14 +15,15 @@ concurrency:
 
 jobs:
   # ──────────────────────────────────────────────
-  # 변경 감지: backend / frontend 변경 여부 판별
-  # ──────────────────��───────────────────────────
+  # 변경 감지: backend / frontend / deploy 경로 판별
+  # ──────────────────────────────────────────────
   changes:
     name: Detect Changes
     runs-on: ubuntu-latest
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
+      deploy: ${{ steps.filter.outputs.deploy }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -33,10 +34,15 @@ jobs:
               - 'backend/**'
             frontend:
               - 'frontend/**'
+            deploy:
+              - 'backend/**'
+              - 'scripts/deploy.sh'
+              - 'scripts/newshive.service'
+              - '.github/workflows/ci.yml'
 
-  # ───��──────────────────────────────────────────
+  # ──────────────────────────────────────────────
   # Job 1: 백엔드 테스트 (backend 변경 시만 실행)
-  # ─────────���────────────────────────────��───────
+  # ──────────────────────────────────────────────
   backend-test:
     name: Backend Tests
     needs: changes
@@ -67,9 +73,9 @@ jobs:
           cd backend
           python -m pytest tests/ -n 4 -q --tb=short
 
-  # ─��──────────────────────────────────────��─────
+  # ──────────────────────────────────────────────
   # Job 2: 백엔드 린트 (backend 변경 시만 실행)
-  # ───────────────────────────────────────────���──
+  # ──────────────────────────────────────────────
   backend-lint:
     name: Backend Lint
     needs: changes
@@ -93,9 +99,9 @@ jobs:
           cd backend
           ruff check app/
 
-  # ───────��───────────────────────────────���──────
-  # Job 3: 프론트엔드 체크 (frontend 변경 시만 실���)
-  # ─────────────────────────────────────────���────
+  # ──────────────────────────────────────────────
+  # Job 3: 프론트엔드 체크 (frontend 변경 시만 실행)
+  # ──────────────────────────────────────────────
   frontend-check:
     name: Frontend Check
     needs: changes
@@ -127,3 +133,31 @@ jobs:
         run: |
           cd frontend
           npm run build
+
+  # ──────────────────────────────────────────────
+  # Job 4: OCI 배포 (테스트/린트 통과 후 실행)
+  #   - backend 변경 시: backend-test + backend-lint 모두 성공 필요
+  #   - scripts만 변경 시: CI 잡이 skipped → 바로 배포
+  # ──────────────────────────────────────────────
+  deploy:
+    name: Deploy to OCI
+    needs: [changes, backend-test, backend-lint]
+    if: |
+      always() &&
+      needs.changes.outputs.deploy == 'true' &&
+      (needs.backend-test.result == 'success' || needs.backend-test.result == 'skipped') &&
+      (needs.backend-lint.result == 'success' || needs.backend-lint.result == 'skipped')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.OCI_HOST }}
+          username: ubuntu
+          key: ${{ secrets.OCI_SSH_KEY }}
+          script_stop: true
+          script: |
+            bash /home/ubuntu/news-hive/scripts/deploy.sh
