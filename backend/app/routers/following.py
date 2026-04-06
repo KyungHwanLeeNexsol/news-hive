@@ -137,18 +137,22 @@ def list_followings(
     각 팔로잉의 키워드 수와 마지막 알림 시각을 함께 반환한다.
     """
     # 팔로잉 + 키워드 수 + 마지막 알림 시각 조인 쿼리
+    # KeywordNotification은 keyword_id를 통해 해당 팔로잉의 키워드에만 조인해야
+    # count(StockKeyword.id)가 알림 수와 곱해지는 카르테시안 곱 문제를 방지한다.
+    from sqlalchemy import distinct
     rows = (
         db.query(
             StockFollowing,
             Stock,
-            func.count(StockKeyword.id).label("keyword_count"),
+            func.count(distinct(StockKeyword.id)).label("keyword_count"),
             func.max(KeywordNotification.sent_at).label("last_notification_at"),
         )
         .join(Stock, StockFollowing.stock_id == Stock.id)
         .outerjoin(StockKeyword, StockKeyword.following_id == StockFollowing.id)
         .outerjoin(
             KeywordNotification,
-            KeywordNotification.user_id == StockFollowing.user_id,
+            (KeywordNotification.keyword_id == StockKeyword.id)
+            & (KeywordNotification.user_id == current_user.id),
         )
         .filter(StockFollowing.user_id == current_user.id)
         .group_by(StockFollowing.id, Stock.id)
