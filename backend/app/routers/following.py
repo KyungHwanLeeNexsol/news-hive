@@ -319,7 +319,7 @@ async def ai_generate_keywords(
                 new_keywords[category].append(KeywordResponse.model_validate(kw))
             except Exception:
                 # UNIQUE 제약 위반 등 예외 무시
-                logger.exception("AI 키워드 저장 실패 (category=%s, keyword=%s)", category, kw_text)
+                logger.exception("AI 키워드 저장 실패 (category=%s, keyword=%s)", category, keyword_text)
                 db.rollback()
 
     db.commit()

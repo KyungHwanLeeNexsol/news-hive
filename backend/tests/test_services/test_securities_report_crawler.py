@@ -4,14 +4,11 @@
 """
 
 import asyncio
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 
 from app.services.securities_report_crawler import (
     _parse_target_price,
-    _parse_published_at,
     _parse_report_rows,
     fetch_securities_reports,
 )

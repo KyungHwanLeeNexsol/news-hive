@@ -8,7 +8,6 @@ import html
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -32,7 +31,6 @@ def match_keywords_and_notify(db: Session) -> dict:
     from app.models.news import NewsArticle
     from app.models.disclosure import Disclosure
     from app.models.following import StockFollowing, StockKeyword, KeywordNotification
-    from app.models.user import User
 
     stats = {"matched": 0, "notified": 0, "skipped_duplicates": 0}
 
@@ -77,11 +75,11 @@ def match_keywords_and_notify(db: Session) -> dict:
         for kw, user_id, stock_id in keyword_rows:
             user_keywords.setdefault(user_id, []).append((kw.id, kw.keyword, stock_id))
 
-        # stock_id → 기업명 매핑 (알림 메시지 기업명 표시용)
+        # stock_id → 기업명/종목코드 매핑 (알림 메시지 기업명·주가 표시용)
         from app.models.stock import Stock
-        stock_name_map: dict[int, str] = {
-            s.id: s.name for s in db.query(Stock.id, Stock.name).all()
-        }
+        _stock_rows = db.query(Stock.id, Stock.name, Stock.stock_code).all()
+        stock_name_map: dict[int, str] = {s.id: s.name for s in _stock_rows}
+        stock_code_map: dict[int, str | None] = {s.id: s.stock_code for s in _stock_rows}
 
         if not user_keywords:
             # 팔로잉 키워드가 없으면 스킵
@@ -129,6 +127,7 @@ def match_keywords_and_notify(db: Session) -> dict:
                         content_url=article.url,
                         keyword_text=keyword,
                         company_name=stock_name_map.get(stock_id, ""),
+                        stock_code=stock_code_map.get(stock_id),
                     )
                     if channel != "none":
                         stats["notified"] += 1
@@ -173,6 +172,7 @@ def match_keywords_and_notify(db: Session) -> dict:
                         content_url=disclosure.url,
                         keyword_text=keyword,
                         company_name=stock_name_map.get(stock_id, ""),
+                        stock_code=stock_code_map.get(stock_id),
                     )
                     if channel != "none":
                         stats["notified"] += 1
@@ -228,6 +228,7 @@ def match_keywords_and_notify(db: Session) -> dict:
                         content_url=report.url,
                         keyword_text=keyword,
                         company_name=stock_name_map.get(stock_id, ""),
+                        stock_code=stock_code_map.get(stock_id),
                     )
                     if channel != "none":
                         stats["notified"] += 1
@@ -254,6 +255,7 @@ def _dispatch_notification(
     content_url: str,
     keyword_text: str,
     company_name: str = "",
+    stock_code: str | None = None,
 ) -> str:
     """알림을 발송하고 채널명을 반환한다.
 
@@ -267,6 +269,7 @@ def _dispatch_notification(
         content_url: 콘텐츠 URL
         keyword_text: 매칭된 키워드 텍스트
         company_name: 팔로잉 종목명 (메시지 헤더에 표시)
+        stock_code: 종목코드 (현재 주가 조회에 사용)
 
     Returns:
         사용된 채널명: "telegram" | "web_push" | "none"
@@ -281,11 +284,27 @@ def _dispatch_notification(
     if not user:
         return channel
 
+    # 현재 주가 조회 (종목코드가 있는 경우)
+    price_suffix = ""
+    if stock_code:
+        try:
+            from app.services.naver_finance import fetch_current_price_with_change
+            price_data = asyncio.run(fetch_current_price_with_change(stock_code))
+            if price_data:
+                price = price_data["current_price"]
+                rate = price_data["change_rate"]
+                sign = "+" if rate >= 0 else ""
+                price_suffix = f" | {price:,}원 ({sign}{rate:.2f}%)"
+        except Exception as e:
+            logger.debug(f"주가 조회 실패 ({stock_code}): {e}")
+
     # 알림 메시지 구성 (SPEC-FOLLOW-002: 리포트 타입 추가)
     type_label = {"news": "뉴스", "disclosure": "공시", "report": "리포트"}.get(content_type, "알림")
     header = f"[키워드 알림] {keyword_text}"
     if company_name:
-        header = f"[키워드 알림] {keyword_text} | {company_name}"
+        header = f"[키워드 알림] {keyword_text} | {company_name}{price_suffix}"
+    elif price_suffix:
+        header = f"[키워드 알림] {keyword_text}{price_suffix}"
     safe_url = html.escape(content_url)
     message = (
         f"<b>{header}</b>\n\n"

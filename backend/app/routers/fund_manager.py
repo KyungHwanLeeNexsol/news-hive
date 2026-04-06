@@ -539,5 +539,3 @@ async def get_model_health_endpoint(db: Session = Depends(get_db)):
     """
     from app.services.improvement_loop import get_model_health
     return get_model_health(db)
-
-    return result

@@ -434,7 +434,6 @@ def _run_failure_aggregation():
     db = SessionLocal()
     try:
         from app.services.improvement_loop import aggregate_failure_patterns, _log_improvement
-        import json as _json
 
         result = asyncio.run(aggregate_failure_patterns(db, days=30))
         if result:

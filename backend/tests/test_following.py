@@ -4,8 +4,6 @@
 get_current_user 의존성을 Mock으로 대체하여 인증 없이 테스트한다.
 """
 
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -114,7 +112,7 @@ def test_unfollow_stock_success(
     db.add(kw)
     db.flush()
 
-    resp = auth_client.delete(f"/api/following/stocks/005930")
+    resp = auth_client.delete("/api/following/stocks/005930")
     assert resp.status_code == 200
     assert "해제" in resp.json()["message"]
 

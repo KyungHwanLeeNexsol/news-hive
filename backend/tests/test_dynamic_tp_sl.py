@@ -12,7 +12,7 @@
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 
 # ---------------------------------------------------------------------------
@@ -480,8 +480,7 @@ class TestConfidenceMultipliers:
     def test_high_confidence_target_multiplier(self):
         """신뢰도 >=0.8: target multiplier=2.5."""
         from app.services.dynamic_tp_sl import (
-            TARGET_ATR_DEFAULT, TARGET_ATR_HIGH_CONF, TARGET_ATR_LOW_CONF,
-            STOP_ATR_DEFAULT, STOP_ATR_HIGH_CONF, STOP_ATR_LOW_CONF,
+            TARGET_ATR_HIGH_CONF, STOP_ATR_HIGH_CONF,
         )
         assert TARGET_ATR_HIGH_CONF == pytest.approx(2.5)
         assert STOP_ATR_HIGH_CONF == pytest.approx(1.0)

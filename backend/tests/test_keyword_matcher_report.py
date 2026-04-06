@@ -7,8 +7,6 @@
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # Mock 빌더 헬퍼
@@ -111,6 +109,8 @@ def test_report_keyword_match_notifies() -> None:
     disc_q.filter.return_value.all.return_value = []
     kw_q = MagicMock()
     kw_q.join.return_value.all.return_value = kw_rows
+    stock_q = MagicMock()
+    stock_q.all.return_value = []
     report_q = MagicMock()
     report_q.filter.return_value.all.return_value = [report]
     notif_q = MagicMock()
@@ -128,6 +128,8 @@ def test_report_keyword_match_notifies() -> None:
         elif call_count == 3:
             return kw_q
         elif call_count == 4:
+            return stock_q
+        elif call_count == 5:
             return report_q
         else:
             return notif_q
@@ -135,7 +137,7 @@ def test_report_keyword_match_notifies() -> None:
     db.query.side_effect = query_side
 
     with patch.object(km, "_dispatch_notification", side_effect=mock_dispatch):
-        stats = km.match_keywords_and_notify(db)
+        km.match_keywords_and_notify(db)
 
     # 알림이 발송되었는지, content_type이 "report"인지 확인
     report_calls = [c for c in dispatched_calls if c.get("content_type") == "report"]
@@ -164,6 +166,8 @@ def test_report_keyword_no_duplicate() -> None:
     disc_q.filter.return_value.all.return_value = []
     kw_q = MagicMock()
     kw_q.join.return_value.all.return_value = kw_rows
+    stock_q = MagicMock()
+    stock_q.all.return_value = []
     report_q = MagicMock()
     report_q.filter.return_value.all.return_value = [report]
     notif_q = MagicMock()
@@ -182,6 +186,8 @@ def test_report_keyword_no_duplicate() -> None:
         elif call_count == 3:
             return kw_q
         elif call_count == 4:
+            return stock_q
+        elif call_count == 5:
             return report_q
         else:
             return notif_q
@@ -216,6 +222,8 @@ def test_existing_news_disclosure_matching_unaffected() -> None:
     disc_q.filter.return_value.all.return_value = [disclosure]
     kw_q = MagicMock()
     kw_q.join.return_value.all.return_value = kw_rows
+    stock_q = MagicMock()
+    stock_q.all.return_value = []
     report_q = MagicMock()
     report_q.filter.return_value.all.return_value = []  # 리포트 없음
     notif_q = MagicMock()
@@ -233,6 +241,11 @@ def test_existing_news_disclosure_matching_unaffected() -> None:
         elif call_count == 3:
             return kw_q
         elif call_count == 4:
+            return stock_q
+        elif call_count == 5:
+            # 뉴스 매칭 중복 체크 (KeywordNotification)
+            return notif_q
+        elif call_count == 6:
             return report_q
         else:
             return notif_q
@@ -256,35 +269,13 @@ def test_existing_news_disclosure_matching_unaffected() -> None:
 
 def test_type_label_report() -> None:
     """_dispatch_notification에서 content_type='report'이면 메시지에 '리포트'가 포함된다."""
-    from app.services.keyword_matcher import _dispatch_notification
-
-    user_mock = MagicMock()
-    user_mock.id = 10
-    user_mock.telegram_chat_id = None
-
-    db = MagicMock()
-    db.query.return_value.filter.return_value.first.return_value = user_mock
-    db.query.return_value.filter.return_value.all.return_value = []
-
-    captured_messages = []
-
-    async def mock_send_telegram(chat_id, message):
-        captured_messages.append(message)
-        return True
-
-    with (
-        patch("app.services.keyword_matcher.asyncio") as mock_asyncio,
-        patch("app.models.user.User", MagicMock()),
-        patch("app.models.user.PushSubscription", MagicMock()),
-        patch("app.models.following.KeywordNotification", MagicMock()),
-    ):
-        # type_label 로직만 직접 검증 (함수 내부 로직 추출)
-        content_type = "report"
-        type_label = {
-            "news": "뉴스",
-            "disclosure": "공시",
-            "report": "리포트",
-        }.get(content_type, "알림")
+    # type_label 로직만 직접 검증 (함수 내부 로직 추출)
+    content_type = "report"
+    type_label = {
+        "news": "뉴스",
+        "disclosure": "공시",
+        "report": "리포트",
+    }.get(content_type, "알림")
 
     assert type_label == "리포트", "content_type='report'이면 type_label이 '리포트'여야 한다"
 

@@ -5,7 +5,6 @@ DDD 방식의 특성화 테스트 (Characterization Tests).
 """
 import json
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy.orm import Session
