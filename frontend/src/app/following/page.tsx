@@ -26,6 +26,13 @@ interface TelegramLinkCode {
   instruction: string;
 }
 
+// 종목 검색 결과 타입
+interface StockSearchResult {
+  name: string;
+  stock_code: string;
+  market: string | null;
+}
+
 // 상대 시간 포맷 (마지막 알림 시간 표시용)
 function formatRelativeTime(dateStr: string | null): string {
   if (!dateStr) return '없음';
@@ -51,8 +58,12 @@ export default function FollowingPage() {
   const [followingList, setFollowingList] = useState<FollowingItem[]>([]);
   const [listLoading, setListLoading] = useState(true);
 
-  // 종목 추가 상태
-  const [addCode, setAddCode] = useState('');
+  // 종목 검색/추가 상태
+  const [searchQuery, setSearchQuery] = useState('');
+  const [suggestions, setSuggestions] = useState<StockSearchResult[]>([]);
+  const [selectedStock, setSelectedStock] = useState<StockSearchResult | null>(null);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
   const [addLoading, setAddLoading] = useState(false);
   const [addError, setAddError] = useState('');
   const [addSuccess, setAddSuccess] = useState('');
@@ -120,16 +131,38 @@ export default function FollowingPage() {
     }
   }, [accessToken, loadFollowing, loadTelegramStatus]);
 
-  // 종목 팔로잉 추가
-  const handleAdd = async () => {
-    const code = addCode.trim();
-    if (!code) return;
-    // 6자리 종목코드 검증
-    if (!/^\d{6}$/.test(code)) {
-      setAddError('종목코드는 6자리 숫자여야 합니다.');
+  // 종목 검색 (디바운스 300ms)
+  useEffect(() => {
+    if (!searchQuery.trim() || !accessToken || selectedStock) {
+      setSuggestions([]);
+      setShowSuggestions(false);
       return;
     }
-    if (!accessToken) return;
+    const timer = setTimeout(async () => {
+      setSearchLoading(true);
+      try {
+        const res = await fetch(
+          `/api/stocks?q=${encodeURIComponent(searchQuery.trim())}&limit=8`,
+          { headers: { Authorization: `Bearer ${accessToken}` } },
+        );
+        if (res.ok) {
+          const data: unknown = await res.json();
+          const items = Array.isArray(data) ? (data as StockSearchResult[]) : [];
+          setSuggestions(items);
+          setShowSuggestions(items.length > 0);
+        }
+      } catch {
+        // 검색 실패 시 조용히 처리
+      } finally {
+        setSearchLoading(false);
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery, accessToken, selectedStock]);
+
+  // 종목 팔로잉 추가
+  const handleAdd = async () => {
+    if (!selectedStock || !accessToken) return;
 
     setAddLoading(true);
     setAddError('');
@@ -142,12 +175,13 @@ export default function FollowingPage() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${accessToken}`,
         },
-        body: JSON.stringify({ stock_code: code }),
+        body: JSON.stringify({ stock_code: selectedStock.stock_code }),
       });
 
       if (res.status === 201) {
-        setAddSuccess(`${code} 종목을 팔로잉했습니다.`);
-        setAddCode('');
+        setAddSuccess(`${selectedStock.name}(${selectedStock.stock_code}) 종목을 팔로잉했습니다.`);
+        setSearchQuery('');
+        setSelectedStock(null);
         loadFollowing();
       } else if (res.status === 409) {
         setAddError('이미 팔로잉 중인 종목입니다.');
@@ -265,27 +299,78 @@ export default function FollowingPage() {
           </div>
         ) : (
           <>
-            {/* 종목 추가 입력 영역 */}
+            {/* 종목 검색/추가 입력 영역 */}
             <div className="px-4 py-3 border-b border-[#f0f0f0] bg-[#fafafa]">
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={addCode}
-                  onChange={(e) => {
-                    setAddCode(e.target.value);
-                    setAddError('');
-                    setAddSuccess('');
-                  }}
-                  onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
-                  placeholder="종목코드 6자리 입력 (예: 005930)"
-                  maxLength={6}
-                  className="flex-1 px-3 py-1.5 text-[13px] border border-[#ddd] rounded focus:outline-none focus:border-[#1261c4] bg-white"
-                />
+              <div className="relative flex items-center gap-2">
+                {selectedStock ? (
+                  /* 선택된 종목 표시 */
+                  <div className="flex-1 flex items-center gap-2 px-3 py-1.5 border border-[#1261c4] rounded bg-white">
+                    <span className="text-[13px] font-semibold text-[#333] flex-1">
+                      {selectedStock.name}
+                      <span className="text-[11px] text-[#1261c4] ml-1.5 font-normal">{selectedStock.stock_code}</span>
+                      {selectedStock.market && (
+                        <span className="text-[10px] text-[#999] ml-1">{selectedStock.market}</span>
+                      )}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => { setSelectedStock(null); setSearchQuery(''); setAddError(''); setAddSuccess(''); }}
+                      className="text-[#aaa] hover:text-[#333] text-[16px] font-bold leading-none"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ) : (
+                  /* 종목 검색 입력 */
+                  <div className="flex-1 relative">
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => {
+                        setSearchQuery(e.target.value);
+                        setAddError('');
+                        setAddSuccess('');
+                      }}
+                      onFocus={() => suggestions.length > 0 && setShowSuggestions(true)}
+                      onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+                      placeholder="종목명 또는 종목코드로 검색 (예: 삼성전자, 005930)"
+                      className="w-full px-3 py-1.5 text-[13px] border border-[#ddd] rounded focus:outline-none focus:border-[#1261c4] bg-white pr-16"
+                    />
+                    {searchLoading && (
+                      <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[11px] text-[#999]">검색 중...</span>
+                    )}
+                    {/* 자동완성 드롭다운 */}
+                    {showSuggestions && suggestions.length > 0 && (
+                      <div className="absolute z-20 left-0 right-0 top-full mt-0.5 bg-white border border-[#ddd] rounded shadow-lg overflow-hidden">
+                        {suggestions.map((stock) => (
+                          <button
+                            key={stock.stock_code}
+                            type="button"
+                            onMouseDown={() => {
+                              setSelectedStock(stock);
+                              setSearchQuery(stock.name);
+                              setShowSuggestions(false);
+                              setAddError('');
+                              setAddSuccess('');
+                            }}
+                            className="w-full px-3 py-2 text-left hover:bg-[#f0f7ff] flex items-center gap-2 border-b border-[#f5f5f5] last:border-0"
+                          >
+                            <span className="text-[13px] font-medium text-[#333] flex-1 truncate">{stock.name}</span>
+                            <span className="text-[11px] text-[#1261c4] shrink-0">{stock.stock_code}</span>
+                            {stock.market && (
+                              <span className="text-[10px] text-[#999] shrink-0">{stock.market}</span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <button
                   type="button"
                   onClick={handleAdd}
-                  disabled={addLoading || !addCode.trim()}
-                  className="px-4 py-1.5 text-[13px] font-semibold bg-[#1261c4] text-white rounded hover:bg-[#0e4f9e] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  disabled={addLoading || !selectedStock}
+                  className="px-4 py-1.5 text-[13px] font-semibold bg-[#1261c4] text-white rounded hover:bg-[#0e4f9e] disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
                 >
                   {addLoading ? '추가 중...' : '팔로잉 추가'}
                 </button>
