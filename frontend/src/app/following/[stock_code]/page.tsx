@@ -18,6 +18,15 @@ const CATEGORY_LABELS: Record<string, string> = {
 const CATEGORY_ORDER = ['product', 'competitor', 'upstream', 'market', 'custom'] as const;
 type Category = (typeof CATEGORY_ORDER)[number];
 
+// 카테고리 뱃지 스타일
+const CATEGORY_BADGE: Record<string, { bg: string; color: string }> = {
+  product:    { bg: '#e8f0fc', color: '#1261c4' },
+  competitor: { bg: '#fff3e0', color: '#e65100' },
+  upstream:   { bg: '#e8f5e9', color: '#2e7d32' },
+  market:     { bg: '#f0ebff', color: '#6c47c4' },
+  custom:     { bg: '#f5f5f5', color: '#555' },
+};
+
 // 키워드 아이템 타입
 interface KeywordItem {
   id: number;
@@ -46,9 +55,6 @@ export default function StockKeywordPage() {
     custom: [],
   });
   const [keywordsLoading, setKeywordsLoading] = useState(true);
-
-  // 현재 선택된 카테고리 탭
-  const [activeTab, setActiveTab] = useState<Category>('product');
 
   // AI 키워드 생성 상태
   const [aiLoading, setAiLoading] = useState(false);
@@ -216,8 +222,8 @@ export default function StockKeywordPage() {
     }
   };
 
-  // 현재 탭의 키워드 목록
-  const activeKeywords = keywords[activeTab] ?? [];
+  // 전체 키워드 (카테고리 순서대로 평탄화)
+  const allKeywords = CATEGORY_ORDER.flatMap((cat) => keywords[cat] ?? []);
 
   // 전체 키워드 수 계산
   const totalKeywordCount = CATEGORY_ORDER.reduce(
@@ -312,36 +318,6 @@ export default function StockKeywordPage() {
           {addSuccess && <p className="mt-1.5 text-[12px] text-[#388e3c]">{addSuccess}</p>}
         </div>
 
-        {/* 카테고리 탭 */}
-        <div className="flex border-b border-[#e5e5e5] px-4 pt-1">
-          {CATEGORY_ORDER.map((cat) => {
-            const count = keywords[cat]?.length ?? 0;
-            const isActive = activeTab === cat;
-            return (
-              <button
-                key={cat}
-                type="button"
-                onClick={() => setActiveTab(cat)}
-                className={`flex items-center gap-1.5 px-3 py-2 text-[13px] font-medium border-b-2 -mb-px transition-colors ${
-                  isActive
-                    ? 'border-[#1261c4] text-[#1261c4]'
-                    : 'border-transparent text-[#666] hover:text-[#333]'
-                }`}
-              >
-                {CATEGORY_LABELS[cat]}
-                {/* 카테고리별 키워드 수 표시 */}
-                {count > 0 && (
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
-                    isActive ? 'bg-[#1261c4] text-white' : 'bg-[#f0f0f0] text-[#999]'
-                  }`}>
-                    {count}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-
         {/* 키워드 태그 목록 */}
         <div className="px-4 py-4 min-h-[120px]">
           {keywordsLoading ? (
@@ -355,12 +331,10 @@ export default function StockKeywordPage() {
                 />
               ))}
             </div>
-          ) : activeKeywords.length === 0 ? (
+          ) : allKeywords.length === 0 ? (
             // 빈 상태
             <div className="text-center py-8">
-              <p className="text-[#999] text-[13px]">
-                {CATEGORY_LABELS[activeTab]} 카테고리에 등록된 키워드가 없습니다.
-              </p>
+              <p className="text-[#999] text-[13px]">등록된 키워드가 없습니다.</p>
               <p className="text-[#bbb] text-[12px] mt-1">
                 위의 입력창에서 키워드를 추가하거나 AI 키워드 생성을 사용해 보세요.
               </p>
@@ -368,34 +342,46 @@ export default function StockKeywordPage() {
           ) : (
             // 키워드 태그 목록
             <div className="flex flex-wrap gap-2">
-              {activeKeywords.map((item) => (
-                <span
-                  key={item.id}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#f0f4ff] border border-[#c5d7f7] rounded-full text-[13px] text-[#1261c4]"
-                >
-                  {item.keyword}
-                  {/* AI 생성 키워드 표시 */}
-                  {item.source === 'ai' && (
-                    <span className="text-[10px] text-[#6c47c4] font-medium">AI</span>
-                  )}
-                  {/* 키워드 삭제 버튼 */}
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteKeyword(item.id)}
-                    disabled={deletingId === item.id}
-                    className="ml-0.5 text-[#999] hover:text-[#e12343] transition-colors disabled:opacity-50"
-                    aria-label={`${item.keyword} 키워드 삭제`}
+              {allKeywords.map((item) => {
+                const badge = CATEGORY_BADGE[item.category] ?? CATEGORY_BADGE.custom;
+                return (
+                  <span
+                    key={item.id}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#f0f4ff] border border-[#c5d7f7] rounded-full text-[13px] text-[#1261c4]"
                   >
-                    {deletingId === item.id ? (
-                      <span className="inline-block w-3 h-3 border border-[#999] border-t-transparent rounded-full animate-spin" />
-                    ) : (
-                      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M1 1L11 11M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                      </svg>
+                    {item.keyword}
+                    {/* 카테고리 뱃지 */}
+                    <span
+                      className="text-[10px] px-1.5 py-0.5 rounded-full font-medium"
+                      style={{ backgroundColor: badge.bg, color: badge.color }}
+                    >
+                      {CATEGORY_LABELS[item.category] ?? item.category}
+                    </span>
+                    {/* AI 생성 키워드 뱃지 */}
+                    {item.source === 'ai' && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[#6c47c4] text-white font-bold tracking-wide">
+                        AI
+                      </span>
                     )}
-                  </button>
-                </span>
-              ))}
+                    {/* 키워드 삭제 버튼 */}
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteKeyword(item.id)}
+                      disabled={deletingId === item.id}
+                      className="ml-0.5 text-[#999] hover:text-[#e12343] transition-colors disabled:opacity-50"
+                      aria-label={`${item.keyword} 키워드 삭제`}
+                    >
+                      {deletingId === item.id ? (
+                        <span className="inline-block w-3 h-3 border border-[#999] border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                          <path d="M1 1L11 11M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                        </svg>
+                      )}
+                    </button>
+                  </span>
+                );
+              })}
             </div>
           )}
         </div>
