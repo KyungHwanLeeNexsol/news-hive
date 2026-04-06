@@ -522,4 +522,22 @@ async def backtest_by_signal_type(
             "winning_signals": correct,
         }
 
+
+# ---- SPEC-AI-006: 모델 건강 상태 ----
+
+
+@router.get("/model-health")
+async def get_model_health_endpoint(db: Session = Depends(get_db)):
+    """AI 모델의 종합 건강 상태를 조회합니다.
+
+    반환 정보:
+    - 현재 프롬프트 버전 및 적중률
+    - A/B 테스트 활성 여부 및 현황
+    - 팩터 가중치 (현재 vs 기본값)
+    - 시그널 유형별 적중률
+    - 최근 10건 자기개선 이력
+    """
+    from app.services.improvement_loop import get_model_health
+    return get_model_health(db)
+
     return result

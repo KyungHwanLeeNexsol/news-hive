@@ -377,6 +377,132 @@ def _run_gap_pullback_check():
     _run_gap_pullback_check_sync()
 
 
+# ---------------------------------------------------------------------------
+# SPEC-AI-006: 자기개선 루프 스케줄 작업
+# ---------------------------------------------------------------------------
+
+def _run_failure_aggregation():
+    """매일 18:30 KST — 검증된 시그널 실패 패턴 집계."""
+    _start = _time.monotonic()
+    db = SessionLocal()
+    try:
+        from app.services.improvement_loop import aggregate_failure_patterns, _log_improvement
+        import json as _json
+
+        result = asyncio.run(aggregate_failure_patterns(db, days=30))
+        if result:
+            _log_improvement(
+                db,
+                action_type="failure_aggregation",
+                details=result,
+            )
+            db.commit()
+            logger.info(
+                "실패 패턴 집계 완료: 총 %d건, 적중률 %.1f%%",
+                result["total_verified"],
+                result["accuracy_rate"] * 100,
+            )
+        else:
+            logger.info("실패 패턴 집계: 검증 시그널 부족으로 집계 생략")
+    except Exception as e:
+        logger.error("실패 패턴 집계 실패: %s", e)
+    finally:
+        _record_job_duration("failure_aggregation", _time.monotonic() - _start)
+        db.close()
+
+
+def _run_prompt_improvement():
+    """매주 일요일 22:00 KST — 실패 패턴 기반 프롬프트 자동 개선."""
+    _start = _time.monotonic()
+    db = SessionLocal()
+    try:
+        from app.services.improvement_loop import (
+            aggregate_failure_patterns,
+            generate_improved_prompt,
+            register_treatment_version,
+        )
+
+        # 최근 30일 실패 패턴 집계
+        failure_summary = asyncio.run(aggregate_failure_patterns(db, days=30))
+        if failure_summary is None:
+            logger.info("프롬프트 개선: 검증 시그널 부족으로 생략")
+            return
+
+        # 적중률이 70% 이상이면 개선 불필요
+        if failure_summary["accuracy_rate"] >= 0.70:
+            logger.info(
+                "프롬프트 개선 생략: 적중률 %.1f%% (목표 70%% 달성)",
+                failure_summary["accuracy_rate"] * 100,
+            )
+            return
+
+        # 개선 프롬프트 생성
+        improved = asyncio.run(generate_improved_prompt(db, failure_summary))
+        if improved:
+            asyncio.run(register_treatment_version(
+                db,
+                prompt_text=improved,
+                rationale=f"적중률 {failure_summary['accuracy_rate'] * 100:.1f}% 개선 목적",
+            ))
+            logger.info("프롬프트 개선 완료 — 새 실험군 등록")
+        else:
+            logger.warning("프롬프트 개선: AI 생성 실패")
+    except Exception as e:
+        logger.error("프롬프트 개선 실패: %s", e)
+    finally:
+        _record_job_duration("prompt_improvement", _time.monotonic() - _start)
+        db.close()
+
+
+def _run_ab_test_evaluation():
+    """매주 일요일 22:30 KST — A/B 테스트 결과 평가 및 오래된 실험 종료."""
+    _start = _time.monotonic()
+    db = SessionLocal()
+    try:
+        from app.services.prompt_versioner import evaluate_ab_test
+        from app.services.improvement_loop import resolve_stale_ab_test
+
+        # 통계적 유의성 평가 (30일 데이터)
+        result = evaluate_ab_test(db, days=30)
+        if result:
+            logger.info(
+                "A/B 테스트 평가: 대조군 %.1f%% vs 실험군 %.1f%% (p=%.4f, winner=%s)",
+                result["accuracy_a"],
+                result["accuracy_b"],
+                result["p_value"],
+                result.get("winner", "없음"),
+            )
+
+        # 30일 초과 미결론 실험 종료
+        resolved = asyncio.run(resolve_stale_ab_test(db, max_days=30))
+        if resolved:
+            logger.info("오래된 A/B 테스트 미결론 종료")
+    except Exception as e:
+        logger.error("A/B 테스트 평가 실패: %s", e)
+    finally:
+        _record_job_duration("ab_test_evaluation", _time.monotonic() - _start)
+        db.close()
+
+
+def _run_factor_weight_adaptation():
+    """매월 1일 23:00 KST — 팩터 가중치 자동 조정."""
+    _start = _time.monotonic()
+    db = SessionLocal()
+    try:
+        from app.services.improvement_loop import adapt_factor_weights
+
+        new_weights = asyncio.run(adapt_factor_weights(db, days=60))
+        if new_weights:
+            logger.info("팩터 가중치 조정 완료: %s", new_weights)
+        else:
+            logger.info("팩터 가중치 조정: 데이터 부족으로 생략")
+    except Exception as e:
+        logger.error("팩터 가중치 조정 실패: %s", e)
+    finally:
+        _record_job_duration("factor_weight_adapt", _time.monotonic() - _start)
+        db.close()
+
+
 @retry_with_backoff(max_attempts=3)
 def _run_ml_feature_capture():
     """일별 ML 피처 스냅샷 생성 (REQ-025)."""
@@ -618,6 +744,38 @@ def start_scheduler():
             id=f"gap_pullback_check_11{_minute_offset:02d}",
             replace_existing=True,
         )
+
+    # SPEC-AI-006: 자기개선 루프 작업
+    # 실패 패턴 집계: 매일 18:30 KST = 09:30 UTC
+    from apscheduler.triggers.cron import CronTrigger
+    scheduler.add_job(
+        _run_failure_aggregation,
+        CronTrigger(hour=9, minute=30, timezone="UTC"),
+        id="failure_aggregation",
+        replace_existing=True,
+    )
+    # 프롬프트 자동 개선: 매주 일요일 22:00 KST = 13:00 UTC
+    scheduler.add_job(
+        _run_prompt_improvement,
+        CronTrigger(day_of_week="sun", hour=13, minute=0, timezone="UTC"),
+        id="prompt_improvement",
+        replace_existing=True,
+    )
+    # A/B 테스트 평가: 매주 일요일 22:30 KST = 13:30 UTC
+    scheduler.add_job(
+        _run_ab_test_evaluation,
+        CronTrigger(day_of_week="sun", hour=13, minute=30, timezone="UTC"),
+        id="ab_test_evaluation",
+        replace_existing=True,
+    )
+    # 팩터 가중치 조정: 매월 1일 23:00 KST = 14:00 UTC
+    scheduler.add_job(
+        _run_factor_weight_adaptation,
+        CronTrigger(day=1, hour=14, minute=0, timezone="UTC"),
+        id="factor_weight_adapt",
+        replace_existing=True,
+    )
+
     scheduler.start()
     logger.info(
         f"Scheduler started: crawling every {interval} min, "
@@ -631,7 +789,11 @@ def start_scheduler():
         f"portfolio snapshot at 16:00 KST, "
         f"sector momentum at 16:30 KST, "
         f"ML feature capture at 09:00 KST, "
-        f"gap pullback check at 10:00~11:30 KST every 15min"
+        f"gap pullback check at 10:00~11:30 KST every 15min, "
+        f"failure_aggregation at 18:30 KST, "
+        f"prompt_improvement every Sunday 22:00 KST, "
+        f"ab_test_evaluation every Sunday 22:30 KST, "
+        f"factor_weight_adapt on 1st of month 23:00 KST"
     )
 
 

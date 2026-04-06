@@ -1547,8 +1547,9 @@ async def analyze_stock(
     # 과거 시그널 적중률 조회
     from app.services.signal_verifier import get_accuracy_stats, calibrate_confidence
     from app.services.factor_scoring import build_factor_scores_json
-    from app.services.prompt_versioner import get_current_version
+    from app.services.prompt_versioner import get_current_version, get_ab_versions
     from app.services.news_price_impact_service import get_sector_news_impact_stats
+    from app.services.improvement_loop import get_active_factor_weights
     accuracy = get_accuracy_stats(db, days=30)
     accuracy_text = "아직 검증된 시그널 없음"
     if accuracy["total"] > 0:
@@ -1582,8 +1583,16 @@ async def analyze_stock(
                 f"※ 과거 통계를 참고하되, 현재 시장 상황이 다를 수 있음에 유의하세요."
             )
 
-    # REQ-AI-008: 프롬프트 버전
-    current_prompt_version = get_current_version(db, template_key="signal")
+    # SPEC-AI-006: A/B 테스트 — stock_id 기반 대조군/실험군 분리
+    # 짝수 stock_id → 대조군, 홀수 stock_id → 실험군
+    _control_version, _treatment_version = get_ab_versions(db, template_key="signal")
+    if _treatment_version and stock_id % 2 == 1:
+        current_prompt_version = _treatment_version
+    else:
+        current_prompt_version = _control_version or get_current_version(db, template_key="signal")
+
+    # SPEC-AI-006: 동적 팩터 가중치 로드 (DB 활성 가중치 우선, 없으면 기본값)
+    _active_weights = get_active_factor_weights(db)
 
     # Pre-compute values that would break f-string syntax
     trend_label = {'improving': '개선 중', 'worsening': '악화 중', 'stable': '안정적'}.get(
@@ -1755,12 +1764,13 @@ async def analyze_stock(
 
     # Phase B 필드 할당 (마이그레이션 미적용 시에도 안전하게 처리)
     try:
-        # REQ-AI-006: 다중 팩터 스코어링
+        # REQ-AI-006: 다중 팩터 스코어링 (SPEC-AI-006: 동적 가중치 적용)
         factor_json, comp_score = build_factor_scores_json(
             news_data=news,
             market_data=market_data or {},
             financials=financial_data or {},
             impact_stats=impact_stats,
+            weights=_active_weights,
         )
         signal.factor_scores = factor_json
         signal.composite_score = comp_score

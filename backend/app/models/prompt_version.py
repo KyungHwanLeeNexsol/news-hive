@@ -17,6 +17,11 @@ class PromptVersion(Base):
     template_key: Mapped[str] = mapped_column(String(50), nullable=False)  # briefing / signal
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_control: Mapped[bool] = mapped_column(Boolean, default=False)  # A/B 테스트 대조군
+
+    # SPEC-AI-006: AI 자동 생성 프롬프트 내용
+    prompt_template: Mapped[str | None] = mapped_column(Text, nullable=True)  # 실제 프롬프트 텍스트
+    generation_source: Mapped[str | None] = mapped_column(Text, nullable=True)  # 생성 근거 (JSON)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
