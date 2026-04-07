@@ -67,11 +67,7 @@ export default function StockKeywordPage() {
   const [addError, setAddError] = useState('');
   const [addSuccess, setAddSuccess] = useState('');
 
-  // 삭제 중인 키워드 ID
-  const [deletingId, setDeletingId] = useState<number | null>(null);
-
-  // 벌크 삭제 선택 모드
-  const [selectMode, setSelectMode] = useState(false);
+  // 벌크 삭제 선택
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
 
@@ -201,38 +197,6 @@ export default function StockKeywordPage() {
     }
   };
 
-  // 키워드 삭제
-  const handleDeleteKeyword = async (keywordId: number) => {
-    if (!accessToken || !stockCode) return;
-    setDeletingId(keywordId);
-    try {
-      const res = await fetch(`/api/following/stocks/${stockCode}/keywords/${keywordId}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (res.ok) {
-        // 로컬 상태에서 즉시 제거 (재로드 없이)
-        setKeywords((prev) => {
-          const updated = { ...prev };
-          for (const cat of CATEGORY_ORDER) {
-            updated[cat] = updated[cat].filter((k) => k.id !== keywordId);
-          }
-          return updated;
-        });
-      }
-    } catch {
-      // 삭제 실패 시 조용히 처리
-    } finally {
-      setDeletingId(null);
-    }
-  };
-
-  // 선택 모드 토글
-  const toggleSelectMode = () => {
-    setSelectMode((prev) => !prev);
-    setSelectedIds(new Set());
-  };
-
   // 개별 키워드 선택/해제
   const toggleSelectKeyword = (id: number) => {
     setSelectedIds((prev) => {
@@ -275,7 +239,6 @@ export default function StockKeywordPage() {
           return updated;
         });
         setSelectedIds(new Set());
-        setSelectMode(false);
       }
     } catch {
       // 삭제 실패 시 조용히 처리
@@ -382,44 +345,31 @@ export default function StockKeywordPage() {
 
         {/* 키워드 태그 목록 */}
         <div className="min-h-[120px]">
-          {/* 키워드 섹션 헤더 — 편집 버튼 포함 */}
+          {/* 키워드 섹션 헤더 */}
           {!keywordsLoading && allKeywords.length > 0 && (
-            <div className="flex items-center justify-between px-4 pt-3 pb-1">
-              {selectMode ? (
-                <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => toggleSelectAll(totalKeywordCount)}
-                    className="text-[12px] text-[#555] hover:text-[#333]"
-                  >
-                    {selectedIds.size === totalKeywordCount ? '전체 해제' : '전체 선택'}
-                  </button>
-                  <span className="text-[#ddd]">|</span>
-                  <button
-                    type="button"
-                    onClick={handleBulkDelete}
-                    disabled={selectedIds.size === 0 || bulkDeleting}
-                    className="text-[12px] text-[#e12343] hover:text-[#c41231] disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
-                  >
-                    {bulkDeleting ? (
-                      <>
-                        <span className="inline-block w-3 h-3 border border-[#e12343] border-t-transparent rounded-full animate-spin" />
-                        삭제 중...
-                      </>
-                    ) : (
-                      `선택 삭제${selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}`
-                    )}
-                  </button>
-                </div>
-              ) : (
-                <span className="text-[12px] text-[#aaa]">키워드 목록</span>
-              )}
+            <div className="flex items-center gap-3 px-4 pt-3 pb-1">
               <button
                 type="button"
-                onClick={toggleSelectMode}
-                className="text-[13px] font-medium text-[#1261c4] hover:underline"
+                onClick={() => toggleSelectAll(totalKeywordCount)}
+                className="text-[12px] text-[#555] hover:text-[#333]"
               >
-                {selectMode ? '완료' : '편집'}
+                {selectedIds.size === totalKeywordCount ? '전체 해제' : '전체 선택'}
+              </button>
+              <span className="text-[#ddd]">|</span>
+              <button
+                type="button"
+                onClick={handleBulkDelete}
+                disabled={selectedIds.size === 0 || bulkDeleting}
+                className="text-[12px] text-[#e12343] hover:text-[#c41231] disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
+              >
+                {bulkDeleting ? (
+                  <>
+                    <span className="inline-block w-3 h-3 border border-[#e12343] border-t-transparent rounded-full animate-spin" />
+                    삭제 중...
+                  </>
+                ) : (
+                  `선택 삭제${selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}`
+                )}
               </button>
             </div>
           )}
@@ -451,25 +401,22 @@ export default function StockKeywordPage() {
                 return (
                   <span
                     key={item.id}
-                    onClick={selectMode ? () => toggleSelectKeyword(item.id) : undefined}
+                    onClick={() => toggleSelectKeyword(item.id)}
                     className={[
-                      'inline-flex items-center gap-1.5 px-3 py-1.5 border rounded-full text-[13px] transition-colors',
-                      selectMode ? 'cursor-pointer' : '',
-                      selectMode && selectedIds.has(item.id)
+                      'inline-flex items-center gap-1.5 px-3 py-1.5 border rounded-full text-[13px] transition-colors cursor-pointer',
+                      selectedIds.has(item.id)
                         ? 'bg-[#e8f0fc] border-[#1261c4] text-[#1261c4]'
                         : 'bg-white border-[#e0e0e0] text-[#333]',
                     ].join(' ')}
                   >
-                    {/* 선택 모드 체크 아이콘 */}
-                    {selectMode && (
-                      <span className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center flex-shrink-0 ${selectedIds.has(item.id) ? 'bg-[#1261c4] border-[#1261c4]' : 'border-[#ccc]'}`}>
-                        {selectedIds.has(item.id) && (
-                          <svg width="8" height="6" viewBox="0 0 8 6" fill="none">
-                            <path d="M1 3L3 5L7 1" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                          </svg>
-                        )}
-                      </span>
-                    )}
+                    {/* 체크 아이콘 */}
+                    <span className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center flex-shrink-0 ${selectedIds.has(item.id) ? 'bg-[#1261c4] border-[#1261c4]' : 'border-[#ccc]'}`}>
+                      {selectedIds.has(item.id) && (
+                        <svg width="8" height="6" viewBox="0 0 8 6" fill="none">
+                          <path d="M1 3L3 5L7 1" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      )}
+                    </span>
                     {item.keyword}
                     {/* 카테고리 뱃지 */}
                     <span
@@ -483,24 +430,6 @@ export default function StockKeywordPage() {
                       <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[#6c47c4] text-white font-bold tracking-wide">
                         AI
                       </span>
-                    )}
-                    {/* 키워드 삭제 버튼 (선택 모드에서는 숨김) */}
-                    {!selectMode && (
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteKeyword(item.id)}
-                        disabled={deletingId === item.id}
-                        className="ml-0.5 text-[#999] hover:text-[#e12343] transition-colors disabled:opacity-50"
-                        aria-label={`${item.keyword} 키워드 삭제`}
-                      >
-                        {deletingId === item.id ? (
-                          <span className="inline-block w-3 h-3 border border-[#999] border-t-transparent rounded-full animate-spin" />
-                        ) : (
-                          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M1 1L11 11M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                          </svg>
-                        )}
-                      </button>
                     )}
                   </span>
                 );
