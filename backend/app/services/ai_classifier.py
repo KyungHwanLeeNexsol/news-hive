@@ -130,6 +130,17 @@ _NON_FINANCIAL_PATTERNS: list[str] = [
     # Crime / Social (non-business context)
     "검찰", "경찰", "구속", "기소", "체포", "재판", "판결", "혐의",
     "사건", "사고", "사망", "범죄", "살인", "폭행", "피의자",
+    # TV schedules / program highlights (non-investment)
+    "TV하이라이트", "방송하이라이트", "오늘의TV", "편성표", "TV편성",
+    "▣TV", "▣MBC", "▣KBS", "▣SBS", "▣JTBC", "▣tvN", "▣채널",
+    # Local government / public welfare announcements (non-market)
+    "통합돌봄", "복지급여", "육아나눔터", "공동육아나눔터", "돌봄센터",
+    "해충방제", "전기포충기", "흡연위해예방", "흡연예방교실", "금연교실",
+    "방역소독", "예방접종", "무상급식", "기초생활수급",
+    "요양통합", "방문요양", "재가서비스", "노인돌봄",
+    # Community / social welfare (지자체 보도자료 패턴)
+    "찾아가는 유아", "찾아가는 어르신", "사각지대 해소", "복지사각지대",
+    "위기가구 발굴", "수급자격",
 ]
 
 # Compile regex for non-financial detection
