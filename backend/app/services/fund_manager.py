@@ -1699,6 +1699,18 @@ async def analyze_stock(
 
     confidence_val = min(max(float(parsed.get("confidence", 0.5)), 0.0), 1.0)
 
+    # 코드 레벨 가드: AI가 프롬프트 지시(confidence >= 0.7 for buy)를 무시하고
+    # 낮은 confidence로 buy/sell을 출력하는 경우 강제로 hold 변환.
+    # gpt-4o-mini 등 fallback 모델의 instruction-following 불완전성 대응.
+    _MIN_ACTION_CONFIDENCE = 0.45
+    if parsed.get("signal") in ("buy", "sell") and confidence_val < _MIN_ACTION_CONFIDENCE:
+        logger.info(
+            "낮은 confidence로 buy/sell 강제 hold 변환: %s (conf=%.2f < %.2f, signal=%s)",
+            stock.name,
+            confidence_val, _MIN_ACTION_CONFIDENCE, parsed["signal"],
+        )
+        parsed["signal"] = "hold"
+
     # AI가 제공한 목표가/손절가 추출 (0 또는 None은 무효 처리)
     ai_target = parsed.get("target_price")
     ai_stop = parsed.get("stop_loss")
@@ -2369,6 +2381,16 @@ async def _generate_signals_from_picks(
 
     if not stock_hints:
         return
+
+    # 브리핑 pick이 너무 많으면 시그널 품질이 희석됨.
+    # 최대 5개 종목으로 제한하여 AI가 확신 있는 종목에만 집중하도록 유도.
+    MAX_SIGNAL_PICKS = 5
+    if len(stock_hints) > MAX_SIGNAL_PICKS:
+        logger.info(
+            "브리핑 추천 종목 %d개 → 상위 %d개로 제한",
+            len(stock_hints), MAX_SIGNAL_PICKS,
+        )
+        stock_hints = stock_hints[:MAX_SIGNAL_PICKS]
 
     stock_names = [name for name, _ in stock_hints]
     logger.info(f"브리핑 추천 종목 {len(stock_names)}개에 대해 시그널 자동 생성: {stock_names}")
