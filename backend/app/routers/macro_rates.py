@@ -113,7 +113,8 @@ def _fetch_exchange_rates() -> list[dict]:
                 # 1차: 당일 1분봉 — 장 중 15분 지연 실시간
                 data = yf.download(symbol, period="1d", interval="1m", progress=False, auto_adjust=True)
                 if not data.empty:
-                    close_col = data["Close"]
+                    # yfinance >= 0.2.x: 단일 티커도 MultiIndex 반환 → squeeze()로 Series 변환
+                    close_col = data["Close"].squeeze()
                     valid = close_col.dropna()
                     if not valid.empty:
                         price = float(valid.iloc[-1])
@@ -122,7 +123,7 @@ def _fetch_exchange_rates() -> list[dict]:
                 if price is None:
                     data = yf.download(symbol, period="5d", progress=False, auto_adjust=True)
                     if not data.empty:
-                        close_col = data["Close"]
+                        close_col = data["Close"].squeeze()
                         valid = close_col.dropna()
                         if len(valid) >= 2:
                             price = float(valid.iloc[-1])
@@ -138,7 +139,7 @@ def _fetch_exchange_rates() -> list[dict]:
                 if prev_close is None:
                     daily = yf.download(symbol, period="5d", progress=False, auto_adjust=True)
                     if not daily.empty:
-                        valid_daily = daily["Close"].dropna()
+                        valid_daily = daily["Close"].squeeze().dropna()
                         if len(valid_daily) >= 2:
                             prev_close = float(valid_daily.iloc[-2])
 
