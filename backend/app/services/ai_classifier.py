@@ -499,7 +499,7 @@ async def classify_sentiment_with_ai(
     if not neutral_articles:
         return
 
-    chunk_size = 15
+    chunk_size = 30
     reclassified = 0
 
     for chunk_start in range(0, len(neutral_articles), chunk_size):
@@ -792,8 +792,8 @@ async def classify_news_with_ai(
     sector_map = {s.id: s.name for s in sectors}
     sector_list = "\n".join(f"- ID:{sid} {sname}" for sid, sname in sector_map.items())
 
-    # 배치로 처리 (한 번에 10개씩)
-    chunk_size = 10
+    # 배치로 처리 (한 번에 30개씩)
+    chunk_size = 30
     classified_count = 0
 
     for chunk_start in range(0, len(unmatched), chunk_size):
