@@ -136,7 +136,8 @@ def test_report_keyword_match_notifies() -> None:
 
     db.query.side_effect = query_side
 
-    with patch.object(km, "_dispatch_notification", side_effect=mock_dispatch):
+    with patch.object(km, "_dispatch_notification", side_effect=mock_dispatch), \
+         patch.object(km, "_check_relevance", return_value=8):
         km.match_keywords_and_notify(db)
 
     # 알림이 발송되었는지, content_type이 "report"인지 확인
@@ -258,7 +259,8 @@ def test_existing_news_disclosure_matching_unaffected() -> None:
         dispatched_calls.append(kwargs)
         return "telegram"
 
-    with patch.object(km, "_dispatch_notification", side_effect=mock_dispatch):
+    with patch.object(km, "_dispatch_notification", side_effect=mock_dispatch), \
+         patch.object(km, "_check_relevance", return_value=8):
         stats = km.match_keywords_and_notify(db)
 
     # 뉴스 매칭이 정상 작동해야 함
