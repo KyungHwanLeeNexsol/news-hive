@@ -321,45 +321,7 @@ export default function StockKeywordPage() {
               키워드 {totalKeywordCount}개
             </span>
           </div>
-          {/* 편집(멀티셀렉트) 토글 */}
-          {totalKeywordCount > 0 && (
-            <button
-              type="button"
-              onClick={toggleSelectMode}
-              className="ml-auto text-[12px] text-[#1261c4] hover:underline"
-            >
-              {selectMode ? '완료' : '편집'}
-            </button>
-          )}
         </div>
-        {/* 선택 모드 툴바 */}
-        {selectMode && (
-          <div className="flex items-center gap-3 px-4 py-2 border-b border-[#f0f0f0] bg-[#fafafa]">
-            <button
-              type="button"
-              onClick={() => toggleSelectAll(totalKeywordCount)}
-              className="text-[12px] text-[#555] hover:text-[#333]"
-            >
-              {selectedIds.size === totalKeywordCount ? '전체 해제' : '전체 선택'}
-            </button>
-            <span className="text-[#ddd]">|</span>
-            <button
-              type="button"
-              onClick={handleBulkDelete}
-              disabled={selectedIds.size === 0 || bulkDeleting}
-              className="text-[12px] text-[#e12343] hover:text-[#c41231] disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
-            >
-              {bulkDeleting ? (
-                <>
-                  <span className="inline-block w-3 h-3 border border-[#e12343] border-t-transparent rounded-full animate-spin" />
-                  삭제 중...
-                </>
-              ) : (
-                `선택 삭제${selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}`
-              )}
-            </button>
-          </div>
-        )}
 
         {/* AI 키워드 생성 + 수동 키워드 추가 영역 */}
         <div className="px-4 py-3 border-b border-[#f0f0f0] bg-[#fafafa]">
@@ -419,7 +381,49 @@ export default function StockKeywordPage() {
         </div>
 
         {/* 키워드 태그 목록 */}
-        <div className="px-4 py-4 min-h-[120px]">
+        <div className="min-h-[120px]">
+          {/* 키워드 섹션 헤더 — 편집 버튼 포함 */}
+          {!keywordsLoading && allKeywords.length > 0 && (
+            <div className="flex items-center justify-between px-4 pt-3 pb-1">
+              {selectMode ? (
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => toggleSelectAll(totalKeywordCount)}
+                    className="text-[12px] text-[#555] hover:text-[#333]"
+                  >
+                    {selectedIds.size === totalKeywordCount ? '전체 해제' : '전체 선택'}
+                  </button>
+                  <span className="text-[#ddd]">|</span>
+                  <button
+                    type="button"
+                    onClick={handleBulkDelete}
+                    disabled={selectedIds.size === 0 || bulkDeleting}
+                    className="text-[12px] text-[#e12343] hover:text-[#c41231] disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
+                  >
+                    {bulkDeleting ? (
+                      <>
+                        <span className="inline-block w-3 h-3 border border-[#e12343] border-t-transparent rounded-full animate-spin" />
+                        삭제 중...
+                      </>
+                    ) : (
+                      `선택 삭제${selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}`
+                    )}
+                  </button>
+                </div>
+              ) : (
+                <span className="text-[12px] text-[#aaa]">키워드 목록</span>
+              )}
+              <button
+                type="button"
+                onClick={toggleSelectMode}
+                className="text-[13px] font-medium text-[#1261c4] hover:underline"
+              >
+                {selectMode ? '완료' : '편집'}
+              </button>
+            </div>
+          )}
+          <div className="px-4 pb-4 pt-2">
           {keywordsLoading ? (
             // 스켈레톤 로딩
             <div className="flex flex-wrap gap-2">
@@ -503,6 +507,7 @@ export default function StockKeywordPage() {
               })}
             </div>
           )}
+          </div>
         </div>
       </div>
     </div>
