@@ -23,6 +23,7 @@ interface MacroRatesData {
   exchange_rates: ExchangeRate[];
   interest_rates: InterestRate[];
   updated_at: string;
+  data_delay_minutes?: number;
 }
 
 const FLAG: Record<string, string> = {
@@ -75,10 +76,12 @@ export default function GlobalMacroWidget() {
   const [loading, setLoading] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
-  const fetchData = async () => {
+  // force=true 이면 서버 캐시를 무시하고 즉시 조회
+  const fetchData = async (force = false) => {
     setLoading(true);
     try {
-      const res = await fetch('/api/macro/rates');
+      const url = force ? '/api/macro/rates?force=true' : '/api/macro/rates';
+      const res = await fetch(url);
       if (res.ok) {
         const json: MacroRatesData = await res.json();
         setData(json);
@@ -97,10 +100,10 @@ export default function GlobalMacroWidget() {
     }
   }, [open, data]);
 
-  // 10분마다 자동 갱신 (패널 열려있을 때만)
+  // 3분마다 자동 갱신 (패널 열려있을 때만)
   useEffect(() => {
     if (!open) return;
-    const interval = setInterval(fetchData, 600_000);
+    const interval = setInterval(() => fetchData(), 180_000);
     return () => clearInterval(interval);
   }, [open]);
 
@@ -116,6 +119,8 @@ export default function GlobalMacroWidget() {
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
+  const delayMin = data?.data_delay_minutes ?? 15;
+
   return (
     <div ref={panelRef} className="fixed bottom-5 right-5 z-50 flex flex-col items-end gap-2">
       {/* 팝업 패널 */}
@@ -127,7 +132,7 @@ export default function GlobalMacroWidget() {
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={fetchData}
+                onClick={() => fetchData(true)}
                 disabled={loading}
                 className="text-[11px] text-[#1261c4] hover:underline disabled:opacity-40"
               >
@@ -149,7 +154,10 @@ export default function GlobalMacroWidget() {
             <div className="divide-y divide-[#f5f5f5]">
               {/* 환율 섹션 */}
               <div className="px-4 py-3">
-                <p className="text-[11px] font-semibold text-[#888] uppercase tracking-wide mb-2">환율</p>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-[11px] font-semibold text-[#888] uppercase tracking-wide">환율</p>
+                  <span className="text-[10px] text-[#bbb]">약 {delayMin}분 지연</span>
+                </div>
                 {data.exchange_rates.length === 0 ? (
                   <p className="text-[12px] text-[#bbb]">데이터 없음</p>
                 ) : (
@@ -202,7 +210,7 @@ export default function GlobalMacroWidget() {
               {/* 업데이트 시각 */}
               <div className="px-4 py-2 bg-[#fafafa]">
                 <p className="text-[10px] text-[#bbb] text-right">
-                  환율 {new Date(data.updated_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })} 기준
+                  조회 {new Date(data.updated_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })} · Yahoo Finance
                 </p>
               </div>
             </div>
@@ -222,12 +230,10 @@ export default function GlobalMacroWidget() {
         }`}
       >
         {open ? (
-          // X 아이콘 (회전 효과)
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
             <path d="M2 2L14 14M14 2L2 14" stroke="white" strokeWidth="2" strokeLinecap="round"/>
           </svg>
         ) : (
-          // 달러/지구 아이콘
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <circle cx="12" cy="12" r="9" stroke="white" strokeWidth="1.8"/>
             <path d="M12 3C12 3 8 7 8 12C8 17 12 21 12 21" stroke="white" strokeWidth="1.5" strokeLinecap="round"/>

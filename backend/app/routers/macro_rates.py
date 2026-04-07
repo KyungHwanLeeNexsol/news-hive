@@ -4,7 +4,7 @@ import logging
 import time
 from datetime import date, datetime, timezone
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 logger = logging.getLogger(__name__)
 
@@ -12,7 +12,8 @@ router = APIRouter(prefix="/api/macro", tags=["macro"])
 
 # 인메모리 캐시: (timestamp, data)
 _rates_cache: tuple[float, dict] | None = None
-_CACHE_TTL = 600  # 10분
+# 자동 갱신 캐시: 3분 (yfinance 자체가 ~15분 지연이므로 너무 자주 호출할 필요 없음)
+_CACHE_TTL = 180  # 3분
 
 # ---------------------------------------------------------------------------
 # 기준금리 및 회의 일정 설정 (수동 업데이트)
@@ -88,38 +89,58 @@ def _calc_dday(meeting_dates: list[str]) -> tuple[str | None, int | None]:
 
 
 def _fetch_exchange_rates() -> list[dict]:
-    """yfinance로 환율 조회. 실패 시 빈 리스트 반환."""
+    """yfinance로 환율 조회 (인트라데이 우선, 일봉 폴백).
+
+    Yahoo Finance 환율 데이터는 약 15분 지연됩니다.
+    1차: 당일 1분봉 (가장 최신 장중 데이터)
+    2차: 5일 일봉 폴백 (최근 거래일 종가)
+    """
     try:
         import yfinance as yf
 
-        # USD/KRW, JPY/KRW, EUR/KRW 조회
-        symbols = ["USDKRW=X", "JPYKRW=X", "EURKRW=X"]
-        tickers = yf.Tickers(" ".join(symbols))
-
-        results = []
         labels = [
             ("USDKRW=X", "USD/KRW", "달러"),
             ("JPYKRW=X", "JPY/KRW", "엔화"),
             ("EURKRW=X", "EUR/KRW", "유로"),
         ]
 
+        results = []
         for symbol, pair, label in labels:
             try:
-                ticker = tickers.tickers[symbol]
-                info = ticker.fast_info
-                price = getattr(info, "last_price", None)
-                prev_close = getattr(info, "previous_close", None)
+                price: float | None = None
+                prev_close: float | None = None
+
+                # 1차: 당일 1분봉 — 장 중 15분 지연 실시간
+                data = yf.download(symbol, period="1d", interval="1m", progress=False, auto_adjust=True)
+                if not data.empty:
+                    close_col = data["Close"]
+                    valid = close_col.dropna()
+                    if not valid.empty:
+                        price = float(valid.iloc[-1])
+
+                # 2차: 5일 일봉 폴백 — 최근 거래일 종가 + 전일 종가
+                if price is None:
+                    data = yf.download(symbol, period="5d", progress=False, auto_adjust=True)
+                    if not data.empty:
+                        close_col = data["Close"]
+                        valid = close_col.dropna()
+                        if len(valid) >= 2:
+                            price = float(valid.iloc[-1])
+                            prev_close = float(valid.iloc[-2])
+                        elif len(valid) == 1:
+                            price = float(valid.iloc[-1])
 
                 if price is None:
-                    # fast_info 실패 시 history 폴백
-                    hist = ticker.history(period="2d")
-                    if not hist.empty:
-                        price = float(hist["Close"].iloc[-1])
-                        if len(hist) >= 2:
-                            prev_close = float(hist["Close"].iloc[-2])
-
-                if price is None:
+                    logger.warning(f"환율 조회 실패 — 데이터 없음 ({symbol})")
                     continue
+
+                # 전일 종가로 변동률 계산 (인트라데이 시에는 daily 데이터로 보정)
+                if prev_close is None:
+                    daily = yf.download(symbol, period="5d", progress=False, auto_adjust=True)
+                    if not daily.empty:
+                        valid_daily = daily["Close"].dropna()
+                        if len(valid_daily) >= 2:
+                            prev_close = float(valid_daily.iloc[-2])
 
                 change_pct = None
                 if prev_close and prev_close != 0:
@@ -165,16 +186,23 @@ def _build_rates_data() -> dict:
         "exchange_rates": exchange_rates,
         "interest_rates": interest_rates,
         "updated_at": datetime.now(timezone.utc).isoformat(),
+        # Yahoo Finance 환율은 약 15분 지연 제공
+        "data_delay_minutes": 15,
     }
 
 
 @router.get("/rates")
-def get_macro_rates() -> dict:
-    """환율 및 기준금리 데이터 반환 (10분 캐시)."""
+def get_macro_rates(force: bool = Query(default=False, description="캐시 무시 후 강제 갱신")) -> dict:
+    """환율 및 기준금리 데이터 반환.
+
+    - 자동 갱신: 3분 캐시
+    - force=true: 캐시 무시 후 즉시 조회 (사용자 새로고침 버튼)
+    """
     global _rates_cache
     now = time.time()
 
-    if _rates_cache is not None:
+    # force=False이고 캐시가 유효한 경우 캐시 반환
+    if not force and _rates_cache is not None:
         cached_at, cached_data = _rates_cache
         if now - cached_at < _CACHE_TTL:
             return cached_data
