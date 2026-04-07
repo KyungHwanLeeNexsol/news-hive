@@ -35,9 +35,13 @@ def _cache_set(key: tuple, score: int) -> None:
 def _shortcut_score(keyword: str, company_name: str, search_text: str) -> int | None:
     """AI 호출 없이 결정 가능한 shortcut 점수.
 
-    - 키워드가 곧 기업명(또는 그 일부) → 10점 (자명한 관련)
-    - 기업명이 본문에도 함께 등장 → 8점 (자명한 관련)
+    - 키워드 == 기업명 → 10점 (완전 일치)
+    - 기업명이 키워드에 포함(키워드가 더 구체적) → 10점
+    - 기업명이 본문에도 함께 등장 → 8점
     - 그 외 → None (AI 평가 필요)
+
+    주의: 'kw_l in name_l' (키워드가 기업명의 부분 문자열) 조건은
+    "에너지" in "SNT에너지" 같은 오탐을 유발하므로 제거됨.
     """
     if not company_name:
         return None
@@ -45,8 +49,8 @@ def _shortcut_score(keyword: str, company_name: str, search_text: str) -> int | 
     name_l = company_name.lower().strip()
     if not kw_l or not name_l:
         return None
-    # 키워드 = 기업명 (또는 한쪽이 다른 쪽을 포함)
-    if kw_l == name_l or kw_l in name_l or name_l in kw_l:
+    # 완전 일치 또는 키워드가 기업명을 포함하는 경우만 shortcut 적용
+    if kw_l == name_l or name_l in kw_l:
         return 10
     # 기업명이 콘텐츠 본문에 함께 등장하면 직접 관련 가능성 높음
     if name_l in search_text:
@@ -149,7 +153,12 @@ def _check_relevance(
     content_type: str,
     content_id: int,
 ) -> int:
-    """캐시에서 관련성 점수를 조회한다. 없으면 -1 (폴백 = 발송)."""
+    """캐시에서 관련성 점수를 조회한다.
+
+    Returns:
+        캐시 히트: 저장된 점수 (0~10)
+        캐시 미스(AI 평가 실패 또는 미평가): -1 (발송 차단)
+    """
     return _relevance_cache.get((content_type, content_id, keyword, company_name), -1)
 
 
@@ -279,7 +288,7 @@ def match_keywords_and_notify(db: Session) -> dict:
                         content_type="news",
                         content_id=article.id,
                     )
-                    if 0 <= score < RELEVANCE_THRESHOLD:
+                    if score < RELEVANCE_THRESHOLD:
                         stats.setdefault("filtered_low_relevance", 0)
                         stats["filtered_low_relevance"] += 1
                         break
@@ -353,7 +362,7 @@ def match_keywords_and_notify(db: Session) -> dict:
                         content_type="disclosure",
                         content_id=disclosure.id,
                     )
-                    if 0 <= score < RELEVANCE_THRESHOLD:
+                    if score < RELEVANCE_THRESHOLD:
                         stats.setdefault("filtered_low_relevance", 0)
                         stats["filtered_low_relevance"] += 1
                         break
@@ -439,7 +448,7 @@ def match_keywords_and_notify(db: Session) -> dict:
                         content_type="report",
                         content_id=report.id,
                     )
-                    if 0 <= score < RELEVANCE_THRESHOLD:
+                    if score < RELEVANCE_THRESHOLD:
                         stats.setdefault("filtered_low_relevance", 0)
                         stats["filtered_low_relevance"] += 1
                         break
