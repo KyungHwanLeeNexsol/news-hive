@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import Header from "@/components/Header";
 import { Providers } from "@/components/Providers";
+import GlobalMacroWidget from "@/components/GlobalMacroWidget";
 
 export const metadata: Metadata = {
   title: "NewsHive",
@@ -29,6 +30,7 @@ export default function RootLayout({
           <main className="max-w-[1200px] mx-auto px-4 py-4">
             {children}
           </main>
+          <GlobalMacroWidget />
         </Providers>
       </body>
     </html>
