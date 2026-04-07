@@ -141,6 +141,19 @@ _NON_FINANCIAL_PATTERNS: list[str] = [
     # Community / social welfare (지자체 보도자료 패턴)
     "찾아가는 유아", "찾아가는 어르신", "사각지대 해소", "복지사각지대",
     "위기가구 발굴", "수급자격",
+    # Social isolation / welfare
+    "고독사", "안부 확인 서비스", "이상징후 감지 출동",
+    # Cultural festivals and events (non-investment)
+    "문화축전", "궁중문화", "궁중 체험", "궁중새내기",
+    "참여형 축제", "시간여행 체험",
+    # Government-funded arts organizations (non-investment)
+    "도립무용단", "시립무용단", "국립무용단", "도립교향악단",
+    "문예회관", "무용단 공연",
+    # Museum / gallery events (non-investment)
+    "박물관·미술관", "박물관 주간", "미술관 주간",
+    # Local government civic / aesthetic projects
+    "불법 주정차", "주정차 신고", "교통행정 운영",
+    "간판개선", "불법 광고물 정비",
 ]
 
 # Compile regex for non-financial detection
