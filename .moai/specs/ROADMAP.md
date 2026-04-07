@@ -86,6 +86,31 @@ This roadmap defines the systematic enhancement strategy across 5 tiers (0-4).
 
 **설계 원칙**: 데이터 없이 자가 학습 로직을 만들지 않는다. 충분한 샘플이 확보된 후 통계적으로 유의미한 개선만 적용한다.
 
+### TIER 7: Investment Tracking (Priority: High)
+
+| SPEC ID | Title | Status | Dependencies |
+|---------|-------|--------|--------------|
+| SPEC-FOLLOW-001 | Company Following System (기업 팔로잉) | planned | SPEC-AUTH-001 |
+| SPEC-FOLLOW-002 | Securities Report Collection and Keyword Notification | planned | SPEC-FOLLOW-001 |
+
+**SPEC-FOLLOW-002 개요**:
+
+네이버 금융 리서치의 종목분석 리포트를 주기적으로 수집하여 DB에 저장하고, 기존 SPEC-FOLLOW-001 키워드 매처가 뉴스/공시와 동일한 방식으로 리포트에 대해서도 텔레그램/Web Push 알림을 발송하도록 확장한다.
+
+- **신규 모델**: `SecuritiesReport` (title, company_name, stock_id, securities_firm, opinion, target_price, url, published_at)
+- **신규 크롤러**: `securities_report_crawler.py` (네이버 리서치 종목분석 페이지, dart_crawler 패턴 재사용)
+- **확장**: `keyword_matcher.match_keywords_and_notify()` 에 `content_type="report"` 루프 추가 (스키마는 이미 지원)
+- **DB 마이그레이션**: `041_spec_follow_002_securities_reports.py`
+- **프론트엔드 변경 없음**: 기존 텔레그램/Web Push 알림 채널 100% 재사용
+
+**SPEC-FOLLOW-001 개요**:
+
+사용자가 종목을 팔로잉하면 AI가 핵심 키워드를 자동 생성하고, 뉴스/공시에서 키워드 매칭 시 텔레그램 알림을 발송하는 시스템.
+
+- **핵심 기능**: 종목 팔로잉, AI 키워드 생성 (4카테고리), 키워드 매칭 알림, 텔레그램 봇 연동
+- **신규 인프라**: 텔레그램 Bot API 연동, 키워드 매칭 스케줄러
+- **기존 활용**: JWT 인증, Stock DB, 뉴스/공시 크롤러, ask_ai() 다중 프로바이더
+
 ## Execution Order
 
 ```
@@ -96,6 +121,7 @@ Phase 3: SPEC-AUTH-001 -> SPEC-VIZ-001              ⚠️ AUTH pending, VIZ com
 Phase 4: SPEC-SCALE-001                             ✅ COMPLETED (2026-03-29)
 Phase 5: SPEC-AI-001~005                            ✅ COMPLETED (2026-04-05)
 Phase 6: SPEC-AI-006                                ⏳ PLANNED (100건+ 거래 데이터 확보 후)
+Phase 7: SPEC-FOLLOW-001                             ⏳ PLANNED
 ```
 
 ## Usage
