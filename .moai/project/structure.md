@@ -30,6 +30,7 @@ news-hive/
 │   │   │   ├── alerts.py             # 매크로 알림
 │   │   │   ├── events.py             # 경제 이벤트
 │   │   │   ├── fund_manager.py       # 투자 시그널, 브리핑, TP/SL 통계
+│   │   │   ├── macro_rates.py        # 글로벌 매크로 환율/기준금리 API (GET /api/macro/rates)
 │   │   │   ├── paper_trading.py      # 페이퍼 트레이딩 (시뮬레이션 거래, TP/SL 백테스트)
 │   │   │   ├── auth.py               # 관리자 인증
 │   │   │   ├── health.py             # 헬스체크
@@ -47,7 +48,9 @@ news-hive/
 │   │       ├── dynamic_tp_sl.py      # 동적 익절/손절 (ATR 기반) (SPEC-AI-005)
 │   │       ├── news_price_impact_service.py  # 뉴스-가격 반응 추적 (스냅샷/백필/통계)
 │   │       ├── commodity_service.py  # 원자재 가격 수집 (yfinance, 장 중/장 외 fallback)
-│   │       └── commodity_news_service.py # 원자재 뉴스 매칭 (제목 기반 키워드 매칭)
+│   │       ├── commodity_news_service.py # 원자재 뉴스 매칭 (제목 기반 키워드 매칭)
+│   │       ├── securities_report_crawler.py # 증권사 리포트 수집 + HTML 본문 크롤링 (최대 3000자)
+│   │       └── keyword_generator.py  # AI 기반 키워드 생성 (리포트 본문 크로스참조)
 │   │       └── crawlers/             # 개별 뉴스 소스 크롤러
 │   │           ├── naver.py          # Naver 뉴스 검색 API
 │   │           ├── google.py         # Google News RSS 파싱
@@ -58,9 +61,12 @@ news-hive/
 │   ├── tests/                        # 백엔드 단위 테스트
 │   │   ├── test_disclosure_impact_scorer.py  # 공시 충격 점수 계산 테스트 (40개 케이스)
 │   │   └── test_dynamic_tp_sl.py     # 동적 TP/SL 테스트 (37개 케이스)
-│   ├── alembic/                      # DB 마이그레이션 (38개 버전)
+│   ├── alembic/                      # DB 마이그레이션 (42개 버전)
 │   │   ├── versions/                 # 마이그레이션 파일들
-│   │   │   └── 038_add_dynamic_tp_sl.py # 동적 TP/SL 컬럼 추가
+│   │   │   ├── 038_add_dynamic_tp_sl.py # 동적 TP/SL 컬럼 추가
+│   │   │   ├── 040_add_securities_report_table.py # 증권사 리포트 테이블
+│   │   │   ├── 041_add_securities_report_columns.py # 이종 모델 지원
+│   │   │   └── 042_add_content_to_securities_reports.py # content 컬럼 추가
 │   │   └── env.py                    # Alembic 환경 설정
 │   ├── seed/
 │   │   ├── sectors.py               # 한국 증시 업종 초기 데이터
@@ -91,9 +97,12 @@ news-hive/
 │   │   │   │   └── page.tsx          # 경제 이벤트 캘린더
 │   │   │   ├── watchlist/
 │   │   │   │   └── page.tsx          # 관심 종목 (localStorage 기반)
-│   │   │   └── manage/
-│   │   │       └── page.tsx          # 관리 페이지 (섹터/종목 CRUD)
+│   │   │   ├── manage/
+│   │   │   │   └── page.tsx          # 관리 페이지 (섹터/종목 CRUD)
+│   │   │   └── following/
+│   │   │       └── [stock_code]/page.tsx # 종목 팔로우 (키워드 선택 모드)
 │   │   ├── components/               # 재사용 UI 컴포넌트
+│   │   │   └── GlobalMacroWidget.tsx # 글로벌 매크로 플로팅 위젯 (환율/금리/D-DAY)
 │   │   └── lib/
 │   │       └── api.ts                # Backend API 호출 함수 모음
 │   ├── next.config.ts                # /api/* → FastAPI 프록시 rewrite
@@ -221,7 +230,7 @@ APScheduler (08:30 KST)
 
 ---
 
-## 데이터베이스 테이블 (38개 마이그레이션)
+## 데이터베이스 테이블 (42개 마이그레이션)
 
 | 테이블 | 용도 |
 |--------|------|
@@ -242,6 +251,7 @@ APScheduler (08:30 KST)
 | news_commodity_relations | 뉴스-원자재 연관 매핑 |
 | stock_relations | 종목 간 관계 그래프 (SPEC-RELATION-001) |
 | virtual_trades | 페이퍼 트레이딩 시뮬레이션 거래 (SPEC-AI-005) |
+| securities_reports | 증권사 리포트 메타데이터 + HTML 본문 |
 
 ### virtual_trades 테이블 (migration 038)
 

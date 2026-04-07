@@ -22,7 +22,7 @@
 | AI (폴백2) | OpenRouter | - | 다양한 모델 폴백 |
 | 주가 데이터 | Naver Finance | - | 실시간 시세 크롤링 |
 | 주가 데이터 | KIS Open API | - | 한국투자증권 API |
-| 원자재 가격 | yfinance | - | 글로벌 원자재 선물/ETF 가격 수집 |
+| 원자재 가격 | yfinance | - | 글로벌 원자재 선물/ETF 가격 수집 + 환율 데이터 (글로벌 매크로 위젯) |
 | 공시 | DART API | - | 금융감독원 공시 |
 | 컨테이너 | Docker / Compose | - | 로컬 DB 실행 |
 | 배포 (백엔드) | Oracle Cloud VM | - | Ubuntu + systemd |
