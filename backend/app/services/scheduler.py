@@ -143,12 +143,16 @@ def _run_dart_crawl():
 def _run_securities_report_crawl():
     """증권사 리포트 크롤링 동기 래퍼 (SPEC-FOLLOW-002)."""
     _start = _time.monotonic()
-    from app.services.securities_report_crawler import fetch_securities_reports
+    from app.services.securities_report_crawler import fetch_securities_reports, backfill_report_content
 
     db = SessionLocal()
     try:
         count = asyncio.run(fetch_securities_reports(db))
         logger.info(f"Securities report crawl completed: {count} new reports")
+        # 본문이 없는 기존 리포트 백필 (content 없는 것 순서대로 최대 50건씩)
+        backfill_count = asyncio.run(backfill_report_content(db, batch_size=50))
+        if backfill_count > 0:
+            logger.info(f"Securities report content backfill: {backfill_count} reports updated")
     except Exception as e:
         logger.error(f"Securities report crawl failed: {e}")
         raise

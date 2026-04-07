@@ -1,7 +1,8 @@
 """증권사 리포트 크롤러 (SPEC-FOLLOW-002).
 
 네이버 리서치 센터 종목분석 리포트를 수집하여 DB에 저장한다.
-PDF 파일은 수집하지 않으며 URL과 메타데이터만 저장한다 (REQ-FOLLOW-002-N3).
+URL과 메타데이터를 수집하고, HTML 페이지에서 보고서 본문도 추출하여 저장한다.
+본문은 AI 키워드 생성 시 투자포인트 추출에 활용된다.
 """
 
 import logging
@@ -30,6 +31,9 @@ _HEADERS = {
     "Referer": "https://finance.naver.com/research/",
     "Accept-Language": "ko-KR,ko;q=0.9",
 }
+
+# 보고서 본문 최대 저장 길이
+_CONTENT_MAX_LEN = 3000
 
 
 def _parse_target_price(text: str | None) -> int | None:
@@ -73,6 +77,80 @@ def _parse_published_at(date_str: str | None) -> datetime | None:
     return None
 
 
+def _extract_report_content(html: str) -> str | None:
+    """네이버 리서치 보고서 HTML에서 본문 텍스트를 추출한다.
+
+    Args:
+        html: 보고서 페이지 HTML 문자열
+
+    Returns:
+        추출된 본문 텍스트 (최대 _CONTENT_MAX_LEN자), 추출 실패 시 None
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
+    # 불필요 태그 제거 (스크립트, 스타일, 네비게이션)
+    for tag in soup.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+
+    text_parts: list[str] = []
+
+    # 1차: 네이버 리서치 본문 컨테이너 탐색 (알려진 선택자 순서대로)
+    content_selectors = [
+        ("div", {"class": "view_txt"}),
+        ("div", {"class": "view_text"}),
+        ("div", {"class": "report_text"}),
+        ("div", {"id": "content"}),
+        ("div", {"class": "content"}),
+    ]
+    for tag, attrs in content_selectors:
+        el = soup.find(tag, attrs)
+        if el:
+            text = el.get_text(separator=" ", strip=True)
+            if len(text) > 100:
+                text_parts.append(text)
+                break
+
+    # 2차: 폴백 — td.view 또는 본문 td 탐색
+    if not text_parts:
+        td = soup.find("td", {"class": "view"})
+        if td:
+            text = td.get_text(separator=" ", strip=True)
+            if len(text) > 100:
+                text_parts.append(text)
+
+    # 3차: 폴백 — 모든 <p> 태그에서 본문 수집
+    if not text_parts:
+        paras = [p.get_text(strip=True) for p in soup.find_all("p") if len(p.get_text(strip=True)) > 30]
+        if paras:
+            text_parts.append(" ".join(paras))
+
+    if not text_parts:
+        return None
+
+    # 공백 정규화 및 길이 제한
+    combined = re.sub(r"\s{2,}", " ", " ".join(text_parts)).strip()
+    return combined[:_CONTENT_MAX_LEN] if combined else None
+
+
+async def _fetch_report_content(client: httpx.AsyncClient, url: str) -> str | None:
+    """보고서 URL에서 HTML을 가져와 본문 텍스트를 추출한다.
+
+    Args:
+        client: 재사용 httpx 클라이언트
+        url: 보고서 페이지 URL
+
+    Returns:
+        추출된 본문 텍스트, 실패 시 None
+    """
+    try:
+        resp = await client.get(url, timeout=10.0)
+        resp.raise_for_status()
+        return _extract_report_content(resp.text)
+    except Exception as e:
+        logger.debug(f"보고서 본문 조회 실패 ({url}): {e}")
+        return None
+
+
 async def fetch_securities_reports(db: Session, pages: int = 3) -> int:
     """네이버 리서치 종목분석 리포트를 수집하여 저장한다.
 
@@ -100,8 +178,11 @@ async def fetch_securities_reports(db: Session, pages: int = 3) -> int:
     }
 
     new_count = 0
+    # 새로 발견된 보고서 목록 (URL + 메타데이터)
+    new_reports: list[dict] = []
 
     async with httpx.AsyncClient(timeout=30.0, headers=_HEADERS) as client:
+        # 1단계: 리스트 페이지에서 메타데이터 수집
         for page in range(1, pages + 1):
             try:
                 resp = await client.get(
@@ -124,39 +205,82 @@ async def fetch_securities_reports(db: Session, pages: int = 3) -> int:
                 break
 
             for row_data in rows:
-                try:
-                    url = row_data.get("url", "")
-                    if not url or url in existing_urls:
-                        continue
-
-                    # 종목명으로 stock_id 매핑
-                    company_name = row_data.get("company_name", "")
-                    stock_id = name_to_id.get(company_name)
-
-                    report = SecuritiesReport(
-                        title=row_data.get("title", "")[:500],
-                        company_name=company_name[:200],
-                        stock_code=row_data.get("stock_code"),
-                        stock_id=stock_id,
-                        securities_firm=row_data.get("securities_firm", "")[:100],
-                        opinion=row_data.get("opinion"),
-                        target_price=row_data.get("target_price"),
-                        url=url[:1000],
-                        published_at=row_data.get("published_at"),
-                    )
-                    db.add(report)
+                url = row_data.get("url", "")
+                if url and url not in existing_urls:
+                    new_reports.append(row_data)
                     existing_urls.add(url)
-                    new_count += 1
-                except Exception as e:
-                    logger.warning(f"리포트 행 처리 실패 (url={row_data.get('url', '')}): {e}")
-                    continue
 
             api_circuit_breaker.record_success("naver_research")
-            db.commit()
-            logger.debug(f"네이버 리서치 page={page} 완료: 누적 {new_count}건 저장")
+
+        # 2단계: 새 보고서 본문 개별 조회 후 저장
+        for row_data in new_reports:
+            url = row_data.get("url", "")
+            if not url:
+                continue
+
+            # 보고서 본문 조회 (실패해도 메타데이터만으로 저장)
+            content = await _fetch_report_content(client, url)
+
+            company_name = row_data.get("company_name", "")
+            stock_id = name_to_id.get(company_name)
+
+            try:
+                report = SecuritiesReport(
+                    title=row_data.get("title", "")[:500],
+                    company_name=company_name[:200],
+                    stock_code=row_data.get("stock_code"),
+                    stock_id=stock_id,
+                    securities_firm=row_data.get("securities_firm", "")[:100],
+                    opinion=row_data.get("opinion"),
+                    target_price=row_data.get("target_price"),
+                    url=url[:1000],
+                    published_at=row_data.get("published_at"),
+                    content=content,
+                )
+                db.add(report)
+                new_count += 1
+            except Exception as e:
+                logger.warning(f"리포트 행 처리 실패 (url={url}): {e}")
+                continue
+
+        db.commit()
 
     logger.info(f"증권사 리포트 크롤링 완료: 신규 {new_count}건 저장")
     return new_count
+
+
+async def backfill_report_content(db: Session, batch_size: int = 50) -> int:
+    """기존 보고서 중 content가 없는 항목을 백필한다.
+
+    Args:
+        db: SQLAlchemy 세션
+        batch_size: 한 번에 처리할 최대 건수
+
+    Returns:
+        백필 완료된 건수
+    """
+    reports = (
+        db.query(SecuritiesReport)
+        .filter(SecuritiesReport.content.is_(None))
+        .order_by(SecuritiesReport.published_at.desc())
+        .limit(batch_size)
+        .all()
+    )
+
+    if not reports:
+        return 0
+
+    updated = 0
+    async with httpx.AsyncClient(timeout=10.0, headers=_HEADERS) as client:
+        for report in reports:
+            content = await _fetch_report_content(client, report.url)
+            if content:
+                report.content = content
+                updated += 1
+
+    db.commit()
+    logger.info(f"증권사 리포트 본문 백필 완료: {updated}/{len(reports)}건")
+    return updated
 
 
 def _parse_report_rows(html: str) -> list[dict]:
@@ -206,7 +330,7 @@ def _parse_report_rows(html: str) -> list[dict]:
             title = title_tag.get_text(strip=True)
             href = title_tag.get("href", "")
 
-            # PDF 링크 제외 (REQ-FOLLOW-002-N3)
+            # PDF 링크 제외
             if href.endswith(".pdf") or "pdf" in href.lower():
                 continue
 

@@ -5,7 +5,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -34,6 +34,9 @@ class SecuritiesReport(Base):
     securities_firm: Mapped[str] = mapped_column(String(100), nullable=False)
     opinion: Mapped[str | None] = mapped_column(String(50), nullable=True)  # 매수/중립/매도 등
     target_price: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 목표주가 (원)
+
+    # 리포트 본문 (HTML 파싱 후 핵심 텍스트, 최대 3000자)
+    content: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # 리포트 URL (중복 방지 키)
     url: Mapped[str] = mapped_column(String(1000), nullable=False, unique=True)
