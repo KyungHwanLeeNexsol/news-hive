@@ -9,7 +9,7 @@ import { useRouter, useParams } from 'next/navigation';
 const CATEGORY_LABELS: Record<string, string> = {
   product: '제품',
   competitor: '경쟁사',
-  upstream: '전방산업',
+  upstream: '후방산업',
   market: '시장',
   custom: '커스텀',
 };

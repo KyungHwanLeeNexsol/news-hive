@@ -122,7 +122,7 @@ async def generate_keywords(
 다음 4개 카테고리별로 각 3~5개의 한국어 키워드를 제안하세요:
 - product: 이 기업의 주요 제품/서비스 관련 키워드
 - competitor: 경쟁사 및 경쟁 관계 키워드
-- upstream: 원자재, 부품, 공급망 관련 키워드
+- upstream: 후방산업 관련 키워드 (이 기업에 원자재·부품·소재를 공급하는 업체 및 공급망 체인)
 - market: 산업 동향, 규제, 시장 환경 키워드
 
 이미 등록된 키워드(제외 필요): {existing_keywords if existing_keywords else '없음'}
