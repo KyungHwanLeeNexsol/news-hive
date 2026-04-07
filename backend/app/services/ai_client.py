@@ -115,9 +115,19 @@ async def ask_ai_with_model(prompt: str, max_retries: int = 3) -> tuple[str | No
                         gemini_errors.append(f"{key_name}: {type(e).__name__}: {e}")
                         break
 
-    # 전체 실패
-    api_circuit_breaker.record_failure("gemini")
-    logger.warning(f"Gemini 전체 실패: {gemini_errors}")
+    # 전체 실패 — rate limit(쿨다운)과 실제 서비스 오류를 구분
+    # rate limit만으로 모든 키가 차단된 경우는 서킷 브레이커 실패로 기록하지 않는다.
+    # 서킷 브레이커는 실제 서비스 장애(네트워크 오류, 5xx 등)에만 반응해야 한다.
+    all_rate_limited = all(
+        ("rate_limited" in e or "cooldown" in e) for e in gemini_errors
+    ) if gemini_errors else False
+
+    if all_rate_limited:
+        logger.warning(f"Gemini 전체 rate limited (서킷 브레이커 미적용): {gemini_errors}")
+    else:
+        api_circuit_breaker.record_failure("gemini")
+        logger.warning(f"Gemini 서비스 오류 — 서킷 브레이커 실패 기록: {gemini_errors}")
+
     return None, "unknown"
 
 

@@ -12,10 +12,10 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
-# 연속 실패 시 서킷이 열리는 임계치
-DEFAULT_FAILURE_THRESHOLD = 3
+# 연속 실패 시 서킷이 열리는 임계치 (rate limit 제외한 실제 서비스 오류 기준)
+DEFAULT_FAILURE_THRESHOLD = 5
 # 서킷 열림 후 재시도까지 대기 시간 (초)
-DEFAULT_RECOVERY_TIMEOUT = 300  # 5분
+DEFAULT_RECOVERY_TIMEOUT = 120  # 2분 (실제 서비스 장애는 보통 단기간 내 복구됨)
 
 
 @dataclass
