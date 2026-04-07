@@ -42,6 +42,17 @@ def _build_reference_context(stock_code: str, db: Session) -> str:
 
         lines: list[str] = []
 
+        # 기업 기본 정보 (항상 포함 — 공시/리포트 없을 때도 섹터 앵커링 역할)
+        basic_parts: list[str] = []
+        if stock.sector:
+            basic_parts.append(f"섹터/업종: {stock.sector.name}")
+        if stock.market:
+            basic_parts.append(f"상장 시장: {stock.market}")
+        if basic_parts:
+            lines.append("## 기업 기본 정보")
+            for part in basic_parts:
+                lines.append(f"- {part}")
+
         # 최신 정기공시 보고서 (사업/분기/반기보고서) 최대 3건
         disclosures = (
             db.query(Disclosure)
@@ -54,10 +65,19 @@ def _build_reference_context(stock_code: str, db: Session) -> str:
             .all()
         )
         if disclosures:
-            lines.append("## 최신 공시 보고서")
-            for d in disclosures:
-                summary = (d.ai_summary or "")[:300]
-                lines.append(f"- [{d.rcept_dt}] {d.report_name}" + (f": {summary}" if summary else ""))
+            # 가장 최신 공시를 '현재 사업 내용'으로 강조 — 사업 전환 기업에서 stale한 섹터보다 우선
+            latest = disclosures[0]
+            latest_summary = (latest.ai_summary or "")[:500]
+            lines.append("## 현재 사업 내용 (최신 공시 기준)")
+            lines.append(
+                f"- [{latest.rcept_dt}] {latest.report_name}"
+                + (f"\n  {latest_summary}" if latest_summary else "")
+            )
+            if len(disclosures) > 1:
+                lines.append("## 이전 공시 보고서")
+                for d in disclosures[1:]:
+                    summary = (d.ai_summary or "")[:200]
+                    lines.append(f"- [{d.rcept_dt}] {d.report_name}" + (f": {summary}" if summary else ""))
 
         # 최신 애널리스트 리포트 최대 5건
         reports = (
@@ -109,15 +129,21 @@ async def generate_keywords(
     # DB에서 공시/리포트 컨텍스트 조회
     reference_context = _build_reference_context(stock_code, db)
     reference_section = (
-        f"\n\n참고 자료 (최신 공시 보고서 및 애널리스트 리포트):\n{reference_context}\n"
+        f"\n\n참고 자료 (기업 정보, 공시 보고서, 애널리스트 리포트):\n{reference_context}\n"
         if reference_context
         else ""
     )
 
     prompt = f"""당신은 한국 주식 투자 전문가입니다.
 종목 코드 {stock_code}, 기업명 '{company_name}'에 대한 투자 모니터링 키워드를 생성해주세요.{reference_section}
-위 참고 자료(공시 보고서, 애널리스트 리포트)를 대조·분석하여, 해당 기업의 현재 핵심 이슈와 투자 포인트를 반영한 키워드를 도출하세요.
-자료가 없는 경우 기업과 산업에 대한 전문 지식을 활용하세요.
+위 참고 자료를 바탕으로, 해당 기업의 **현재** 사업 영역에 해당하는 키워드만 도출하세요.
+전자공시에 공시된 최근 결산 사업보고서, 분기보고서, 반기보고서와 애널리스트 분석 보고서를 대조해 핵심 키워드를 생성하세요.
+
+⚠️ 중요 제약 사항:
+- '현재 사업 내용 (최신 공시 기준)' 항목이 있으면 해당 내용을 최우선으로 참조하세요. 섹터/업종은 보조 참고용이며, 기업이 사업을 전환한 경우 공시 내용이 우선입니다.
+- 반드시 현재 수행 중인 사업에 직접 관련된 구체적인 키워드만 생성하세요. 과거에 영위했으나 현재 중단된 사업의 키워드는 생성하지 마세요.
+- 해당 기업의 실제 사업과 무관한 범용 IT·AI·금융·데이터 키워드(예: "데이터 보호", "AI 기반 솔루션", "디지털 전환", "클라우드 서비스")는 절대 생성하지 마세요.
+- 기업명만으로 업종을 추측하지 말고, 반드시 위 참고 자료를 기준으로 하세요.
 
 다음 4개 카테고리별로 각 3~5개의 한국어 키워드를 제안하세요:
 - product: 이 기업의 주요 제품/서비스 관련 키워드
