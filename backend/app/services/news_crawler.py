@@ -527,8 +527,36 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
     saved_count = 0
     batch_size = 30
 
+    # 섹터/종목 이름 매핑 (사전 점수 필터링 + 관계 삽입 공통 사용)
+    sector_name_map = {s.id: s.name for s in sectors}
+    stock_name_map = {s.id: s.name for s in stocks}
+
     for i in range(0, len(unique_articles), batch_size):
         batch = unique_articles[i : i + batch_size]
+
+        # 사전 점수 필터링: 직접 관계(keyword/AI) 중 하나라도 임계값 통과하는 기사만 저장
+        # 모든 관계가 점수 미달이면 기사가 news_articles에 저장되지만 관계가 없는 고아 기사가 됨 (버그 방지)
+        def _has_passing_direct_relation(ad: dict) -> bool:
+            for rel in ad.get("_relations", []):
+                if rel.get("propagation_type") == "propagated":
+                    continue  # 전파 관계는 저장 후 계산되므로 사전 체크 제외
+                sn = stock_name_map.get(rel.get("stock_id")) if rel.get("stock_id") else None
+                sec_n = sector_name_map.get(rel.get("sector_id")) if rel.get("sector_id") else None
+                s = calculate_relevance_score(
+                    title=ad["title"],
+                    description=ad.get("description"),
+                    stock_name=sn,
+                    sector_name=sec_n,
+                    is_ai_classified=rel.get("match_type") == "ai_classified",
+                    source=ad.get("source"),
+                )
+                if s >= 10:  # 완화된 임계값(직접 관계)
+                    return True
+            return False
+
+        batch = [ad for ad in batch if _has_passing_direct_relation(ad)]
+        if not batch:
+            continue
 
         # Step 1: Bulk insert articles via raw SQL
         values_parts = []
@@ -589,10 +617,6 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
         rel_params: dict = {}
         rel_idx = 0
 
-        # 섹터/종목 이름 매핑 (relevance_score 계산용, 배치당 1회만 생성)
-        sector_name_map = {s.id: s.name for s in sectors}
-        stock_name_map = {s.id: s.name for s in stocks}
-
         for ad in batch:
             article_id = url_to_id.get(ad["url"])
             if not article_id:
@@ -635,10 +659,11 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
                     source=ad.get("source"),
                 )
 
-                # 전파된 간접 관계(propagated)는 엄격한 점수 필터(30),
-                # 직접 분류된 관계(keyword/AI)는 완화된 기준(15) 적용
+                # 전파된 간접 관계(propagated)는 엄격한 점수 필터(25),
+                # 직접 분류된 관계(keyword/AI)는 완화된 기준(10) 적용
+                # (소스 신뢰도가 0.75인 naver 기준: 섹터 매칭 15×0.75=11.25 → 10 통과)
                 is_propagated = rel.get("propagation_type") == "propagated"
-                min_score = 30 if is_propagated else 15
+                min_score = 25 if is_propagated else 10
                 if score < min_score:
                     continue
 
