@@ -180,8 +180,9 @@ def match_keywords_and_notify(db: Session) -> dict:
 
     stats = {"matched": 0, "notified": 0, "skipped_duplicates": 0}
 
-    # 마지막 실행 이후 기간 결정 (첫 실행이면 최근 1시간)
-    since = _last_run if _last_run else datetime.now(timezone.utc) - timedelta(hours=1)
+    # 마지막 실행 이후 기간 결정 (첫 실행이면 최근 20분)
+    # 1시간으로 설정 시 재시작 직후 AI burst가 발생하므로 스케줄 간격(10분)의 2배로 제한
+    since = _last_run if _last_run else datetime.now(timezone.utc) - timedelta(minutes=20)
 
     # 당일 기준 시작 시각 (KST 00:00 → UTC)
     kst = timezone(timedelta(hours=9))
