@@ -55,6 +55,22 @@ class AddKeywordRequest(BaseModel):
         return v
 
 
+class BulkDeleteKeywordsRequest(BaseModel):
+    """키워드 일괄 삭제 요청 스키마."""
+
+    keyword_ids: list[int]
+
+    @field_validator("keyword_ids")
+    @classmethod
+    def validate_keyword_ids(cls, v: list[int]) -> list[int]:
+        """삭제 대상 키워드 ID 목록 검증."""
+        if not v:
+            raise ValueError("삭제할 키워드를 하나 이상 선택하세요")
+        if len(v) > 100:
+            raise ValueError("한번에 최대 100개까지 삭제할 수 있습니다")
+        return v
+
+
 class KeywordResponse(BaseModel):
     """키워드 응답 스키마."""
 
