@@ -532,11 +532,12 @@ def _dispatch_notification(
         header = f"[키워드 알림] {keyword_text} | {company_name}{price_suffix}"
     elif price_suffix:
         header = f"[키워드 알림] {keyword_text}{price_suffix}"
-    safe_url = html.escape(content_url)
+    # URL은 이스케이프하지 않음 — href에 &amp;가 들어가면 Naver가 404 반환
+    # 텍스트 콘텐츠(header, title)만 HTML 이스케이프 처리
     message = (
-        f"<b>{header}</b>\n\n"
-        f"<b>{type_label}</b>: {content_title}\n"
-        f"<a href=\"{safe_url}\">자세히 보기</a>"
+        f"<b>{html.escape(header)}</b>\n\n"
+        f"<b>{type_label}</b>: {html.escape(content_title)}\n"
+        f'<a href="{content_url}">자세히 보기</a>'
     )
 
     # 인라인 키보드: 키워드 삭제 버튼

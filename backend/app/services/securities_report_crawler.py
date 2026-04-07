@@ -222,6 +222,13 @@ def _parse_report_rows(html: str) -> list[dict]:
             else:
                 url = f"https://finance.naver.com/{href.strip()}"
 
+            # 네이버 HTML 구조 변경 대응:
+            # /company_read.naver?nid=N&page=M → /research/company_read.naver?nid=N
+            if "/company_read.naver" in url and "/research/" not in url:
+                nid_m = re.search(r"nid=(\d+)", url)
+                if nid_m:
+                    url = f"https://finance.naver.com/research/company_read.naver?nid={nid_m.group(1)}"
+
             securities_firm = firm_td.get_text(strip=True)
             target_price_text = target_td.get_text(strip=True) if target_td else None
             opinion = opinion_td.get_text(strip=True) if opinion_td else None
