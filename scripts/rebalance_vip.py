@@ -7,7 +7,14 @@ import sys
 import os
 
 # backend 경로 추가
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
+backend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backend")
+sys.path.insert(0, backend_dir)
+
+# .env 로드 (DATABASE_URL 등)
+env_path = os.path.join(backend_dir, ".env")
+if os.path.exists(env_path):
+    from dotenv import load_dotenv
+    load_dotenv(env_path)
 
 # SQLAlchemy 관계 해석을 위해 모든 모델 선로드
 import app.models  # noqa: F401 — __init__.py 전체 임포트
