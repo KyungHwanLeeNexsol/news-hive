@@ -17,9 +17,10 @@
 | 테스트 병렬화 | pytest-xdist | - | pytest 테스트 병렬 실행 (11min → 8sec) |
 | CI/CD | GitHub Actions | - | 자동 테스트 및 배포 파이프라인 |
 | Node.js (CI) | Node.js | 24 (LTS) | GitHub Actions 환경 |
-| AI (주) | Google Gemini | 1.5 Flash | 뉴스 분류, 브리핑 생성 |
-| AI (폴백1) | Groq | - | 고속 추론 폴백 |
-| AI (폴백2) | OpenRouter | - | 다양한 모델 폴백 |
+| AI (Lite) | Google Gemini | 2.0-flash-lite | 뉴스 분류, 번역, 키워드 알림 (무료/유료 키 분리) |
+| AI (Standard) | Google Gemini | 2.0-flash | 기사 요약, 공시 요약, 키워드 생성 |
+| AI (Pro) | Google Gemini | 2.5-flash | 시그널 검증, 관계 추론 (고비용) |
+| AI (폴백) | OpenAI | gpt-4o-mini | Gemini 전체 실패 시 최종 폴백 |
 | 주가 데이터 | Naver Finance | - | 실시간 시세 크롤링 |
 | 주가 데이터 | KIS Open API | - | 한국투자증권 API |
 | 원자재 가격 | yfinance | - | 글로벌 원자재 선물/ETF 가격 수집 + 환율 데이터 (글로벌 매크로 위젯) |
@@ -346,7 +347,7 @@ ATR은 변동성을 측정하는 기술적 지표로, 동적 익절/손절(TP/SL
 
 ### RSI, MACD, 볼린저 밴드
 
-다른 기술적 지표들(RSI, MACD, 볼린저 밴드)은 `technical_indicators.py`에서 계산되며, 투자 시그널 생성 및 일일 브리핑에 활용됩니다.
+다른 기술적 지표들(RSI, MACD, 볼린저 밴드)은 `technical_indicators.py`에서 계산되며, 투자 시그널 생성에 활용됩니다.
 
 ---
 
