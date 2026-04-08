@@ -18,8 +18,8 @@ from app.models.vip_trading import VIPDisclosure, VIPPortfolio, VIPTrade
 
 logger = logging.getLogger(__name__)
 
-# 포지션 사이징: 총 현금의 10%를 한 공시 종목에 투자
-VIP_POSITION_PCT = 0.10
+# 포지션 사이징: 초기 자본의 5%를 한 공시 종목에 투자 (분할 매수 2회 → 1회당 2.5%)
+VIP_POSITION_PCT = 0.05
 
 # 분할 매수 횟수: 1차 + 2차
 SPLIT_COUNT = 2
@@ -390,15 +390,26 @@ async def _execute_vip_buy(
         logger.warning("현재가 조회 실패: %s", stock.stock_code)
         return None
 
-    # 포지션 사이징: 총 현금 × 10% / 2 (분할 매수)
-    max_invest = _calculate_position_size(portfolio.current_cash)
+    # 포지션 사이징: 초기 자본 × 5% / 2 (분할 매수 — 종목별 균등 비중)
+    max_invest = _calculate_position_size(portfolio.initial_capital)
     split_invest = max_invest // SPLIT_COUNT
 
     if split_invest < current_price:
         logger.warning(
-            "VIP 가용 현금 부족: cash=%d, 필요최소=%d (%s %d차 매수)",
+            "VIP 주가 대비 투자금 부족: cash=%d, split_invest=%d, price=%d (%s %d차 매수)",
             portfolio.current_cash,
+            split_invest,
             current_price,
+            stock.name,
+            split_sequence,
+        )
+        return None
+
+    if portfolio.current_cash < split_invest:
+        logger.warning(
+            "VIP 잔여 현금 부족: cash=%d, 필요=%d (%s %d차 매수)",
+            portfolio.current_cash,
+            split_invest,
             stock.name,
             split_sequence,
         )
@@ -498,16 +509,16 @@ async def _execute_vip_sell(
     )
 
 
-def _calculate_position_size(cash: int) -> int:
-    """가용 현금 대비 투자 가능 포지션 크기를 계산한다.
+def _calculate_position_size(initial_capital: int) -> int:
+    """초기 자본 기준 종목당 투자 금액을 계산한다.
 
     Args:
-        cash: 현재 현금 잔고
+        initial_capital: 포트폴리오 초기 자본
 
     Returns:
-        최대 투자 금액 (현금 × 10%)
+        종목당 최대 투자 금액 (초기자본 × 5%)
     """
-    return int(cash * VIP_POSITION_PCT)
+    return int(initial_capital * VIP_POSITION_PCT)
 
 
 def _business_days_between(start: datetime, end: datetime) -> int:
