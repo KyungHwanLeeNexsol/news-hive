@@ -651,7 +651,7 @@ export default function TradingPage() {
   const tabs: { key: Tab; label: string; desc: string }[] = [
     { key: 'vip', label: 'VIP 추종', desc: '브이아이피자산운용 대량보유 공시 추종' },
     { key: 'ks200', label: 'KS200 스윙', desc: 'Stochastics Slow + 이격도 기반 스윙 트레이딩' },
-    { key: 'paper', label: 'AI 페이퍼', desc: 'AI 펀드매니저 시그널 기반 페이퍼 트레이딩' },
+    { key: 'paper', label: 'AI 펀드매니저', desc: 'AI 펀드매니저 시그널 기반 페이퍼 트레이딩' },
   ];
 
   return (
