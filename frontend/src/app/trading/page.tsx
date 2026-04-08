@@ -130,7 +130,7 @@ function VIPTab() {
                 </tr>
               </thead>
               <tbody>
-                {positions.map((p) => {
+                {[...positions].sort((a, b) => b.invest_amount - a.invest_amount).map((p) => {
                   const weight = stats.total_value > 0
                     ? (p.invest_amount / stats.total_value * 100).toFixed(1)
                     : '0.0';
@@ -475,7 +475,7 @@ function PaperTradingTab() {
                 </tr>
               </thead>
               <tbody>
-                {positions.map((pos, i) => (
+                {[...positions].sort((a, b) => b.invest_amount - a.invest_amount).map((pos, i) => (
                   <tr key={i} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
                     <td className="px-4 py-3 font-semibold text-gray-800">{pos.stock_name}</td>
                     <td className="px-4 py-3 text-right text-gray-700">{fmt(pos.entry_price)}원</td>

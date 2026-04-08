@@ -95,9 +95,10 @@ def get_snapshots(days: int = 30, db: Session = Depends(get_db)):
         .order_by(PortfolioSnapshot.snapshot_date.asc())
         .all()
     )
+    kst = timezone(timedelta(hours=9))
     return [
         {
-            "date": s.snapshot_date.isoformat(),
+            "date": s.snapshot_date.astimezone(kst).strftime("%Y-%m-%d"),
             "total_value": s.total_value,
             "cash": s.cash,
             "positions_value": s.positions_value,

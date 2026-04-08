@@ -549,18 +549,31 @@ def _business_days_between(start: datetime, end: datetime) -> int:
 async def _fetch_price(stock_code: str) -> int | None:
     """종목 현재가를 조회한다.
 
+    # @MX:NOTE: [AUTO] 모바일 API 직접 호출 — KOSPI/KOSDAQ 목록 탐색(2회 HTTP) 생략으로 응답속도 개선
+    # @MX:REASON: fetch_current_price는 목록 탐색 2회 후 모바일 fallback으로 종목당 3회 HTTP 요청 발생
     Args:
         stock_code: 종목 코드
 
     Returns:
         현재가 (원) 또는 None
     """
+    import httpx
+    from app.services.naver_finance import HEADERS
     try:
-        from app.services.naver_finance import fetch_current_price
-        return await fetch_current_price(stock_code)
+        url = f"https://m.stock.naver.com/api/stock/{stock_code}/integration"
+        async with httpx.AsyncClient(timeout=5, follow_redirects=True) as client:
+            resp = await client.get(url, headers=HEADERS)
+            resp.raise_for_status()
+        data = resp.json()
+        price_str = (
+            data.get("dealTrendInfos", [{}])[0].get("closePrice", "")
+            or data.get("stockInfo", {}).get("closePrice", "")
+        )
+        if price_str:
+            return int(str(price_str).replace(",", ""))
     except Exception as e:
         logger.warning("현재가 조회 실패 (%s): %s", stock_code, e)
-        return None
+    return None
 
 
 def _get_or_create_stock(db: Session, disclosure: VIPDisclosure) -> Stock | None:
