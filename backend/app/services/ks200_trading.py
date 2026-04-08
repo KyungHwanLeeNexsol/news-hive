@@ -112,6 +112,192 @@ async def execute_pending_signals(db: Session) -> dict:
     }
 
 
+async def execute_backfill_signals(db: Session) -> dict:
+    """백필된 미실행 신호를 날짜 순서대로 실행한다 (시뮬레이션).
+
+    현재가를 조회하지 않고 price_at_signal을 체결가로 사용한다.
+    신호 발생 순서(signal_date ASC)대로 처리하여 포트폴리오 상태를 일관되게 유지한다.
+
+    Returns: {"buy_executed": int, "sell_executed": int, "skipped": int}
+    """
+    # @MX:NOTE: 백필 전용 실행 함수 — execute_pending_signals과 구분 (현재가 조회 없음)
+    # @MX:REASON: 백필 시뮬레이션은 과거 체결가(price_at_signal) 기반이어야 역사적 정합성 유지
+    # @MX:SPEC: SPEC-KS200-001
+    portfolio = get_or_create_ks200_portfolio(db)
+
+    # 미실행 신호 전체를 날짜 오름차순으로 조회 (시간 순서대로 시뮬레이션)
+    pending_signals = (
+        db.query(KS200Signal)
+        .filter(KS200Signal.executed.is_(False))
+        .order_by(KS200Signal.signal_date.asc())
+        .all()
+    )
+
+    buy_executed = sell_executed = skipped = 0
+
+    for signal in pending_signals:
+        try:
+            if signal.signal_type == "buy":
+                result = _execute_backfill_buy(db, portfolio, signal)
+                if result is not None:
+                    buy_executed += 1
+                else:
+                    skipped += 1
+            elif signal.signal_type == "sell":
+                closed = _execute_backfill_sell(db, portfolio, signal)
+                if closed:
+                    sell_executed += 1
+                else:
+                    skipped += 1
+
+            signal.executed = True
+            # 신호마다 커밋하여 포트폴리오 상태(잔고, 포지션)를 순서대로 반영
+            db.commit()
+
+        except Exception as e:
+            logger.error(
+                "백필 신호 실행 실패 (id=%d, code=%s, type=%s): %s",
+                signal.id,
+                signal.stock_code,
+                signal.signal_type,
+                e,
+            )
+            signal.executed = True
+            db.commit()
+
+    logger.info(
+        "백필 실행 완료: 매수=%d, 매도=%d, 스킵=%d",
+        buy_executed,
+        sell_executed,
+        skipped,
+    )
+    return {
+        "buy_executed": buy_executed,
+        "sell_executed": sell_executed,
+        "skipped": skipped,
+    }
+
+
+def _execute_backfill_buy(
+    db: Session,
+    portfolio: KS200Portfolio,
+    signal: KS200Signal,
+) -> KS200Trade | None:
+    """백필 매수 신호를 실행한다 (price_at_signal 기반).
+
+    현재가 조회 없이 신호 발생 시점의 가격을 체결가로 사용한다.
+    조건 불충족 시 None 반환.
+    """
+    # 현재 오픈 포지션 수 확인
+    open_count = (
+        db.query(KS200Trade)
+        .filter(
+            KS200Trade.portfolio_id == portfolio.id,
+            KS200Trade.is_open.is_(True),
+        )
+        .count()
+    )
+    if open_count >= MAX_OPEN_POSITIONS:
+        logger.debug("백필 매수 스킵 (%s): 최대 포지션 수 초과", signal.stock_code)
+        return None
+
+    # 잔고 확인
+    if portfolio.current_cash < signal.price_at_signal:
+        logger.debug(
+            "백필 매수 스킵 (%s): 잔고 부족 (잔고=%d, 주가=%d)",
+            signal.stock_code,
+            portfolio.current_cash,
+            signal.price_at_signal,
+        )
+        return None
+
+    # 동일 종목 기존 포지션 확인
+    existing_position = (
+        db.query(KS200Trade)
+        .filter(
+            KS200Trade.portfolio_id == portfolio.id,
+            KS200Trade.stock_code == signal.stock_code,
+            KS200Trade.is_open.is_(True),
+        )
+        .first()
+    )
+    if existing_position is not None:
+        logger.debug("백필 매수 스킵 (%s): 이미 보유 중", signal.stock_code)
+        return None
+
+    # 체결가는 신호 발생 시점의 가격 (현재가 조회 없음)
+    exec_price = signal.price_at_signal
+
+    # stock_id 조회
+    stock = (
+        db.query(Stock)
+        .filter(Stock.stock_code == signal.stock_code)
+        .first()
+    )
+    if stock is None:
+        logger.warning("백필 매수 스킵 (%s): stocks 테이블에 없는 종목", signal.stock_code)
+        return None
+
+    invest_amount = min(POSITION_SIZE, portfolio.current_cash)
+    quantity = invest_amount // exec_price
+    if quantity <= 0:
+        logger.debug("백필 매수 스킵 (%s): 매수 가능 수량 0", signal.stock_code)
+        return None
+
+    total_cost = exec_price * quantity
+    portfolio.current_cash -= total_cost
+
+    trade = KS200Trade(
+        portfolio_id=portfolio.id,
+        stock_id=stock.id,
+        stock_code=signal.stock_code,
+        entry_price=exec_price,
+        quantity=quantity,
+        entry_date=signal.signal_date,
+        is_open=True,
+    )
+    db.add(trade)
+    logger.info(
+        "백필 매수 체결: %s %d주 @ %d원 (투자금=%d원, 잔고=%d원, 기준일=%s)",
+        signal.stock_code,
+        quantity,
+        exec_price,
+        total_cost,
+        portfolio.current_cash,
+        signal.signal_date.date() if signal.signal_date else "unknown",
+    )
+    return trade
+
+
+def _execute_backfill_sell(
+    db: Session,
+    portfolio: KS200Portfolio,
+    signal: KS200Signal,
+) -> bool:
+    """백필 매도 신호를 실행한다 (price_at_signal 기반).
+
+    보유 포지션이 없으면 False 반환.
+    """
+    open_trades = (
+        db.query(KS200Trade)
+        .filter(
+            KS200Trade.portfolio_id == portfolio.id,
+            KS200Trade.stock_code == signal.stock_code,
+            KS200Trade.is_open.is_(True),
+        )
+        .all()
+    )
+    if not open_trades:
+        logger.debug("백필 매도 스킵 (%s): 보유 포지션 없음", signal.stock_code)
+        return False
+
+    exec_price = signal.price_at_signal
+    for trade in open_trades:
+        _close_position(db, portfolio, trade, exec_price, reason="backfill_sell")
+
+    return True
+
+
 async def _execute_buy(
     db: Session,
     portfolio: KS200Portfolio,

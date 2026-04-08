@@ -137,6 +137,32 @@ def get_ks200_signals(
     ]
 
 
+@router.post("/trigger-backfill", dependencies=[Depends(_require_admin)])
+async def trigger_ks200_backfill(
+    trading_days: int = Query(30, ge=1, le=90, description="소급 계산할 거래일 수 (최대 90일)"),
+    db: Session = Depends(get_db),
+):
+    """KS200 과거 N 거래일 신호를 소급 계산하고 시뮬레이션 매매를 실행한다.
+
+    관리자 전용 엔드포인트. Authorization: Bearer <admin_token> 헤더 필수.
+    1단계: backfill_historical_signals — 과거 신호 DB 저장
+    2단계: execute_backfill_signals — 날짜 순서대로 시뮬레이션 매매 실행
+    """
+    try:
+        from app.services.ks200_signal import backfill_historical_signals
+        from app.services.ks200_trading import execute_backfill_signals
+
+        scan_result = await backfill_historical_signals(db, trading_days)
+        exec_result = await execute_backfill_signals(db)
+        return {
+            "backfill_scan": scan_result,
+            "backfill_execution": exec_result,
+        }
+    except Exception as e:
+        logger.error("KS200 백필 실패: %s", e)
+        raise HTTPException(status_code=500, detail=f"백필 실패: {e}")
+
+
 @router.post("/trigger-scan", dependencies=[Depends(_require_admin)])
 async def trigger_ks200_scan(db: Session = Depends(get_db)):
     """수동 신호 스캔 및 매매 실행 트리거 (관리자 전용).

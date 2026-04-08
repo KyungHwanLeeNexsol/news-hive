@@ -231,6 +231,179 @@ async def fetch_excluded_stock_codes() -> set[str]:
     return excluded
 
 
+async def backfill_historical_signals(db: Session, trading_days: int = 30) -> dict:
+    """최근 N 거래일의 신호를 소급 계산하여 DB에 저장한다.
+
+    과거 데이터를 슬라이싱하여 각 거래일 기준 신호를 재현한다.
+    중복 신호(동일 종목+날짜)는 저장하지 않는다.
+
+    Returns: {"scanned": int, "days_processed": int, "buy_signals": int, "sell_signals": int}
+    """
+    # @MX:NOTE: 백필 전용 함수 — execute_backfill_signals과 쌍으로 사용, price_at_signal 기반 시뮬레이션
+    # @MX:SPEC: SPEC-KS200-001
+    from datetime import date, datetime, timezone
+
+    from app.models.ks200_trading import KS200Signal
+    from app.models.stock import Stock
+    from app.services.naver_finance import fetch_stock_price_history
+
+    # 1. KOSPI 200 구성종목 및 제외 종목 조회
+    codes = await fetch_kospi200_codes()
+    if not codes:
+        logger.warning("KOSPI 200 구성종목 조회 실패 — 백필 중단")
+        return {"scanned": 0, "days_processed": 0, "buy_signals": 0, "sell_signals": 0}
+
+    excluded = await fetch_excluded_stock_codes()
+    valid_codes = [c for c in codes if c not in excluded]
+
+    # 종목코드 → stock_id 매핑
+    stocks = db.query(Stock).filter(Stock.stock_code.in_(valid_codes)).all()
+    code_to_id: dict[str, int] = {s.stock_code.strip(): s.id for s in stocks}
+
+    # 2. 병렬 가격 이력 조회 (세마포어 5개로 제한 — 백필은 속도보다 안정성 우선)
+    semaphore = asyncio.Semaphore(5)
+
+    async def _fetch_prices(code: str) -> tuple[str, list] | None:
+        """종목 가격 이력을 조회한다. pages=6 = 약 90거래일."""
+        async with semaphore:
+            try:
+                prices = await fetch_stock_price_history(code, pages=6)
+                if not prices:
+                    return None
+                return code, prices
+            except Exception as e:
+                logger.debug("백필 가격 조회 실패 (%s): %s", code, e)
+                return None
+
+    fetch_results = await asyncio.gather(
+        *[_fetch_prices(code) for code in valid_codes],
+        return_exceptions=True,
+    )
+
+    # code → prices 매핑 구성
+    code_to_prices: dict[str, list] = {}
+    for res in fetch_results:
+        if isinstance(res, Exception) or res is None:
+            continue
+        code, prices = res
+        code_to_prices[code] = prices
+
+    logger.info(
+        "백필 가격 이력 조회 완료: %d/%d 종목",
+        len(code_to_prices),
+        len(valid_codes),
+    )
+
+    # 3. 각 거래일별 신호 계산
+    # prices 목록은 최신순 정렬 — date 필드는 "2026.02.26" 형식
+    # 날짜 파싱 헬퍼
+    def _parse_date(date_str: str) -> date | None:
+        try:
+            return datetime.strptime(date_str, "%Y.%m.%d").date()
+        except ValueError:
+            return None
+
+    # 모든 가격 이력에서 등장하는 과거 날짜 목록을 수집 후 최근 trading_days일 선택
+    # 가장 데이터가 많은 종목의 날짜 기준으로 거래일 목록 생성
+    all_dates: set[date] = set()
+    for prices in code_to_prices.values():
+        for p in prices:
+            d = _parse_date(p.date)
+            if d is not None:
+                all_dates.add(d)
+
+    today = datetime.now(timezone.utc).date()
+    # 오늘 포함 미래 날짜 제외, 내림차순 정렬 후 상위 trading_days일 추출
+    target_dates = sorted(
+        [d for d in all_dates if d < today],
+        reverse=True,
+    )[:trading_days]
+
+    if not target_dates:
+        logger.warning("백필 대상 거래일이 없습니다")
+        return {"scanned": len(valid_codes), "days_processed": 0, "buy_signals": 0, "sell_signals": 0}
+
+    buy_count = sell_count = 0
+
+    for target_date in target_dates:
+        for code, prices in code_to_prices.items():
+            # 해당 날짜까지의 데이터만 슬라이싱 (최신순이므로 target_date 이전 데이터 선택)
+            sliced = [p for p in prices if _parse_date(p.date) is not None and _parse_date(p.date) <= target_date]
+            if not sliced:
+                continue
+
+            # 지표 계산에 필요한 최소 봉 수 확인 (STO1+STO2-1+1 = 17봉)
+            min_bars = STO1 + STO2 - 1 + 1
+            if len(sliced) < min_bars:
+                continue
+
+            result = check_signal(sliced)
+            if result is None or result.signal == "hold":
+                continue
+
+            result.stock_code = code
+            result.price = sliced[0].close  # 해당 날짜 기준 최신 종가
+
+            # 중복 신호 확인 (동일 종목 + 동일 날짜 + 동일 신호 유형)
+            existing = (
+                db.query(KS200Signal)
+                .filter(
+                    KS200Signal.stock_code == code,
+                    KS200Signal.signal_type == result.signal,
+                )
+                .all()
+            )
+            already_exists = any(
+                s.signal_date.date() == target_date
+                for s in existing
+                if s.signal_date is not None
+            )
+            if already_exists:
+                continue
+
+            signal_dt = datetime(
+                target_date.year,
+                target_date.month,
+                target_date.day,
+                15,  # 15:30 KST 스캔 시간 근사
+                30,
+                0,
+                tzinfo=timezone.utc,
+            )
+
+            signal_obj = KS200Signal(
+                stock_code=code,
+                stock_id=code_to_id.get(code),
+                signal_type=result.signal,
+                stoch_k=result.stoch_k,
+                disparity=result.disparity,
+                price_at_signal=result.price,
+                executed=False,
+                signal_date=signal_dt,
+            )
+            db.add(signal_obj)
+
+            if result.signal == "buy":
+                buy_count += 1
+            else:
+                sell_count += 1
+
+    db.commit()
+    logger.info(
+        "백필 완료: 매수=%d, 매도=%d (종목=%d, 거래일=%d)",
+        buy_count,
+        sell_count,
+        len(code_to_prices),
+        len(target_dates),
+    )
+    return {
+        "scanned": len(valid_codes),
+        "days_processed": len(target_dates),
+        "buy_signals": buy_count,
+        "sell_signals": sell_count,
+    }
+
+
 async def run_daily_signal_scan(db: Session) -> dict:
     """KOSPI 200 전종목 일별 신호 스캔을 실행한다.
 

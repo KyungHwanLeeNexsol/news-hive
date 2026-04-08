@@ -4,7 +4,7 @@ SPEC-VIP-001 REQ-VIP-007: REST API 엔드포인트 제공
 """
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -166,7 +166,10 @@ def get_vip_disclosures(
 
 
 @router.post("/trigger-check", dependencies=[Depends(_require_admin)])
-async def trigger_vip_check(db: Session = Depends(get_db)):
+async def trigger_vip_check(
+    days: int = Query(3, ge=1, le=365, description="공시 조회 기간 (일). 백필 시 최대 365일."),
+    db: Session = Depends(get_db),
+):
     """VIP 공시 수집 및 청산 조건 체크를 수동으로 트리거한다.
 
     관리자 전용 엔드포인트. Authorization: Bearer <admin_token> 헤더 필수.
@@ -183,7 +186,7 @@ async def trigger_vip_check(db: Session = Depends(get_db)):
         )
 
         # 1. 신규 공시 수집
-        fetched = await fetch_vip_disclosures(db, days=3)
+        fetched = await fetch_vip_disclosures(db, days=days)
 
         # 2. 미처리 공시 처리
         processed = await process_unhandled_vip_disclosures(db)
