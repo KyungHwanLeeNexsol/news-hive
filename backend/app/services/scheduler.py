@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import threading
 import time as _time
 from datetime import datetime
 
@@ -10,6 +11,9 @@ from app.database import SessionLocal
 from app.services.job_retry import retry_with_backoff
 
 logger = logging.getLogger(__name__)
+
+# 뉴스/공시/리포트 크롤 완료 후 각각 호출되는 keyword matching 동시 실행 방지
+_keyword_matching_lock = threading.Lock()
 
 
 def _record_job_duration(job_id: str, duration: float) -> None:
@@ -409,23 +413,35 @@ def _run_gap_pullback_check():
 
 
 def _run_keyword_matching():
-    """신규 뉴스/공시에서 팔로잉 키워드 매칭 후 알림 발송 (SPEC-FOLLOW-001)."""
-    _start = _time.monotonic()
-    from app.services.keyword_matcher import match_keywords_and_notify
+    """신규 뉴스/공시에서 팔로잉 키워드 매칭 후 알림 발송 (SPEC-FOLLOW-001).
 
-    db = SessionLocal()
+    뉴스/공시/리포트 크롤 완료 후 각각 호출되므로 동시 실행 가능.
+    Lock으로 직렬화하여 중복 알림 발송 및 UniqueViolation 방지.
+    """
+    # 이미 실행 중이면 스킵 (non-blocking acquire)
+    if not _keyword_matching_lock.acquire(blocking=False):
+        logger.debug("키워드 매칭 이미 실행 중 — 이번 호출 스킵")
+        return
+
+    _start = _time.monotonic()
     try:
-        stats = match_keywords_and_notify(db)
-        if stats["notified"] > 0 or stats["matched"] > 0:
-            logger.info(
-                f"키워드 매칭 완료: 매칭 {stats['matched']}건, "
-                f"알림 {stats['notified']}건, 중복 스킵 {stats['skipped_duplicates']}건"
-            )
-    except Exception as e:
-        logger.error(f"키워드 매칭 실패: {e}")
+        from app.services.keyword_matcher import match_keywords_and_notify
+
+        db = SessionLocal()
+        try:
+            stats = match_keywords_and_notify(db)
+            if stats["notified"] > 0 or stats["matched"] > 0:
+                logger.info(
+                    f"키워드 매칭 완료: 매칭 {stats['matched']}건, "
+                    f"알림 {stats['notified']}건, 중복 스킵 {stats['skipped_duplicates']}건"
+                )
+        except Exception as e:
+            logger.error(f"키워드 매칭 실패: {e}")
+        finally:
+            _record_job_duration("keyword_matching", _time.monotonic() - _start)
+            db.close()
     finally:
-        _record_job_duration("keyword_matching", _time.monotonic() - _start)
-        db.close()
+        _keyword_matching_lock.release()
 
 
 # ---------------------------------------------------------------------------

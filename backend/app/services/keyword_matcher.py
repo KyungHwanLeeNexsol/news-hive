@@ -522,7 +522,7 @@ def _dispatch_notification(
         return channel
 
     # 현재 주가 조회 (종목코드가 있는 경우)
-    price_suffix = ""
+    price_part = ""
     if stock_code:
         try:
             from app.services.naver_finance import fetch_current_price_with_change
@@ -530,18 +530,22 @@ def _dispatch_notification(
             if price_data:
                 price = price_data["current_price"]
                 rate = price_data["change_rate"]
+                # 한국 주식 관행: 상승=빨간(🔺), 하락=파란(🔻)
+                # 텔레그램은 HTML 색상 미지원 → 이모지로 대체
+                arrow = "🔺" if rate >= 0 else "🔻"
                 sign = "+" if rate >= 0 else ""
-                price_suffix = f" | {price:,}원 ({sign}{rate:.2f}%)"
+                price_part = f" [{price:,}원 {arrow}{sign}{rate:.2f}%]"
         except Exception as e:
             logger.debug(f"주가 조회 실패 ({stock_code}): {e}")
 
     # 알림 메시지 구성 (SPEC-FOLLOW-002: 리포트 타입 추가)
+    # 형식: [키워드 알림] [키워드] [기업명] [주가 🔺/🔻 변동률]
     type_label = {"news": "뉴스", "disclosure": "공시", "report": "리포트"}.get(content_type, "알림")
-    header = f"[키워드 알림] {keyword_text}"
+    header = f"[키워드 알림] [{keyword_text}]"
     if company_name:
-        header = f"[키워드 알림] {keyword_text} | {company_name}{price_suffix}"
-    elif price_suffix:
-        header = f"[키워드 알림] {keyword_text}{price_suffix}"
+        header += f" [{company_name}]"
+    if price_part:
+        header += price_part
     # URL은 이스케이프하지 않음 — href에 &amp;가 들어가면 Naver가 404 반환
     # 텍스트 콘텐츠(header, title)만 HTML 이스케이프 처리
     message = (
