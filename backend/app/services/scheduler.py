@@ -379,6 +379,79 @@ def _is_kr_market_open() -> bool:
     return now_kst.weekday() < 5
 
 
+# ---------------------------------------------------------------------------
+# SPEC-VIP-001: VIP투자자문 추종 매매 스케줄 작업
+# ---------------------------------------------------------------------------
+
+def _run_vip_disclosure_check():
+    """VIP투자자문 대량보유 공시 수집 및 처리 (30분 간격, 평일 09:00-18:00 KST).
+
+    SPEC-VIP-001 REQ-VIP-006
+    """
+    if not _is_kr_market_open():
+        logger.debug("주말 — VIP 공시 수집 스킵")
+        return
+
+    _start = _time.monotonic()
+    from app.services.vip_disclosure_crawler import (
+        fetch_vip_disclosures,
+        process_unhandled_vip_disclosures,
+    )
+
+    db = SessionLocal()
+    try:
+        fetched = asyncio.run(fetch_vip_disclosures(db, days=3))
+        if fetched:
+            logger.info("VIP 신규 공시 %d건 수집", fetched)
+
+        processed = asyncio.run(process_unhandled_vip_disclosures(db))
+        if processed:
+            logger.info("VIP 공시 처리 완료: %d건", processed)
+    except Exception as e:
+        logger.error("VIP 공시 수집/처리 실패: %s", e)
+    finally:
+        _record_job_duration("vip_disclosure_check", _time.monotonic() - _start)
+        db.close()
+
+
+def _run_vip_exit_check():
+    """VIP 포지션 청산 조건 체크 (60분 간격, 평일 09:00-18:00 KST).
+
+    - 수익률 50% 이상 시 30% 부분 익절 (REQ-VIP-004)
+    - 3영업일 경과 1차 포지션에 2차 매수 실행 (REQ-VIP-002)
+
+    SPEC-VIP-001 REQ-VIP-006
+    """
+    if not _is_kr_market_open():
+        logger.debug("주말 — VIP Exit 체크 스킵")
+        return
+
+    _start = _time.monotonic()
+    from app.services.vip_follow_trading import (
+        check_exit_conditions,
+        check_second_buy_pending,
+    )
+
+    db = SessionLocal()
+    try:
+        exit_stats = asyncio.run(check_exit_conditions(db))
+        if exit_stats["partial_sold"] or exit_stats["full_exit"]:
+            logger.info(
+                "VIP Exit 체크: 부분익절=%d, 전량청산=%d",
+                exit_stats["partial_sold"],
+                exit_stats["full_exit"],
+            )
+
+        second_buys = asyncio.run(check_second_buy_pending(db))
+        if second_buys:
+            logger.info("VIP 2차 매수 실행: %d건", second_buys)
+    except Exception as e:
+        logger.error("VIP Exit 체크 실패: %s", e)
+    finally:
+        _record_job_duration("vip_exit_check", _time.monotonic() - _start)
+        db.close()
+
+
 @retry_with_backoff(max_attempts=3)
 def _run_exit_check():
     """장중 청산 조건 확인 (1시간 간격). 주말에는 스킵."""
@@ -858,6 +931,34 @@ def start_scheduler():
         _run_factor_weight_adaptation,
         CronTrigger(day=1, hour=14, minute=0, timezone="UTC"),
         id="factor_weight_adapt",
+        replace_existing=True,
+    )
+
+    # SPEC-VIP-001: VIP투자자문 추종 매매 작업
+    # 공시 수집: 평일 30분 간격 (09:00~18:00 KST)
+    scheduler.add_job(
+        _run_vip_disclosure_check,
+        "cron",
+        day_of_week="mon-fri",
+        hour="9-18",
+        minute="*/30",
+        timezone="Asia/Seoul",
+        id="vip_disclosure_check",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    # VIP 청산/2차 매수 체크: 평일 60분 간격 (09:00~18:00 KST)
+    scheduler.add_job(
+        _run_vip_exit_check,
+        "cron",
+        day_of_week="mon-fri",
+        hour="9-18",
+        minute=0,
+        timezone="Asia/Seoul",
+        id="vip_exit_check",
+        max_instances=1,
+        coalesce=True,
         replace_existing=True,
     )
 
