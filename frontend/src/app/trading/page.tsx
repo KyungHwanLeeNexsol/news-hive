@@ -418,6 +418,9 @@ function PaperTradingTab() {
   }
 
   const totalValue = stats.initial_capital + stats.total_pnl;
+  const returnPct = stats.initial_capital > 0
+    ? ((totalValue - stats.initial_capital) / stats.initial_capital) * 100
+    : 0;
 
   return (
     <div className="flex flex-col gap-6">
@@ -426,8 +429,8 @@ function PaperTradingTab() {
         <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
           <span className="text-[12px] text-gray-500 font-medium">총 자산</span>
           <div className="text-[18px] font-bold text-gray-900 mt-1">{fmt(totalValue)}원</div>
-          <div className={`text-[12px] font-semibold mt-0.5 ${pctColor(stats.cumulative_return)}`}>
-            {stats.cumulative_return >= 0 ? '+' : ''}{stats.cumulative_return.toFixed(2)}%
+          <div className={`text-[12px] font-semibold mt-0.5 ${pctColor(returnPct)}`}>
+            {returnPct >= 0 ? '+' : ''}{returnPct.toFixed(2)}% 누적 수익률
           </div>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
@@ -435,21 +438,21 @@ function PaperTradingTab() {
           <div className={`text-[18px] font-bold mt-1 ${stats.win_rate >= 50 ? 'text-[#e12343]' : 'text-[#1261c4]'}`}>
             {stats.win_rate.toFixed(1)}%
           </div>
-          <div className="text-[12px] text-gray-400 mt-0.5">{stats.closed_trades}건 중</div>
+          <div className="text-[12px] text-gray-400 mt-0.5">청산 {stats.closed_trades}건 중</div>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
-          <span className="text-[12px] text-gray-500 font-medium">Sharpe Ratio</span>
+          <span className="text-[12px] text-gray-500 font-medium">수익 안정성</span>
           <div className={`text-[18px] font-bold mt-1 ${stats.sharpe_warning ? 'text-orange-400' : 'text-green-700'}`}>
             {stats.sharpe_ratio.toFixed(2)}
           </div>
-          {stats.sharpe_warning && (
-            <div className="text-[11px] text-orange-400 font-medium mt-0.5">1.0 미만</div>
-          )}
+          <div className="text-[11px] text-gray-400 mt-0.5">
+            {stats.sharpe_warning ? '⚠ 변동성 대비 수익 낮음' : '변동성 대비 수익 효율'}
+          </div>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
-          <span className="text-[12px] text-gray-500 font-medium">MDD</span>
+          <span className="text-[12px] text-gray-500 font-medium">최대 낙폭</span>
           <div className="text-[18px] font-bold text-[#1261c4] mt-1">{stats.mdd.toFixed(2)}%</div>
-          <div className="text-[12px] text-gray-400 mt-0.5">최대낙폭</div>
+          <div className="text-[12px] text-gray-400 mt-0.5">고점 대비 최대 하락폭</div>
         </div>
       </div>
 
