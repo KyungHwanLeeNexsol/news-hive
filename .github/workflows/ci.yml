@@ -158,6 +158,5 @@ jobs:
           host: ${{ secrets.OCI_HOST }}
           username: ubuntu
           key: ${{ secrets.OCI_SSH_KEY }}
-          script_stop: true
           script: |
             bash /home/ubuntu/news-hive/scripts/deploy.sh
