@@ -3,7 +3,7 @@
 SPEC-KS200-001
 """
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
@@ -56,15 +56,14 @@ async def execute_pending_signals(db: Session) -> dict:
     """
     portfolio = get_or_create_ks200_portfolio(db)
 
-    # 미실행 신호 조회 (당일 신호만)
-    today_start = datetime.now(timezone.utc).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
+    # 미실행 신호 조회 (최근 24시간 이내)
+    # 15:30 KST 스캔 → 익일 09:05 KST 실행 간격 약 17.5시간을 커버
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
     pending_signals = (
         db.query(KS200Signal)
         .filter(
             KS200Signal.executed.is_(False),
-            KS200Signal.signal_date >= today_start,
+            KS200Signal.signal_date >= cutoff,
         )
         .all()
     )

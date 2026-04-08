@@ -384,7 +384,10 @@ def _is_kr_market_open() -> bool:
 # ---------------------------------------------------------------------------
 
 def _run_ks200_daily_scan():
-    """KOSPI 200 전종목 신호 스캔 및 매매 실행 (매일 15:30 KST = 06:30 UTC, 평일).
+    """KOSPI 200 전종목 신호 스캔 — 신호 저장만 수행 (매일 15:30 KST = 06:30 UTC, 평일).
+
+    신호 실행은 익일 09:05 KST에 _run_ks200_morning_execute()가 담당한다.
+    오늘 완성 봉 데이터 기준으로 신호를 계산하고 DB에 저장한다.
 
     SPEC-KS200-001
     """
@@ -394,18 +397,40 @@ def _run_ks200_daily_scan():
 
     _start = _time.monotonic()
     from app.services.ks200_signal import run_daily_signal_scan
-    from app.services.ks200_trading import execute_pending_signals
 
     db = SessionLocal()
     try:
         scan_result = asyncio.run(run_daily_signal_scan(db))
         logger.info(
-            "KS200 신호 스캔: 스캔=%d, 매수=%d, 매도=%d",
+            "KS200 신호 스캔 완료: 스캔=%d, 매수신호=%d, 매도신호=%d (익일 09:05에 실행)",
             scan_result["scanned"],
             scan_result["buy_signals"],
             scan_result["sell_signals"],
         )
+    except Exception as e:
+        logger.error("KS200 신호 스캔 실패: %s", e)
+    finally:
+        _record_job_duration("ks200_daily_scan", _time.monotonic() - _start)
+        db.close()
 
+
+def _run_ks200_morning_execute():
+    """전날 저장된 KS200 신호를 시장 시가에 실행 (매일 09:05 KST = 00:05 UTC, 평일).
+
+    15:30 스캔으로 저장된 미체결 신호를 익일 장 시작 직후에 실행한다.
+    시가 기준 체결로 슬리피지를 최소화한다.
+
+    SPEC-KS200-001
+    """
+    if not _is_kr_market_open():
+        logger.debug("주말 — KS200 신호 실행 스킵")
+        return
+
+    _start = _time.monotonic()
+    from app.services.ks200_trading import execute_pending_signals
+
+    db = SessionLocal()
+    try:
         exec_result = asyncio.run(execute_pending_signals(db))
         if exec_result["buy_executed"] or exec_result["sell_executed"]:
             logger.info(
@@ -414,10 +439,12 @@ def _run_ks200_daily_scan():
                 exec_result["sell_executed"],
                 exec_result["skipped"],
             )
+        else:
+            logger.debug("KS200 실행 대상 신호 없음")
     except Exception as e:
-        logger.error("KS200 신호 스캔/실행 실패: %s", e)
+        logger.error("KS200 신호 실행 실패: %s", e)
     finally:
-        _record_job_duration("ks200_daily_scan", _time.monotonic() - _start)
+        _record_job_duration("ks200_morning_execute", _time.monotonic() - _start)
         db.close()
 
 
@@ -976,7 +1003,8 @@ def start_scheduler():
         replace_existing=True,
     )
 
-    # SPEC-KS200-001: KOSPI 200 스토캐스틱+이격도 자동매매 (매일 15:30 KST = 06:30 UTC, 평일)
+    # SPEC-KS200-001: KOSPI 200 신호 스캔 (매일 15:30 KST = 06:30 UTC, 평일)
+    # 오늘 완성 봉 기준 신호 저장 — 실행은 익일 09:05에 수행
     scheduler.add_job(
         _run_ks200_daily_scan,
         "cron",
@@ -984,6 +1012,19 @@ def start_scheduler():
         hour=6,
         minute=30,
         id="ks200_daily_scan",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    # SPEC-KS200-001: KS200 신호 실행 (매일 09:05 KST = 00:05 UTC, 평일)
+    # 전날 15:30에 저장된 미체결 신호를 시가 기준으로 실행
+    scheduler.add_job(
+        _run_ks200_morning_execute,
+        "cron",
+        day_of_week="mon-fri",
+        hour=0,
+        minute=5,
+        id="ks200_morning_execute",
         max_instances=1,
         coalesce=True,
         replace_existing=True,
