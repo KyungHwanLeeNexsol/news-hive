@@ -372,7 +372,7 @@ class TestClassifyCommodityNewsWithAI:
             }],
         }])
 
-        with patch("app.services.ai_client.ask_ai", new_callable=AsyncMock, return_value=ai_response):
+        with patch("app.services.ai_client.ask_ai_free_standard", new_callable=AsyncMock, return_value=ai_response):
             count = await classify_commodity_news_with_ai(db, articles, url_to_id)
 
         assert count == 1
@@ -435,7 +435,7 @@ class TestClassifyCommodityNewsWithAI:
             }],
         }])
 
-        with patch("app.services.ai_client.ask_ai", new_callable=AsyncMock, return_value=ai_response):
+        with patch("app.services.ai_client.ask_ai_free_standard", new_callable=AsyncMock, return_value=ai_response):
             count = await classify_commodity_news_with_ai(db, articles, url_to_id)
 
         assert count == 1
