@@ -221,7 +221,7 @@ async def classify_commodity_news_with_ai(
         AI로 분류된 기사 수
     """
     import json as _json
-    from app.services.ai_client import ask_ai
+    from app.services.ai_client import ask_ai_free_standard as ask_ai
 
     commodities = db.query(Commodity).all()
     if not commodities:

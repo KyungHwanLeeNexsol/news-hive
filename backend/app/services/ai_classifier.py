@@ -518,7 +518,7 @@ async def classify_sentiment_with_ai(
     articles를 in-place로 수정하여 _ai_sentiment 필드를 추가한다.
     """
     import json as _json
-    from app.services.ai_client import ask_ai
+    from app.services.ai_client import ask_ai_free_lite as ask_ai_lite
 
     # neutral인 기사만 AI 분석 대상 (이미 _ai_sentiment 설정된 것은 P3에서 처리됨 — 스킵)
     neutral_articles = [
@@ -559,7 +559,7 @@ async def classify_sentiment_with_ai(
 [{{"id": 1, "sentiment": "positive"}}, ...]"""
 
         try:
-            text = await ask_ai(prompt, max_retries=3)
+            text = await ask_ai_lite(prompt, max_retries=3)
             if not text:
                 continue
 
@@ -615,8 +615,8 @@ async def generate_ai_summary(title: str, description: str | None, relations: li
 
 한국어로 작성해주세요. 마크다운 없이 일반 텍스트로 응답해주세요."""
 
-    from app.services.ai_client import ask_ai
-    return await ask_ai(prompt, max_retries=5)
+    from app.services.ai_client import ask_ai_free_standard as ask_ai_standard
+    return await ask_ai_standard(prompt, max_retries=5)
 
 
 async def generate_disclosure_summary(
@@ -640,8 +640,8 @@ async def generate_disclosure_summary(
 
 한국어로 작성해주세요. 마크다운 없이 일반 텍스트로 응답해주세요."""
 
-    from app.services.ai_client import ask_ai
-    return await ask_ai(prompt, max_retries=5)
+    from app.services.ai_client import ask_ai_free_standard as ask_ai_standard
+    return await ask_ai_standard(prompt, max_retries=5)
 
 
 def _is_english_title(title: str) -> bool:
@@ -658,7 +658,7 @@ async def translate_articles_batch(articles: list[dict]) -> None:
     """
     import asyncio as _asyncio
     import json as _json
-    from app.services.ai_client import ask_ai
+    from app.services.ai_client import ask_ai_free_lite as ask_ai_lite
 
     en_articles = [(i, a) for i, a in enumerate(articles) if _is_english_title(a.get("title", ""))]
     if not en_articles:
@@ -685,7 +685,7 @@ async def translate_articles_batch(articles: list[dict]) -> None:
 [{{"id": 1, "title": "번역된 제목", "desc": "번역된 요약"}}, ...]"""
 
         try:
-            text = await ask_ai(prompt, max_retries=5)
+            text = await ask_ai_lite(prompt, max_retries=5)
             if not text:
                 continue
 
@@ -820,7 +820,7 @@ async def classify_news_with_ai(
     비용 절감을 위해 배치로 처리하고, 키워드 매칭이 이미 된 기사는 건너뛴다.
     """
     import json as _json
-    from app.services.ai_client import ask_ai
+    from app.services.ai_client import ask_ai_free_lite as ask_ai_lite
 
     # 키워드 매칭이 안 된 기사만 필터
     unmatched = [(i, a) for i, a in enumerate(articles) if not a.get("_relations")]
@@ -860,7 +860,7 @@ async def classify_news_with_ai(
 [{{"id": 1, "sectors": [섹터ID1, 섹터ID2], "sentiment": "positive"}}, ...]"""
 
         try:
-            text = await ask_ai(prompt, max_retries=3)
+            text = await ask_ai_lite(prompt, max_retries=3)
             if not text:
                 continue
 

@@ -161,7 +161,7 @@ from app.middleware.rate_limiter import RateLimiterMiddleware  # noqa: E402
 app.add_middleware(RateLimiterMiddleware)
 
 # Import and register routers
-from app.routers import sectors, stocks, news, disclosures, alerts, events, fund_manager, auth, commodities, paper_trading, chat  # noqa: E402
+from app.routers import sectors, stocks, news, disclosures, alerts, events, auth, commodities, paper_trading, chat  # noqa: E402
 from app.routers import user as user_router, push as push_router  # noqa: E402
 from app.routers import following as following_router  # noqa: E402
 from app.routers import macro_rates as macro_rates_router  # noqa: E402
@@ -174,7 +174,6 @@ app.include_router(news.router)
 app.include_router(disclosures.router)
 app.include_router(alerts.router)
 app.include_router(events.router)
-app.include_router(fund_manager.router)
 app.include_router(auth.router)
 app.include_router(commodities.router)
 app.include_router(commodities.sector_commodity_router)

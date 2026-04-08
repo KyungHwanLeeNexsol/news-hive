@@ -78,17 +78,18 @@ def _run_crawl_job():
 def _cleanup_old_articles(db):
     """Delete news articles older than 7 days."""
     from datetime import datetime, timedelta, timezone
-    from sqlalchemy import or_
+    from sqlalchemy import func
     from app.models.news import NewsArticle
     from app.models.news_relation import NewsStockRelation
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=7)
 
-    # Find old article IDs (including those with NULL published_at)
+    # Keep freshly collected articles even when published_at is missing.
+    # Otherwise the same URL can be re-crawled and re-notified on the next cycle.
     old_ids = [
         row[0] for row in
         db.query(NewsArticle.id)
-        .filter(or_(NewsArticle.published_at < cutoff, NewsArticle.published_at.is_(None)))
+        .filter(func.coalesce(NewsArticle.published_at, NewsArticle.collected_at) < cutoff)
         .all()
     ]
     if not old_ids:
@@ -211,24 +212,6 @@ def _update_market_caps():
         _record_job_duration("market_cap_update", _time.monotonic() - _start)
         db.close()
 
-
-@retry_with_backoff(max_attempts=3)
-def _run_daily_briefing():
-    """매일 오전 데일리 브리핑 자동 생성."""
-    _start = _time.monotonic()
-    from app.services.fund_manager import generate_daily_briefing
-
-    db = SessionLocal()
-    try:
-        briefing = asyncio.run(generate_daily_briefing(db))
-        if briefing:
-            logger.info(f"Daily briefing auto-generated for {briefing.briefing_date}")
-    except Exception as e:
-        logger.error(f"Daily briefing generation failed: {e}")
-        raise
-    finally:
-        _record_job_duration("daily_briefing", _time.monotonic() - _start)
-        db.close()
 
 
 @retry_with_backoff(max_attempts=3)
@@ -823,16 +806,6 @@ def start_scheduler():
         id="market_cap_update",
         replace_existing=True,
         next_run_time=datetime.now(),
-    )
-    # AI daily briefing every day at 08:30 KST
-    scheduler.add_job(
-        _run_daily_briefing,
-        "cron",
-        hour=8,
-        minute=30,
-        timezone="Asia/Seoul",
-        id="daily_briefing",
-        replace_existing=True,
     )
     # 시그널 적중률 검증: 매일 18:00 KST (장 마감 후)
     scheduler.add_job(

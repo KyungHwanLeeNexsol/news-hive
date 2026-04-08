@@ -94,7 +94,7 @@ async def _classify_macro_severity_batch(
     Returns:
         {group_name: {"severity": ..., "context_summary": ..., "is_false_positive": ...}}
     """
-    from app.services.ai_client import ask_ai
+    from app.services.ai_client import ask_ai_free_standard as ask_ai
 
     if not pending_groups:
         return {}
@@ -182,7 +182,7 @@ async def _classify_macro_severity(
     Returns:
         {"severity": str, "context_summary": str, "is_false_positive": bool}
     """
-    from app.services.ai_client import ask_ai
+    from app.services.ai_client import ask_ai_free_standard as ask_ai
 
     # 기사 제목 + 요약 취합 (최대 5개)
     article_texts = []

@@ -349,7 +349,7 @@ HTML:
 {truncated}"""
 
     try:
-        from app.services.ai_client import ask_ai
+        from app.services.ai_client import ask_ai_free_standard as ask_ai
 
         text = await ask_ai(prompt)
         if not text or text == "EMPTY" or len(text) < 50:

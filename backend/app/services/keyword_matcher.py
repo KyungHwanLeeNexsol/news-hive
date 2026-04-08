@@ -11,6 +11,8 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -143,9 +145,9 @@ def _batch_evaluate(
     )
 
     try:
-        from app.services.ai_client import ask_ai
+        from app.services.ai_client import ask_ai_lite
 
-        response = asyncio.run(ask_ai(prompt))
+        response = asyncio.run(ask_ai_lite(prompt))
         if not response:
             return
 
@@ -190,6 +192,31 @@ def _check_relevance(
         캐시 미스(AI 평가 실패 또는 미평가): -1 (발송 차단)
     """
     return _relevance_cache.get((content_type, content_id, keyword, company_name), -1)
+
+
+def _find_existing_notification(
+    db: Session,
+    *,
+    user_id: int,
+    content_type: str,
+    content_id: int,
+    content_url: str,
+):
+    """Find an existing notification for the same content id or stable content URL."""
+    from app.models.following import KeywordNotification
+
+    return (
+        db.query(KeywordNotification)
+        .filter(
+            KeywordNotification.user_id == user_id,
+            KeywordNotification.content_type == content_type,
+            or_(
+                KeywordNotification.content_id == content_id,
+                KeywordNotification.content_url == content_url,
+            ),
+        )
+        .first()
+    )
 
 
 def match_keywords_and_notify(db: Session) -> dict:
@@ -304,14 +331,12 @@ def match_keywords_and_notify(db: Session) -> dict:
                     stats["matched"] += 1
 
                     # 중복 알림 확인
-                    existing = (
-                        db.query(KeywordNotification)
-                        .filter(
-                            KeywordNotification.user_id == user_id,
-                            KeywordNotification.content_type == "news",
-                            KeywordNotification.content_id == article.id,
-                        )
-                        .first()
+                    existing = _find_existing_notification(
+                        db,
+                        user_id=user_id,
+                        content_type="news",
+                        content_id=article.id,
+                        content_url=article.url,
                     )
                     if existing:
                         stats["skipped_duplicates"] += 1
@@ -379,14 +404,12 @@ def match_keywords_and_notify(db: Session) -> dict:
                     stats["matched"] += 1
 
                     # 중복 알림 확인
-                    existing = (
-                        db.query(KeywordNotification)
-                        .filter(
-                            KeywordNotification.user_id == user_id,
-                            KeywordNotification.content_type == "disclosure",
-                            KeywordNotification.content_id == disclosure.id,
-                        )
-                        .first()
+                    existing = _find_existing_notification(
+                        db,
+                        user_id=user_id,
+                        content_type="disclosure",
+                        content_id=disclosure.id,
+                        content_url=disclosure.url,
                     )
                     if existing:
                         stats["skipped_duplicates"] += 1
@@ -467,14 +490,12 @@ def match_keywords_and_notify(db: Session) -> dict:
                     stats["matched"] += 1
 
                     # 중복 알림 확인
-                    existing = (
-                        db.query(KeywordNotification)
-                        .filter(
-                            KeywordNotification.user_id == user_id,
-                            KeywordNotification.content_type == "report",
-                            KeywordNotification.content_id == report.id,
-                        )
-                        .first()
+                    existing = _find_existing_notification(
+                        db,
+                        user_id=user_id,
+                        content_type="report",
+                        content_id=report.id,
+                        content_url=report.url,
                     )
                     if existing:
                         stats["skipped_duplicates"] += 1
@@ -639,19 +660,26 @@ def _dispatch_notification(
     if channel == "none":
         return channel
 
-    # 알림 이력 저장
+    # 알림 이력 저장 — SAVEPOINT로 UniqueConstraint 위반 시 외부 트랜잭션 격리
     try:
-        notification = KeywordNotification(
-            user_id=user_id,
-            keyword_id=keyword_id,
-            content_type=content_type,
-            content_id=content_id,
-            content_title=content_title[:500],
-            content_url=content_url[:1000],
-            channel=channel,
-        )
-        db.add(notification)
+        with db.begin_nested():  # SAVEPOINT: rollback 시 이 블록만 롤백, 외부 트랜잭션 유지
+            notification = KeywordNotification(
+                user_id=user_id,
+                keyword_id=keyword_id,
+                content_type=content_type,
+                content_id=content_id,
+                content_title=content_title[:500],
+                content_url=content_url[:1000],
+                channel=channel,
+            )
+            db.add(notification)
+            # begin_nested() 종료 시 자동 flush → UniqueConstraint 즉시 검증
         # 커밋은 호출자(match_keywords_and_notify)가 일괄 처리
+    except IntegrityError:
+        # UniqueConstraint(user_id, content_type, content_id) 위반 — DB 레벨 중복 차단
+        # 정상 흐름: _find_existing_notification()이 선제 차단하므로 여기까지 오는 경우는 드뭄
+        logger.debug(f"알림 이력 중복 스킵 (UniqueConstraint): user={user_id}, {content_type}#{content_id}")
+        return channel
     except Exception as e:
         logger.error(f"알림 이력 저장 실패 (user={user_id}): {e}")
 

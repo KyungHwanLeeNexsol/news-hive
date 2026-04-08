@@ -29,19 +29,21 @@ def _get_gemini_keys() -> list[str]:
     return keys
 
 
-async def _call_gemini(prompt: str, api_key: str) -> str | None:
+async def _call_gemini(prompt: str, api_key: str, model: str | None = None) -> str | None:
     """Gemini API 호출.
 
     google.genai의 generate_content()는 동기 호출이므로
     asyncio.to_thread()로 감싸서 이벤트 루프 블로킹을 방지한다.
+    model을 지정하지 않으면 GEMINI_MODEL(Pro)을 사용한다.
     """
     from google import genai
 
     client = genai.Client(api_key=api_key)
+    _model = model or settings.GEMINI_MODEL
 
     def _sync_call() -> str | None:
         response = client.models.generate_content(
-            model=settings.GEMINI_MODEL,
+            model=_model,
             contents=prompt,
         )
         return response.text.strip()
@@ -50,13 +52,14 @@ async def _call_gemini(prompt: str, api_key: str) -> str | None:
 
 
 # @MX:ANCHOR: [AUTO] 모든 AI 호출의 진입점 — 유료 키(0번) 우선, 나머지는 fallback
-# @MX:REASON: Key 0(유료)를 항상 먼저 시도하고 rate limit 시에만 무료 키로 순차 fallback
-async def ask_ai_with_model(prompt: str, max_retries: int = 3) -> tuple[str | None, str]:
+# @MX:REASON: Key 0(유료)를 항상 먼저 시도하고 rate limit 시에만 무료 키로 순차 fallback; free_only=True 시 유료 키 완전 제외
+async def ask_ai_with_model(prompt: str, max_retries: int = 3, model: str | None = None, free_only: bool = False) -> tuple[str | None, str]:
     """AI에 프롬프트를 전송하고 (응답 텍스트, 사용된 모델명) 튜플을 반환한다.
 
-    GEMINI_API_KEY(유료)를 항상 먼저 시도한다.
-    rate limit 등으로 실패 시 Key 2~4를 순차 fallback으로 사용한다.
+    free_only=False(기본): GEMINI_API_KEY(유료)를 먼저 시도, rate limit 시 Key 2~4 fallback.
+    free_only=True: 유료 키(index 0)를 완전 제외, Key 2~4만 사용 (뉴스 수집용).
     전부 소진되거나 서킷이 열린 경우 (None, "unknown")을 반환한다.
+    model을 지정하면 해당 모델을 사용한다 (None이면 GEMINI_MODEL Pro 사용).
     """
     keys = _get_gemini_keys()
 
@@ -69,13 +72,21 @@ async def ask_ai_with_model(prompt: str, max_retries: int = 3) -> tuple[str | No
         return None, "unknown"
 
     n_keys = len(keys)
-    start_idx = 0  # 유료 키(Key 1)를 항상 먼저 시도
+
+    if free_only:
+        # 무료 키(Key 2~4, index 1+)만 사용 — 유료 키(index 0) 완전 제외
+        key_indices = list(range(1, n_keys))
+        if not key_indices:
+            logger.warning("무료 Gemini 키가 설정되지 않음 (GEMINI_API_KEY_2~4)")
+            return None, "unknown"
+    else:
+        # 유료 키(index 0)를 항상 먼저 시도
+        key_indices = list(range(n_keys))
 
     gemini_errors = []
 
     async with _ai_semaphore:
-        for i in range(n_keys):
-            key_idx = (start_idx + i) % n_keys
+        for key_idx in key_indices:
             key_name = f"Gemini-{key_idx + 1}"
 
             # rate limit 쿨다운 중인 키 skip
@@ -88,10 +99,10 @@ async def ask_ai_with_model(prompt: str, max_retries: int = 3) -> tuple[str | No
 
             for attempt in range(max_retries):
                 try:
-                    result = await _call_gemini(prompt, keys[key_idx])
+                    result = await _call_gemini(prompt, keys[key_idx], model=model)
                     if result:
                         api_circuit_breaker.record_success("gemini")
-                        return result, settings.GEMINI_MODEL
+                        return result, model or settings.GEMINI_MODEL
                 except Exception as e:
                     err_str = str(e)
                     is_rate_limit = any(k in err_str for k in ("429", "RESOURCE_EXHAUSTED", "rate_limit"))
@@ -143,13 +154,13 @@ async def _call_openai(prompt: str) -> str | None:
     return text.strip() if text else None
 
 
-async def ask_ai_with_openai_fallback(prompt: str, max_retries: int = 3) -> tuple[str | None, str]:
+async def ask_ai_with_openai_fallback(prompt: str, max_retries: int = 3, model: str | None = None, free_only: bool = False) -> tuple[str | None, str]:
     """Gemini 우선 시도, 전체 실패 시 OpenAI fallback.
 
     Returns:
         (응답 텍스트, 사용된 모델명) 튜플
     """
-    result, model = await ask_ai_with_model(prompt, max_retries)
+    result, model = await ask_ai_with_model(prompt, max_retries, model=model, free_only=free_only)
     if result:
         return result, model
 
@@ -169,9 +180,50 @@ async def ask_ai_with_openai_fallback(prompt: str, max_retries: int = 3) -> tupl
 
 
 async def ask_ai(prompt: str, max_retries: int = 3) -> str | None:
-    """AI에 프롬프트를 전송하고 응답 텍스트를 반환한다.
+    """AI에 프롬프트를 전송하고 응답 텍스트를 반환한다 (Pro 모델).
 
     Gemini 우선, 전체 실패 시 OpenAI로 자동 fallback.
+    고도 금융 추론(브리핑, 시그널, 관계 추론)에 사용한다.
     """
     result, _ = await ask_ai_with_openai_fallback(prompt, max_retries)
+    return result
+
+
+async def ask_ai_standard(prompt: str, max_retries: int = 3) -> str | None:
+    """Standard 모델로 AI 호출한다 (gemini-2.0-flash).
+
+    중간 복잡도 작업(요약 생성, 뉴스/공시 설명, 거시 리스크 분류)에 사용한다.
+    """
+    result, _ = await ask_ai_with_openai_fallback(prompt, max_retries, model=settings.GEMINI_MODEL_STANDARD)
+    return result
+
+
+async def ask_ai_lite(prompt: str, max_retries: int = 3) -> str | None:
+    """Lite 모델로 AI 호출한다 (gemini-2.0-flash-lite).
+
+    단순 분류/JSON 배열 작업(키워드 관련성 점수, 섹터 분류, 감성 분류, 번역)에 사용한다.
+    Pro 모델 대비 약 80% 비용 절감.
+    유료 키 우선 사용 — 키워드 알림 등 유료 전용 작업에 사용한다.
+    """
+    result, _ = await ask_ai_with_openai_fallback(prompt, max_retries, model=settings.GEMINI_MODEL_LITE)
+    return result
+
+
+async def ask_ai_free_standard(prompt: str, max_retries: int = 3) -> str | None:
+    """Standard 모델로 AI 호출한다 (gemini-2.0-flash) — 무료 키 전용.
+
+    뉴스 수집 파이프라인(기사 요약, 공시 요약, 원자재 뉴스 등)에 사용한다.
+    유료 키(GEMINI_API_KEY)는 절대 사용하지 않는다.
+    """
+    result, _ = await ask_ai_with_openai_fallback(prompt, max_retries, model=settings.GEMINI_MODEL_STANDARD, free_only=True)
+    return result
+
+
+async def ask_ai_free_lite(prompt: str, max_retries: int = 3) -> str | None:
+    """Lite 모델로 AI 호출한다 (gemini-2.0-flash-lite) — 무료 키 전용.
+
+    뉴스 수집 파이프라인(감성 분류, 번역, 뉴스 분류, 시그널 검증 등)에 사용한다.
+    유료 키(GEMINI_API_KEY)는 절대 사용하지 않는다.
+    """
+    result, _ = await ask_ai_with_openai_fallback(prompt, max_retries, model=settings.GEMINI_MODEL_LITE, free_only=True)
     return result

@@ -11,7 +11,9 @@ class Settings(BaseSettings):
     GEMINI_API_KEY_2: str = ""
     GEMINI_API_KEY_3: str = ""
     GEMINI_API_KEY_4: str = ""
-    GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_MODEL: str = "gemini-2.5-flash"           # Pro: 금융 추론 (브리핑, 시그널)
+    GEMINI_MODEL_STANDARD: str = "gemini-2.0-flash"  # Standard: 요약/설명 생성
+    GEMINI_MODEL_LITE: str = "gemini-2.0-flash-lite"  # Lite: 단순 분류/JSON 배열
 
     # Z.AI (GLM) — Gemini rate limit 소진 시 fallback
     ZAI_API_KEY: str = ""

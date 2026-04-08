@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
 
-from app.services.ai_client import ask_ai
+from app.services.ai_client import ask_ai_standard as ask_ai
 
 if TYPE_CHECKING:
     pass
