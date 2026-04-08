@@ -13,9 +13,6 @@ from app.services.circuit_breaker import api_circuit_breaker
 
 logger = logging.getLogger(__name__)
 
-# 라운드로빈 카운터 (모듈 수준 상태)
-_call_counter: int = 0
-
 # 동시 API 호출 제한: 최대 3개 (Gemini 15 RPM 보호)
 _ai_semaphore = asyncio.Semaphore(3)
 
@@ -52,16 +49,15 @@ async def _call_gemini(prompt: str, api_key: str) -> str | None:
     return await asyncio.to_thread(_sync_call)
 
 
-# @MX:ANCHOR: [AUTO] 모든 AI 호출의 진입점 — 키 순환 순서가 일일 사용량 분산에 영향
-# @MX:REASON: Gemini 3키 라운드로빈 구조, 변경 시 전체 AI 기능에 영향
+# @MX:ANCHOR: [AUTO] 모든 AI 호출의 진입점 — 유료 키(0번) 우선, 나머지는 fallback
+# @MX:REASON: Key 0(유료)를 항상 먼저 시도하고 rate limit 시에만 무료 키로 순차 fallback
 async def ask_ai_with_model(prompt: str, max_retries: int = 3) -> tuple[str | None, str]:
     """AI에 프롬프트를 전송하고 (응답 텍스트, 사용된 모델명) 튜플을 반환한다.
 
-    Gemini 3개 키를 라운드로빈으로 시도한다.
-    전부 rate limit 소진되거나 서킷이 열린 경우 (None, "unknown")을 반환한다.
+    GEMINI_API_KEY(유료)를 항상 먼저 시도한다.
+    rate limit 등으로 실패 시 Key 2~4를 순차 fallback으로 사용한다.
+    전부 소진되거나 서킷이 열린 경우 (None, "unknown")을 반환한다.
     """
-    global _call_counter
-
     keys = _get_gemini_keys()
 
     if not keys:
@@ -73,8 +69,7 @@ async def ask_ai_with_model(prompt: str, max_retries: int = 3) -> tuple[str | No
         return None, "unknown"
 
     n_keys = len(keys)
-    start_idx = _call_counter % n_keys
-    _call_counter += 1
+    start_idx = 0  # 유료 키(Key 1)를 항상 먼저 시도
 
     gemini_errors = []
 
