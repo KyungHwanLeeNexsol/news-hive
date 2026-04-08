@@ -48,9 +48,10 @@ async def get_vip_portfolio(db: Session = Depends(get_db)):
 
 
 @router.get("/positions")
-def get_vip_positions(db: Session = Depends(get_db)):
-    """현재 오픈 포지션 목록 조회."""
-    from app.services.vip_follow_trading import get_or_create_vip_portfolio
+async def get_vip_positions(db: Session = Depends(get_db)):
+    """현재 오픈 포지션 목록 조회 (미실현 수익률 포함)."""
+    import asyncio
+    from app.services.vip_follow_trading import get_or_create_vip_portfolio, _fetch_price
 
     portfolio = get_or_create_vip_portfolio(db)
     open_trades = (
@@ -63,22 +64,42 @@ def get_vip_positions(db: Session = Depends(get_db)):
         .all()
     )
 
-    result = []
+    # 종목/공시 정보 일괄 로드
+    trade_info = []
     for trade in open_trades:
         stock = db.query(Stock).filter(Stock.id == trade.stock_id).first()
         disclosure = db.query(VIPDisclosure).filter(
             VIPDisclosure.id == trade.vip_disclosure_id
         ).first()
+        trade_info.append((trade, stock, disclosure))
 
+    # 현재가 병렬 조회
+    async def _get_price(stock) -> int | None:
+        if stock and stock.stock_code:
+            return await _fetch_price(stock.stock_code)
+        return None
+
+    prices = await asyncio.gather(*[_get_price(s) for _, s, _ in trade_info])
+
+    result = []
+    for (trade, stock, disclosure), current_price in zip(trade_info, prices):
         invest_amount = trade.entry_price * trade.quantity
+        current_value = (current_price * trade.quantity) if current_price else invest_amount
+        unrealized_pct = round(
+            (current_price - trade.entry_price) / trade.entry_price * 100, 2
+        ) if current_price and trade.entry_price else None
+
         result.append({
             "id": trade.id,
             "stock_code": stock.stock_code if stock else None,
             "stock_name": stock.name if stock else "Unknown",
             "split_sequence": trade.split_sequence,
             "entry_price": trade.entry_price,
+            "current_price": current_price,
             "quantity": trade.quantity,
             "invest_amount": invest_amount,
+            "current_value": current_value,
+            "unrealized_pct": unrealized_pct,
             "entry_date": trade.entry_date.isoformat() if trade.entry_date else None,
             "partial_sold": trade.partial_sold,
             "disclosure_type": disclosure.disclosure_type if disclosure else None,

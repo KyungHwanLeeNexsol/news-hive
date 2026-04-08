@@ -89,23 +89,46 @@ function VIPTab() {
 
   const invested = stats.positions_value;
   const totalPnl = stats.total_value - stats.initial_capital;
+  const isProfit = totalPnl >= 0;
 
   return (
     <div className="flex flex-col gap-6">
       {/* 요약 카드 */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-        <StatCard label="초기 자본" value={`${fmt(stats.initial_capital)}원`} />
-        <StatCard label="잔여 현금" value={`${fmt(stats.current_cash)}원`} />
-        <StatCard label="투자 중" value={`${fmt(invested)}원`} />
-        <StatCard label="총 평가액" value={`${fmt(stats.total_value)}원`} />
-        <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-col gap-1">
-          <span className="text-[12px] text-gray-500 font-medium">총 손익</span>
+        {/* 총 손익 - 강조 카드 */}
+        <div className={`rounded-xl border p-4 flex flex-col gap-1 ${isProfit ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'}`}>
+          <span className={`text-[11px] font-semibold uppercase tracking-wide ${isProfit ? 'text-red-400' : 'text-blue-400'}`}>총 손익</span>
           <span className={`text-[18px] font-bold ${pctColor(totalPnl)}`}>
-            {totalPnl >= 0 ? '+' : ''}{fmt(totalPnl)}원
+            {isProfit ? '+' : ''}{fmt(totalPnl)}원
           </span>
-          <span className={`text-[12px] font-semibold ${pctColor(stats.total_return_pct)}`}>
+          <span className={`text-[13px] font-bold ${pctColor(stats.total_return_pct)}`}>
             {fmtPct(stats.total_return_pct)}
           </span>
+        </div>
+        {/* 총 평가액 */}
+        <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-col gap-1">
+          <span className="text-[11px] text-gray-400 font-medium">총 평가액</span>
+          <span className="text-[17px] font-bold text-gray-800">{fmt(stats.total_value)}원</span>
+          <span className="text-[11px] text-gray-400">초기자본 {fmt(stats.initial_capital)}원</span>
+        </div>
+        {/* 잔여 현금 */}
+        <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-col gap-1">
+          <span className="text-[11px] text-gray-400 font-medium">잔여 현금</span>
+          <span className="text-[17px] font-bold text-gray-700">{fmt(stats.current_cash)}원</span>
+        </div>
+        {/* 투자 중 */}
+        <div className="bg-indigo-50 rounded-xl border border-indigo-200 p-4 flex flex-col gap-1">
+          <span className="text-[11px] text-indigo-400 font-medium">투자 중</span>
+          <span className="text-[17px] font-bold text-indigo-700">{fmt(invested)}원</span>
+          <span className="text-[11px] text-indigo-400">{stats.open_positions}종목</span>
+        </div>
+        {/* 청산 손익 */}
+        <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-col gap-1">
+          <span className="text-[11px] text-gray-400 font-medium">실현 손익</span>
+          <span className={`text-[17px] font-bold ${pctColor(stats.realized_pnl)}`}>
+            {stats.realized_pnl >= 0 ? '+' : ''}{fmt(stats.realized_pnl)}원
+          </span>
+          <span className="text-[11px] text-gray-400">청산 {stats.closed_trades}건</span>
         </div>
       </div>
 
@@ -125,6 +148,7 @@ function VIPTab() {
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">매수가</th>
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">수량</th>
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">평가금액</th>
+                  <th className="text-right px-4 py-3 font-semibold text-gray-600">수익률</th>
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">비중</th>
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">매수일</th>
                 </tr>
@@ -144,7 +168,10 @@ function VIPTab() {
                       </td>
                       <td className="px-4 py-3 text-right text-gray-700">{fmt(p.entry_price)}원</td>
                       <td className="px-4 py-3 text-right text-gray-700">{fmt(p.quantity)}주</td>
-                      <td className="px-4 py-3 text-right font-semibold text-gray-800">{fmt(p.invest_amount)}원</td>
+                      <td className="px-4 py-3 text-right font-semibold text-gray-800">{fmt(p.current_value)}원</td>
+                      <td className={`px-4 py-3 text-right font-semibold ${pctColor(p.unrealized_pct)}`}>
+                        {p.unrealized_pct != null ? fmtPct(p.unrealized_pct) : '-'}
+                      </td>
                       <td className="px-4 py-3 text-right text-gray-500">{weight}%</td>
                       <td className="px-4 py-3 text-right text-gray-400">{formatDate(p.entry_date)}</td>
                     </tr>
@@ -237,21 +264,41 @@ function KS200Tab() {
   return (
     <div className="flex flex-col gap-6">
       {/* 요약 카드 */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-        <StatCard label="초기 자본" value={`${fmt(stats.initial_capital)}원`} />
-        <StatCard label="잔여 현금" value={`${fmt(stats.current_cash)}원`} />
-        <StatCard label="투자 중" value={`${fmt(stats.position_value)}원`} />
-        <StatCard label="총 평가액" value={`${fmt(stats.total_value)}원`} />
-        <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-col gap-1">
-          <span className="text-[12px] text-gray-500 font-medium">총 손익</span>
-          <span className={`text-[18px] font-bold ${pctColor(stats.total_pnl)}`}>
-            {stats.total_pnl >= 0 ? '+' : ''}{fmt(stats.total_pnl)}원
-          </span>
-          <span className={`text-[12px] font-semibold ${pctColor(stats.total_return_pct)}`}>
-            {fmtPct(stats.total_return_pct)}
-          </span>
-        </div>
-      </div>
+      {(() => {
+        const ks200Profit = stats.total_pnl >= 0;
+        return (
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            <div className={`rounded-xl border p-4 flex flex-col gap-1 ${ks200Profit ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'}`}>
+              <span className={`text-[11px] font-semibold uppercase tracking-wide ${ks200Profit ? 'text-red-400' : 'text-blue-400'}`}>총 손익</span>
+              <span className={`text-[18px] font-bold ${pctColor(stats.total_pnl)}`}>
+                {ks200Profit ? '+' : ''}{fmt(stats.total_pnl)}원
+              </span>
+              <span className={`text-[13px] font-bold ${pctColor(stats.total_return_pct)}`}>
+                {fmtPct(stats.total_return_pct)}
+              </span>
+            </div>
+            <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-col gap-1">
+              <span className="text-[11px] text-gray-400 font-medium">총 평가액</span>
+              <span className="text-[17px] font-bold text-gray-800">{fmt(stats.total_value)}원</span>
+              <span className="text-[11px] text-gray-400">초기자본 {fmt(stats.initial_capital)}원</span>
+            </div>
+            <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-col gap-1">
+              <span className="text-[11px] text-gray-400 font-medium">잔여 현금</span>
+              <span className="text-[17px] font-bold text-gray-700">{fmt(stats.current_cash)}원</span>
+            </div>
+            <div className="bg-indigo-50 rounded-xl border border-indigo-200 p-4 flex flex-col gap-1">
+              <span className="text-[11px] text-indigo-400 font-medium">투자 중</span>
+              <span className="text-[17px] font-bold text-indigo-700">{fmt(stats.position_value)}원</span>
+              <span className="text-[11px] text-indigo-400">{stats.open_positions}종목</span>
+            </div>
+            <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-col gap-1">
+              <span className="text-[11px] text-gray-400 font-medium">최대 운용</span>
+              <span className="text-[17px] font-bold text-gray-700">{stats.max_positions}종목</span>
+              <span className="text-[11px] text-gray-400">실현손익 {fmt(stats.realized_pnl)}원</span>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* 포지션 상태 */}
       <div className="flex items-center gap-2 text-[13px] text-gray-500">
@@ -278,16 +325,20 @@ function KS200Tab() {
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">매수가</th>
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">수량</th>
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">평가금액</th>
+                  <th className="text-right px-4 py-3 font-semibold text-gray-600">수익률</th>
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">매수일</th>
                 </tr>
               </thead>
               <tbody>
-                {positions.map((p) => (
+                {[...positions].sort((a, b) => b.current_value - a.current_value).map((p) => (
                   <tr key={p.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
                     <td className="px-4 py-3 font-semibold text-gray-800">{p.stock_code}</td>
                     <td className="px-4 py-3 text-right text-gray-700">{fmt(p.entry_price)}원</td>
                     <td className="px-4 py-3 text-right text-gray-700">{fmt(p.quantity)}주</td>
                     <td className="px-4 py-3 text-right font-semibold text-gray-800">{fmt(p.current_value)}원</td>
+                    <td className={`px-4 py-3 text-right font-semibold ${pctColor(p.unrealized_pct)}`}>
+                      {p.unrealized_pct != null ? fmtPct(p.unrealized_pct) : '-'}
+                    </td>
                     <td className="px-4 py-3 text-right text-gray-400">{formatDate(p.entry_date)}</td>
                   </tr>
                 ))}
@@ -421,38 +472,46 @@ function PaperTradingTab() {
   const returnPct = stats.initial_capital > 0
     ? ((totalValue - stats.initial_capital) / stats.initial_capital) * 100
     : 0;
+  const paperProfit = stats.total_pnl >= 0;
 
   return (
     <div className="flex flex-col gap-6">
       {/* 요약 카드 */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
-          <span className="text-[12px] text-gray-500 font-medium">총 자산</span>
-          <div className="text-[18px] font-bold text-gray-900 mt-1">{fmt(totalValue)}원</div>
-          <div className={`text-[12px] font-semibold mt-0.5 ${pctColor(returnPct)}`}>
-            {returnPct >= 0 ? '+' : ''}{returnPct.toFixed(2)}% 누적 수익률
-          </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        {/* 총 손익 */}
+        <div className={`rounded-xl border p-4 flex flex-col gap-1 ${paperProfit ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'}`}>
+          <span className={`text-[11px] font-semibold uppercase tracking-wide ${paperProfit ? 'text-red-400' : 'text-blue-400'}`}>총 손익</span>
+          <span className={`text-[18px] font-bold ${pctColor(stats.total_pnl)}`}>
+            {paperProfit ? '+' : ''}{fmt(stats.total_pnl)}원
+          </span>
+          <span className={`text-[13px] font-bold ${pctColor(returnPct)}`}>
+            {returnPct >= 0 ? '+' : ''}{returnPct.toFixed(2)}%
+          </span>
         </div>
-        <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
-          <span className="text-[12px] text-gray-500 font-medium">승률</span>
-          <div className={`text-[18px] font-bold mt-1 ${stats.win_rate >= 50 ? 'text-[#e12343]' : 'text-[#1261c4]'}`}>
+        {/* 총 자산 */}
+        <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-col gap-1">
+          <span className="text-[11px] text-gray-400 font-medium">총 자산</span>
+          <span className="text-[17px] font-bold text-gray-800">{fmt(totalValue)}원</span>
+          <span className="text-[11px] text-gray-400">초기자본 {fmt(stats.initial_capital)}원</span>
+        </div>
+        {/* 잔여 현금 */}
+        <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-col gap-1">
+          <span className="text-[11px] text-gray-400 font-medium">잔여 현금</span>
+          <span className="text-[17px] font-bold text-gray-700">{fmt(stats.current_cash)}원</span>
+        </div>
+        {/* 투자 중 */}
+        <div className="bg-indigo-50 rounded-xl border border-indigo-200 p-4 flex flex-col gap-1">
+          <span className="text-[11px] text-indigo-400 font-medium">투자 중</span>
+          <span className="text-[17px] font-bold text-indigo-700">{stats.open_positions}종목</span>
+          <span className="text-[11px] text-indigo-400">보유 포지션</span>
+        </div>
+        {/* 승률 */}
+        <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-col gap-1">
+          <span className="text-[11px] text-gray-400 font-medium">승률</span>
+          <span className={`text-[18px] font-bold ${stats.win_rate >= 50 ? 'text-[#e12343]' : 'text-[#1261c4]'}`}>
             {stats.win_rate.toFixed(1)}%
-          </div>
-          <div className="text-[12px] text-gray-400 mt-0.5">청산 {stats.closed_trades}건 중</div>
-        </div>
-        <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
-          <span className="text-[12px] text-gray-500 font-medium">수익 안정성</span>
-          <div className={`text-[18px] font-bold mt-1 ${stats.sharpe_warning ? 'text-orange-400' : 'text-green-700'}`}>
-            {stats.sharpe_ratio.toFixed(2)}
-          </div>
-          <div className="text-[11px] text-gray-400 mt-0.5">
-            {stats.sharpe_warning ? '⚠ 변동성 대비 수익 낮음' : '변동성 대비 수익 효율'}
-          </div>
-        </div>
-        <div className="bg-white rounded-xl border border-gray-200 p-4 text-center">
-          <span className="text-[12px] text-gray-500 font-medium">최대 낙폭</span>
-          <div className="text-[18px] font-bold text-[#1261c4] mt-1">{stats.mdd.toFixed(2)}%</div>
-          <div className="text-[12px] text-gray-400 mt-0.5">고점 대비 최대 하락폭</div>
+          </span>
+          <span className="text-[11px] text-gray-400">청산 {stats.closed_trades}건 중</span>
         </div>
       </div>
 
@@ -472,6 +531,7 @@ function PaperTradingTab() {
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">진입가</th>
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">수량</th>
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">투자금액</th>
+                  <th className="text-right px-4 py-3 font-semibold text-gray-600">수익률</th>
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">목표가</th>
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">손절가</th>
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">진입일</th>
@@ -484,6 +544,9 @@ function PaperTradingTab() {
                     <td className="px-4 py-3 text-right text-gray-700">{fmt(pos.entry_price)}원</td>
                     <td className="px-4 py-3 text-right text-gray-700">{fmt(pos.quantity)}</td>
                     <td className="px-4 py-3 text-right text-gray-700">{fmt(pos.invest_amount)}원</td>
+                    <td className={`px-4 py-3 text-right font-semibold ${pos.unrealized_pct == null ? 'text-gray-400' : pos.unrealized_pct >= 0 ? 'text-[#e12343]' : 'text-[#1261c4]'}`}>
+                      {pos.unrealized_pct != null ? `${pos.unrealized_pct >= 0 ? '+' : ''}${pos.unrealized_pct.toFixed(2)}%` : '-'}
+                    </td>
                     <td className="px-4 py-3 text-right text-[#e12343] font-semibold">{fmt(pos.target_price)}원</td>
                     <td className="px-4 py-3 text-right text-[#1261c4] font-semibold">{fmt(pos.stop_loss)}원</td>
                     <td className="px-4 py-3 text-right text-gray-400">{pos.entry_date.slice(0, 10)}</td>

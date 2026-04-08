@@ -335,11 +335,13 @@ export interface PaperTradingStats {
 export interface PaperPosition {
   stock_name: string;
   entry_price: number;
+  current_price: number | null;
   quantity: number;
   target_price: number;
   stop_loss: number;
   entry_date: string;
   invest_amount: number;
+  unrealized_pct: number | null;
 }
 
 export interface PaperTrade {
@@ -451,8 +453,11 @@ export interface VIPPosition {
   stock_name: string;
   split_sequence: number;
   entry_price: number;
+  current_price: number | null;
   quantity: number;
   invest_amount: number;
+  current_value: number;
+  unrealized_pct: number | null;
   entry_date: string | null;
   partial_sold: boolean;
   disclosure_type: string | null;
@@ -494,9 +499,11 @@ export interface KS200Position {
   id: number;
   stock_code: string;
   entry_price: number;
+  current_price: number | null;
   quantity: number;
   entry_date: string | null;
   current_value: number;
+  unrealized_pct: number | null;
 }
 
 export interface KS200TradeHistory {

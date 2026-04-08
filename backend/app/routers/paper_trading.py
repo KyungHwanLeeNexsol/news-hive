@@ -19,8 +19,11 @@ def get_stats(db: Session = Depends(get_db)):
 
 
 @router.get("/positions")
-def get_positions(db: Session = Depends(get_db)):
-    """오픈 포지션 목록."""
+async def get_positions(db: Session = Depends(get_db)):
+    """오픈 포지션 목록 (현재가 및 미실현 수익률 포함)."""
+    import asyncio
+    from app.services.vip_follow_trading import _fetch_price
+
     portfolio = get_or_create_portfolio(db)
     trades = (
         db.query(VirtualTrade)
@@ -30,20 +33,40 @@ def get_positions(db: Session = Depends(get_db)):
         )
         .all()
     )
-    result = []
+
+    # 종목 정보 로드
+    trade_stocks = []
     for t in trades:
         stock = db.query(Stock).filter(Stock.id == t.stock_id).first()
+        trade_stocks.append((t, stock))
+
+    async def _safe_fetch(stock) -> int | None:
+        if stock and stock.stock_code:
+            return await _fetch_price(stock.stock_code)
+        return None
+
+    # 현재가 병렬 조회
+    prices = await asyncio.gather(*[_safe_fetch(s) for _, s in trade_stocks])
+
+    result = []
+    for (t, stock), current_price in zip(trade_stocks, prices):
+        invest_amount = t.entry_price * t.quantity
+        unrealized_pct = round(
+            (current_price - t.entry_price) / t.entry_price * 100, 2
+        ) if current_price and t.entry_price else None
         result.append({
             "id": t.id,
             "stock_name": stock.name if stock else "Unknown",
             "stock_code": stock.stock_code if stock else "",
             "direction": t.direction,
             "entry_price": t.entry_price,
+            "current_price": current_price,
             "quantity": t.quantity,
             "target_price": t.target_price,
             "stop_loss": t.stop_loss,
             "entry_date": t.entry_date.isoformat() if t.entry_date else None,
-            "invest_amount": t.entry_price * t.quantity,
+            "invest_amount": invest_amount,
+            "unrealized_pct": unrealized_pct,
         })
     return result
 

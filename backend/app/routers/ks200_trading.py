@@ -48,9 +48,11 @@ async def get_ks200_portfolio(db: Session = Depends(get_db)):
 
 
 @router.get("/positions")
-def get_ks200_positions(db: Session = Depends(get_db)):
-    """현재 오픈 포지션 목록 조회."""
+async def get_ks200_positions(db: Session = Depends(get_db)):
+    """현재 오픈 포지션 목록 조회 (미실현 수익률 포함)."""
+    import asyncio
     from app.services.ks200_trading import get_or_create_ks200_portfolio
+    from app.services.vip_follow_trading import _fetch_price
 
     portfolio = get_or_create_ks200_portfolio(db)
     open_trades = (
@@ -62,17 +64,30 @@ def get_ks200_positions(db: Session = Depends(get_db)):
         .order_by(KS200Trade.entry_date.desc())
         .all()
     )
-    return [
-        {
-            "id": t.id,
-            "stock_code": t.stock_code,
-            "entry_price": t.entry_price,
-            "quantity": t.quantity,
-            "entry_date": t.entry_date.isoformat() if t.entry_date else None,
-            "current_value": t.entry_price * t.quantity,  # 편의상 진입가 기준
-        }
-        for t in open_trades
-    ]
+
+    # 현재가 병렬 조회
+    prices = await asyncio.gather(*[_fetch_price(t.stock_code) for t in open_trades])
+
+    result = []
+    for trade, current_price in zip(open_trades, prices):
+        invest_amount = trade.entry_price * trade.quantity
+        current_value = (current_price * trade.quantity) if current_price else invest_amount
+        unrealized_pct = round(
+            (current_price - trade.entry_price) / trade.entry_price * 100, 2
+        ) if current_price and trade.entry_price else None
+
+        result.append({
+            "id": trade.id,
+            "stock_code": trade.stock_code,
+            "entry_price": trade.entry_price,
+            "current_price": current_price,
+            "quantity": trade.quantity,
+            "entry_date": trade.entry_date.isoformat() if trade.entry_date else None,
+            "current_value": current_value,
+            "unrealized_pct": unrealized_pct,
+        })
+
+    return result
 
 
 @router.get("/trades")
