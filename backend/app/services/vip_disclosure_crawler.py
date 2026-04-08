@@ -24,8 +24,8 @@ logger = logging.getLogger(__name__)
 DART_LIST_URL = "https://opendart.fss.or.kr/api/list.json"
 DART_DOCUMENT_URL = "https://opendart.fss.or.kr/api/document.json"
 
-# VIP투자자문 공시자명 키워드 — DART flr_nm 필드에서 부분 매칭
-VIP_FILER_KEYWORD = "VIP투자자문"
+# 브이아이피자산운용(구 VIP투자자문) 공시자명 키워드 — DART flr_nm 필드에서 부분 매칭
+VIP_FILER_KEYWORD = "아이피자산운용"
 
 # 대량보유 공시 보고서명 키워드
 STAKE_REPORT_KEYWORD = "주식등의대량보유"
@@ -35,9 +35,9 @@ async def fetch_vip_disclosures(db: Session, days: int = 3) -> int:
     """DART OpenAPI에서 VIP투자자문의 대량보유 공시를 수집한다.
 
     전략:
-    1. DART list API에서 지분공시(pblntf_ty=B) 목록 조회
+    1. DART list API에서 지분공시(pblntf_ty=D) 목록 조회
     2. report_nm에 "주식등의대량보유" 포함 항목 필터링
-    3. flr_nm에 "VIP투자자문" 포함 여부 확인
+    3. flr_nm에 "아이피자산운용"(브이아이피자산운용) 포함 여부 확인
     4. VIP 공시 발견 시 상세 보고서 파싱 (stake_pct, avg_price 추출)
     5. vip_disclosures 테이블에 저장
 
@@ -78,7 +78,7 @@ async def fetch_vip_disclosures(db: Session, days: int = 3) -> int:
                 "crtfc_key": dart_key,
                 "bgn_de": bgn_de,
                 "end_de": end_de,
-                "pblntf_ty": "B",  # 지분공시 분류
+                "pblntf_ty": "D",  # 지분공시 분류 (대량보유보고서)
                 "sort": "date",
                 "sort_mth": "desc",
                 "page_no": str(page_no),
