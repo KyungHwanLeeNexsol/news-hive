@@ -112,7 +112,7 @@ def test_report_keyword_match_notifies() -> None:
     stock_q = MagicMock()
     stock_q.all.return_value = []
     report_q = MagicMock()
-    report_q.filter.return_value.all.return_value = [report]
+    report_q.filter.return_value.order_by.return_value.limit.return_value.all.return_value = [report]
     notif_q = MagicMock()
     notif_q.filter.return_value.first.return_value = None  # 중복 없음
 
@@ -170,7 +170,7 @@ def test_report_keyword_no_duplicate() -> None:
     stock_q = MagicMock()
     stock_q.all.return_value = []
     report_q = MagicMock()
-    report_q.filter.return_value.all.return_value = [report]
+    report_q.filter.return_value.order_by.return_value.limit.return_value.all.return_value = [report]
     notif_q = MagicMock()
     # 중복 알림이 이미 존재
     notif_q.filter.return_value.first.return_value = existing_notif
@@ -218,15 +218,15 @@ def test_existing_news_disclosure_matching_unaffected() -> None:
 
     db = MagicMock()
     news_q = MagicMock()
-    news_q.filter.return_value.all.return_value = [news]
+    news_q.filter.return_value.order_by.return_value.limit.return_value.all.return_value = [news]
     disc_q = MagicMock()
-    disc_q.filter.return_value.all.return_value = [disclosure]
+    disc_q.filter.return_value.order_by.return_value.limit.return_value.all.return_value = [disclosure]
     kw_q = MagicMock()
     kw_q.join.return_value.all.return_value = kw_rows
     stock_q = MagicMock()
     stock_q.all.return_value = []
     report_q = MagicMock()
-    report_q.filter.return_value.all.return_value = []  # 리포트 없음
+    report_q.filter.return_value.order_by.return_value.limit.return_value.all.return_value = []  # 리포트 없음
     notif_q = MagicMock()
     notif_q.filter.return_value.first.return_value = None  # 중복 없음
 
