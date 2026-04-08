@@ -10,6 +10,7 @@ from app.models import Commodity, CommodityPrice, SectorCommodityRelation  # noq
 from app.models.sector_insight import SectorInsight  # noqa: F401
 from app.models.disclosure import Disclosure  # noqa: F401
 from app.models.vip_trading import VIPDisclosure, VIPPortfolio, VIPTrade  # noqa: F401
+from app.models.ks200_trading import KS200Portfolio, KS200Trade, KS200Signal  # noqa: F401
 from app.models.macro_alert import MacroAlert  # noqa: F401
 from app.models.economic_event import EconomicEvent  # noqa: F401
 from app.seed.sectors import seed_sectors
@@ -165,6 +166,7 @@ from app.routers import user as user_router, push as push_router  # noqa: E402
 from app.routers import following as following_router  # noqa: E402
 from app.routers import macro_rates as macro_rates_router  # noqa: E402
 from app.routers.vip_trading import router as vip_trading_router  # noqa: E402
+from app.routers.ks200_trading import router as ks200_trading_router  # noqa: E402
 
 app.include_router(sectors.router)
 app.include_router(stocks.router)
@@ -183,6 +185,7 @@ app.include_router(push_router.router)
 app.include_router(following_router.router)
 app.include_router(macro_rates_router.router)
 app.include_router(vip_trading_router)
+app.include_router(ks200_trading_router)
 
 # WebSocket 엔드포인트 등록
 from app.websocket import router as ws_router  # noqa: E402

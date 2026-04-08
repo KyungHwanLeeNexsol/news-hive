@@ -380,6 +380,48 @@ def _is_kr_market_open() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# SPEC-KS200-001: KOSPI 200 스토캐스틱+이격도 자동매매 스케줄 작업
+# ---------------------------------------------------------------------------
+
+def _run_ks200_daily_scan():
+    """KOSPI 200 전종목 신호 스캔 및 매매 실행 (매일 15:30 KST = 06:30 UTC, 평일).
+
+    SPEC-KS200-001
+    """
+    if not _is_kr_market_open():
+        logger.debug("주말 — KS200 신호 스캔 스킵")
+        return
+
+    _start = _time.monotonic()
+    from app.services.ks200_signal import run_daily_signal_scan
+    from app.services.ks200_trading import execute_pending_signals
+
+    db = SessionLocal()
+    try:
+        scan_result = asyncio.run(run_daily_signal_scan(db))
+        logger.info(
+            "KS200 신호 스캔: 스캔=%d, 매수=%d, 매도=%d",
+            scan_result["scanned"],
+            scan_result["buy_signals"],
+            scan_result["sell_signals"],
+        )
+
+        exec_result = asyncio.run(execute_pending_signals(db))
+        if exec_result["buy_executed"] or exec_result["sell_executed"]:
+            logger.info(
+                "KS200 매매 실행: 매수=%d, 매도=%d, 스킵=%d",
+                exec_result["buy_executed"],
+                exec_result["sell_executed"],
+                exec_result["skipped"],
+            )
+    except Exception as e:
+        logger.error("KS200 신호 스캔/실행 실패: %s", e)
+    finally:
+        _record_job_duration("ks200_daily_scan", _time.monotonic() - _start)
+        db.close()
+
+
+# ---------------------------------------------------------------------------
 # SPEC-VIP-001: VIP투자자문 추종 매매 스케줄 작업
 # ---------------------------------------------------------------------------
 
@@ -934,6 +976,19 @@ def start_scheduler():
         replace_existing=True,
     )
 
+    # SPEC-KS200-001: KOSPI 200 스토캐스틱+이격도 자동매매 (매일 15:30 KST = 06:30 UTC, 평일)
+    scheduler.add_job(
+        _run_ks200_daily_scan,
+        "cron",
+        day_of_week="mon-fri",
+        hour=6,
+        minute=30,
+        id="ks200_daily_scan",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+
     # SPEC-VIP-001: VIP투자자문 추종 매매 작업
     # 공시 수집: 평일 30분 간격 (09:00~18:00 KST)
     scheduler.add_job(
@@ -965,6 +1020,7 @@ def start_scheduler():
     scheduler.start()
     logger.info(
         f"Scheduler started: crawling every {interval} min, "
+        f"KS200 daily scan at 15:30 KST, "
         f"DART every {settings.DART_CRAWL_INTERVAL_MINUTES} min, "
         f"market cap every {settings.MARKET_CAP_UPDATE_HOURS}h, "
         f"commodity price every 10 min, commodity news every 30 min, "
