@@ -132,9 +132,26 @@ function VIPTab() {
 
       {/* 오픈 포지션 */}
       <div>
-        <h2 className="text-[15px] font-bold text-gray-800 mb-3">
-          오픈 포지션 <span className="text-[13px] text-gray-500 font-normal">({positions.length}종목)</span>
-        </h2>
+        {(() => {
+          const totalCurrent = positions.reduce((s, p) => s + p.current_value, 0);
+          const totalInvest = positions.reduce((s, p) => s + p.invest_amount, 0);
+          const openRet = totalInvest > 0 ? (totalCurrent - totalInvest) / totalInvest * 100 : 0;
+          return (
+            <div className="flex items-baseline justify-between mb-3">
+              <h2 className="text-[15px] font-bold text-gray-800">
+                오픈 포지션 <span className="text-[13px] text-gray-500 font-normal">({positions.length}종목)</span>
+              </h2>
+              {positions.length > 0 && (
+                <div className="flex items-center gap-3 text-[13px]">
+                  <span className="text-gray-500">평가금액 <span className="font-semibold text-gray-800">{fmt(totalCurrent)}원</span></span>
+                  <span className={`font-bold ${openRet >= 0 ? 'text-[#e12343]' : 'text-[#1261c4]'}`}>
+                    {openRet >= 0 ? '+' : ''}{openRet.toFixed(2)}%
+                  </span>
+                </div>
+              )}
+            </div>
+          );
+        })()}
         {positions.length === 0 ? (
           <div className="text-center py-8 text-gray-400 text-[13px]">보유 종목이 없습니다</div>
         ) : (
@@ -307,9 +324,26 @@ function KS200Tab() {
 
       {/* 오픈 포지션 */}
       <div>
-        <h2 className="text-[15px] font-bold text-gray-800 mb-3">
-          오픈 포지션 <span className="text-[13px] text-gray-500 font-normal">({positions.length}종목)</span>
-        </h2>
+        {(() => {
+          const totalCurrent = positions.reduce((s, p) => s + p.current_value, 0);
+          const totalInvest = positions.reduce((s, p) => s + p.entry_price * p.quantity, 0);
+          const openRet = totalInvest > 0 ? (totalCurrent - totalInvest) / totalInvest * 100 : 0;
+          return (
+            <div className="flex items-baseline justify-between mb-3">
+              <h2 className="text-[15px] font-bold text-gray-800">
+                오픈 포지션 <span className="text-[13px] text-gray-500 font-normal">({positions.length}종목)</span>
+              </h2>
+              {positions.length > 0 && (
+                <div className="flex items-center gap-3 text-[13px]">
+                  <span className="text-gray-500">평가금액 <span className="font-semibold text-gray-800">{fmt(totalCurrent)}원</span></span>
+                  <span className={`font-bold ${openRet >= 0 ? 'text-[#e12343]' : 'text-[#1261c4]'}`}>
+                    {openRet >= 0 ? '+' : ''}{openRet.toFixed(2)}%
+                  </span>
+                </div>
+              )}
+            </div>
+          );
+        })()}
         {positions.length === 0 ? (
           <div className="text-center py-8 text-gray-400 text-[13px]">
             보유 종목이 없습니다 — 평일 15:30 스캔 후 익일 09:05에 매수됩니다
@@ -489,9 +523,26 @@ function PaperTradingTab() {
 
       {/* 오픈 포지션 */}
       <div>
-        <h2 className="text-[15px] font-bold text-gray-800 mb-3">
-          오픈 포지션 <span className="text-[13px] text-gray-500 font-normal">({positions.length}건)</span>
-        </h2>
+        {(() => {
+          const totalCurrent = positions.reduce((s, p) => s + (p.current_price != null ? p.current_price * p.quantity : p.invest_amount), 0);
+          const totalInvest = positions.reduce((s, p) => s + p.invest_amount, 0);
+          const openRet = totalInvest > 0 ? (totalCurrent - totalInvest) / totalInvest * 100 : 0;
+          return (
+            <div className="flex items-baseline justify-between mb-3">
+              <h2 className="text-[15px] font-bold text-gray-800">
+                오픈 포지션 <span className="text-[13px] text-gray-500 font-normal">({positions.length}건)</span>
+              </h2>
+              {positions.length > 0 && (
+                <div className="flex items-center gap-3 text-[13px]">
+                  <span className="text-gray-500">평가금액 <span className="font-semibold text-gray-800">{fmt(totalCurrent)}원</span></span>
+                  <span className={`font-bold ${openRet >= 0 ? 'text-[#e12343]' : 'text-[#1261c4]'}`}>
+                    {openRet >= 0 ? '+' : ''}{openRet.toFixed(2)}%
+                  </span>
+                </div>
+              )}
+            </div>
+          );
+        })()}
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           {positions.length === 0 ? (
             <div className="py-8 text-center text-[13px] text-gray-400">오픈 포지션이 없습니다</div>
