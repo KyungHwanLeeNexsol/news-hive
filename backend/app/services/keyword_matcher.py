@@ -25,7 +25,8 @@ RELEVANCE_THRESHOLD = 6
 
 # 사이클당 최대 처리 콘텐츠 수 (AI 평가로 인한 스케줄러 스레드 블로킹 방지)
 # 1개 AI 호출 ≈ 5~10초, 10분 주기 → 최대 40~50건이 안전 범위
-MAX_ITEMS_PER_CYCLE = 50
+# 비용 절감을 위해 25건으로 축소 (처리 못 한 기사는 다음 사이클에서 처리됨)
+MAX_ITEMS_PER_CYCLE = 25
 
 # 관련성 결과 캐시: {(content_type, content_id, keyword, company_name): score}
 # 동일 사이클/근접 사이클 내 동일 콘텐츠 재평가 방지 (최대 2048개 LRU 흉내)
@@ -45,10 +46,7 @@ def _shortcut_score(keyword: str, company_name: str, search_text: str) -> int | 
     - 키워드 == 기업명 → 10점 (완전 일치)
     - 기업명이 키워드에 포함(키워드가 더 구체적) → 10점
     - 기업명이 본문에도 함께 등장 → 8점
-    - 기업명이 본문에 없음 → 4점 (임계값 미만, AI 호출 생략)
-      시장/업종 기사에서 키워드만 등장하고 기업명은 없는 경우가 대부분이며,
-      AI 호출 결과도 5점 이하로 필터링되는 패턴이 반복된다.
-      rate limit·비용 절감을 위해 AI 없이 관련없음으로 처리한다.
+    - 그 외 → None (AI 평가 필요)
 
     주의: 'kw_l in name_l' (키워드가 기업명의 부분 문자열) 조건은
     "에너지" in "SNT에너지" 같은 오탐을 유발하므로 제거됨.
@@ -65,9 +63,7 @@ def _shortcut_score(keyword: str, company_name: str, search_text: str) -> int | 
     # 기업명이 콘텐츠 본문에 함께 등장하면 직접 관련 가능성 높음
     if name_l in search_text:
         return 8
-    # 기업명이 본문에 없으면 AI 없이 낮은 점수로 처리 (임계값 6 미만 → 알림 차단)
-    # 이 경우 대부분 AI도 5점 이하를 반환하므로 호출 비용 대비 효과 없음
-    return 4
+    return None
 
 
 def _ai_currently_unavailable() -> bool:
