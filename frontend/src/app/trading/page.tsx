@@ -531,6 +531,7 @@ function PaperTradingTab() {
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">진입가</th>
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">수량</th>
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">투자금액</th>
+                  <th className="text-right px-4 py-3 font-semibold text-gray-600">평가금액</th>
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">수익률</th>
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">목표가</th>
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">손절가</th>
@@ -544,6 +545,9 @@ function PaperTradingTab() {
                     <td className="px-4 py-3 text-right text-gray-700">{fmt(pos.entry_price)}원</td>
                     <td className="px-4 py-3 text-right text-gray-700">{fmt(pos.quantity)}</td>
                     <td className="px-4 py-3 text-right text-gray-700">{fmt(pos.invest_amount)}원</td>
+                    <td className="px-4 py-3 text-right text-gray-700">
+                      {pos.current_price != null ? `${fmt(pos.current_price * pos.quantity)}원` : '-'}
+                    </td>
                     <td className={`px-4 py-3 text-right font-semibold ${pos.unrealized_pct == null ? 'text-gray-400' : pos.unrealized_pct >= 0 ? 'text-[#e12343]' : 'text-[#1261c4]'}`}>
                       {pos.unrealized_pct != null ? `${pos.unrealized_pct >= 0 ? '+' : ''}${pos.unrealized_pct.toFixed(2)}%` : '-'}
                     </td>
