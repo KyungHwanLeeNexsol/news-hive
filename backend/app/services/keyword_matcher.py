@@ -317,14 +317,14 @@ def match_keywords_and_notify(db: Session) -> dict:
                         stats["skipped_duplicates"] += 1
                         break  # 동일 뉴스에 이미 알림 발송됨
 
-                    # AI 관련성 게이트 (점수 < 임계값이면 스킵, -1=폴백 발송)
+                    # AI 관련성 게이트 (점수 < 임계값이면 스킵, -1=AI 불가 → 폴백 발송)
                     score = _check_relevance(
                         keyword=keyword,
                         company_name=stock_name_map.get(stock_id, ""),
                         content_type="news",
                         content_id=article.id,
                     )
-                    if score < RELEVANCE_THRESHOLD:
+                    if score != -1 and score < RELEVANCE_THRESHOLD:
                         stats.setdefault("filtered_low_relevance", 0)
                         stats["filtered_low_relevance"] += 1
                         break
@@ -398,7 +398,7 @@ def match_keywords_and_notify(db: Session) -> dict:
                         content_type="disclosure",
                         content_id=disclosure.id,
                     )
-                    if score < RELEVANCE_THRESHOLD:
+                    if score != -1 and score < RELEVANCE_THRESHOLD:
                         stats.setdefault("filtered_low_relevance", 0)
                         stats["filtered_low_relevance"] += 1
                         break
@@ -486,7 +486,7 @@ def match_keywords_and_notify(db: Session) -> dict:
                         content_type="report",
                         content_id=report.id,
                     )
-                    if score < RELEVANCE_THRESHOLD:
+                    if score != -1 and score < RELEVANCE_THRESHOLD:
                         stats.setdefault("filtered_low_relevance", 0)
                         stats["filtered_low_relevance"] += 1
                         break
