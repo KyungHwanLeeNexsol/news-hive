@@ -8,6 +8,7 @@ import html
 import json
 import logging
 import re
+import time
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
@@ -19,6 +20,10 @@ _last_run: datetime | None = None
 
 # AI 관련성 점수 임계값 (>= 통과)
 RELEVANCE_THRESHOLD = 6
+
+# 사이클당 최대 처리 콘텐츠 수 (AI 평가로 인한 스케줄러 스레드 블로킹 방지)
+# 1개 AI 호출 ≈ 5~10초, 10분 주기 → 최대 40~50건이 안전 범위
+MAX_ITEMS_PER_CYCLE = 50
 
 # 관련성 결과 캐시: {(content_type, content_id, keyword, company_name): score}
 # 동일 사이클/근접 사이클 내 동일 콘텐츠 재평가 방지 (최대 2048개 LRU 흉내)
@@ -58,6 +63,26 @@ def _shortcut_score(keyword: str, company_name: str, search_text: str) -> int | 
     return None
 
 
+def _ai_currently_unavailable() -> bool:
+    """현재 모든 AI 제공자가 rate limited/불가 상태인지 빠르게 확인한다.
+
+    True 반환 시 _batch_evaluate를 건너뛰어 스케줄러 스레드 블로킹을 방지한다.
+    """
+    try:
+        from app.services.ai_client import _key_rate_limited_until, _get_gemini_keys
+        keys = _get_gemini_keys()
+        if not keys:
+            return True
+        now = time.monotonic()
+        all_gemini_limited = all(
+            _key_rate_limited_until.get(i, 0) > now
+            for i in range(len(keys))
+        )
+        return all_gemini_limited
+    except Exception:
+        return False
+
+
 def _batch_evaluate(
     *,
     content_type: str,
@@ -89,7 +114,12 @@ def _batch_evaluate(
     if not pending:
         return
 
-    # 2) 단일 AI 호출로 일괄 평가
+    # 2) AI 제공자 가용 여부 확인 — 모두 rate limited 시 스킵 (블로킹 방지)
+    if _ai_currently_unavailable():
+        logger.debug(f"AI 제공자 전체 불가 — {content_type}#{content_id} 배치 평가 스킵")
+        return
+
+    # 3) 단일 AI 호출로 일괄 평가
     type_label = {"news": "뉴스", "disclosure": "공시", "report": "리포트"}.get(content_type, "콘텐츠")
     pair_lines = "\n".join(
         f'{i+1}. 키워드="{kw}", 기업명="{name}"{f" ({code})" if code else ""}'
@@ -191,12 +221,15 @@ def match_keywords_and_notify(db: Session) -> dict:
 
     try:
         # 신규 뉴스 조회 (당일 발행 뉴스만)
+        # 최신 기사 우선 처리 + 사이클당 최대 처리 수 제한 (스케줄러 블로킹 방지)
         recent_news = (
             db.query(NewsArticle)
             .filter(
                 NewsArticle.collected_at > since,
                 NewsArticle.published_at >= today_start_utc,
             )
+            .order_by(NewsArticle.collected_at.desc())
+            .limit(MAX_ITEMS_PER_CYCLE)
             .all()
         )
 
@@ -207,6 +240,8 @@ def match_keywords_and_notify(db: Session) -> dict:
                 Disclosure.created_at > since,
                 Disclosure.created_at >= today_start_utc,
             )
+            .order_by(Disclosure.created_at.desc())
+            .limit(MAX_ITEMS_PER_CYCLE)
             .all()
         )
 
@@ -394,6 +429,8 @@ def match_keywords_and_notify(db: Session) -> dict:
                 SecuritiesReport.collected_at > since,
                 SecuritiesReport.collected_at >= today_start_utc,
             )
+            .order_by(SecuritiesReport.collected_at.desc())
+            .limit(MAX_ITEMS_PER_CYCLE)
             .all()
         )
         for report in recent_reports:
