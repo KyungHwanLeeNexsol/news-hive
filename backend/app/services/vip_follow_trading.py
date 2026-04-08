@@ -7,6 +7,7 @@ SPEC-VIP-001의 매매 로직 구현:
 
 기존 paper_trading.py, fund_manager.py와 완전히 분리된 독립 서비스.
 """
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -631,18 +632,21 @@ async def get_vip_portfolio_stats(db: Session) -> dict:
         .all()
     )
 
-    # 포지션 평가액 계산 (현재가 조회)
-    positions_value = 0
-    for trade in open_trades:
-        stock = db.query(Stock).filter(Stock.id == trade.stock_id).first()
+    # 포지션 평가액 계산 — 현재가를 병렬 조회하여 응답 지연 최소화
+    stocks = {
+        trade.stock_id: db.query(Stock).filter(Stock.id == trade.stock_id).first()
+        for trade in open_trades
+    }
+
+    async def _fetch_trade_value(trade: VIPTrade) -> int:
+        stock = stocks.get(trade.stock_id)
         if stock and stock.stock_code:
             price = await _fetch_price(stock.stock_code)
-            if price:
-                positions_value += price * trade.quantity
-            else:
-                positions_value += trade.entry_price * trade.quantity
-        else:
-            positions_value += trade.entry_price * trade.quantity
+            return (price if price else trade.entry_price) * trade.quantity
+        return trade.entry_price * trade.quantity
+
+    trade_values = await asyncio.gather(*[_fetch_trade_value(t) for t in open_trades])
+    positions_value = sum(trade_values)
 
     total_value = portfolio.current_cash + positions_value
     total_pnl = sum((t.pnl or 0) for t in closed_trades)
