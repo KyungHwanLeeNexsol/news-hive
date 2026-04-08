@@ -11,8 +11,6 @@ import {
   fetchPaperTradingStats,
   fetchPaperPositions,
   fetchPaperTrades,
-  fetchPaperSnapshots,
-  resetPaperTrading,
 } from '@/lib/api';
 import type {
   VIPPortfolioStats,
@@ -405,48 +403,22 @@ function PaperTradingTab() {
   const [stats, setStats] = useState<PaperTradingStats | null>(null);
   const [positions, setPositions] = useState<PaperPosition[]>([]);
   const [trades, setTrades] = useState<PaperTrade[]>([]);
-  const [snapshots, setSnapshots] = useState<PaperSnapshot[]>([]);
   const [loading, setLoading] = useState(true);
-  const [resetting, setResetting] = useState(false);
 
   useEffect(() => {
     Promise.all([
       fetchPaperTradingStats(),
       fetchPaperPositions(),
       fetchPaperTrades(50),
-      fetchPaperSnapshots(30),
     ])
-      .then(([s, p, t, sn]) => {
+      .then(([s, p, t]) => {
         setStats(s);
         setPositions(p);
         setTrades(t);
-        setSnapshots(sn);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
-
-  async function handleReset() {
-    if (!confirm('포트폴리오를 초기화하시겠습니까?\n모든 포지션과 거래 기록이 삭제됩니다.')) return;
-    setResetting(true);
-    try {
-      const ok = await resetPaperTrading();
-      if (ok) {
-        setStats(null);
-        setPositions([]);
-        setTrades([]);
-        setSnapshots([]);
-        const s = await fetchPaperTradingStats();
-        setStats(s);
-      } else {
-        alert('초기화에 실패했습니다.');
-      }
-    } catch {
-      alert('초기화에 실패했습니다.');
-    } finally {
-      setResetting(false);
-    }
-  }
 
   const exitReasonLabel: Record<string, string> = {
     target_hit: '목표가 도달',
@@ -617,56 +589,6 @@ function PaperTradingTab() {
         </div>
       </div>
 
-      {/* 일별 수익률 추이 */}
-      {snapshots.length > 0 && (
-        <div>
-          <h2 className="text-[15px] font-bold text-gray-800 mb-3">
-            일별 누적수익률 <span className="text-[13px] text-gray-500 font-normal">최근 {snapshots.length}일</span>
-          </h2>
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
-            <div className="space-y-1.5">
-              {snapshots.map((snap) => {
-                const maxAbs = Math.max(...snapshots.map((s) => Math.abs(s.cumulative_return_pct)), 1);
-                const width = Math.abs(snap.cumulative_return_pct) / maxAbs * 50;
-                const isPositive = snap.cumulative_return_pct >= 0;
-                return (
-                  <div key={snap.date} className="flex items-center gap-2 text-[11px]">
-                    <span className="w-[60px] text-gray-400 shrink-0">{snap.date.slice(5)}</span>
-                    <div className="flex-1 flex items-center">
-                      <div className="w-1/2 flex justify-end">
-                        {!isPositive && (
-                          <div className="h-3 bg-[#1261c4] rounded-l" style={{ width: `${width}%` }} />
-                        )}
-                      </div>
-                      <div className="w-px h-4 bg-gray-200 shrink-0" />
-                      <div className="w-1/2">
-                        {isPositive && (
-                          <div className="h-3 bg-[#e12343] rounded-r" style={{ width: `${width}%` }} />
-                        )}
-                      </div>
-                    </div>
-                    <span className={`w-[55px] text-right shrink-0 font-medium ${isPositive ? 'text-[#e12343]' : 'text-[#1261c4]'}`}>
-                      {isPositive ? '+' : ''}{snap.cumulative_return_pct.toFixed(2)}%
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 초기화 버튼 */}
-      <div className="text-center">
-        <button
-          type="button"
-          onClick={handleReset}
-          disabled={resetting}
-          className="px-4 py-2 text-[12px] text-gray-400 border border-gray-300 rounded-md hover:text-red-500 hover:border-red-300 disabled:opacity-50 transition-colors"
-        >
-          {resetting ? '초기화 중...' : '포트폴리오 초기화'}
-        </button>
-      </div>
     </div>
   );
 }
