@@ -186,6 +186,67 @@ def get_vip_disclosures(
     return result
 
 
+@router.post("/rebalance", dependencies=[Depends(_require_admin)])
+def rebalance_positions(db: Session = Depends(get_db)):
+    """기존 오픈 포지션 수량을 초기자본 5% 기준으로 재조정한다.
+
+    관리자 전용 엔드포인트. 기존 매수 비중이 불균일한 경우 1회 실행.
+    - full_quantity = initial_capital * 0.05 // entry_price
+    - partial_sold=True 포지션은 full_quantity * 0.7 (30% 익절 반영)
+    - current_cash: 투자금 변동분만큼 조정
+    """
+    from app.services.vip_follow_trading import get_or_create_vip_portfolio
+
+    portfolio = get_or_create_vip_portfolio(db)
+    target_invest = int(portfolio.initial_capital * 0.05)  # 5%
+
+    open_trades = (
+        db.query(VIPTrade)
+        .filter(VIPTrade.portfolio_id == portfolio.id, VIPTrade.is_open.is_(True))
+        .all()
+    )
+
+    if not open_trades:
+        return {"status": "ok", "message": "오픈 포지션 없음", "adjusted": 0}
+
+    old_total_invest = sum(t.entry_price * t.quantity for t in open_trades)
+
+    adjusted = []
+    for trade in open_trades:
+        if trade.entry_price <= 0:
+            continue
+        full_qty = max(1, target_invest // trade.entry_price)
+        new_qty = max(1, round(full_qty * 0.7)) if trade.partial_sold else full_qty
+        old_qty = trade.quantity
+        if old_qty != new_qty:
+            adjusted.append({
+                "trade_id": trade.id,
+                "stock_id": trade.stock_id,
+                "split_sequence": trade.split_sequence,
+                "old_qty": old_qty,
+                "new_qty": new_qty,
+                "old_invest": trade.entry_price * old_qty,
+                "new_invest": trade.entry_price * new_qty,
+            })
+            trade.quantity = new_qty
+
+    new_total_invest = sum(t.entry_price * t.quantity for t in open_trades)
+    cash_diff = old_total_invest - new_total_invest  # 양수면 현금 증가, 음수면 감소
+    portfolio.current_cash = portfolio.current_cash + cash_diff
+
+    db.commit()
+    return {
+        "status": "ok",
+        "target_invest_per_position": target_invest,
+        "old_total_invest": old_total_invest,
+        "new_total_invest": new_total_invest,
+        "cash_diff": cash_diff,
+        "current_cash": portfolio.current_cash,
+        "adjusted": len(adjusted),
+        "details": adjusted,
+    }
+
+
 @router.post("/trigger-check", dependencies=[Depends(_require_admin)])
 async def trigger_vip_check(
     days: int = Query(3, ge=1, le=365, description="공시 조회 기간 (일). 백필 시 최대 365일."),
