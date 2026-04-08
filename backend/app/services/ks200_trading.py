@@ -80,7 +80,7 @@ async def execute_pending_signals(db: Session) -> dict:
                 else:
                     skipped += 1
             elif signal.signal_type == "sell":
-                closed = _execute_sell(db, portfolio, signal)
+                closed = await _execute_sell(db, portfolio, signal)
                 if closed:
                     sell_executed += 1
                 else:
@@ -219,7 +219,7 @@ async def _execute_buy(
     return trade
 
 
-def _execute_sell(
+async def _execute_sell(
     db: Session,
     portfolio: KS200Portfolio,
     signal: KS200Signal,
@@ -228,8 +228,6 @@ def _execute_sell(
 
     보유 포지션이 없으면 False 반환.
     """
-    import asyncio
-
     from app.services.naver_finance import fetch_current_price
 
     open_trades = (
@@ -247,9 +245,7 @@ def _execute_sell(
 
     # 현재가 조회
     try:
-        current_price = asyncio.get_event_loop().run_until_complete(
-            fetch_current_price(signal.stock_code)
-        )
+        current_price = await fetch_current_price(signal.stock_code)
         if current_price is None or current_price <= 0:
             current_price = signal.price_at_signal
     except Exception as e:
