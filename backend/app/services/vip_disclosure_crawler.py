@@ -152,7 +152,14 @@ async def fetch_vip_disclosures(db: Session, days: int = 3) -> int:
                 parse_success = detail is not None and stake_pct > 0.0
                 disclosure_type = _determine_disclosure_type(stake_pct, report_nm, parse_success)
 
-                if disclosure_type == "unknown":
+                # 약식 공시 파싱 실패 → accumulate 처리 시 stake_pct 기본값 5.0 적용
+                if disclosure_type == "accumulate" and stake_pct == 0.0:
+                    stake_pct = 5.0
+                    logger.info(
+                        "약식 공시 파싱 실패 — stake_pct=5.0 기본값 적용: rcept_no=%s, corp=%s",
+                        rcept_no, corp_name,
+                    )
+                elif disclosure_type == "unknown":
                     logger.warning(
                         "VIP 공시 파싱 실패 — 수동 확인 필요: rcept_no=%s, corp=%s, report=%s",
                         rcept_no, corp_name, report_nm,
@@ -404,6 +411,10 @@ def _determine_disclosure_type(
     if any(kw in report_nm for kw in _REDUCE_KEYWORDS):
         return "below5"   # 명시적 매도/감소 보고서
     if not parse_success:
+        # 약식 공시는 5% 이상 보유 전제 — 파싱 실패 시 accumulate로 간주
+        # (약식 대량보유보고서는 5% 미만이면 보고 의무 자체가 없음)
+        if "약식" in report_nm:
+            return "accumulate"
         return "unknown"  # 파싱 실패 — 수동 확인 필요
     return "below5"
 
