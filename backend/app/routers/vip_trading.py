@@ -4,7 +4,7 @@ SPEC-VIP-001 REQ-VIP-007: REST API 엔드포인트 제공
 """
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -14,6 +14,22 @@ from app.models.vip_trading import VIPDisclosure, VIPPortfolio, VIPTrade
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/vip-trading", tags=["VIP Trading"])
+
+
+def _require_admin(request: Request) -> None:
+    """관리자 인증 의존성.
+
+    fund_manager 라우터와 동일한 인메모리 토큰 방식 사용.
+    Authorization: Bearer <token> 헤더를 검증한다.
+    """
+    from app.routers.auth import _verify_admin_token
+
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="관리자 인증이 필요합니다.")
+    token = auth[7:]
+    if not _verify_admin_token(token):
+        raise HTTPException(status_code=401, detail="인증 토큰이 만료되었거나 유효하지 않습니다.")
 
 
 @router.get("/portfolio")
@@ -149,15 +165,13 @@ def get_vip_disclosures(
     return result
 
 
-@router.post("/trigger-check")
+@router.post("/trigger-check", dependencies=[Depends(_require_admin)])
 async def trigger_vip_check(db: Session = Depends(get_db)):
     """VIP 공시 수집 및 청산 조건 체크를 수동으로 트리거한다.
 
-    관리자 전용 엔드포인트.
-    SPEC-VIP-001 REQ-VIP-008: 인증 없이 호출되어서는 안 되나,
-    현재는 내부 관리 API로 운영 (별도 인증 레이어 추가 권장).
+    관리자 전용 엔드포인트. Authorization: Bearer <admin_token> 헤더 필수.
+    SPEC-VIP-001 REQ-VIP-008
     """
-    # @MX:TODO: REQ-VIP-008 — 관리자 인증 미들웨어 추가 필요
     try:
         from app.services.vip_disclosure_crawler import (
             fetch_vip_disclosures,

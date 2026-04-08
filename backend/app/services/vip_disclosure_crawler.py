@@ -147,7 +147,16 @@ async def fetch_vip_disclosures(db: Session, days: int = 3) -> int:
                     avg_price = detail.get("avg_price")
                     raw_xml = detail.get("raw_xml")
 
-                disclosure_type = _determine_disclosure_type(stake_pct, report_nm)
+                # parse_success: 파싱 성공 여부 — 실패 시 "below5" 대신 "unknown" 분류
+                # (파싱 실패를 below5로 처리하면 VIP 매수 공시를 잘못 청산할 위험 있음)
+                parse_success = detail is not None and stake_pct > 0.0
+                disclosure_type = _determine_disclosure_type(stake_pct, report_nm, parse_success)
+
+                if disclosure_type == "unknown":
+                    logger.warning(
+                        "VIP 공시 파싱 실패 — 수동 확인 필요: rcept_no=%s, corp=%s, report=%s",
+                        rcept_no, corp_name, report_nm,
+                    )
 
                 # stock_code로 stock_id 매핑
                 stock_id: int | None = None
@@ -238,14 +247,13 @@ async def _parse_vip_disclosure_detail(
 
 
 def _extract_stake_info_from_xml(xml_content: str, rcept_no: str) -> dict | None:
-    """XML 문자열에서 보유비율과 평균단가를 추출한다.
+    """XML/HTML 문자열에서 보유비율과 평균단가를 추출한다.
 
-    DART XML 구조:
-    - 보유비율: "보유비율" 또는 "주식등의비율" 텍스트를 포함하는 태그
-    - 평균단가: "평균단가" 텍스트를 포함하는 태그
+    DART 보고서는 XML과 HTML 두 형식으로 제공된다.
+    정규식 → ElementTree → HTML 텍스트 스캔 순서로 3단계 파싱을 시도한다.
 
     Args:
-        xml_content: XML 문자열
+        xml_content: XML 또는 HTML 문자열
         rcept_no: 로깅용 접수번호
 
     Returns:
@@ -256,56 +264,110 @@ def _extract_stake_info_from_xml(xml_content: str, rcept_no: str) -> dict | None
     stake_pct: float = 0.0
     avg_price: float | None = None
 
-    # 정규식으로 보유비율 추출 (XML 파싱 실패 안전망 겸용)
-    # 패턴 예: <보유비율>5.12</보유비율> 또는 텍스트 내 5.12%
+    # -------------------------------------------------------------------
+    # 1단계: 정규식 패턴 매칭 (XML 태그 + HTML 텍스트 패턴 통합)
+    # DART XML: <보유비율>5.12</보유비율>
+    # DART HTML 테이블: >5.12%< 또는 >5.12 <  (보유비율 셀 다음 셀)
+    # -------------------------------------------------------------------
     stake_patterns = [
+        # XML 태그 방식
         r"<보유비율[^>]*>\s*([\d.]+)\s*</보유비율>",
         r"<주식등의비율[^>]*>\s*([\d.]+)\s*</주식등의비율>",
-        r"보유비율[^0-9]*([\d.]+)\s*%",
+        # HTML 셀: "보유비율" 키워드 이후 숫자+% (최대 200자 이내)
+        r"보유비율.{0,200}?([\d]+\.[\d]+)\s*%",
+        r"보유\s*비율.{0,200}?([\d]+\.[\d]+)",
+        # 주식등의수 / 발행주식 비율 패턴
+        r"주식등의\s*비율.{0,200}?([\d]+\.[\d]+)\s*%",
+        r"소유\s*비율.{0,200}?([\d]+\.[\d]+)\s*%",
     ]
     for pattern in stake_patterns:
-        match = re.search(pattern, xml_content)
+        match = re.search(pattern, xml_content, re.DOTALL)
         if match:
             try:
-                stake_pct = float(match.group(1))
-                break
+                val = float(match.group(1))
+                if 0.0 < val <= 100.0:
+                    stake_pct = val
+                    logger.debug("VIP 공시 보유비율 정규식 추출 (%s): %.2f%%", rcept_no, stake_pct)
+                    break
             except ValueError:
                 continue
 
     # 평균단가 추출
     avg_patterns = [
         r"<평균단가[^>]*>\s*([\d,]+)\s*</평균단가>",
-        r"평균단가[^0-9]*([\d,]+)",
+        r"평균\s*단가.{0,200}?([\d,]+)원",
+        r"평균\s*단가.{0,200}?([\d,]{4,})",   # 4자리 이상 숫자 (1,000원 이상)
+        r"취득\s*단가.{0,200}?([\d,]{4,})",
     ]
     for pattern in avg_patterns:
-        match = re.search(pattern, xml_content)
+        match = re.search(pattern, xml_content, re.DOTALL)
         if match:
             try:
-                avg_price = float(match.group(1).replace(",", ""))
-                break
+                raw_num = match.group(1).replace(",", "")
+                val = float(raw_num)
+                if val >= 100:   # 100원 이상만 유효한 주가로 간주
+                    avg_price = val
+                    break
             except ValueError:
                 continue
 
-    # XML ElementTree 파싱 시도 (정규식 보완)
+    # -------------------------------------------------------------------
+    # 2단계: ElementTree XML 파싱 (정규식 보완)
+    # -------------------------------------------------------------------
     if stake_pct == 0.0:
         try:
             root = ET.fromstring(xml_content)
             for elem in root.iter():
-                tag = elem.tag.lower()
-                if "보유비율" in tag or "비율" in tag:
-                    text = (elem.text or "").strip().replace(",", "").replace("%", "")
-                    if text:
+                tag = (elem.tag or "").lower()
+                text = (elem.text or "").strip().replace(",", "").replace("%", "")
+                if ("보유비율" in tag or "주식등의비율" in tag) and text:
+                    try:
+                        val = float(text)
+                        if 0.0 < val <= 100.0:
+                            stake_pct = val
+                            logger.debug(
+                                "VIP 공시 보유비율 ElementTree 추출 (%s): %.2f%%",
+                                rcept_no, stake_pct,
+                            )
+                            break
+                    except ValueError:
+                        continue
+        except ET.ParseError:
+            logger.debug("XML ElementTree 파싱 실패 (%s) — HTML 문서 가능성", rcept_no)
+
+    # -------------------------------------------------------------------
+    # 3단계: HTML 테이블 텍스트 스캔 (DART HTML 보고서 대응)
+    # "보유비율" 키워드 다음에 오는 td/th 셀의 첫 번째 숫자 추출
+    # -------------------------------------------------------------------
+    if stake_pct == 0.0:
+        # 셀 경계 분리 후 "보유비율" 셀 다음 셀에서 숫자 추출
+        cells = re.split(r"<(?:td|th)[^>]*>", xml_content, flags=re.IGNORECASE)
+        for idx, cell in enumerate(cells):
+            clean = re.sub(r"<[^>]+>", "", cell).strip()
+            if "보유비율" in clean or "주식등의비율" in clean:
+                # 다음 셀들에서 숫자 탐색
+                for next_cell in cells[idx + 1 : idx + 4]:
+                    next_clean = re.sub(r"<[^>]+>", "", next_cell).strip().replace(",", "")
+                    num_match = re.search(r"([\d]+\.[\d]+)", next_clean)
+                    if num_match:
                         try:
-                            val = float(text)
-                            if 0 < val <= 100:
+                            val = float(num_match.group(1))
+                            if 0.0 < val <= 100.0:
                                 stake_pct = val
+                                logger.debug(
+                                    "VIP 공시 보유비율 HTML 테이블 추출 (%s): %.2f%%",
+                                    rcept_no, stake_pct,
+                                )
                                 break
                         except ValueError:
                             continue
-        except ET.ParseError:
-            logger.debug("XML ElementTree 파싱 실패 (%s), 정규식 결과 사용", rcept_no)
+                if stake_pct > 0.0:
+                    break
 
-    # XML 원본은 최대 50KB만 보존 (DB 부담 최소화)
+    if stake_pct == 0.0:
+        logger.debug("VIP 공시 보유비율 추출 실패 (%s) — 3단계 모두 시도", rcept_no)
+
+    # 원본은 최대 50KB만 보존 (DB 부담 최소화)
     raw_xml = xml_content[:51200] if xml_content else None
 
     return {
@@ -315,22 +377,34 @@ def _extract_stake_info_from_xml(xml_content: str, rcept_no: str) -> dict | None
     }
 
 
-def _determine_disclosure_type(stake_pct: float, report_nm: str) -> str:
+def _determine_disclosure_type(
+    stake_pct: float, report_nm: str, parse_success: bool = True
+) -> str:
     """공시 유형을 결정한다.
+
+    parse_success=False(파싱 실패)이고 보고서명에 명시적 매도/감소 키워드가 없으면
+    "below5" 대신 "unknown"을 반환한다.
+    → "unknown"은 매매 없이 로그만 남기고 수동 확인을 유도한다.
+    → 파싱 실패를 "below5"로 처리하면 VIP 매수 공시를 잘못 청산할 위험이 있다.
 
     Args:
         stake_pct: 보유비율 (%)
         report_nm: DART 보고서명
+        parse_success: 상세 파싱 성공 여부 (stake_pct > 0.0이면 True)
 
     Returns:
         "accumulate" | "reduce" | "below5" | "unknown"
     """
     if stake_pct >= 5.0:
         return "accumulate"
-    if stake_pct > 0.0:
+    if 0.0 < stake_pct < 5.0:
         return "below5"
-    if "처분" in report_nm or "감소" in report_nm:
-        return "reduce"
+    # stake_pct == 0.0 — 파싱 실패이거나 실제 0%
+    _REDUCE_KEYWORDS = ("처분", "감소", "감량", "매도", "일부처분")
+    if any(kw in report_nm for kw in _REDUCE_KEYWORDS):
+        return "below5"   # 명시적 매도/감소 보고서
+    if not parse_success:
+        return "unknown"  # 파싱 실패 — 수동 확인 필요
     return "below5"
 
 

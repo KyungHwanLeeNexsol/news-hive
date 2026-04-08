@@ -440,3 +440,83 @@ async def test_execute_buy_insufficient_cash():
     # 포지션 사이징: 5,000 * 10% / 2 = 250원 < 10,000원(1주가격) → 매수 불가
     assert result is None, "현금 부족 시 None을 반환해야 한다"
     assert not db.add.called, "현금 부족 시 VIPTrade가 추가되어서는 안 된다"
+
+
+# ---------------------------------------------------------------------------
+# 파싱 개선 테스트 — _determine_disclosure_type, _extract_stake_info_from_xml
+# ---------------------------------------------------------------------------
+
+
+def test_determine_disclosure_type_parse_failure_returns_unknown() -> None:
+    """파싱 실패(parse_success=False) 시 'below5' 대신 'unknown'을 반환한다.
+
+    핵심 버그 방지: 파싱 실패를 below5로 분류하면 VIP 매수 공시를 잘못 청산할 수 있음.
+    """
+    from app.services.vip_disclosure_crawler import _determine_disclosure_type
+
+    result = _determine_disclosure_type(
+        stake_pct=0.0,
+        report_nm="주식등의대량보유상황보고서",
+        parse_success=False,
+    )
+    assert result == "unknown", "파싱 실패 시 'unknown'이어야 한다 (잘못 청산 방지)"
+
+
+def test_determine_disclosure_type_reduce_keyword_overrides_parse_failure() -> None:
+    """파싱 실패라도 보고서명에 '처분' 키워드가 있으면 'below5'를 반환한다."""
+    from app.services.vip_disclosure_crawler import _determine_disclosure_type
+
+    result = _determine_disclosure_type(
+        stake_pct=0.0,
+        report_nm="주식등의대량보유상황보고서(일부처분)",
+        parse_success=False,
+    )
+    assert result == "below5"
+
+
+def test_determine_disclosure_type_parse_success_accumulate() -> None:
+    """파싱 성공 + stake_pct >= 5.0 → 'accumulate'."""
+    from app.services.vip_disclosure_crawler import _determine_disclosure_type
+
+    result = _determine_disclosure_type(
+        stake_pct=5.12,
+        report_nm="주식등의대량보유상황보고서",
+        parse_success=True,
+    )
+    assert result == "accumulate"
+
+
+def test_extract_stake_info_html_table_pattern() -> None:
+    """DART HTML 테이블 형식에서 보유비율을 파싱한다 (3단계 HTML 스캔)."""
+    from app.services.vip_disclosure_crawler import _extract_stake_info_from_xml
+
+    # DART HTML 보고서 테이블 패턴 시뮬레이션
+    html_content = """
+    <table>
+      <tr><th>항목</th><th>내용</th></tr>
+      <tr><td>보유비율</td><td>5.23 %</td></tr>
+      <tr><td>평균단가</td><td>45,200원</td></tr>
+    </table>
+    """
+    result = _extract_stake_info_from_xml(html_content, "TEST-001")
+
+    assert result is not None
+    assert result["stake_pct"] == pytest.approx(5.23, abs=0.01), "HTML 테이블에서 보유비율 파싱 실패"
+    assert result["avg_price"] == pytest.approx(45200, abs=1), "HTML 테이블에서 평균단가 파싱 실패"
+
+
+def test_extract_stake_info_xml_tag_pattern() -> None:
+    """DART XML 태그 형식에서 보유비율을 파싱한다 (1단계 정규식)."""
+    from app.services.vip_disclosure_crawler import _extract_stake_info_from_xml
+
+    xml_content = """<?xml version="1.0"?>
+    <root>
+      <보유비율>7.45</보유비율>
+      <평균단가>32,100</평균단가>
+    </root>
+    """
+    result = _extract_stake_info_from_xml(xml_content, "TEST-002")
+
+    assert result is not None
+    assert result["stake_pct"] == pytest.approx(7.45, abs=0.01)
+    assert result["avg_price"] == pytest.approx(32100, abs=1)
