@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.stock import Stock
-from app.models.vip_trading import VIPDisclosure, VIPPortfolio, VIPTrade
+from app.models.vip_trading import VIPDisclosure, VIPTrade
 
 logger = logging.getLogger(__name__)
 
