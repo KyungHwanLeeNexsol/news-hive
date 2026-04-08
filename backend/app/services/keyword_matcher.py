@@ -233,7 +233,7 @@ def match_keywords_and_notify(db: Session) -> dict:
 
     from app.models.news import NewsArticle
     from app.models.disclosure import Disclosure
-    from app.models.following import StockFollowing, StockKeyword, KeywordNotification
+    from app.models.following import StockFollowing, StockKeyword
 
     stats = {"matched": 0, "notified": 0, "skipped_duplicates": 0}
 
