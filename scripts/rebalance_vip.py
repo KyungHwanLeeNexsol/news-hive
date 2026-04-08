@@ -9,6 +9,12 @@ import os
 # backend 경로 추가
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 
+# SQLAlchemy 관계 해석을 위해 모든 모델 선로드
+import app.models  # noqa: F401 — __init__.py 전체 임포트
+import app.models.disclosure  # noqa: F401
+import app.models.vip_trading  # noqa: F401
+import app.models.ks200_trading  # noqa: F401
+
 from app.database import SessionLocal
 from app.models.vip_trading import VIPPortfolio, VIPTrade
 
