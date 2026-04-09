@@ -45,7 +45,8 @@ def _keyword_in_text(keyword: str, text: str) -> bool:
 
     영문/숫자로만 구성된 키워드는 단어 경계 기준 매칭으로 오탐을 방지한다.
     예) "ESS" → "BESS", "address", "progress" 에 매칭되지 않음
-    한글 포함 키워드는 단순 포함 검사 (한국어 조사 붙임 형태 허용).
+    한글 포함 키워드는 단어 경계 기준 매칭으로 오탐을 방지한다.
+    예) "하이브" → "하이브리드" 에 매칭되지 않음 (조사 붙임 형태는 허용)
 
     Args:
         keyword: 원본 키워드 (대소문자 무관)
@@ -54,9 +55,25 @@ def _keyword_in_text(keyword: str, text: str) -> bool:
     kw = keyword.lower().strip()
     if not kw:
         return False
-    # 한글 포함 키워드: 단순 포함 검사 (조사 붙임 허용)
+    # 한글 포함 키워드: 단어 경계 기준 (조사 붙임 형태 허용, 합성어 오탐 방지)
+    # 앞: 한글이 바로 선행하면 매칭 안 함 ("SNT에너지"에서 "에너지" 오탐 방지)
+    # 뒤: 한국어 격조사/접속조사이거나, 비한글 문자이거나, 문자열 끝이어야 함
+    #     ("하이브리드"에서 "리드"는 조사가 아니므로 매칭 안 함)
     if re.search(r"[가-힣ㄱ-ㅎㅏ-ㅣ]", kw):
-        return kw in text
+        # 긴 조사를 앞에 배치하여 우선 매칭 (예: "에서"가 "에"보다 먼저)
+        _JOSA = (
+            r"로부터|에서|에게서|에게|이나|이고|이며|이면|이니|이랑|이다|이야|이여|면서"
+            r"|부터|까지|보다|처럼|만큼|마저|조차"
+            r"|로|에|이|가|을|를|의|은|는|과|와|도|만|뿐|나|고|며|면|니|랑|다|야|아|여|서"
+        )
+        pattern = (
+            r"(?<![가-힣])"
+            + re.escape(kw)
+            + r"(?=(?:"
+            + _JOSA
+            + r")(?![가-힣])|[^가-힣ㄱ-ㅎㅏ-ㅣ]|$)"
+        )
+        return bool(re.search(pattern, text))
     # 영문/숫자/기호 키워드: 단어 경계 기준 (부분 문자열 오탐 방지)
     pattern = r"(?<![a-zA-Z0-9\-])" + re.escape(kw) + r"(?![a-zA-Z0-9\-])"
     return bool(re.search(pattern, text))
@@ -378,8 +395,9 @@ def match_keywords_and_notify(db: Session) -> dict:
                         break
                     # AI 불가(-1) 폴백: 기업명이 본문에 없으면 차단
                     # (rate limit 시 무관한 기사 오발송 방지)
+                    # _keyword_in_text 사용으로 "하이브리드"에 "하이브" 오탐 방지
                     if score == -1 and company_name_for_check:
-                        if company_name_for_check.lower() not in search_text:
+                        if not _keyword_in_text(company_name_for_check, search_text):
                             stats.setdefault("filtered_low_relevance", 0)
                             stats["filtered_low_relevance"] += 1
                             break
@@ -457,7 +475,7 @@ def match_keywords_and_notify(db: Session) -> dict:
                         stats["filtered_low_relevance"] += 1
                         break
                     if score == -1 and company_name_for_check:
-                        if company_name_for_check.lower() not in search_text:
+                        if not _keyword_in_text(company_name_for_check, search_text):
                             stats.setdefault("filtered_low_relevance", 0)
                             stats["filtered_low_relevance"] += 1
                             break
@@ -549,7 +567,7 @@ def match_keywords_and_notify(db: Session) -> dict:
                         stats["filtered_low_relevance"] += 1
                         break
                     if score == -1 and company_name_for_check:
-                        if company_name_for_check.lower() not in search_text:
+                        if not _keyword_in_text(company_name_for_check, search_text):
                             stats.setdefault("filtered_low_relevance", 0)
                             stats["filtered_low_relevance"] += 1
                             break
