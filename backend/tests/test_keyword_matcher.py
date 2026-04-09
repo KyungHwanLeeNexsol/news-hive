@@ -240,3 +240,41 @@ def test_match_keywords_short_keyword_skipped() -> None:
         stats["matched"] += 1
 
     assert stats["matched"] == 0
+
+
+# ---------------------------------------------------------------------------
+# _keyword_in_text 단어 경계 테스트 (회귀 방지)
+# ---------------------------------------------------------------------------
+
+
+def test_keyword_in_text_korean_word_boundary_false_positive() -> None:
+    """한글 키워드가 다른 단어의 부분 문자열에 오매칭되지 않아야 한다.
+
+    재현: "하이브" 키워드가 "하이브리드" 포함 기사에 잘못 매칭되는 버그.
+    """
+    from app.services.keyword_matcher import _keyword_in_text
+
+    # 오탐 방지: 키워드 뒤에 조사가 아닌 한글이 이어지는 경우
+    assert not _keyword_in_text("하이브", "한미반도체 하이브리드 본더 공장"), (
+        '"하이브"가 "하이브리드"에 매칭되면 안 됨'
+    )
+    assert not _keyword_in_text("하이브", "하이브리드 에너지 관련 뉴스"), (
+        '"하이브"가 문장 첫 단어인 "하이브리드"에 매칭되면 안 됨'
+    )
+
+
+def test_keyword_in_text_korean_word_boundary_valid_match() -> None:
+    """한글 키워드가 조사 붙임 형태나 공백 뒤에서 정상 매칭되어야 한다."""
+    from app.services.keyword_matcher import _keyword_in_text
+
+    # 정상 매칭: 공백으로 구분된 단어
+    assert _keyword_in_text("하이브", "하이브 실적 발표")
+    # 정상 매칭: 조사 붙임 형태
+    assert _keyword_in_text("하이브", "하이브가 공시 발표")
+    assert _keyword_in_text("하이브", "하이브에서 신규 사업 발표")
+    assert _keyword_in_text("하이브", "하이브의 실적이 발표됐다")
+    assert _keyword_in_text("하이브", "하이브를 둘러싼 논란")
+    # 정상 매칭: 문장 끝
+    assert _keyword_in_text("하이브", "공시를 발표한 하이브")
+    # 정상 매칭: 영문 혼용
+    assert _keyword_in_text("하이브", "hybe 하이브 실적")

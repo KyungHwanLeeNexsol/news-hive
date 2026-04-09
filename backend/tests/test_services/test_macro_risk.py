@@ -107,10 +107,10 @@ class TestDetectMacroRisks:
         assert war_alerts[0].level == "warning"
 
     @patch(
-        "app.services.macro_risk._classify_macro_severity",
-        new=AsyncMock(return_value={
+        "app.services.macro_risk._classify_macro_severity_batch",
+        new=AsyncMock(return_value={"전쟁": {
             "severity": "critical", "context_summary": "", "is_false_positive": False,
-        }),
+        }}),
     )
     def test_critical_threshold_creates_critical_alert(self, db, make_news):
         """CRITICAL_THRESHOLD 이상이면 critical 알림 생성."""
@@ -164,10 +164,10 @@ class TestDetectMacroRisks:
         assert len(new_war_alerts) == 0
 
     @patch(
-        "app.services.macro_risk._classify_macro_severity",
-        new=AsyncMock(return_value={
+        "app.services.macro_risk._classify_macro_severity_batch",
+        new=AsyncMock(return_value={"전쟁": {
             "severity": "critical", "context_summary": "", "is_false_positive": False,
-        }),
+        }}),
     )
     def test_cooldown_upgrades_warning_to_critical(self, db, make_news, make_macro_alert):
         """쿨다운 중 기존 warning -> critical 업그레이드."""
@@ -181,10 +181,10 @@ class TestDetectMacroRisks:
         assert existing.level == "critical"
 
     @patch(
-        "app.services.macro_risk._classify_macro_severity",
-        new=AsyncMock(return_value={
+        "app.services.macro_risk._classify_macro_severity_batch",
+        new=AsyncMock(return_value={"전쟁": {
             "severity": "low", "context_summary": "시장 영향 없음", "is_false_positive": True,
-        }),
+        }}),
     )
     def test_nlp_false_positive_skips_alert(self, db, make_news):
         """REQ-AI-010: NLP가 거짓 양성으로 판정하면 알림 미생성."""

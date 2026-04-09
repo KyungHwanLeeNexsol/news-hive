@@ -17,6 +17,20 @@ from app.models.stock import Stock
 
 logger = logging.getLogger(__name__)
 
+
+async def _set_volatility_context(signal: FundSignal) -> None:
+    """시그널에 시장 변동성 레벨을 추가한다.
+
+    공시 기반 시그널은 factor_scores 계산을 거치지 않으므로
+    volatility_level 만 보강한다.
+    """
+    try:
+        from app.services.market_context import get_market_volatility
+        vol_info = await get_market_volatility()
+        signal.volatility_level = vol_info["volatility_level"]
+    except Exception as e:
+        logger.warning("변동성 컨텍스트 추가 실패: %s", e)
+
 # 공시 유형별 기본 충격 점수
 _BASE_IMPACT_BY_TYPE = {
     "주요사항보고": 20,
@@ -384,6 +398,8 @@ async def _create_disclosure_signal(db: Session, disclosure: Disclosure) -> Fund
     db.add(signal)
     db.flush()
 
+    await _set_volatility_context(signal)
+
     # 페이퍼트레이딩 자동 연동 (REQ-DISC-019)
     try:
         from app.services.paper_trading import execute_signal_trade
@@ -433,6 +449,8 @@ async def _create_ripple_signals(
         )
         db.add(signal)
         db.flush()
+
+        await _set_volatility_context(signal)
 
         # 페이퍼트레이딩 자동 연동 (REQ-DISC-019)
         try:
@@ -592,6 +610,8 @@ async def _create_gap_pullback_signal(
         market_summary=f"공시유형: {disclosure.report_type}, 공시일: {disclosure.rcept_dt}",
     )
     db.add(signal)
+    db.flush()
+    await _set_volatility_context(signal)
     db.commit()
     logger.info(
         "[갭업풀백] 대기 시그널 생성: %s (impact=%.1f)",

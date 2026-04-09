@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import threading
 import time as _time
 from datetime import datetime
 
@@ -10,6 +11,9 @@ from app.database import SessionLocal
 from app.services.job_retry import retry_with_backoff
 
 logger = logging.getLogger(__name__)
+
+# 뉴스/공시/리포트 크롤 완료 후 각각 호출되는 keyword matching 동시 실행 방지
+_keyword_matching_lock = threading.Lock()
 
 
 def _record_job_duration(job_id: str, duration: float) -> None:
@@ -74,17 +78,18 @@ def _run_crawl_job():
 def _cleanup_old_articles(db):
     """Delete news articles older than 7 days."""
     from datetime import datetime, timedelta, timezone
-    from sqlalchemy import or_
+    from sqlalchemy import func
     from app.models.news import NewsArticle
     from app.models.news_relation import NewsStockRelation
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=7)
 
-    # Find old article IDs (including those with NULL published_at)
+    # Keep freshly collected articles even when published_at is missing.
+    # Otherwise the same URL can be re-crawled and re-notified on the next cycle.
     old_ids = [
         row[0] for row in
         db.query(NewsArticle.id)
-        .filter(or_(NewsArticle.published_at < cutoff, NewsArticle.published_at.is_(None)))
+        .filter(func.coalesce(NewsArticle.published_at, NewsArticle.collected_at) < cutoff)
         .all()
     ]
     if not old_ids:
@@ -143,12 +148,16 @@ def _run_dart_crawl():
 def _run_securities_report_crawl():
     """증권사 리포트 크롤링 동기 래퍼 (SPEC-FOLLOW-002)."""
     _start = _time.monotonic()
-    from app.services.securities_report_crawler import fetch_securities_reports
+    from app.services.securities_report_crawler import fetch_securities_reports, backfill_report_content
 
     db = SessionLocal()
     try:
         count = asyncio.run(fetch_securities_reports(db))
         logger.info(f"Securities report crawl completed: {count} new reports")
+        # 본문이 없는 기존 리포트 백필 (content 없는 것 순서대로 최대 50건씩)
+        backfill_count = asyncio.run(backfill_report_content(db, batch_size=50))
+        if backfill_count > 0:
+            logger.info(f"Securities report content backfill: {backfill_count} reports updated")
     except Exception as e:
         logger.error(f"Securities report crawl failed: {e}")
         raise
@@ -203,24 +212,6 @@ def _update_market_caps():
         _record_job_duration("market_cap_update", _time.monotonic() - _start)
         db.close()
 
-
-@retry_with_backoff(max_attempts=3)
-def _run_daily_briefing():
-    """매일 오전 데일리 브리핑 자동 생성."""
-    _start = _time.monotonic()
-    from app.services.fund_manager import generate_daily_briefing
-
-    db = SessionLocal()
-    try:
-        briefing = asyncio.run(generate_daily_briefing(db))
-        if briefing:
-            logger.info(f"Daily briefing auto-generated for {briefing.briefing_date}")
-    except Exception as e:
-        logger.error(f"Daily briefing generation failed: {e}")
-        raise
-    finally:
-        _record_job_duration("daily_briefing", _time.monotonic() - _start)
-        db.close()
 
 
 @retry_with_backoff(max_attempts=3)
@@ -371,6 +362,148 @@ def _is_kr_market_open() -> bool:
     return now_kst.weekday() < 5
 
 
+# ---------------------------------------------------------------------------
+# SPEC-KS200-001: KOSPI 200 스토캐스틱+이격도 자동매매 스케줄 작업
+# ---------------------------------------------------------------------------
+
+def _run_ks200_daily_scan():
+    """KOSPI 200 전종목 신호 스캔 — 신호 저장만 수행 (매일 15:30 KST = 06:30 UTC, 평일).
+
+    신호 실행은 익일 09:05 KST에 _run_ks200_morning_execute()가 담당한다.
+    오늘 완성 봉 데이터 기준으로 신호를 계산하고 DB에 저장한다.
+
+    SPEC-KS200-001
+    """
+    if not _is_kr_market_open():
+        logger.debug("주말 — KS200 신호 스캔 스킵")
+        return
+
+    _start = _time.monotonic()
+    from app.services.ks200_signal import run_daily_signal_scan
+
+    db = SessionLocal()
+    try:
+        scan_result = asyncio.run(run_daily_signal_scan(db))
+        logger.info(
+            "KS200 신호 스캔 완료: 스캔=%d, 매수신호=%d, 매도신호=%d (익일 09:05에 실행)",
+            scan_result["scanned"],
+            scan_result["buy_signals"],
+            scan_result["sell_signals"],
+        )
+    except Exception as e:
+        logger.error("KS200 신호 스캔 실패: %s", e)
+    finally:
+        _record_job_duration("ks200_daily_scan", _time.monotonic() - _start)
+        db.close()
+
+
+def _run_ks200_morning_execute():
+    """전날 저장된 KS200 신호를 시장 시가에 실행 (매일 09:05 KST = 00:05 UTC, 평일).
+
+    15:30 스캔으로 저장된 미체결 신호를 익일 장 시작 직후에 실행한다.
+    시가 기준 체결로 슬리피지를 최소화한다.
+
+    SPEC-KS200-001
+    """
+    if not _is_kr_market_open():
+        logger.debug("주말 — KS200 신호 실행 스킵")
+        return
+
+    _start = _time.monotonic()
+    from app.services.ks200_trading import execute_pending_signals
+
+    db = SessionLocal()
+    try:
+        exec_result = asyncio.run(execute_pending_signals(db))
+        if exec_result["buy_executed"] or exec_result["sell_executed"]:
+            logger.info(
+                "KS200 매매 실행: 매수=%d, 매도=%d, 스킵=%d",
+                exec_result["buy_executed"],
+                exec_result["sell_executed"],
+                exec_result["skipped"],
+            )
+        else:
+            logger.debug("KS200 실행 대상 신호 없음")
+    except Exception as e:
+        logger.error("KS200 신호 실행 실패: %s", e)
+    finally:
+        _record_job_duration("ks200_morning_execute", _time.monotonic() - _start)
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# SPEC-VIP-001: VIP투자자문 추종 매매 스케줄 작업
+# ---------------------------------------------------------------------------
+
+def _run_vip_disclosure_check():
+    """VIP투자자문 대량보유 공시 수집 및 처리 (30분 간격, 평일 09:00-18:00 KST).
+
+    SPEC-VIP-001 REQ-VIP-006
+    """
+    if not _is_kr_market_open():
+        logger.debug("주말 — VIP 공시 수집 스킵")
+        return
+
+    _start = _time.monotonic()
+    from app.services.vip_disclosure_crawler import (
+        fetch_vip_disclosures,
+        process_unhandled_vip_disclosures,
+    )
+
+    db = SessionLocal()
+    try:
+        fetched = asyncio.run(fetch_vip_disclosures(db, days=3))
+        if fetched:
+            logger.info("VIP 신규 공시 %d건 수집", fetched)
+
+        processed = asyncio.run(process_unhandled_vip_disclosures(db))
+        if processed:
+            logger.info("VIP 공시 처리 완료: %d건", processed)
+    except Exception as e:
+        logger.error("VIP 공시 수집/처리 실패: %s", e)
+    finally:
+        _record_job_duration("vip_disclosure_check", _time.monotonic() - _start)
+        db.close()
+
+
+def _run_vip_exit_check():
+    """VIP 포지션 청산 조건 체크 (60분 간격, 평일 09:00-18:00 KST).
+
+    - 수익률 50% 이상 시 30% 부분 익절 (REQ-VIP-004)
+    - 3영업일 경과 1차 포지션에 2차 매수 실행 (REQ-VIP-002)
+
+    SPEC-VIP-001 REQ-VIP-006
+    """
+    if not _is_kr_market_open():
+        logger.debug("주말 — VIP Exit 체크 스킵")
+        return
+
+    _start = _time.monotonic()
+    from app.services.vip_follow_trading import (
+        check_exit_conditions,
+        check_second_buy_pending,
+    )
+
+    db = SessionLocal()
+    try:
+        exit_stats = asyncio.run(check_exit_conditions(db))
+        if exit_stats["partial_sold"] or exit_stats["full_exit"]:
+            logger.info(
+                "VIP Exit 체크: 부분익절=%d, 전량청산=%d",
+                exit_stats["partial_sold"],
+                exit_stats["full_exit"],
+            )
+
+        second_buys = asyncio.run(check_second_buy_pending(db))
+        if second_buys:
+            logger.info("VIP 2차 매수 실행: %d건", second_buys)
+    except Exception as e:
+        logger.error("VIP Exit 체크 실패: %s", e)
+    finally:
+        _record_job_duration("vip_exit_check", _time.monotonic() - _start)
+        db.close()
+
+
 @retry_with_backoff(max_attempts=3)
 def _run_exit_check():
     """장중 청산 조건 확인 (1시간 간격). 주말에는 스킵."""
@@ -405,23 +538,35 @@ def _run_gap_pullback_check():
 
 
 def _run_keyword_matching():
-    """신규 뉴스/공시에서 팔로잉 키워드 매칭 후 알림 발송 (SPEC-FOLLOW-001)."""
-    _start = _time.monotonic()
-    from app.services.keyword_matcher import match_keywords_and_notify
+    """신규 뉴스/공시에서 팔로잉 키워드 매칭 후 알림 발송 (SPEC-FOLLOW-001).
 
-    db = SessionLocal()
+    뉴스/공시/리포트 크롤 완료 후 각각 호출되므로 동시 실행 가능.
+    Lock으로 직렬화하여 중복 알림 발송 및 UniqueViolation 방지.
+    """
+    # 이미 실행 중이면 스킵 (non-blocking acquire)
+    if not _keyword_matching_lock.acquire(blocking=False):
+        logger.debug("키워드 매칭 이미 실행 중 — 이번 호출 스킵")
+        return
+
+    _start = _time.monotonic()
     try:
-        stats = match_keywords_and_notify(db)
-        if stats["notified"] > 0 or stats["matched"] > 0:
-            logger.info(
-                f"키워드 매칭 완료: 매칭 {stats['matched']}건, "
-                f"알림 {stats['notified']}건, 중복 스킵 {stats['skipped_duplicates']}건"
-            )
-    except Exception as e:
-        logger.error(f"키워드 매칭 실패: {e}")
+        from app.services.keyword_matcher import match_keywords_and_notify
+
+        db = SessionLocal()
+        try:
+            stats = match_keywords_and_notify(db)
+            if stats["notified"] > 0 or stats["matched"] > 0:
+                logger.info(
+                    f"키워드 매칭 완료: 매칭 {stats['matched']}건, "
+                    f"알림 {stats['notified']}건, 중복 스킵 {stats['skipped_duplicates']}건"
+                )
+        except Exception as e:
+            logger.error(f"키워드 매칭 실패: {e}")
+        finally:
+            _record_job_duration("keyword_matching", _time.monotonic() - _start)
+            db.close()
     finally:
-        _record_job_duration("keyword_matching", _time.monotonic() - _start)
-        db.close()
+        _keyword_matching_lock.release()
 
 
 # ---------------------------------------------------------------------------
@@ -662,16 +807,6 @@ def start_scheduler():
         replace_existing=True,
         next_run_time=datetime.now(),
     )
-    # AI daily briefing every day at 08:30 KST
-    scheduler.add_job(
-        _run_daily_briefing,
-        "cron",
-        hour=8,
-        minute=30,
-        timezone="Asia/Seoul",
-        id="daily_briefing",
-        replace_existing=True,
-    )
     # 시그널 적중률 검증: 매일 18:00 KST (장 마감 후)
     scheduler.add_job(
         _run_signal_verification,
@@ -841,9 +976,65 @@ def start_scheduler():
         replace_existing=True,
     )
 
+    # SPEC-KS200-001: KOSPI 200 신호 스캔 (매일 15:30 KST = 06:30 UTC, 평일)
+    # 오늘 완성 봉 기준 신호 저장 — 실행은 익일 09:05에 수행
+    scheduler.add_job(
+        _run_ks200_daily_scan,
+        "cron",
+        day_of_week="mon-fri",
+        hour=6,
+        minute=30,
+        id="ks200_daily_scan",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    # SPEC-KS200-001: KS200 신호 실행 (매일 09:05 KST = 00:05 UTC, 평일)
+    # 전날 15:30에 저장된 미체결 신호를 시가 기준으로 실행
+    scheduler.add_job(
+        _run_ks200_morning_execute,
+        "cron",
+        day_of_week="mon-fri",
+        hour=0,
+        minute=5,
+        id="ks200_morning_execute",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+
+    # SPEC-VIP-001: VIP투자자문 추종 매매 작업
+    # 공시 수집: 평일 30분 간격 (09:00~18:00 KST)
+    scheduler.add_job(
+        _run_vip_disclosure_check,
+        "cron",
+        day_of_week="mon-fri",
+        hour="9-18",
+        minute="*/30",
+        timezone="Asia/Seoul",
+        id="vip_disclosure_check",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    # VIP 청산/2차 매수 체크: 평일 60분 간격 (09:00~18:00 KST)
+    scheduler.add_job(
+        _run_vip_exit_check,
+        "cron",
+        day_of_week="mon-fri",
+        hour="9-18",
+        minute=0,
+        timezone="Asia/Seoul",
+        id="vip_exit_check",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+
     scheduler.start()
     logger.info(
         f"Scheduler started: crawling every {interval} min, "
+        f"KS200 daily scan at 15:30 KST, "
         f"DART every {settings.DART_CRAWL_INTERVAL_MINUTES} min, "
         f"market cap every {settings.MARKET_CAP_UPDATE_HOURS}h, "
         f"commodity price every 10 min, commodity news every 30 min, "

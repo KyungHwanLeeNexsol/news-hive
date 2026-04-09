@@ -21,7 +21,7 @@ from app.models.news_relation import NewsStockRelation
 from app.models.portfolio_report import PortfolioReport
 from app.models.sector import Sector
 from app.models.stock import Stock
-from app.services.ai_client import ask_ai as _ask_ai, ask_ai_with_openai_fallback as _ask_ai_with_model
+from app.services.ai_client import ask_ai_free as _ask_ai, ask_ai_with_openai_fallback as _ask_ai_with_model
 
 logger = logging.getLogger(__name__)
 
@@ -1689,7 +1689,7 @@ async def analyze_stock(
   예: 브리핑에서 "관망"이면 시그널도 "hold"가 기본. "회피"면 "sell" 또는 "hold". "적극매수"/"매수"면 "buy".
 """
 
-    response, ai_model_used = await _ask_ai_with_model(prompt)
+    response, ai_model_used = await _ask_ai_with_model(prompt, free_only=True)
     parsed = _parse_json_response(response)
     if not parsed:
         return None
@@ -1698,6 +1698,18 @@ async def analyze_stock(
     price_at_signal = market_data.get("current_price") if market_data else None
 
     confidence_val = min(max(float(parsed.get("confidence", 0.5)), 0.0), 1.0)
+
+    # 코드 레벨 가드: AI가 프롬프트 지시(confidence >= 0.7 for buy)를 무시하고
+    # 낮은 confidence로 buy/sell을 출력하는 경우 강제로 hold 변환.
+    # gpt-4o-mini 등 fallback 모델의 instruction-following 불완전성 대응.
+    _MIN_ACTION_CONFIDENCE = 0.45
+    if parsed.get("signal") in ("buy", "sell") and confidence_val < _MIN_ACTION_CONFIDENCE:
+        logger.info(
+            "낮은 confidence로 buy/sell 강제 hold 변환: %s (conf=%.2f < %.2f, signal=%s)",
+            stock.name,
+            confidence_val, _MIN_ACTION_CONFIDENCE, parsed["signal"],
+        )
+        parsed["signal"] = "hold"
 
     # AI가 제공한 목표가/손절가 추출 (0 또는 None은 무효 처리)
     ai_target = parsed.get("target_price")
@@ -2234,7 +2246,7 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
 10. 한자(漢字) 절대 사용 금지. 순수 한글만 사용하세요.
 """
 
-    response, ai_model_used = await _ask_ai_with_model(prompt)
+    response, ai_model_used = await _ask_ai_with_model(prompt, free_only=True)
     if not response:
         # 설정된 키 확인
         from app.config import settings as _s
@@ -2259,7 +2271,7 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
             if "반드시 아래 JSON 형식으로만 응답하세요." in prompt
             else prompt
         )
-        retry_response, _ = await _ask_ai_with_model(retry_prompt)
+        retry_response, _ = await _ask_ai_with_model(retry_prompt, free_only=True)
         if retry_response:
             parsed = _parse_json_response(retry_response)
         if not parsed:
@@ -2369,6 +2381,16 @@ async def _generate_signals_from_picks(
 
     if not stock_hints:
         return
+
+    # 브리핑 pick이 너무 많으면 시그널 품질이 희석됨.
+    # 최대 5개 종목으로 제한하여 AI가 확신 있는 종목에만 집중하도록 유도.
+    MAX_SIGNAL_PICKS = 5
+    if len(stock_hints) > MAX_SIGNAL_PICKS:
+        logger.info(
+            "브리핑 추천 종목 %d개 → 상위 %d개로 제한",
+            len(stock_hints), MAX_SIGNAL_PICKS,
+        )
+        stock_hints = stock_hints[:MAX_SIGNAL_PICKS]
 
     stock_names = [name for name, _ in stock_hints]
     logger.info(f"브리핑 추천 종목 {len(stock_names)}개에 대해 시그널 자동 생성: {stock_names}")

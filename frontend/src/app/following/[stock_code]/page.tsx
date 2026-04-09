@@ -9,7 +9,7 @@ import { useRouter, useParams } from 'next/navigation';
 const CATEGORY_LABELS: Record<string, string> = {
   product: '제품',
   competitor: '경쟁사',
-  upstream: '전방산업',
+  upstream: '후방산업',
   market: '시장',
   custom: '커스텀',
 };
@@ -67,8 +67,9 @@ export default function StockKeywordPage() {
   const [addError, setAddError] = useState('');
   const [addSuccess, setAddSuccess] = useState('');
 
-  // 삭제 중인 키워드 ID
-  const [deletingId, setDeletingId] = useState<number | null>(null);
+  // 벌크 삭제 선택
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
 
   // 기업명 상태
   const [stockName, setStockName] = useState('');
@@ -196,29 +197,53 @@ export default function StockKeywordPage() {
     }
   };
 
-  // 키워드 삭제
-  const handleDeleteKeyword = async (keywordId: number) => {
-    if (!accessToken || !stockCode) return;
-    setDeletingId(keywordId);
+  // 개별 키워드 선택/해제
+  const toggleSelectKeyword = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  // 전체 선택/해제
+  const toggleSelectAll = (total: number) => {
+    if (selectedIds.size === total) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(CATEGORY_ORDER.flatMap((cat) => keywords[cat] ?? []).map((k) => k.id)));
+    }
+  };
+
+  // 선택 키워드 일괄 삭제
+  const handleBulkDelete = async () => {
+    if (!accessToken || !stockCode || selectedIds.size === 0) return;
+    setBulkDeleting(true);
     try {
-      const res = await fetch(`/api/following/stocks/${stockCode}/keywords/${keywordId}`, {
+      const res = await fetch(`/api/following/stocks/${stockCode}/keywords`, {
         method: 'DELETE',
-        headers: { Authorization: `Bearer ${accessToken}` },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ keyword_ids: Array.from(selectedIds) }),
       });
       if (res.ok) {
-        // 로컬 상태에서 즉시 제거 (재로드 없이)
+        const ids = selectedIds;
         setKeywords((prev) => {
           const updated = { ...prev };
           for (const cat of CATEGORY_ORDER) {
-            updated[cat] = updated[cat].filter((k) => k.id !== keywordId);
+            updated[cat] = updated[cat].filter((k) => !ids.has(k.id));
           }
           return updated;
         });
+        setSelectedIds(new Set());
       }
     } catch {
       // 삭제 실패 시 조용히 처리
     } finally {
-      setDeletingId(null);
+      setBulkDeleting(false);
     }
   };
 
@@ -319,7 +344,36 @@ export default function StockKeywordPage() {
         </div>
 
         {/* 키워드 태그 목록 */}
-        <div className="px-4 py-4 min-h-[120px]">
+        <div className="min-h-[120px]">
+          {/* 키워드 섹션 헤더 */}
+          {!keywordsLoading && allKeywords.length > 0 && (
+            <div className="flex items-center gap-3 px-4 pt-3 pb-1">
+              <button
+                type="button"
+                onClick={() => toggleSelectAll(totalKeywordCount)}
+                className="text-[12px] text-[#555] hover:text-[#333]"
+              >
+                {selectedIds.size === totalKeywordCount ? '전체 해제' : '전체 선택'}
+              </button>
+              <span className="text-[#ddd]">|</span>
+              <button
+                type="button"
+                onClick={handleBulkDelete}
+                disabled={selectedIds.size === 0 || bulkDeleting}
+                className="text-[12px] text-[#e12343] hover:text-[#c41231] disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
+              >
+                {bulkDeleting ? (
+                  <>
+                    <span className="inline-block w-3 h-3 border border-[#e12343] border-t-transparent rounded-full animate-spin" />
+                    삭제 중...
+                  </>
+                ) : (
+                  `선택 삭제${selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}`
+                )}
+              </button>
+            </div>
+          )}
+          <div className="px-4 pb-4 pt-2">
           {keywordsLoading ? (
             // 스켈레톤 로딩
             <div className="flex flex-wrap gap-2">
@@ -347,8 +401,22 @@ export default function StockKeywordPage() {
                 return (
                   <span
                     key={item.id}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-[#e0e0e0] rounded-full text-[13px] text-[#333]"
+                    onClick={() => toggleSelectKeyword(item.id)}
+                    className={[
+                      'inline-flex items-center gap-1.5 px-3 py-1.5 border rounded-full text-[13px] transition-colors cursor-pointer',
+                      selectedIds.has(item.id)
+                        ? 'bg-[#e8f0fc] border-[#1261c4] text-[#1261c4]'
+                        : 'bg-white border-[#e0e0e0] text-[#333]',
+                    ].join(' ')}
                   >
+                    {/* 체크 아이콘 */}
+                    <span className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center flex-shrink-0 ${selectedIds.has(item.id) ? 'bg-[#1261c4] border-[#1261c4]' : 'border-[#ccc]'}`}>
+                      {selectedIds.has(item.id) && (
+                        <svg width="8" height="6" viewBox="0 0 8 6" fill="none">
+                          <path d="M1 3L3 5L7 1" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      )}
+                    </span>
                     {item.keyword}
                     {/* 카테고리 뱃지 */}
                     <span
@@ -363,27 +431,12 @@ export default function StockKeywordPage() {
                         AI
                       </span>
                     )}
-                    {/* 키워드 삭제 버튼 */}
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteKeyword(item.id)}
-                      disabled={deletingId === item.id}
-                      className="ml-0.5 text-[#999] hover:text-[#e12343] transition-colors disabled:opacity-50"
-                      aria-label={`${item.keyword} 키워드 삭제`}
-                    >
-                      {deletingId === item.id ? (
-                        <span className="inline-block w-3 h-3 border border-[#999] border-t-transparent rounded-full animate-spin" />
-                      ) : (
-                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
-                          <path d="M1 1L11 11M11 1L1 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                        </svg>
-                      )}
-                    </button>
                   </span>
                 );
               })}
             </div>
           )}
+          </div>
         </div>
       </div>
     </div>

@@ -1,4 +1,4 @@
-import type { Sector, Stock, StockListItem, NewsArticle, NewsRelation, StockDetail, FinancialPeriod, PriceRecord, SentimentTrendItem, SectorInsight, DisclosureItem, DisclosureDetail, MacroAlert, EconomicEvent, FundSignal, DailyBriefing, PortfolioReport, AccuracyStats, StockNewsImpactStats, Commodity, CommodityHistoryPoint, SectorCommodity, CommodityNewsArticle, PaperTradingStats, PaperPosition, PaperTrade, PaperSnapshot, ChatResponse, BacktestResult, NewsPriceCorrelation, User, AuthTokens } from "./types";
+import type { Sector, Stock, StockListItem, NewsArticle, NewsRelation, StockDetail, FinancialPeriod, PriceRecord, SentimentTrendItem, SectorInsight, DisclosureItem, DisclosureDetail, MacroAlert, EconomicEvent, FundSignal, DailyBriefing, PortfolioReport, AccuracyStats, StockNewsImpactStats, Commodity, CommodityHistoryPoint, SectorCommodity, CommodityNewsArticle, PaperTradingStats, PaperPosition, PaperTrade, PaperSnapshot, ChatResponse, BacktestResult, NewsPriceCorrelation, User, AuthTokens, VIPPortfolioStats, VIPPosition, VIPTradeHistory, KS200PortfolioStats, KS200Position, KS200TradeHistory } from "./types";
 
 const API_BASE = "/api";
 
@@ -901,5 +901,43 @@ export async function fetchPersonalizedFeed(
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail ?? '개인화 피드를 불러오지 못했습니다.');
   }
+  return res.json();
+}
+
+// ── 모의투자 포트폴리오 API ──
+
+export async function fetchVIPPortfolio(): Promise<VIPPortfolioStats> {
+  const res = await fetchWithRetry(`${API_BASE}/vip-trading/portfolio`);
+  if (!res.ok) throw new Error('VIP 포트폴리오 조회 실패');
+  return res.json();
+}
+
+export async function fetchVIPPositions(): Promise<VIPPosition[]> {
+  const res = await fetchWithRetry(`${API_BASE}/vip-trading/positions`);
+  if (!res.ok) throw new Error('VIP 포지션 조회 실패');
+  return res.json();
+}
+
+export async function fetchVIPTrades(limit = 30, offset = 0): Promise<VIPTradeHistory[]> {
+  const res = await fetchWithRetry(`${API_BASE}/vip-trading/trades?limit=${limit}&offset=${offset}`);
+  if (!res.ok) throw new Error('VIP 거래 내역 조회 실패');
+  return res.json();
+}
+
+export async function fetchKS200Portfolio(): Promise<KS200PortfolioStats> {
+  const res = await fetchWithRetry(`${API_BASE}/ks200-trading/portfolio`);
+  if (!res.ok) throw new Error('KS200 포트폴리오 조회 실패');
+  return res.json();
+}
+
+export async function fetchKS200Positions(): Promise<KS200Position[]> {
+  const res = await fetchWithRetry(`${API_BASE}/ks200-trading/positions`);
+  if (!res.ok) throw new Error('KS200 포지션 조회 실패');
+  return res.json();
+}
+
+export async function fetchKS200Trades(limit = 30, offset = 0): Promise<KS200TradeHistory[]> {
+  const res = await fetchWithRetry(`${API_BASE}/ks200-trading/trades?limit=${limit}&offset=${offset}`);
+  if (!res.ok) throw new Error('KS200 거래 내역 조회 실패');
   return res.json();
 }

@@ -19,8 +19,10 @@ def get_stats(db: Session = Depends(get_db)):
 
 
 @router.get("/positions")
-def get_positions(db: Session = Depends(get_db)):
-    """오픈 포지션 목록."""
+async def get_positions(db: Session = Depends(get_db)):
+    """오픈 포지션 목록 (현재가 및 미실현 수익률 포함)."""
+    from app.services.vip_follow_trading import _fetch_prices_batch
+
     portfolio = get_or_create_portfolio(db)
     trades = (
         db.query(VirtualTrade)
@@ -30,20 +32,36 @@ def get_positions(db: Session = Depends(get_db)):
         )
         .all()
     )
+
+    # 종목 정보 로드 — N+1 쿼리 방지: IN 쿼리로 일괄 조회
+    trade_stock_ids = [t.stock_id for t in trades]
+    stocks_map = {s.id: s for s in db.query(Stock).filter(Stock.id.in_(trade_stock_ids)).all()} if trade_stock_ids else {}
+    trade_stocks = [(t, stocks_map.get(t.stock_id)) for t in trades]
+
+    # 현재가 배치 조회 (1회 API 호출)
+    batch_codes = [s.stock_code for _, s in trade_stocks if s and s.stock_code]
+    prices_map = await _fetch_prices_batch(batch_codes)
+    prices = [prices_map.get(s.stock_code) if s and s.stock_code else None for _, s in trade_stocks]
+
     result = []
-    for t in trades:
-        stock = db.query(Stock).filter(Stock.id == t.stock_id).first()
+    for (t, stock), current_price in zip(trade_stocks, prices):
+        invest_amount = t.entry_price * t.quantity
+        unrealized_pct = round(
+            (current_price - t.entry_price) / t.entry_price * 100, 2
+        ) if current_price and t.entry_price else None
         result.append({
             "id": t.id,
             "stock_name": stock.name if stock else "Unknown",
             "stock_code": stock.stock_code if stock else "",
             "direction": t.direction,
             "entry_price": t.entry_price,
+            "current_price": current_price,
             "quantity": t.quantity,
             "target_price": t.target_price,
             "stop_loss": t.stop_loss,
             "entry_date": t.entry_date.isoformat() if t.entry_date else None,
-            "invest_amount": t.entry_price * t.quantity,
+            "invest_amount": invest_amount,
+            "unrealized_pct": unrealized_pct,
         })
     return result
 
@@ -95,9 +113,10 @@ def get_snapshots(days: int = 30, db: Session = Depends(get_db)):
         .order_by(PortfolioSnapshot.snapshot_date.asc())
         .all()
     )
+    kst = timezone(timedelta(hours=9))
     return [
         {
-            "date": s.snapshot_date.isoformat(),
+            "date": s.snapshot_date.astimezone(kst).strftime("%Y-%m-%d"),
             "total_value": s.total_value,
             "cash": s.cash,
             "positions_value": s.positions_value,

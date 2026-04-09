@@ -163,7 +163,7 @@ async def run_incremental_inference(db: Session) -> dict[str, int]:
 
 async def _infer_inter_sector_relations(db: Session) -> int:
     """Phase A: DB의 전체 섹터 목록으로 섹터 간 관계를 AI 추론."""
-    from app.services.ai_client import ask_ai
+    from app.services.ai_client import ask_ai_free as ask_ai
 
     sectors = db.query(Sector).all()
     if len(sectors) < 2:
@@ -249,7 +249,7 @@ async def _infer_intra_sector_competitors(db: Session) -> int:
 
 async def _infer_competitors_for_sector(db: Session, sector_id: int) -> int:
     """단일 섹터의 종목 간 경쟁 관계를 AI로 추론."""
-    from app.services.ai_client import ask_ai
+    from app.services.ai_client import ask_ai_free as ask_ai
 
     sector = db.query(Sector).filter(Sector.id == sector_id).first()
     if not sector:

@@ -8,8 +8,11 @@ import html
 import json
 import logging
 import re
+import time
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -19,6 +22,11 @@ _last_run: datetime | None = None
 
 # AI 관련성 점수 임계값 (>= 통과)
 RELEVANCE_THRESHOLD = 6
+
+# 사이클당 최대 처리 콘텐츠 수 (AI 평가로 인한 스케줄러 스레드 블로킹 방지)
+# 1개 AI 호출 ≈ 5~10초, 10분 주기 → 최대 40~50건이 안전 범위
+# 비용 절감을 위해 25건으로 축소 (처리 못 한 기사는 다음 사이클에서 처리됨)
+MAX_ITEMS_PER_CYCLE = 25
 
 # 관련성 결과 캐시: {(content_type, content_id, keyword, company_name): score}
 # 동일 사이클/근접 사이클 내 동일 콘텐츠 재평가 방지 (최대 2048개 LRU 흉내)
@@ -32,12 +40,57 @@ def _cache_set(key: tuple, score: int) -> None:
     _relevance_cache[key] = score
 
 
+def _keyword_in_text(keyword: str, text: str) -> bool:
+    """키워드가 텍스트에 포함되는지 확인한다.
+
+    영문/숫자로만 구성된 키워드는 단어 경계 기준 매칭으로 오탐을 방지한다.
+    예) "ESS" → "BESS", "address", "progress" 에 매칭되지 않음
+    한글 포함 키워드는 단어 경계 기준 매칭으로 오탐을 방지한다.
+    예) "하이브" → "하이브리드" 에 매칭되지 않음 (조사 붙임 형태는 허용)
+
+    Args:
+        keyword: 원본 키워드 (대소문자 무관)
+        text: 검색 대상 텍스트 (소문자 변환된 상태 가정)
+    """
+    kw = keyword.lower().strip()
+    if not kw:
+        return False
+    # 한글 포함 키워드: 단어 경계 기준 (조사 붙임 형태 허용, 합성어 오탐 방지)
+    # 앞: 한글이 바로 선행하면 매칭 안 함 ("SNT에너지"에서 "에너지" 오탐 방지)
+    # 뒤: 한국어 격조사/접속조사이거나, 비한글 문자이거나, 문자열 끝이어야 함
+    #     ("하이브리드"에서 "리드"는 조사가 아니므로 매칭 안 함)
+    if re.search(r"[가-힣ㄱ-ㅎㅏ-ㅣ]", kw):
+        # 긴 조사를 앞에 배치하여 우선 매칭 (예: "에서"가 "에"보다 먼저)
+        _JOSA = (
+            r"로부터|에서|에게서|에게|이나|이고|이며|이면|이니|이랑|이다|이야|이여|면서"
+            r"|부터|까지|보다|처럼|만큼|마저|조차"
+            r"|로|에|이|가|을|를|의|은|는|과|와|도|만|뿐|나|고|며|면|니|랑|다|야|아|여|서"
+        )
+        pattern = (
+            r"(?<![가-힣])"
+            + re.escape(kw)
+            + r"(?=(?:"
+            + _JOSA
+            + r")(?![가-힣])|[^가-힣ㄱ-ㅎㅏ-ㅣ]|$)"
+        )
+        return bool(re.search(pattern, text))
+    # 영문/숫자/기호 키워드: 단어 경계 기준 (부분 문자열 오탐 방지)
+    pattern = r"(?<![a-zA-Z0-9\-])" + re.escape(kw) + r"(?![a-zA-Z0-9\-])"
+    return bool(re.search(pattern, text))
+
+
 def _shortcut_score(keyword: str, company_name: str, search_text: str) -> int | None:
     """AI 호출 없이 결정 가능한 shortcut 점수.
 
-    - 키워드가 곧 기업명(또는 그 일부) → 10점 (자명한 관련)
-    - 기업명이 본문에도 함께 등장 → 8점 (자명한 관련)
+    - 키워드 == 기업명 → 10점 (완전 일치)
+    - 기업명이 키워드에 포함(키워드가 더 구체적) → 10점
     - 그 외 → None (AI 평가 필요)
+
+    주의: 'kw_l in name_l' (키워드가 기업명의 부분 문자열) 조건은
+    "에너지" in "SNT에너지" 같은 오탐을 유발하므로 제거됨.
+    주의: 'name_l in search_text → 8점' 케이스는 제거됨.
+    기업명이 본문에 등장해도 키워드(예: "ESS") 관련성은 AI가 판단해야 함.
+    예) 전자담배 기사에 삼성SDI가 언급돼도 "ESS" 키워드 알림은 부적절.
     """
     if not company_name:
         return None
@@ -45,13 +98,30 @@ def _shortcut_score(keyword: str, company_name: str, search_text: str) -> int | 
     name_l = company_name.lower().strip()
     if not kw_l or not name_l:
         return None
-    # 키워드 = 기업명 (또는 한쪽이 다른 쪽을 포함)
-    if kw_l == name_l or kw_l in name_l or name_l in kw_l:
+    # 완전 일치 또는 키워드가 기업명을 포함하는 경우만 shortcut 적용
+    if kw_l == name_l or name_l in kw_l:
         return 10
-    # 기업명이 콘텐츠 본문에 함께 등장하면 직접 관련 가능성 높음
-    if name_l in search_text:
-        return 8
     return None
+
+
+def _ai_currently_unavailable() -> bool:
+    """현재 모든 AI 제공자가 rate limited/불가 상태인지 빠르게 확인한다.
+
+    True 반환 시 _batch_evaluate를 건너뛰어 스케줄러 스레드 블로킹을 방지한다.
+    """
+    try:
+        from app.services.ai_client import _key_rate_limited_until, _get_gemini_keys
+        keys = _get_gemini_keys()
+        if not keys:
+            return True
+        now = time.monotonic()
+        all_gemini_limited = all(
+            _key_rate_limited_until.get(i, 0) > now
+            for i in range(len(keys))
+        )
+        return all_gemini_limited
+    except Exception:
+        return False
 
 
 def _batch_evaluate(
@@ -85,7 +155,12 @@ def _batch_evaluate(
     if not pending:
         return
 
-    # 2) 단일 AI 호출로 일괄 평가
+    # 2) AI 제공자 가용 여부 확인 — 모두 rate limited 시 스킵 (블로킹 방지)
+    if _ai_currently_unavailable():
+        logger.debug(f"AI 제공자 전체 불가 — {content_type}#{content_id} 배치 평가 스킵")
+        return
+
+    # 3) 단일 AI 호출로 일괄 평가
     type_label = {"news": "뉴스", "disclosure": "공시", "report": "리포트"}.get(content_type, "콘텐츠")
     pair_lines = "\n".join(
         f'{i+1}. 키워드="{kw}", 기업명="{name}"{f" ({code})" if code else ""}'
@@ -109,9 +184,9 @@ def _batch_evaluate(
     )
 
     try:
-        from app.services.ai_client import ask_ai
+        from app.services.ai_client import ask_ai_lite
 
-        response = asyncio.run(ask_ai(prompt))
+        response = asyncio.run(ask_ai_lite(prompt))
         if not response:
             return
 
@@ -149,8 +224,38 @@ def _check_relevance(
     content_type: str,
     content_id: int,
 ) -> int:
-    """캐시에서 관련성 점수를 조회한다. 없으면 -1 (폴백 = 발송)."""
+    """캐시에서 관련성 점수를 조회한다.
+
+    Returns:
+        캐시 히트: 저장된 점수 (0~10)
+        캐시 미스(AI 평가 실패 또는 미평가): -1 (발송 차단)
+    """
     return _relevance_cache.get((content_type, content_id, keyword, company_name), -1)
+
+
+def _find_existing_notification(
+    db: Session,
+    *,
+    user_id: int,
+    content_type: str,
+    content_id: int,
+    content_url: str,
+):
+    """Find an existing notification for the same content id or stable content URL."""
+    from app.models.following import KeywordNotification
+
+    return (
+        db.query(KeywordNotification)
+        .filter(
+            KeywordNotification.user_id == user_id,
+            KeywordNotification.content_type == content_type,
+            or_(
+                KeywordNotification.content_id == content_id,
+                KeywordNotification.content_url == content_url,
+            ),
+        )
+        .first()
+    )
 
 
 def match_keywords_and_notify(db: Session) -> dict:
@@ -167,12 +272,13 @@ def match_keywords_and_notify(db: Session) -> dict:
 
     from app.models.news import NewsArticle
     from app.models.disclosure import Disclosure
-    from app.models.following import StockFollowing, StockKeyword, KeywordNotification
+    from app.models.following import StockFollowing, StockKeyword
 
     stats = {"matched": 0, "notified": 0, "skipped_duplicates": 0}
 
-    # 마지막 실행 이후 기간 결정 (첫 실행이면 최근 1시간)
-    since = _last_run if _last_run else datetime.now(timezone.utc) - timedelta(hours=1)
+    # 마지막 실행 이후 기간 결정 (첫 실행이면 최근 20분)
+    # 1시간으로 설정 시 재시작 직후 AI burst가 발생하므로 스케줄 간격(10분)의 2배로 제한
+    since = _last_run if _last_run else datetime.now(timezone.utc) - timedelta(minutes=20)
 
     # 당일 기준 시작 시각 (KST 00:00 → UTC)
     kst = timezone(timedelta(hours=9))
@@ -181,12 +287,15 @@ def match_keywords_and_notify(db: Session) -> dict:
 
     try:
         # 신규 뉴스 조회 (당일 발행 뉴스만)
+        # 최신 기사 우선 처리 + 사이클당 최대 처리 수 제한 (스케줄러 블로킹 방지)
         recent_news = (
             db.query(NewsArticle)
             .filter(
                 NewsArticle.collected_at > since,
                 NewsArticle.published_at >= today_start_utc,
             )
+            .order_by(NewsArticle.collected_at.desc())
+            .limit(MAX_ITEMS_PER_CYCLE)
             .all()
         )
 
@@ -197,6 +306,8 @@ def match_keywords_and_notify(db: Session) -> dict:
                 Disclosure.created_at > since,
                 Disclosure.created_at >= today_start_utc,
             )
+            .order_by(Disclosure.created_at.desc())
+            .limit(MAX_ITEMS_PER_CYCLE)
             .all()
         )
 
@@ -233,7 +344,7 @@ def match_keywords_and_notify(db: Session) -> dict:
             _candidate_pairs: list[tuple[str, str, str | None]] = []
             for _u, _kws in user_keywords.items():
                 for _kid, _kw, _sid in _kws:
-                    if len(_kw) < 2 or _kw.lower() not in search_text:
+                    if len(_kw) < 2 or not _keyword_in_text(_kw, search_text):
                         continue
                     _candidate_pairs.append(
                         (_kw, stock_name_map.get(_sid, ""), stock_code_map.get(_sid))
@@ -253,36 +364,43 @@ def match_keywords_and_notify(db: Session) -> dict:
                     # 최소 2자 이상 키워드만 매칭
                     if len(keyword) < 2:
                         continue
-                    if keyword.lower() not in search_text:
+                    if not _keyword_in_text(keyword, search_text):
                         continue
 
                     stats["matched"] += 1
 
                     # 중복 알림 확인
-                    existing = (
-                        db.query(KeywordNotification)
-                        .filter(
-                            KeywordNotification.user_id == user_id,
-                            KeywordNotification.content_type == "news",
-                            KeywordNotification.content_id == article.id,
-                        )
-                        .first()
+                    existing = _find_existing_notification(
+                        db,
+                        user_id=user_id,
+                        content_type="news",
+                        content_id=article.id,
+                        content_url=article.url,
                     )
                     if existing:
                         stats["skipped_duplicates"] += 1
                         break  # 동일 뉴스에 이미 알림 발송됨
 
-                    # AI 관련성 게이트 (점수 < 임계값이면 스킵, -1=폴백 발송)
+                    # AI 관련성 게이트 (점수 < 임계값이면 스킵)
+                    company_name_for_check = stock_name_map.get(stock_id, "")
                     score = _check_relevance(
                         keyword=keyword,
-                        company_name=stock_name_map.get(stock_id, ""),
+                        company_name=company_name_for_check,
                         content_type="news",
                         content_id=article.id,
                     )
-                    if 0 <= score < RELEVANCE_THRESHOLD:
+                    if score != -1 and score < RELEVANCE_THRESHOLD:
                         stats.setdefault("filtered_low_relevance", 0)
                         stats["filtered_low_relevance"] += 1
                         break
+                    # AI 불가(-1) 폴백: 기업명이 본문에 없으면 차단
+                    # (rate limit 시 무관한 기사 오발송 방지)
+                    # _keyword_in_text 사용으로 "하이브리드"에 "하이브" 오탐 방지
+                    if score == -1 and company_name_for_check:
+                        if not _keyword_in_text(company_name_for_check, search_text):
+                            stats.setdefault("filtered_low_relevance", 0)
+                            stats["filtered_low_relevance"] += 1
+                            break
 
                     # 알림 발송
                     channel = _dispatch_notification(
@@ -309,7 +427,7 @@ def match_keywords_and_notify(db: Session) -> dict:
             _candidate_pairs = []
             for _u, _kws in user_keywords.items():
                 for _kid, _kw, _sid in _kws:
-                    if len(_kw) < 2 or _kw.lower() not in search_text:
+                    if len(_kw) < 2 or not _keyword_in_text(_kw, search_text):
                         continue
                     _candidate_pairs.append(
                         (_kw, stock_name_map.get(_sid, ""), stock_code_map.get(_sid))
@@ -328,35 +446,39 @@ def match_keywords_and_notify(db: Session) -> dict:
                 for kw_id, keyword, stock_id in kw_list:
                     if len(keyword) < 2:
                         continue
-                    if keyword.lower() not in search_text:
+                    if not _keyword_in_text(keyword, search_text):
                         continue
 
                     stats["matched"] += 1
 
                     # 중복 알림 확인
-                    existing = (
-                        db.query(KeywordNotification)
-                        .filter(
-                            KeywordNotification.user_id == user_id,
-                            KeywordNotification.content_type == "disclosure",
-                            KeywordNotification.content_id == disclosure.id,
-                        )
-                        .first()
+                    existing = _find_existing_notification(
+                        db,
+                        user_id=user_id,
+                        content_type="disclosure",
+                        content_id=disclosure.id,
+                        content_url=disclosure.url,
                     )
                     if existing:
                         stats["skipped_duplicates"] += 1
                         break
 
+                    company_name_for_check = stock_name_map.get(stock_id, "")
                     score = _check_relevance(
                         keyword=keyword,
-                        company_name=stock_name_map.get(stock_id, ""),
+                        company_name=company_name_for_check,
                         content_type="disclosure",
                         content_id=disclosure.id,
                     )
-                    if 0 <= score < RELEVANCE_THRESHOLD:
+                    if score != -1 and score < RELEVANCE_THRESHOLD:
                         stats.setdefault("filtered_low_relevance", 0)
                         stats["filtered_low_relevance"] += 1
                         break
+                    if score == -1 and company_name_for_check:
+                        if not _keyword_in_text(company_name_for_check, search_text):
+                            stats.setdefault("filtered_low_relevance", 0)
+                            stats["filtered_low_relevance"] += 1
+                            break
 
                     # 알림 발송
                     channel = _dispatch_notification(
@@ -384,6 +506,8 @@ def match_keywords_and_notify(db: Session) -> dict:
                 SecuritiesReport.collected_at > since,
                 SecuritiesReport.collected_at >= today_start_utc,
             )
+            .order_by(SecuritiesReport.collected_at.desc())
+            .limit(MAX_ITEMS_PER_CYCLE)
             .all()
         )
         for report in recent_reports:
@@ -395,7 +519,7 @@ def match_keywords_and_notify(db: Session) -> dict:
             _candidate_pairs = []
             for _u, _kws in user_keywords.items():
                 for _kid, _kw, _sid in _kws:
-                    if len(_kw) < 2 or _kw.lower() not in search_text:
+                    if len(_kw) < 2 or not _keyword_in_text(_kw, search_text):
                         continue
                     _candidate_pairs.append(
                         (_kw, stock_name_map.get(_sid, ""), stock_code_map.get(_sid))
@@ -414,35 +538,39 @@ def match_keywords_and_notify(db: Session) -> dict:
                 for kw_id, keyword, stock_id in kw_list:
                     if len(keyword) < 2:
                         continue
-                    if keyword.lower() not in search_text:
+                    if not _keyword_in_text(keyword, search_text):
                         continue
 
                     stats["matched"] += 1
 
                     # 중복 알림 확인
-                    existing = (
-                        db.query(KeywordNotification)
-                        .filter(
-                            KeywordNotification.user_id == user_id,
-                            KeywordNotification.content_type == "report",
-                            KeywordNotification.content_id == report.id,
-                        )
-                        .first()
+                    existing = _find_existing_notification(
+                        db,
+                        user_id=user_id,
+                        content_type="report",
+                        content_id=report.id,
+                        content_url=report.url,
                     )
                     if existing:
                         stats["skipped_duplicates"] += 1
                         break
 
+                    company_name_for_check = stock_name_map.get(stock_id, "")
                     score = _check_relevance(
                         keyword=keyword,
-                        company_name=stock_name_map.get(stock_id, ""),
+                        company_name=company_name_for_check,
                         content_type="report",
                         content_id=report.id,
                     )
-                    if 0 <= score < RELEVANCE_THRESHOLD:
+                    if score != -1 and score < RELEVANCE_THRESHOLD:
                         stats.setdefault("filtered_low_relevance", 0)
                         stats["filtered_low_relevance"] += 1
                         break
+                    if score == -1 and company_name_for_check:
+                        if not _keyword_in_text(company_name_for_check, search_text):
+                            stats.setdefault("filtered_low_relevance", 0)
+                            stats["filtered_low_relevance"] += 1
+                            break
 
                     # 알림 발송
                     channel = _dispatch_notification(
@@ -512,7 +640,7 @@ def _dispatch_notification(
         return channel
 
     # 현재 주가 조회 (종목코드가 있는 경우)
-    price_suffix = ""
+    price_part = ""
     if stock_code:
         try:
             from app.services.naver_finance import fetch_current_price_with_change
@@ -520,23 +648,28 @@ def _dispatch_notification(
             if price_data:
                 price = price_data["current_price"]
                 rate = price_data["change_rate"]
+                # 한국 주식 관행: 상승=빨간(🔺), 하락=파란(🔻)
+                # 텔레그램은 HTML 색상 미지원 → 이모지로 대체
+                arrow = "🔺" if rate >= 0 else "🔻"
                 sign = "+" if rate >= 0 else ""
-                price_suffix = f" | {price:,}원 ({sign}{rate:.2f}%)"
+                price_part = f" [{price:,}원 {arrow}{sign}{rate:.2f}%]"
         except Exception as e:
             logger.debug(f"주가 조회 실패 ({stock_code}): {e}")
 
     # 알림 메시지 구성 (SPEC-FOLLOW-002: 리포트 타입 추가)
+    # 형식: [키워드 알림] [키워드] [기업명] [주가 🔺/🔻 변동률]
     type_label = {"news": "뉴스", "disclosure": "공시", "report": "리포트"}.get(content_type, "알림")
-    header = f"[키워드 알림] {keyword_text}"
+    header = f"[키워드 알림] [{keyword_text}]"
     if company_name:
-        header = f"[키워드 알림] {keyword_text} | {company_name}{price_suffix}"
-    elif price_suffix:
-        header = f"[키워드 알림] {keyword_text}{price_suffix}"
-    safe_url = html.escape(content_url)
+        header += f" [{company_name}]"
+    if price_part:
+        header += price_part
+    # URL은 이스케이프하지 않음 — href에 &amp;가 들어가면 Naver가 404 반환
+    # 텍스트 콘텐츠(header, title)만 HTML 이스케이프 처리
     message = (
-        f"<b>{header}</b>\n\n"
-        f"<b>{type_label}</b>: {content_title}\n"
-        f"<a href=\"{safe_url}\">자세히 보기</a>"
+        f"<b>{html.escape(header)}</b>\n\n"
+        f"<b>{type_label}</b>: {html.escape(content_title)}\n"
+        f'<a href="{content_url}">자세히 보기</a>'
     )
 
     # 인라인 키보드: 키워드 삭제 버튼
@@ -587,19 +720,26 @@ def _dispatch_notification(
     if channel == "none":
         return channel
 
-    # 알림 이력 저장
+    # 알림 이력 저장 — SAVEPOINT로 UniqueConstraint 위반 시 외부 트랜잭션 격리
     try:
-        notification = KeywordNotification(
-            user_id=user_id,
-            keyword_id=keyword_id,
-            content_type=content_type,
-            content_id=content_id,
-            content_title=content_title[:500],
-            content_url=content_url[:1000],
-            channel=channel,
-        )
-        db.add(notification)
+        with db.begin_nested():  # SAVEPOINT: rollback 시 이 블록만 롤백, 외부 트랜잭션 유지
+            notification = KeywordNotification(
+                user_id=user_id,
+                keyword_id=keyword_id,
+                content_type=content_type,
+                content_id=content_id,
+                content_title=content_title[:500],
+                content_url=content_url[:1000],
+                channel=channel,
+            )
+            db.add(notification)
+            # begin_nested() 종료 시 자동 flush → UniqueConstraint 즉시 검증
         # 커밋은 호출자(match_keywords_and_notify)가 일괄 처리
+    except IntegrityError:
+        # UniqueConstraint(user_id, content_type, content_id) 위반 — DB 레벨 중복 차단
+        # 정상 흐름: _find_existing_notification()이 선제 차단하므로 여기까지 오는 경우는 드뭄
+        logger.debug(f"알림 이력 중복 스킵 (UniqueConstraint): user={user_id}, {content_type}#{content_id}")
+        return channel
     except Exception as e:
         logger.error(f"알림 이력 저장 실패 (user={user_id}): {e}")
 

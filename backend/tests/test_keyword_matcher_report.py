@@ -112,7 +112,7 @@ def test_report_keyword_match_notifies() -> None:
     stock_q = MagicMock()
     stock_q.all.return_value = []
     report_q = MagicMock()
-    report_q.filter.return_value.all.return_value = [report]
+    report_q.filter.return_value.order_by.return_value.limit.return_value.all.return_value = [report]
     notif_q = MagicMock()
     notif_q.filter.return_value.first.return_value = None  # 중복 없음
 
@@ -136,7 +136,8 @@ def test_report_keyword_match_notifies() -> None:
 
     db.query.side_effect = query_side
 
-    with patch.object(km, "_dispatch_notification", side_effect=mock_dispatch):
+    with patch.object(km, "_dispatch_notification", side_effect=mock_dispatch), \
+         patch.object(km, "_check_relevance", return_value=8):
         km.match_keywords_and_notify(db)
 
     # 알림이 발송되었는지, content_type이 "report"인지 확인
@@ -169,7 +170,7 @@ def test_report_keyword_no_duplicate() -> None:
     stock_q = MagicMock()
     stock_q.all.return_value = []
     report_q = MagicMock()
-    report_q.filter.return_value.all.return_value = [report]
+    report_q.filter.return_value.order_by.return_value.limit.return_value.all.return_value = [report]
     notif_q = MagicMock()
     # 중복 알림이 이미 존재
     notif_q.filter.return_value.first.return_value = existing_notif
@@ -217,15 +218,15 @@ def test_existing_news_disclosure_matching_unaffected() -> None:
 
     db = MagicMock()
     news_q = MagicMock()
-    news_q.filter.return_value.all.return_value = [news]
+    news_q.filter.return_value.order_by.return_value.limit.return_value.all.return_value = [news]
     disc_q = MagicMock()
-    disc_q.filter.return_value.all.return_value = [disclosure]
+    disc_q.filter.return_value.order_by.return_value.limit.return_value.all.return_value = [disclosure]
     kw_q = MagicMock()
     kw_q.join.return_value.all.return_value = kw_rows
     stock_q = MagicMock()
     stock_q.all.return_value = []
     report_q = MagicMock()
-    report_q.filter.return_value.all.return_value = []  # 리포트 없음
+    report_q.filter.return_value.order_by.return_value.limit.return_value.all.return_value = []  # 리포트 없음
     notif_q = MagicMock()
     notif_q.filter.return_value.first.return_value = None  # 중복 없음
 
@@ -258,7 +259,8 @@ def test_existing_news_disclosure_matching_unaffected() -> None:
         dispatched_calls.append(kwargs)
         return "telegram"
 
-    with patch.object(km, "_dispatch_notification", side_effect=mock_dispatch):
+    with patch.object(km, "_dispatch_notification", side_effect=mock_dispatch), \
+         patch.object(km, "_check_relevance", return_value=8):
         stats = km.match_keywords_and_notify(db)
 
     # 뉴스 매칭이 정상 작동해야 함

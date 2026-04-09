@@ -19,6 +19,7 @@ from app.models.user import User
 from app.schemas.following import (
     AddKeywordRequest,
     AIGenerateResponse,
+    BulkDeleteKeywordsRequest,
     FollowingListResponse,
     FollowingResponse,
     FollowStockRequest,
@@ -259,6 +260,28 @@ def delete_keyword(
     db.delete(kw)
     db.commit()
     return {"message": "키워드가 삭제되었습니다"}
+
+
+@router.delete("/stocks/{stock_code}/keywords", response_model=dict)
+def bulk_delete_keywords(
+    stock_code: str,
+    request: BulkDeleteKeywordsRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """팔로잉 종목의 키워드를 일괄 삭제한다."""
+    following = _get_following_or_404(stock_code, current_user.id, db)
+
+    deleted_count = (
+        db.query(StockKeyword)
+        .filter(
+            StockKeyword.id.in_(request.keyword_ids),
+            StockKeyword.following_id == following.id,
+        )
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return {"message": f"{deleted_count}개의 키워드가 삭제되었습니다", "deleted_count": deleted_count}
 
 
 @router.post("/stocks/{stock_code}/keywords/ai-generate", response_model=AIGenerateResponse)

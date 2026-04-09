@@ -58,7 +58,7 @@ async def _classify_error(signal: FundSignal, stock_name: str) -> str | None:
     Returns:
         오류 카테고리 문자열 또는 None (분류 실패 시)
     """
-    from app.services.ai_client import ask_ai
+    from app.services.ai_client import ask_ai_free_lite as ask_ai
 
     prompt = f"""투자 시그널이 실패한 원인을 분류해주세요.
 

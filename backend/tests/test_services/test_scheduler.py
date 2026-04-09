@@ -12,7 +12,6 @@ from app.services.scheduler import (
     _run_commodity_news_crawl,
     _run_commodity_price_fetch,
     _run_crawl_job,
-    _run_daily_briefing,
     _run_dart_crawl,
     _run_exit_check,
     _run_fast_verify,
@@ -66,40 +65,6 @@ class TestRunCrawlJob:
         mock_cleanup.side_effect = Exception("DB Error")
 
         _run_crawl_job()
-
-        mock_db.close.assert_called()
-
-
-class TestRunDailyBriefing:
-    """_run_daily_briefing이 generate_daily_briefing을 호출하는지 검증."""
-
-    @patch("app.services.scheduler.asyncio.run")
-    @patch("app.services.scheduler.SessionLocal")
-    def test_calls_generate_daily_briefing(
-        self, mock_session_cls, mock_arun,
-    ) -> None:
-        """generate_daily_briefing을 호출한다."""
-        mock_db = MagicMock()
-        mock_session_cls.return_value = mock_db
-        mock_arun.return_value = MagicMock(briefing_date="2026-03-26")
-
-        _run_daily_briefing()
-
-        mock_arun.assert_called_once()
-        mock_db.close.assert_called_once()
-
-    @patch("app.services.job_retry.time.sleep")
-    @patch("app.services.scheduler.asyncio.run")
-    @patch("app.services.scheduler.SessionLocal")
-    def test_handles_briefing_exception(
-        self, mock_session_cls, mock_arun, mock_sleep,
-    ) -> None:
-        """브리핑 생성 실패 시 예외가 전파되지 않는다."""
-        mock_db = MagicMock()
-        mock_session_cls.return_value = mock_db
-        mock_arun.side_effect = Exception("AI Error")
-
-        _run_daily_briefing()
 
         mock_db.close.assert_called()
 

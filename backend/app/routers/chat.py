@@ -407,7 +407,7 @@ async def chat_endpoint(req: ChatRequest, db: Session = Depends(get_db)):
     사용자 메시지에서 종목을 감지하고, 관련 데이터를 수집하여
     Gemini에게 분석을 요청한 후 응답을 반환한다.
     """
-    # OpenAI fallback 경유 wrapper 사용 (Gemini 한도 소진 시 자동 전환)
+    # 무료 키 전용 — 유료 키(key 0)는 키워드 알림·생성 전용으로 예약됨
     from app.services.ai_client import ask_ai_with_openai_fallback as ask_ai_with_model
 
     # 세션 관리
@@ -439,7 +439,7 @@ async def chat_endpoint(req: ChatRequest, db: Session = Depends(get_db)):
     # AI 호출
     ai_model_used: str | None = None
     try:
-        reply, ai_model_used = await ask_ai_with_model(prompt)
+        reply, ai_model_used = await ask_ai_with_model(prompt, free_only=True)
         if not reply:
             reply = "죄송합니다. AI 응답을 생성하지 못했습니다. 잠시 후 다시 시도해주세요."
     except Exception as e:

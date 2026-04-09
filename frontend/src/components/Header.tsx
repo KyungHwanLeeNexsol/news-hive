@@ -13,6 +13,7 @@ const navItems = [
   { href: '/calendar', label: '캘린더' },
   { href: '/chat', label: 'AI 분석' },
   { href: '/following', label: '팔로잉' },
+  { href: '/trading', label: '모의투자' },
 ];
 
 export default function Header() {

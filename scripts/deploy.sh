@@ -3,6 +3,12 @@
 # 직접 실행도 가능: ssh ubuntu@140.245.76.242 'bash -s' < scripts/deploy.sh
 
 set -e
+
+# 동시 배포 방지: 다른 배포가 진행 중이면 즉시 종료
+LOCK_FILE="/tmp/newshive-deploy.lock"
+exec 200>"$LOCK_FILE"
+flock -n 200 || { echo "!!! 다른 배포가 진행 중입니다. 잠시 후 재시도하세요."; exit 1; }
+
 cd /home/ubuntu/news-hive
 
 echo ">>> git pull..."

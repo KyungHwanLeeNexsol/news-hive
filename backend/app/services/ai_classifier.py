@@ -130,6 +130,30 @@ _NON_FINANCIAL_PATTERNS: list[str] = [
     # Crime / Social (non-business context)
     "검찰", "경찰", "구속", "기소", "체포", "재판", "판결", "혐의",
     "사건", "사고", "사망", "범죄", "살인", "폭행", "피의자",
+    # TV schedules / program highlights (non-investment)
+    "TV하이라이트", "방송하이라이트", "오늘의TV", "편성표", "TV편성",
+    "▣TV", "▣MBC", "▣KBS", "▣SBS", "▣JTBC", "▣tvN", "▣채널",
+    # Local government / public welfare announcements (non-market)
+    "통합돌봄", "복지급여", "육아나눔터", "공동육아나눔터", "돌봄센터",
+    "해충방제", "전기포충기", "흡연위해예방", "흡연예방교실", "금연교실",
+    "방역소독", "예방접종", "무상급식", "기초생활수급",
+    "요양통합", "방문요양", "재가서비스", "노인돌봄",
+    # Community / social welfare (지자체 보도자료 패턴)
+    "찾아가는 유아", "찾아가는 어르신", "사각지대 해소", "복지사각지대",
+    "위기가구 발굴", "수급자격",
+    # Social isolation / welfare
+    "고독사", "안부 확인 서비스", "이상징후 감지 출동",
+    # Cultural festivals and events (non-investment)
+    "문화축전", "궁중문화", "궁중 체험", "궁중새내기",
+    "참여형 축제", "시간여행 체험",
+    # Government-funded arts organizations (non-investment)
+    "도립무용단", "시립무용단", "국립무용단", "도립교향악단",
+    "문예회관", "무용단 공연",
+    # Museum / gallery events (non-investment)
+    "박물관·미술관", "박물관 주간", "미술관 주간",
+    # Local government civic / aesthetic projects
+    "불법 주정차", "주정차 신고", "교통행정 운영",
+    "간판개선", "불법 광고물 정비",
 ]
 
 # Compile regex for non-financial detection
@@ -179,6 +203,13 @@ SOURCE_CREDIBILITY: dict[str, float] = {
     # Tier 2 (0.85x): 종합 일간지
     "조선일보": 0.85, "중앙일보": 0.85, "동아일보": 0.85,
     "한겨레": 0.85, "경향신문": 0.85, "조선비즈": 0.85,
+    # Tier 3 (0.7x): 통신사 및 방송
+    # 크롤러 집계 소스 (aggregator): 다양한 언론사 기사를 수집하므로 중간값 부여
+    "naver": 0.75,    # 네이버 뉴스: 대부분 공신력 있는 언론사 기사
+    "google": 0.70,   # 구글 뉴스: 다양한 소스 혼재
+    "yahoo": 0.65,    # 야후 파이낸스: 영문 중심
+    "korean_rss": 0.80,  # 한국 경제지 RSS 직접 수집
+    "us_news": 0.70,  # 미국 업종별 뉴스
     # Tier 3 (0.7x): 통신사 및 방송
     "연합뉴스": 0.7, "뉴스1": 0.7, "뉴시스": 0.7,
     "YTN": 0.7, "SBS": 0.7, "KBS": 0.7, "MBC": 0.7, "JTBC": 0.7,
@@ -487,7 +518,7 @@ async def classify_sentiment_with_ai(
     articles를 in-place로 수정하여 _ai_sentiment 필드를 추가한다.
     """
     import json as _json
-    from app.services.ai_client import ask_ai
+    from app.services.ai_client import ask_ai_free_lite as ask_ai_lite
 
     # neutral인 기사만 AI 분석 대상 (이미 _ai_sentiment 설정된 것은 P3에서 처리됨 — 스킵)
     neutral_articles = [
@@ -499,7 +530,7 @@ async def classify_sentiment_with_ai(
     if not neutral_articles:
         return
 
-    chunk_size = 15
+    chunk_size = 30
     reclassified = 0
 
     for chunk_start in range(0, len(neutral_articles), chunk_size):
@@ -528,7 +559,7 @@ async def classify_sentiment_with_ai(
 [{{"id": 1, "sentiment": "positive"}}, ...]"""
 
         try:
-            text = await ask_ai(prompt, max_retries=3)
+            text = await ask_ai_lite(prompt, max_retries=3)
             if not text:
                 continue
 
@@ -584,8 +615,8 @@ async def generate_ai_summary(title: str, description: str | None, relations: li
 
 한국어로 작성해주세요. 마크다운 없이 일반 텍스트로 응답해주세요."""
 
-    from app.services.ai_client import ask_ai
-    return await ask_ai(prompt, max_retries=5)
+    from app.services.ai_client import ask_ai_free_standard as ask_ai_standard
+    return await ask_ai_standard(prompt, max_retries=5)
 
 
 async def generate_disclosure_summary(
@@ -609,8 +640,8 @@ async def generate_disclosure_summary(
 
 한국어로 작성해주세요. 마크다운 없이 일반 텍스트로 응답해주세요."""
 
-    from app.services.ai_client import ask_ai
-    return await ask_ai(prompt, max_retries=5)
+    from app.services.ai_client import ask_ai_free_standard as ask_ai_standard
+    return await ask_ai_standard(prompt, max_retries=5)
 
 
 def _is_english_title(title: str) -> bool:
@@ -627,7 +658,7 @@ async def translate_articles_batch(articles: list[dict]) -> None:
     """
     import asyncio as _asyncio
     import json as _json
-    from app.services.ai_client import ask_ai
+    from app.services.ai_client import ask_ai_free_lite as ask_ai_lite
 
     en_articles = [(i, a) for i, a in enumerate(articles) if _is_english_title(a.get("title", ""))]
     if not en_articles:
@@ -654,7 +685,7 @@ async def translate_articles_batch(articles: list[dict]) -> None:
 [{{"id": 1, "title": "번역된 제목", "desc": "번역된 요약"}}, ...]"""
 
         try:
-            text = await ask_ai(prompt, max_retries=5)
+            text = await ask_ai_lite(prompt, max_retries=5)
             if not text:
                 continue
 
@@ -706,6 +737,14 @@ _AMBIGUOUS_SECTOR_KEYWORDS: dict[str, list[str]] = {
     "아연": ["아연도금", "아연가격", "아연값", "비철"],
     # "니켈"은 비교적 명확하지만 배터리 문맥에서 자동차 섹터와 중복 가능
     "니켈": ["니켈가격", "니켈값", "니켈광", "비철"],
+    # "카드"는 "토스카드", "스타벅스카드" 등 비금융 상품명에 포함되어 오탐 발생
+    # → 금융 카드업 관련 확인 키워드가 함께 등장할 때만 카드 섹터로 분류
+    "카드": [
+        "삼성카드", "신한카드", "현대카드", "kb카드", "롯데카드",
+        "우리카드", "하나카드", "bc카드", "비씨카드",
+        "카드사", "카드업", "신용카드", "체크카드",
+        "카드론", "연체율", "카드수수료", "카드발급",
+    ],
 }
 
 
@@ -781,7 +820,7 @@ async def classify_news_with_ai(
     비용 절감을 위해 배치로 처리하고, 키워드 매칭이 이미 된 기사는 건너뛴다.
     """
     import json as _json
-    from app.services.ai_client import ask_ai
+    from app.services.ai_client import ask_ai_free_lite as ask_ai_lite
 
     # 키워드 매칭이 안 된 기사만 필터
     unmatched = [(i, a) for i, a in enumerate(articles) if not a.get("_relations")]
@@ -792,8 +831,8 @@ async def classify_news_with_ai(
     sector_map = {s.id: s.name for s in sectors}
     sector_list = "\n".join(f"- ID:{sid} {sname}" for sid, sname in sector_map.items())
 
-    # 배치로 처리 (한 번에 10개씩)
-    chunk_size = 10
+    # 배치로 처리 (한 번에 30개씩)
+    chunk_size = 30
     classified_count = 0
 
     for chunk_start in range(0, len(unmatched), chunk_size):
@@ -821,7 +860,7 @@ async def classify_news_with_ai(
 [{{"id": 1, "sectors": [섹터ID1, 섹터ID2], "sentiment": "positive"}}, ...]"""
 
         try:
-            text = await ask_ai(prompt, max_retries=3)
+            text = await ask_ai_lite(prompt, max_retries=3)
             if not text:
                 continue
 

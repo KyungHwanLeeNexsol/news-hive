@@ -335,11 +335,13 @@ export interface PaperTradingStats {
 export interface PaperPosition {
   stock_name: string;
   entry_price: number;
+  current_price: number | null;
   quantity: number;
   target_price: number;
   stop_loss: number;
   entry_date: string;
   invest_amount: number;
+  unrealized_pct: number | null;
 }
 
 export interface PaperTrade {
@@ -428,4 +430,94 @@ export interface CorrelationTimeline {
 export interface NewsPriceCorrelation {
   correlation_7d: number;
   timeline: CorrelationTimeline[];
+}
+
+// ── 모의투자 포트폴리오 ──
+
+export interface VIPPortfolioStats {
+  portfolio_id: number;
+  name: string;
+  initial_capital: number;
+  current_cash: number;
+  positions_value: number;
+  total_value: number;
+  total_return_pct: number;
+  realized_pnl: number;
+  open_positions: number;
+  closed_trades: number;
+}
+
+export interface VIPPosition {
+  id: number;
+  stock_code: string | null;
+  stock_name: string;
+  split_sequence: number;
+  entry_price: number;
+  current_price: number | null;
+  quantity: number;
+  invest_amount: number;
+  current_value: number;
+  unrealized_pct: number | null;
+  entry_date: string | null;
+  partial_sold: boolean;
+  disclosure_type: string | null;
+  stake_pct: number | null;
+}
+
+export interface VIPTradeHistory {
+  id: number;
+  stock_code: string | null;
+  stock_name: string;
+  split_sequence: number;
+  entry_price: number;
+  quantity: number;
+  entry_date: string | null;
+  exit_price: number | null;
+  exit_date: string | null;
+  exit_reason: string | null;
+  pnl: number | null;
+  return_pct: number | null;
+  partial_sold: boolean;
+  is_open: boolean;
+}
+
+export interface KS200PortfolioStats {
+  portfolio_id: number;
+  name: string;
+  initial_capital: number;
+  current_cash: number;
+  position_value: number;
+  total_value: number;
+  total_pnl: number;
+  total_return_pct: number;
+  realized_pnl: number;
+  open_positions: number;
+  max_positions: number;
+}
+
+export interface KS200Position {
+  id: number;
+  stock_code: string;
+  stock_name: string;
+  entry_price: number;
+  current_price: number | null;
+  quantity: number;
+  entry_date: string | null;
+  current_value: number;
+  unrealized_pct: number | null;
+}
+
+export interface KS200TradeHistory {
+  id: number;
+  stock_code: string;
+  stock_name: string;
+  entry_price: number;
+  quantity: number;
+  entry_date: string | null;
+  exit_price: number | null;
+  exit_date: string | null;
+  exit_reason: string | null;
+  pnl: number | null;
+  return_pct: number | null;
+  is_open: boolean;
 }
