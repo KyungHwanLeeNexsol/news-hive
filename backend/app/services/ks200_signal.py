@@ -153,33 +153,38 @@ def check_signal(prices_newest_first: list) -> SignalResult | None:
 
 
 async def fetch_kospi200_codes() -> list[str]:
-    """pykrx로 KOSPI 200 구성종목 코드 목록을 조회한다.
+    """Naver Finance에서 KOSPI 200 구성종목 코드 목록을 조회한다.
 
-    # @MX:NOTE: KRX 데이터포털 API는 세션 인증 필요(LOGOUT 400 반환) — pykrx 라이브러리로 대체
-    pykrx는 동기 함수이므로 asyncio.to_thread()로 감싸 이벤트 루프 블로킹 방지.
+    # @MX:NOTE: KRX 데이터포털 API는 세션 인증 필요(LOGOUT 400) — Naver Finance 구성종목 페이지로 대체
+    # @MX:REASON: data.krx.co.kr는 세션 쿠키 없이 호출 시 400 LOGOUT 반환, 서버 환경에서 세션 유지 불가
+    페이지당 10종목씩 최대 24페이지 조회 (새 종목이 없으면 조기 종료).
     실패 시 빈 리스트 반환 — 스캔을 중단하고 로그 경고 출력.
     """
-    from datetime import datetime
+    import re
 
-    def _sync_fetch() -> list[str]:
-        from pykrx import stock as pykrx_stock
-        today = datetime.now().strftime("%Y%m%d")
-        try:
-            # KOSPI 200 인덱스 코드: "1028"
-            tickers = pykrx_stock.get_index_portfolio_deposit_file("1028", date=today)
-            codes = [str(t).zfill(6) for t in tickers if t]
-            return codes
-        except Exception as e:
-            logger.warning("pykrx KOSPI 200 조회 실패: %s", e)
-            return []
+    import httpx
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    }
+    all_codes: list[str] = []
 
     try:
-        codes = await asyncio.to_thread(_sync_fetch)
-        if codes:
-            logger.info("KOSPI 200 구성종목 %d개 조회 완료 (pykrx)", len(codes))
-        else:
-            logger.warning("KOSPI 200 구성종목 조회 결과 없음")
-        return codes
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            for page in range(1, 25):
+                resp = await client.get(
+                    f"https://finance.naver.com/sise/entryJongmok.nhn?code=KPI200&page={page}",
+                    headers=headers,
+                )
+                resp.raise_for_status()
+                codes = re.findall(r"code=([0-9]{6})", resp.text)
+                new_codes = [c for c in codes if c not in all_codes]
+                if not new_codes:
+                    break
+                all_codes.extend(new_codes)
+
+        logger.info("KOSPI 200 구성종목 %d개 조회 완료 (Naver Finance)", len(all_codes))
+        return all_codes
     except Exception as e:
         logger.warning("KOSPI 200 구성종목 조회 실패: %s", e)
         return []
