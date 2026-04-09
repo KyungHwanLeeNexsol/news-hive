@@ -4,6 +4,16 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Performance — 모의투자 포트폴리오 조회 속도 개선 (2026-04-09)
+
+- `_fetch_prices_batch()` 추가: Naver 배치 API(`SERVICE_ITEM`) 사용 — 종목 N개를 1회 요청으로 조회
+  - 기존: N개 종목 → `Semaphore(5)` 제약으로 `ceil(N/5)` 순차 배치 (최대 10~20초)
+  - 개선: N개 종목 → 배치 API 1회 호출 (1~2초), 배치 실패 시 개별 조회 폴백
+- `_fetch_price()` 개선: 30초 인메모리 캐시 추가, timeout 10s → 3s 단축
+- `get_vip_portfolio_stats`: Stock N+1 쿼리 → `IN` 쿼리 1회로 통합
+- `GET /api/vip-trading/positions`: Stock + VIPDisclosure N+1 → `IN` 쿼리 2회로 통합
+- `GET /api/paper-trading/positions`: Stock N+1 → `IN` 쿼리 1회로 통합
+
 ### Added — SPEC-FOLLOW-002: 증권사 리포트 수집 및 키워드 알림 확장
 
 - `SecuritiesReport` 모델 추가: 네이버 리서치 종목분석 리포트 저장 테이블
