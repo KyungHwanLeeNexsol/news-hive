@@ -650,7 +650,8 @@ async def _fetch_prices_batch(stock_codes: list[str]) -> dict[str, int]:
     _BATCH_SIZE = 50
     for i in range(0, len(to_fetch), _BATCH_SIZE):
         batch = to_fetch[i:i + _BATCH_SIZE]
-        query = ",".join(f"SERVICE_ITEM:{c}" for c in batch)
+        # @MX:NOTE: Naver 배치 포맷은 "SERVICE_ITEM:code1,code2,..." — "SERVICE_ITEM:" 반복 시 첫 종목만 반환됨
+        query = "SERVICE_ITEM:" + ",".join(batch)
         url = f"https://polling.finance.naver.com/api/realtime?query={query}"
         try:
             async with httpx.AsyncClient(timeout=5, follow_redirects=True) as client:
