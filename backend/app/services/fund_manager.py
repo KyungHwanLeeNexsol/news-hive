@@ -21,7 +21,7 @@ from app.models.news_relation import NewsStockRelation
 from app.models.portfolio_report import PortfolioReport
 from app.models.sector import Sector
 from app.models.stock import Stock
-from app.services.ai_client import ask_ai as _ask_ai, ask_ai_with_openai_fallback as _ask_ai_with_model
+from app.services.ai_client import ask_ai_free as _ask_ai, ask_ai_with_openai_fallback as _ask_ai_with_model
 
 logger = logging.getLogger(__name__)
 
@@ -1689,7 +1689,7 @@ async def analyze_stock(
   예: 브리핑에서 "관망"이면 시그널도 "hold"가 기본. "회피"면 "sell" 또는 "hold". "적극매수"/"매수"면 "buy".
 """
 
-    response, ai_model_used = await _ask_ai_with_model(prompt)
+    response, ai_model_used = await _ask_ai_with_model(prompt, free_only=True)
     parsed = _parse_json_response(response)
     if not parsed:
         return None
@@ -2246,7 +2246,7 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
 10. 한자(漢字) 절대 사용 금지. 순수 한글만 사용하세요.
 """
 
-    response, ai_model_used = await _ask_ai_with_model(prompt)
+    response, ai_model_used = await _ask_ai_with_model(prompt, free_only=True)
     if not response:
         # 설정된 키 확인
         from app.config import settings as _s
@@ -2271,7 +2271,7 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
             if "반드시 아래 JSON 형식으로만 응답하세요." in prompt
             else prompt
         )
-        retry_response, _ = await _ask_ai_with_model(retry_prompt)
+        retry_response, _ = await _ask_ai_with_model(retry_prompt, free_only=True)
         if retry_response:
             parsed = _parse_json_response(retry_response)
         if not parsed:

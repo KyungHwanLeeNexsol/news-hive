@@ -40,16 +40,40 @@ def _cache_set(key: tuple, score: int) -> None:
     _relevance_cache[key] = score
 
 
+def _keyword_in_text(keyword: str, text: str) -> bool:
+    """키워드가 텍스트에 포함되는지 확인한다.
+
+    영문/숫자로만 구성된 키워드는 단어 경계 기준 매칭으로 오탐을 방지한다.
+    예) "ESS" → "BESS", "address", "progress" 에 매칭되지 않음
+    한글 포함 키워드는 단순 포함 검사 (한국어 조사 붙임 형태 허용).
+
+    Args:
+        keyword: 원본 키워드 (대소문자 무관)
+        text: 검색 대상 텍스트 (소문자 변환된 상태 가정)
+    """
+    kw = keyword.lower().strip()
+    if not kw:
+        return False
+    # 한글 포함 키워드: 단순 포함 검사 (조사 붙임 허용)
+    if re.search(r"[가-힣ㄱ-ㅎㅏ-ㅣ]", kw):
+        return kw in text
+    # 영문/숫자/기호 키워드: 단어 경계 기준 (부분 문자열 오탐 방지)
+    pattern = r"(?<![a-zA-Z0-9\-])" + re.escape(kw) + r"(?![a-zA-Z0-9\-])"
+    return bool(re.search(pattern, text))
+
+
 def _shortcut_score(keyword: str, company_name: str, search_text: str) -> int | None:
     """AI 호출 없이 결정 가능한 shortcut 점수.
 
     - 키워드 == 기업명 → 10점 (완전 일치)
     - 기업명이 키워드에 포함(키워드가 더 구체적) → 10점
-    - 기업명이 본문에도 함께 등장 → 8점
     - 그 외 → None (AI 평가 필요)
 
     주의: 'kw_l in name_l' (키워드가 기업명의 부분 문자열) 조건은
     "에너지" in "SNT에너지" 같은 오탐을 유발하므로 제거됨.
+    주의: 'name_l in search_text → 8점' 케이스는 제거됨.
+    기업명이 본문에 등장해도 키워드(예: "ESS") 관련성은 AI가 판단해야 함.
+    예) 전자담배 기사에 삼성SDI가 언급돼도 "ESS" 키워드 알림은 부적절.
     """
     if not company_name:
         return None
@@ -60,9 +84,6 @@ def _shortcut_score(keyword: str, company_name: str, search_text: str) -> int | 
     # 완전 일치 또는 키워드가 기업명을 포함하는 경우만 shortcut 적용
     if kw_l == name_l or name_l in kw_l:
         return 10
-    # 기업명이 콘텐츠 본문에 함께 등장하면 직접 관련 가능성 높음
-    if name_l in search_text:
-        return 8
     return None
 
 
@@ -306,7 +327,7 @@ def match_keywords_and_notify(db: Session) -> dict:
             _candidate_pairs: list[tuple[str, str, str | None]] = []
             for _u, _kws in user_keywords.items():
                 for _kid, _kw, _sid in _kws:
-                    if len(_kw) < 2 or _kw.lower() not in search_text:
+                    if len(_kw) < 2 or not _keyword_in_text(_kw, search_text):
                         continue
                     _candidate_pairs.append(
                         (_kw, stock_name_map.get(_sid, ""), stock_code_map.get(_sid))
@@ -326,7 +347,7 @@ def match_keywords_and_notify(db: Session) -> dict:
                     # 최소 2자 이상 키워드만 매칭
                     if len(keyword) < 2:
                         continue
-                    if keyword.lower() not in search_text:
+                    if not _keyword_in_text(keyword, search_text):
                         continue
 
                     stats["matched"] += 1
@@ -380,7 +401,7 @@ def match_keywords_and_notify(db: Session) -> dict:
             _candidate_pairs = []
             for _u, _kws in user_keywords.items():
                 for _kid, _kw, _sid in _kws:
-                    if len(_kw) < 2 or _kw.lower() not in search_text:
+                    if len(_kw) < 2 or not _keyword_in_text(_kw, search_text):
                         continue
                     _candidate_pairs.append(
                         (_kw, stock_name_map.get(_sid, ""), stock_code_map.get(_sid))
@@ -399,7 +420,7 @@ def match_keywords_and_notify(db: Session) -> dict:
                 for kw_id, keyword, stock_id in kw_list:
                     if len(keyword) < 2:
                         continue
-                    if keyword.lower() not in search_text:
+                    if not _keyword_in_text(keyword, search_text):
                         continue
 
                     stats["matched"] += 1
@@ -466,7 +487,7 @@ def match_keywords_and_notify(db: Session) -> dict:
             _candidate_pairs = []
             for _u, _kws in user_keywords.items():
                 for _kid, _kw, _sid in _kws:
-                    if len(_kw) < 2 or _kw.lower() not in search_text:
+                    if len(_kw) < 2 or not _keyword_in_text(_kw, search_text):
                         continue
                     _candidate_pairs.append(
                         (_kw, stock_name_map.get(_sid, ""), stock_code_map.get(_sid))
@@ -485,7 +506,7 @@ def match_keywords_and_notify(db: Session) -> dict:
                 for kw_id, keyword, stock_id in kw_list:
                     if len(keyword) < 2:
                         continue
-                    if keyword.lower() not in search_text:
+                    if not _keyword_in_text(keyword, search_text):
                         continue
 
                     stats["matched"] += 1

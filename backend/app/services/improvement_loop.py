@@ -147,7 +147,7 @@ async def generate_improved_prompt(db: Session, failure_summary: dict) -> str | 
     Returns:
         개선된 프롬프트 텍스트, 실패 시 None.
     """
-    from app.services.ai_client import ask_ai as _ask_ai
+    from app.services.ai_client import ask_ai_free as _ask_ai
 
     # 현재 활성 프롬프트 템플릿 조회 (없으면 기본 안내 사용)
     current_template = _get_current_prompt_template(db)

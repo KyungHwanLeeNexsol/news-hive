@@ -315,7 +315,7 @@ async def generate_sector_insight(sector_id: int, db: Session = Depends(get_db))
 한국어로, 마크다운 없이 일반 텍스트로 작성해주세요."""
 
     try:
-        from app.services.ai_client import ask_ai
+        from app.services.ai_client import ask_ai_free as ask_ai
 
         content = await ask_ai(prompt)
         if not content:

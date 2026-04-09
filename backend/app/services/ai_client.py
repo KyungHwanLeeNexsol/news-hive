@@ -160,9 +160,9 @@ async def ask_ai_with_openai_fallback(prompt: str, max_retries: int = 3, model: 
     Returns:
         (응답 텍스트, 사용된 모델명) 튜플
     """
-    result, model = await ask_ai_with_model(prompt, max_retries, model=model, free_only=free_only)
+    result, used_model = await ask_ai_with_model(prompt, max_retries, model=model, free_only=free_only)
     if result:
-        return result, model
+        return result, used_model
 
     # Gemini 전체 실패 → OpenAI fallback
     if not settings.OPENAI_API_KEY:
@@ -186,6 +186,17 @@ async def ask_ai(prompt: str, max_retries: int = 3) -> str | None:
     고도 금융 추론(브리핑, 시그널, 관계 추론)에 사용한다.
     """
     result, _ = await ask_ai_with_openai_fallback(prompt, max_retries)
+    return result
+
+
+async def ask_ai_free(prompt: str, max_retries: int = 3) -> str | None:
+    """Pro 모델로 AI 호출 — 무료 키 전용 (key 1~3).
+
+    유료 키(GEMINI_API_KEY, index 0)를 사용하지 않는 고급 AI 추론.
+    브리핑, 시그널, 섹터 분석, 채팅 등 일반 작업에 사용한다.
+    키워드 알림·키워드 생성은 ask_ai_lite/ask_ai_standard(유료 키 우선)를 사용한다.
+    """
+    result, _ = await ask_ai_with_openai_fallback(prompt, max_retries, free_only=True)
     return result
 
 
