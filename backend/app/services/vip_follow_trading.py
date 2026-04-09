@@ -8,6 +8,7 @@ SPEC-VIP-001의 매매 로직 구현:
 기존 paper_trading.py, fund_manager.py와 완전히 분리된 독립 서비스.
 """
 import asyncio
+import json
 import logging
 import time
 from datetime import datetime, timezone
@@ -609,6 +610,77 @@ async def _fetch_price(stock_code: str) -> int | None:
     return None
 
 
+async def _fetch_prices_batch(stock_codes: list[str]) -> dict[str, int]:
+    """여러 종목의 현재가를 Naver 배치 API 한 번으로 조회한다.
+
+    # @MX:NOTE: Naver 배치 API — 최대 50개 종목을 1번 요청으로 조회 (N개별 요청 대비 대폭 빠름)
+    # @MX:ANCHOR: 포트폴리오 조회 성능 핵심 경로 — vip/paper trading /positions 및 get_vip_portfolio_stats에서 사용
+    # @MX:REASON: 개별 _fetch_price N회 호출 시 semaphore(5) 제약으로 ceil(N/5) 순차 배치 필요 → 배치 API로 1회 요청
+
+    Args:
+        stock_codes: 조회할 종목 코드 목록
+
+    Returns:
+        {stock_code: current_price} 딕셔너리 (조회 실패 종목은 포함되지 않음)
+    """
+    if not stock_codes:
+        return {}
+
+    now = time.monotonic()
+    result: dict[str, int] = {}
+    to_fetch: list[str] = []
+
+    # 캐시 히트 먼저 분리
+    for code in stock_codes:
+        cached = _price_cache.get(code)
+        if cached is not None:
+            cached_price, cached_at = cached
+            if now - cached_at < _PRICE_CACHE_TTL:
+                result[code] = cached_price
+                continue
+        to_fetch.append(code)
+
+    if not to_fetch:
+        return result
+
+    import httpx
+    from app.services.naver_finance import HEADERS
+
+    # 배치 API: SERVICE_ITEM:{code} 형식으로 최대 50개 한 번에 조회
+    _BATCH_SIZE = 50
+    for i in range(0, len(to_fetch), _BATCH_SIZE):
+        batch = to_fetch[i:i + _BATCH_SIZE]
+        query = ",".join(f"SERVICE_ITEM:{c}" for c in batch)
+        url = f"https://polling.finance.naver.com/api/realtime?query={query}"
+        try:
+            async with httpx.AsyncClient(timeout=5, follow_redirects=True) as client:
+                resp = await client.get(url, headers=HEADERS)
+                resp.raise_for_status()
+            text = resp.content.decode("euc-kr", errors="replace")
+            data = json.loads(text)
+            for area in data.get("result", {}).get("areas", []):
+                for item in area.get("datas", []):
+                    code = item.get("cd", "")
+                    if not code:
+                        continue
+                    try:
+                        price = int(float(item.get("nv", 0) or 0))
+                    except (ValueError, TypeError):
+                        continue
+                    if price > 0:
+                        result[code] = price
+                        _price_cache[code] = (price, now)
+        except Exception as e:
+            logger.warning("배치 현재가 조회 실패 — 개별 조회로 폴백: %s", e)
+            # 배치 실패 시 기존 개별 조회 폴백
+            fallback = await asyncio.gather(*[_fetch_price(c) for c in batch])
+            for code, price in zip(batch, fallback):
+                if price:
+                    result[code] = price
+
+    return result
+
+
 def _get_or_create_stock(db: Session, disclosure: VIPDisclosure) -> Stock | None:
     """공시 정보로 종목을 조회하거나 자동 등록한다.
 
@@ -678,21 +750,20 @@ async def get_vip_portfolio_stats(db: Session) -> dict:
         .all()
     )
 
-    # 포지션 평가액 계산 — 현재가를 병렬 조회하여 응답 지연 최소화
+    # 포지션 평가액 계산 — 배치 API로 현재가 일괄 조회 (N개별 요청 → 1회 요청)
     # N+1 쿼리 방지: open_trades의 stock_id를 한 번에 IN 쿼리로 조회
     open_stock_ids = [t.stock_id for t in open_trades]
     stocks_list = db.query(Stock).filter(Stock.id.in_(open_stock_ids)).all() if open_stock_ids else []
     stocks = {s.id: s for s in stocks_list}
 
-    async def _fetch_trade_value(trade: VIPTrade) -> int:
-        stock = stocks.get(trade.stock_id)
-        if stock and stock.stock_code:
-            price = await _fetch_price(stock.stock_code)
-            return (price if price else trade.entry_price) * trade.quantity
-        return trade.entry_price * trade.quantity
+    # 현재가 일괄 조회 (배치 API 1회 호출)
+    stock_codes = [s.stock_code for s in stocks_list if s.stock_code]
+    prices = await _fetch_prices_batch(stock_codes)
 
-    trade_values = await asyncio.gather(*[_fetch_trade_value(t) for t in open_trades])
-    positions_value = sum(trade_values)
+    positions_value = sum(
+        (prices.get(stocks[t.stock_id].stock_code, t.entry_price) if t.stock_id in stocks else t.entry_price) * t.quantity
+        for t in open_trades
+    )
 
     total_value = portfolio.current_cash + positions_value
     total_pnl = sum((t.pnl or 0) for t in closed_trades)

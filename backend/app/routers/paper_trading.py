@@ -21,8 +21,7 @@ def get_stats(db: Session = Depends(get_db)):
 @router.get("/positions")
 async def get_positions(db: Session = Depends(get_db)):
     """오픈 포지션 목록 (현재가 및 미실현 수익률 포함)."""
-    import asyncio
-    from app.services.vip_follow_trading import _fetch_price
+    from app.services.vip_follow_trading import _fetch_prices_batch
 
     portfolio = get_or_create_portfolio(db)
     trades = (
@@ -39,13 +38,10 @@ async def get_positions(db: Session = Depends(get_db)):
     stocks_map = {s.id: s for s in db.query(Stock).filter(Stock.id.in_(trade_stock_ids)).all()} if trade_stock_ids else {}
     trade_stocks = [(t, stocks_map.get(t.stock_id)) for t in trades]
 
-    async def _safe_fetch(stock) -> int | None:
-        if stock and stock.stock_code:
-            return await _fetch_price(stock.stock_code)
-        return None
-
-    # 현재가 병렬 조회
-    prices = await asyncio.gather(*[_safe_fetch(s) for _, s in trade_stocks])
+    # 현재가 배치 조회 (1회 API 호출)
+    batch_codes = [s.stock_code for _, s in trade_stocks if s and s.stock_code]
+    prices_map = await _fetch_prices_batch(batch_codes)
+    prices = [prices_map.get(s.stock_code) if s and s.stock_code else None for _, s in trade_stocks]
 
     result = []
     for (t, stock), current_price in zip(trade_stocks, prices):
