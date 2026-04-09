@@ -498,6 +498,7 @@ export interface KS200PortfolioStats {
 export interface KS200Position {
   id: number;
   stock_code: string;
+  stock_name: string;
   entry_price: number;
   current_price: number | null;
   quantity: number;
@@ -509,6 +510,7 @@ export interface KS200Position {
 export interface KS200TradeHistory {
   id: number;
   stock_code: string;
+  stock_name: string;
   entry_price: number;
   quantity: number;
   entry_date: string | null;

@@ -51,6 +51,7 @@ async def get_ks200_portfolio(db: Session = Depends(get_db)):
 async def get_ks200_positions(db: Session = Depends(get_db)):
     """현재 오픈 포지션 목록 조회 (미실현 수익률 포함)."""
     import asyncio
+    from app.models.stock import Stock
     from app.services.ks200_trading import get_or_create_ks200_portfolio
     from app.services.vip_follow_trading import _fetch_price
 
@@ -64,6 +65,11 @@ async def get_ks200_positions(db: Session = Depends(get_db)):
         .order_by(KS200Trade.entry_date.desc())
         .all()
     )
+
+    # 종목명 조회
+    stock_ids = [t.stock_id for t in open_trades if t.stock_id]
+    stocks = db.query(Stock).filter(Stock.id.in_(stock_ids)).all()
+    stock_name_map: dict[int, str] = {s.id: s.name for s in stocks}
 
     # 현재가 병렬 조회
     prices = await asyncio.gather(*[_fetch_price(t.stock_code) for t in open_trades])
@@ -79,6 +85,7 @@ async def get_ks200_positions(db: Session = Depends(get_db)):
         result.append({
             "id": trade.id,
             "stock_code": trade.stock_code,
+            "stock_name": stock_name_map.get(trade.stock_id, trade.stock_code),
             "entry_price": trade.entry_price,
             "current_price": current_price,
             "quantity": trade.quantity,
@@ -97,6 +104,7 @@ def get_ks200_trades(
     offset: int = Query(default=0, ge=0),
 ):
     """거래 이력 조회 (최신순)."""
+    from app.models.stock import Stock
     from app.services.ks200_trading import get_or_create_ks200_portfolio
 
     portfolio = get_or_create_ks200_portfolio(db)
@@ -108,10 +116,17 @@ def get_ks200_trades(
         .limit(limit)
         .all()
     )
+
+    # 종목명 조회
+    stock_ids = [t.stock_id for t in trades if t.stock_id]
+    stocks = db.query(Stock).filter(Stock.id.in_(stock_ids)).all()
+    stock_name_map: dict[int, str] = {s.id: s.name for s in stocks}
+
     return [
         {
             "id": t.id,
             "stock_code": t.stock_code,
+            "stock_name": stock_name_map.get(t.stock_id, t.stock_code),
             "entry_price": t.entry_price,
             "quantity": t.quantity,
             "entry_date": t.entry_date.isoformat() if t.entry_date else None,
@@ -133,14 +148,23 @@ def get_ks200_signals(
     signal_type: str | None = Query(default=None, description="buy 또는 sell 필터"),
 ):
     """최근 신호 목록 조회 (최신순)."""
+    from app.models.stock import Stock
+
     query = db.query(KS200Signal)
     if signal_type in ("buy", "sell"):
         query = query.filter(KS200Signal.signal_type == signal_type)
     signals = query.order_by(KS200Signal.signal_date.desc()).limit(limit).all()
+
+    # 종목명 조회
+    stock_ids = [s.stock_id for s in signals if s.stock_id]
+    stocks = db.query(Stock).filter(Stock.id.in_(stock_ids)).all()
+    stock_name_map: dict[int, str] = {s.id: s.name for s in stocks}
+
     return [
         {
             "id": s.id,
             "stock_code": s.stock_code,
+            "stock_name": stock_name_map.get(s.stock_id, s.stock_code) if s.stock_id else s.stock_code,
             "signal_type": s.signal_type,
             "stoch_k": round(s.stoch_k, 2),
             "disparity": round(s.disparity, 2),

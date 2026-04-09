@@ -353,7 +353,7 @@ function KS200Tab() {
             <table className="w-full text-[13px]">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-200">
-                  <th className="text-left px-4 py-3 font-semibold text-gray-600">종목코드</th>
+                  <th className="text-left px-4 py-3 font-semibold text-gray-600">종목명</th>
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">매수가</th>
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">수량</th>
                   <th className="text-right px-4 py-3 font-semibold text-gray-600">평가금액</th>
@@ -364,7 +364,7 @@ function KS200Tab() {
               <tbody>
                 {[...positions].sort((a, b) => b.current_value - a.current_value).map((p) => (
                   <tr key={p.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
-                    <td className="px-4 py-3 font-semibold text-gray-800">{p.stock_code}</td>
+                    <td className="px-4 py-3 font-semibold text-gray-800">{p.stock_name}</td>
                     <td className="px-4 py-3 text-right text-gray-700">{fmt(p.entry_price)}원</td>
                     <td className="px-4 py-3 text-right text-gray-700">{fmt(p.quantity)}주</td>
                     <td className="px-4 py-3 text-right font-semibold text-gray-800">{fmt(p.current_value)}원</td>
@@ -387,7 +387,7 @@ function KS200Tab() {
           <table className="w-full text-[13px]">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200">
-                <th className="text-left px-4 py-3 font-semibold text-gray-600">종목코드</th>
+                <th className="text-left px-4 py-3 font-semibold text-gray-600">종목명</th>
                 <th className="text-right px-4 py-3 font-semibold text-gray-600">상태</th>
                 <th className="text-right px-4 py-3 font-semibold text-gray-600">매수가</th>
                 <th className="text-right px-4 py-3 font-semibold text-gray-600">매도가</th>
@@ -403,7 +403,7 @@ function KS200Tab() {
                 </tr>
               ) : trades.map((t) => (
                 <tr key={t.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
-                  <td className="px-4 py-3 font-semibold text-gray-800">{t.stock_code}</td>
+                  <td className="px-4 py-3 font-semibold text-gray-800">{t.stock_name}</td>
                   <td className="px-4 py-3 text-right">
                     <span className={`inline-block px-2 py-0.5 rounded text-[11px] font-semibold ${
                       t.is_open
