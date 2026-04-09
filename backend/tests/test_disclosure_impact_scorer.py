@@ -97,10 +97,32 @@ def _make_signal(**kwargs) -> MagicMock:
 class TestScoreDisclosureImpact:
     """AC-001, AC-002, AC-003, AC-004: score_disclosure_impact 함수 검증."""
 
-    def test_기업지배구조_기본점수(self):
-        """AC-001: 기업지배구조(M&A) 공시 → 기본 점수 30."""
-        d = _make_disclosure(report_type="기업지배구조")
-        assert score_disclosure_impact(d, None) == 30.0
+    def test_기업지배구조_루틴_기본점수(self):
+        """기업지배구조 공시 — 루틴(M&A 키워드 없음) → 기본 점수 10."""
+        d = _make_disclosure(report_type="기업지배구조", report_name="이사회 의결 통지")
+        assert score_disclosure_impact(d, None) == 10.0
+
+    def test_기업지배구조_MnA_가산점수(self):
+        """기업지배구조 공시 — 합병/분할 등 M&A 키워드 감지 → 기본 10 + 20 = 30."""
+        for keyword in ("합병계약 체결", "회사분할결정", "영업양수도 결정", "주식교환"):
+            d = _make_disclosure(report_type="기업지배구조", report_name=keyword)
+            assert score_disclosure_impact(d, None) == 30.0, keyword
+
+    def test_루틴_거버넌스_공시_캡(self):
+        """정기주총결과, 주주총회소집공고, 사외이사 선임·해임 신고 등은 5점으로 제한."""
+        routine_cases = [
+            ("기업지배구조", "정기주주총회결과"),
+            ("기업지배구조", "[기재정정]정기주주총회결과"),
+            ("기업지배구조", "주주총회소집공고"),
+            ("기업지배구조", "주주총회 소집공고"),
+            ("기업지배구조", "사외이사의 선임·해임 또는 중도퇴임에 관한 신고"),
+            ("기업지배구조", "사외이사의 선임ㆍ해임또는중도퇴임에관한신고"),
+            ("기업지배구조", "[기재정정]기업가치제고계획(자율공시)(고배당기업 표시를 위한 재공시)"),
+            ("지분공시", "임원·주요주주특정증권등소유상황보고서"),
+        ]
+        for report_type, report_name in routine_cases:
+            d = _make_disclosure(report_type=report_type, report_name=report_name)
+            assert score_disclosure_impact(d, None) == 5.0, report_name
 
     def test_지분공시_기본점수(self):
         """AC-001: 지분공시 → 기본 점수 25."""

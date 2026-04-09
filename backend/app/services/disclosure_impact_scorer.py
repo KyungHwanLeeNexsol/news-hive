@@ -32,11 +32,13 @@ async def _set_volatility_context(signal: FundSignal) -> None:
         logger.warning("변동성 컨텍스트 추가 실패: %s", e)
 
 # 공시 유형별 기본 충격 점수
+# @MX:NOTE: "기업지배구조"는 M&A부터 정기주총결과까지 혼재 — 기본값은 보수적으로 설정하고
+#           M&A 키워드(합병/분할/영업양수도 등)가 감지된 경우에만 _MNA_BONUS 가산
 _BASE_IMPACT_BY_TYPE = {
     "주요사항보고": 20,
     "실적변동": 20,  # 실제는 AI 분석으로 정밀 계산
     "지분공시": 25,
-    "기업지배구조": 30,  # M&A
+    "기업지배구조": 10,  # 기본은 루틴(AGM 등), M&A는 키워드 감지 시 +20 가산
     "발행공시": -10,  # 희석 효과 (신주/전환사채)
     "정기공시": 10,
     "기타공시": 10,
@@ -44,6 +46,65 @@ _BASE_IMPACT_BY_TYPE = {
 
 # 수주/계약 관련 키워드
 _CONTRACT_KEYWORDS = ["단일판매", "단일공급", "공급계약", "수주", "계약체결"]
+
+# @MX:NOTE: 루틴 거버넌스 공시 — 섹터 파급 트리거 대상에서 제외
+# 정기주총/소집공고/사외이사 변경/기재정정 단독/기업가치제고계획 재공시 등은
+# 시장에 실질 충격을 주지 않으므로 impact_score를 5로 제한하여 파급 임계(30) 미달 처리
+_ROUTINE_GOVERNANCE_KEYWORDS = [
+    "정기주주총회결과",
+    "정기주주총회 소집",
+    "주주총회소집공고",
+    "주주총회 소집공고",
+    "임시주주총회 소집",
+    "사외이사의 선임",
+    "사외이사의 해임",
+    "사외이사의 중도퇴임",
+    "임원ㆍ주요주주특정증권등소유상황보고서",
+    "임원·주요주주특정증권등소유상황보고서",
+    "임원 주요주주",
+    "기업가치제고계획",
+    "주주우선공모",  # 단독 공시는 루틴
+]
+
+# @MX:NOTE: M&A/분할/영업양수도 키워드 — "기업지배구조"에 가산점 부여
+_MNA_KEYWORDS = [
+    "합병",
+    "분할",
+    "영업양수",
+    "영업양도",
+    "주식교환",
+    "주식이전",
+    "포괄적 주식",
+    "자산양수",
+    "자산양도",
+]
+_MNA_BONUS = 20
+
+# @MX:NOTE: 지주사 임시 블랙리스트 — 섹터 파급 후보에서 제외
+# @MX:REASON: 지주사는 본업 노출이 희석되어 있어 섹터 단위 이벤트에 연동되지 않음.
+#             stocks 테이블에 company_type 컬럼 도입 전까지 임시 운영
+_HOLDING_COMPANY_CODES: set[str] = {
+    # 일반지주
+    "034730",  # SK
+    "003550",  # LG
+    "078930",  # GS
+    "282330",  # BGF
+    "006120",  # SK디스커버리
+    "001740",  # SK네트웍스
+    "267250",  # HD현대
+    "000150",  # 두산
+    "004990",  # 롯데지주
+    "097230",  # HJ중공업(한진중공업지주 성격)
+    # 금융지주
+    "086790",  # 하나금융지주
+    "316140",  # 우리금융지주
+    "105560",  # KB금융
+    "055550",  # 신한지주
+    "138040",  # 메리츠금융지주
+    "175330",  # JB금융지주
+    "139130",  # DGB금융지주
+    "071050",  # 한국금융지주
+}
 
 
 def extract_contract_amount(report_name: str, ai_summary: str | None) -> int | None:
@@ -86,6 +147,12 @@ def score_disclosure_impact(
     report_name = disclosure.report_name or ""
     ai_summary = disclosure.ai_summary or ""
 
+    # @MX:NOTE: 루틴 거버넌스 공시는 시장 충격 없음 → 5점으로 캡, 섹터 파급 트리거(30) 미달 처리
+    #           과거 "정기주주총회결과" "사외이사 선임 신고" 등이 30점을 받아 sector_ripple을 오발시킨 버그 교정
+    normalized = report_name.replace(" ", "").replace("·", "")
+    if any(kw.replace(" ", "").replace("·", "") in normalized for kw in _ROUTINE_GOVERNANCE_KEYWORDS):
+        return 5.0
+
     # 수주/계약 공시 (REQ-DISC-002): 수주금액/시총 비율 기반
     is_contract = any(kw in report_name for kw in _CONTRACT_KEYWORDS)
     if is_contract and market_cap_億 and market_cap_億 > 0:
@@ -107,6 +174,11 @@ def score_disclosure_impact(
 
     # 기본값 (REQ-DISC-004)
     base = _BASE_IMPACT_BY_TYPE.get(report_type, 10)
+
+    # @MX:NOTE: 기업지배구조 공시 중 M&A 키워드 감지 시 +20 가산 (합병/분할/영업양수도 등)
+    if report_type == "기업지배구조" and any(kw in report_name for kw in _MNA_KEYWORDS):
+        base += _MNA_BONUS
+
     return float(base)
 
 
@@ -162,6 +234,10 @@ async def detect_sector_ripple(
     """동종업계 파급 후보 탐지 (REQ-DISC-011 ~ REQ-DISC-013).
 
     원인 종목과 같은 섹터에서 아직 미반응(등락률 < +2%) 종목을 찾는다.
+
+    # @MX:NOTE: 지주사/우선주/시총 역전 종목은 파급 후보에서 제외 (2026-04 교정)
+    # @MX:REASON: 기존 로직은 "석유와가스" 섹터에 SK/GS 등 지주사까지 포함하고,
+    #             파급받는 종목이 원인 종목보다 커도 strong 판정 → S-Oil AGM → SK 오매수 발생
     """
     if not trigger_disclosure.stock_id:
         return []
@@ -170,7 +246,7 @@ async def detect_sector_ripple(
     if not trigger_stock or not trigger_stock.sector_id:
         return []
 
-    # 동일 섹터의 다른 종목
+    # 동일 섹터의 다른 종목 — 우선주 제외(종목코드 말자리 0 아닌 경우)
     sector_stocks = (
         db.query(Stock)
         .filter(
@@ -180,6 +256,10 @@ async def detect_sector_ripple(
         )
         .all()
     )
+    # 우선주 제외 (KRX 종목코드 말자리 5/7/9 는 우선주)
+    sector_stocks = [s for s in sector_stocks if s.stock_code and s.stock_code[-1] not in {"5", "7", "9"}]
+    # 지주사 제외 (임시 블랙리스트 — 추후 stocks 테이블에 company_type 컬럼 도입 시 교체)
+    sector_stocks = [s for s in sector_stocks if s.stock_code not in _HOLDING_COMPANY_CODES]
     if not sector_stocks:
         return []
 
@@ -207,9 +287,12 @@ async def detect_sector_ripple(
                 return None
 
             # REQ-DISC-012: 시총 비율로 신호 강도 결정
+            # @MX:NOTE: cap_ratio 상한 1.5 — 타깃이 원인 종목보다 1.5배 이상 크면 파급 방향 역전 의심 → 제외
             stock_market_cap = stock.market_cap or 0
             if trigger_market_cap > 0:
                 cap_ratio = stock_market_cap / trigger_market_cap
+                if cap_ratio > 1.5:
+                    return None  # 시총 역전 — 파급 대상 부적합
                 strength = "strong" if cap_ratio >= 0.3 else "moderate"
             else:
                 strength = "moderate"
