@@ -29,9 +29,14 @@ class FundSignal(Base):
     price_after_1d: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 1일 후 주가
     price_after_3d: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 3일 후 주가
     price_after_5d: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 5일 후 주가
-    is_correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)  # 시그널 방향 적중 여부
-    return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)  # 5일 수익률 (%)
+    is_correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)  # 시그널 방향 적중 여부 (알파 기반)
+    return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)  # 검증 기간 종목 절대 수익률 (%)
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # 검증 완료 시점
+
+    # 벤치마크(KOSPI) 대비 알파 (2026-04 교정)
+    # @MX:NOTE: is_correct는 return_pct가 아니라 alpha_pct 부호로 판정 — 시장 베타 제거
+    benchmark_return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)  # 같은 기간 KOSPI 수익률
+    alpha_pct: Mapped[float | None] = mapped_column(Float, nullable=True)  # return_pct - benchmark_return_pct
 
     # REQ-AI-003: 시그널 실패 원인 분류
     # 값: macro_shock, supply_reversal, earnings_miss, sector_contagion, technical_breakdown

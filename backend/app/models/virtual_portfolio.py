@@ -87,4 +87,10 @@ class PortfolioSnapshot(Base):
     daily_return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)  # 일일 수익률
     cumulative_return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)  # 누적 수익률
 
+    # 벤치마크(KOSPI) 대비 알파 (2026-04 교정)
+    # @MX:NOTE: 절대 수익률만으로는 시장 랠리 덕에 좋아 보이는 착시가 발생 → KOSPI 대비 초과수익(알파) 기록
+    benchmark_value: Mapped[float | None] = mapped_column(Float, nullable=True)  # 해당 일 KOSPI 종가
+    benchmark_cumulative_return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    alpha_pct: Mapped[float | None] = mapped_column(Float, nullable=True)  # cumulative_return_pct - benchmark_cumulative_return_pct
+
     portfolio = relationship("VirtualPortfolio", back_populates="snapshots")

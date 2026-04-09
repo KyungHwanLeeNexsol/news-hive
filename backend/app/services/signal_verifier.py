@@ -181,14 +181,37 @@ async def verify_signals(db: Session) -> dict:
         if age_days >= verify_threshold_days and signal.price_after_5d is None:
             signal.price_after_5d = current_price
 
-            # 적중 여부 판단
+            # 적중 여부 판단 — 시장중립 알파 기반 (2026-04 교정)
+            # @MX:NOTE: 과거에는 price_change > 0 만 보고 적중 판정 → 상승장에서 모든 시그널이 "적중"
+            #           된 것처럼 기록되어 sector_ripple 같은 베타 신호도 고정밀로 오판됨.
+            # @MX:REASON: 전략 품질을 시장 노이즈와 분리하려면 KOSPI 대비 초과수익(알파)로 판정해야 함.
             price_change = current_price - signal.price_at_signal
             signal.return_pct = round(price_change / signal.price_at_signal * 100, 2)
 
-            if signal.signal == "buy":
-                signal.is_correct = price_change > 0  # 매수 시그널 → 주가 상승이면 적중
-            elif signal.signal == "sell":
-                signal.is_correct = price_change < 0  # 매도 시그널 → 주가 하락이면 적중
+            try:
+                from app.services.benchmark import get_kospi_period_return
+
+                benchmark_ret = await get_kospi_period_return(
+                    signal.created_at,
+                    now,
+                )
+                if benchmark_ret is not None:
+                    signal.benchmark_return_pct = round(benchmark_ret, 2)
+                    signal.alpha_pct = round(signal.return_pct - benchmark_ret, 2)
+            except Exception as exc:  # pragma: no cover
+                logger.warning("시그널 %d 벤치마크 조회 실패: %s", signal.id, exc)
+
+            # 알파 기반 판정 (벤치마크 없으면 기존 절대 수익률 fallback)
+            if signal.alpha_pct is not None:
+                if signal.signal == "buy":
+                    signal.is_correct = signal.alpha_pct > 0
+                elif signal.signal == "sell":
+                    signal.is_correct = signal.alpha_pct < 0
+            else:
+                if signal.signal == "buy":
+                    signal.is_correct = price_change > 0
+                elif signal.signal == "sell":
+                    signal.is_correct = price_change < 0
 
             # REQ-AI-003: 실패한 시그널의 오류 패턴 분류
             if signal.is_correct is False:

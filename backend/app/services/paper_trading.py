@@ -397,7 +397,12 @@ def _close_trade(
 
 
 async def take_daily_snapshot(db: Session) -> PortfolioSnapshot | None:
-    """일일 포트폴리오 스냅샷을 기록한다."""
+    """일일 포트폴리오 스냅샷을 기록한다.
+
+    # @MX:NOTE: KOSPI 벤치마크 대비 알파도 함께 기록 (2026-04 교정)
+    # @MX:REASON: 절대 수익률만 보면 상승장에서 모든 전략이 잘 맞춘 것처럼 보이는 착시 발생
+    """
+    from app.services.benchmark import get_kospi_close, get_kospi_cumulative_return
     from app.services.signal_verifier import _get_current_price
 
     portfolio = db.query(VirtualPortfolio).filter(VirtualPortfolio.is_active.is_(True)).first()
@@ -443,6 +448,40 @@ async def take_daily_snapshot(db: Session) -> PortfolioSnapshot | None:
             (total_value - prev_snapshot.total_value) / prev_snapshot.total_value * 100, 2,
         )
 
+    # KOSPI 벤치마크 / 알파 계산 (실패 시 None 저장)
+    benchmark_value: float | None = None
+    benchmark_cum_return: float | None = None
+    alpha_pct: float | None = None
+    try:
+        from zoneinfo import ZoneInfo
+
+        today_kst = datetime.now(ZoneInfo("Asia/Seoul")).date()
+        benchmark_value = await get_kospi_close(today_kst)
+
+        # 기준일: 첫 스냅샷 날짜 또는 포트폴리오 생성일
+        first_snap = (
+            db.query(PortfolioSnapshot)
+            .filter(PortfolioSnapshot.portfolio_id == portfolio.id)
+            .order_by(PortfolioSnapshot.snapshot_date.asc())
+            .first()
+        )
+        if first_snap and first_snap.snapshot_date:
+            base_date = first_snap.snapshot_date.astimezone(ZoneInfo("Asia/Seoul")).date()
+        elif portfolio.created_at:
+            base_date = portfolio.created_at.astimezone(ZoneInfo("Asia/Seoul")).date()
+        else:
+            base_date = today_kst
+
+        if base_date < today_kst:
+            benchmark_cum_return = await get_kospi_cumulative_return(base_date, today_kst)
+        else:
+            benchmark_cum_return = 0.0
+
+        if benchmark_cum_return is not None:
+            alpha_pct = round(cumulative_return - benchmark_cum_return, 4)
+    except Exception as exc:  # pragma: no cover - 외부 API 실패 대비
+        logger.warning("벤치마크/알파 계산 실패 (스냅샷 기록은 계속): %s", exc)
+
     snapshot = PortfolioSnapshot(
         portfolio_id=portfolio.id,
         total_value=total_value,
@@ -451,11 +490,20 @@ async def take_daily_snapshot(db: Session) -> PortfolioSnapshot | None:
         open_positions=len(open_trades),
         daily_return_pct=daily_return,
         cumulative_return_pct=cumulative_return,
+        benchmark_value=benchmark_value,
+        benchmark_cumulative_return_pct=benchmark_cum_return,
+        alpha_pct=alpha_pct,
     )
     db.add(snapshot)
     db.commit()
     db.refresh(snapshot)
-    logger.info("포트폴리오 스냅샷: 총자산=%d, 수익률=%.2f%%", total_value, cumulative_return)
+    logger.info(
+        "포트폴리오 스냅샷: 총자산=%d, 누적=%.2f%%, KOSPI=%s%%, α=%s%%",
+        total_value,
+        cumulative_return,
+        f"{benchmark_cum_return:.2f}" if benchmark_cum_return is not None else "N/A",
+        f"{alpha_pct:.2f}" if alpha_pct is not None else "N/A",
+    )
 
     # REQ-021: 스냅샷 저장 후 방어 모드 점검
     check_defensive_mode(db)
@@ -517,6 +565,35 @@ def get_portfolio_stats(db: Session) -> dict:
     # 누적 수익률
     cumulative_return = snapshots[-1].cumulative_return_pct if snapshots else 0
 
+    # KOSPI 벤치마크 대비 알파 (2026-04 교정)
+    # @MX:NOTE: 승률만 보고 전략 품질을 오판하지 않도록 알파를 노출한다.
+    benchmark_cum = snapshots[-1].benchmark_cumulative_return_pct if snapshots else None
+    alpha_pct = snapshots[-1].alpha_pct if snapshots else None
+
+    # 알파 기반 승률 — 청산된 시그널 중 alpha_pct가 양수인 비율
+    from app.models.fund_signal import FundSignal
+    alpha_rows = (
+        db.query(FundSignal.alpha_pct)
+        .join(VirtualTrade, VirtualTrade.signal_id == FundSignal.id)
+        .filter(
+            VirtualTrade.portfolio_id == portfolio.id,
+            VirtualTrade.is_open.is_(False),
+            FundSignal.alpha_pct.isnot(None),
+        )
+        .all()
+    )
+    alpha_values = [row[0] for row in alpha_rows if row[0] is not None]
+    alpha_win_rate: float | None = None
+    if alpha_values:
+        alpha_wins = sum(1 for v in alpha_values if v > 0)
+        alpha_win_rate = round(alpha_wins / len(alpha_values) * 100, 1)
+
+    alpha_warning = (
+        alpha_pct is not None
+        and alpha_pct < 0
+        and len(snapshots) >= 10
+    )
+
     return {
         "portfolio_id": portfolio.id,
         "portfolio_name": portfolio.name,
@@ -532,6 +609,11 @@ def get_portfolio_stats(db: Session) -> dict:
         "sharpe_ratio": sharpe_ratio,
         "mdd": mdd,
         "sharpe_warning": sharpe_ratio < 1.0 and len(daily_returns) >= 20,
+        "benchmark_cumulative_return_pct": benchmark_cum,
+        "alpha_pct": alpha_pct,
+        "alpha_win_rate": alpha_win_rate,  # 알파 기준 승률 (시장초과 건수 / 청산 건수)
+        "alpha_sample_size": len(alpha_values),
+        "alpha_warning": alpha_warning,
         "is_defensive_mode": portfolio.is_defensive_mode,
         "defensive_mode_entered_at": (
             portfolio.defensive_mode_entered_at.isoformat()
