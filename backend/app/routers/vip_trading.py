@@ -64,14 +64,15 @@ async def get_vip_positions(db: Session = Depends(get_db)):
         .all()
     )
 
-    # 종목/공시 정보 일괄 로드
-    trade_info = []
-    for trade in open_trades:
-        stock = db.query(Stock).filter(Stock.id == trade.stock_id).first()
-        disclosure = db.query(VIPDisclosure).filter(
-            VIPDisclosure.id == trade.vip_disclosure_id
-        ).first()
-        trade_info.append((trade, stock, disclosure))
+    # 종목/공시 정보 일괄 로드 — N+1 쿼리 방지: IN 쿼리로 일괄 조회
+    trade_stock_ids = [t.stock_id for t in open_trades]
+    trade_disclosure_ids = [t.vip_disclosure_id for t in open_trades if t.vip_disclosure_id]
+    stocks_map = {s.id: s for s in db.query(Stock).filter(Stock.id.in_(trade_stock_ids)).all()} if trade_stock_ids else {}
+    disclosures_map = {d.id: d for d in db.query(VIPDisclosure).filter(VIPDisclosure.id.in_(trade_disclosure_ids)).all()} if trade_disclosure_ids else {}
+    trade_info = [
+        (trade, stocks_map.get(trade.stock_id), disclosures_map.get(trade.vip_disclosure_id))
+        for trade in open_trades
+    ]
 
     # 현재가 병렬 조회
     async def _get_price(stock) -> int | None:

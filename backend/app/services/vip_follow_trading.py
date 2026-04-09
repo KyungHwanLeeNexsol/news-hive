@@ -9,6 +9,7 @@ SPEC-VIP-001의 매매 로직 구현:
 """
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
@@ -561,6 +562,11 @@ def _business_days_between(start: datetime, end: datetime) -> int:
 # asyncio.gather로 18개 종목 동시 요청 시 Naver 서버가 429/timeout을 반환하던 문제 수정
 _PRICE_FETCH_SEMAPHORE = asyncio.Semaphore(5)
 
+# 현재가 인메모리 캐시: {stock_code: (price, cached_at)}
+# 포트폴리오 재조회 시 Naver API 호출 생략 → 응답 속도 개선
+_price_cache: dict[str, tuple[int, float]] = {}
+_PRICE_CACHE_TTL = 30  # 30초 TTL — 장중 실시간성과 응답 속도 균형
+
 
 async def _fetch_price(stock_code: str) -> int | None:
     """종목 현재가를 조회한다.
@@ -568,25 +574,36 @@ async def _fetch_price(stock_code: str) -> int | None:
     # @MX:NOTE: Naver 실시간 polling API 사용 — integration endpoint는 dealTrendInfos[0]가 전일종가를 반환해 오류 발생
     # @MX:REASON: m.stock.naver.com/api/stock/{code}/integration의 dealTrendInfos는 과거 일별 데이터로 실시간 현재가 아님
     # @MX:NOTE: _PRICE_FETCH_SEMAPHORE(5)로 동시 요청 제한 — 병렬 gather 시 Naver 타임아웃 방지
+    # @MX:NOTE: _price_cache로 30초 캐시 — 포트폴리오 재조회 시 Naver API 호출 생략
     Args:
         stock_code: 종목 코드
 
     Returns:
         현재가 (원) 또는 None
     """
+    # 캐시 확인
+    now = time.monotonic()
+    cached = _price_cache.get(stock_code)
+    if cached is not None:
+        cached_price, cached_at = cached
+        if now - cached_at < _PRICE_CACHE_TTL:
+            return cached_price
+
     import httpx
     from app.services.naver_finance import HEADERS
     try:
         url = f"https://polling.finance.naver.com/api/realtime/domestic/stock/{stock_code}"
         async with _PRICE_FETCH_SEMAPHORE:
-            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=3, follow_redirects=True) as client:
                 resp = await client.get(url, headers=HEADERS)
                 resp.raise_for_status()
             data = resp.json()
         datas = data.get("datas") or []
         price_str = datas[0].get("closePrice", "") if datas else ""
         if price_str:
-            return int(str(price_str).replace(",", ""))
+            price = int(str(price_str).replace(",", ""))
+            _price_cache[stock_code] = (price, now)
+            return price
     except Exception as e:
         logger.warning("현재가 조회 실패 (%s): %s(%s)", stock_code, type(e).__name__, e)
     return None
@@ -662,10 +679,10 @@ async def get_vip_portfolio_stats(db: Session) -> dict:
     )
 
     # 포지션 평가액 계산 — 현재가를 병렬 조회하여 응답 지연 최소화
-    stocks = {
-        trade.stock_id: db.query(Stock).filter(Stock.id == trade.stock_id).first()
-        for trade in open_trades
-    }
+    # N+1 쿼리 방지: open_trades의 stock_id를 한 번에 IN 쿼리로 조회
+    open_stock_ids = [t.stock_id for t in open_trades]
+    stocks_list = db.query(Stock).filter(Stock.id.in_(open_stock_ids)).all() if open_stock_ids else []
+    stocks = {s.id: s for s in stocks_list}
 
     async def _fetch_trade_value(trade: VIPTrade) -> int:
         stock = stocks.get(trade.stock_id)

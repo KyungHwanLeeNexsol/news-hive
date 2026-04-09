@@ -34,11 +34,10 @@ async def get_positions(db: Session = Depends(get_db)):
         .all()
     )
 
-    # 종목 정보 로드
-    trade_stocks = []
-    for t in trades:
-        stock = db.query(Stock).filter(Stock.id == t.stock_id).first()
-        trade_stocks.append((t, stock))
+    # 종목 정보 로드 — N+1 쿼리 방지: IN 쿼리로 일괄 조회
+    trade_stock_ids = [t.stock_id for t in trades]
+    stocks_map = {s.id: s for s in db.query(Stock).filter(Stock.id.in_(trade_stock_ids)).all()} if trade_stock_ids else {}
+    trade_stocks = [(t, stocks_map.get(t.stock_id)) for t in trades]
 
     async def _safe_fetch(stock) -> int | None:
         if stock and stock.stock_code:
