@@ -565,8 +565,8 @@ _PRICE_FETCH_SEMAPHORE = asyncio.Semaphore(5)
 async def _fetch_price(stock_code: str) -> int | None:
     """종목 현재가를 조회한다.
 
-    # @MX:NOTE: [AUTO] 모바일 API 직접 호출 — KOSPI/KOSDAQ 목록 탐색(2회 HTTP) 생략으로 응답속도 개선
-    # @MX:REASON: fetch_current_price는 목록 탐색 2회 후 모바일 fallback으로 종목당 3회 HTTP 요청 발생
+    # @MX:NOTE: Naver 실시간 polling API 사용 — integration endpoint는 dealTrendInfos[0]가 전일종가를 반환해 오류 발생
+    # @MX:REASON: m.stock.naver.com/api/stock/{code}/integration의 dealTrendInfos는 과거 일별 데이터로 실시간 현재가 아님
     # @MX:NOTE: _PRICE_FETCH_SEMAPHORE(5)로 동시 요청 제한 — 병렬 gather 시 Naver 타임아웃 방지
     Args:
         stock_code: 종목 코드
@@ -577,17 +577,14 @@ async def _fetch_price(stock_code: str) -> int | None:
     import httpx
     from app.services.naver_finance import HEADERS
     try:
-        url = f"https://m.stock.naver.com/api/stock/{stock_code}/integration"
+        url = f"https://polling.finance.naver.com/api/realtime/domestic/stock/{stock_code}"
         async with _PRICE_FETCH_SEMAPHORE:
             async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
                 resp = await client.get(url, headers=HEADERS)
                 resp.raise_for_status()
             data = resp.json()
-        deal_infos = data.get("dealTrendInfos") or []
-        price_str = (
-            (deal_infos[0].get("closePrice", "") if deal_infos else "")
-            or data.get("stockInfo", {}).get("closePrice", "")
-        )
+        datas = data.get("datas") or []
+        price_str = datas[0].get("closePrice", "") if datas else ""
         if price_str:
             return int(str(price_str).replace(",", ""))
     except Exception as e:
