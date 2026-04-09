@@ -27,6 +27,9 @@ pydantic-settings==2.7.1
 # Commodity Price Tracking
 yfinance>=1.2.0
 
+# KRX 데이터 조회 (KOSPI 200 구성종목)
+pykrx>=1.0.47
+
 # Redis 캐시
 redis[hiredis]>=5.0.0
 

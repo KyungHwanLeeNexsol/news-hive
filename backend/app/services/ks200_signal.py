@@ -153,43 +153,32 @@ def check_signal(prices_newest_first: list) -> SignalResult | None:
 
 
 async def fetch_kospi200_codes() -> list[str]:
-    """KRX 데이터포털에서 KOSPI 200 구성종목 코드 목록을 조회한다.
+    """pykrx로 KOSPI 200 구성종목 코드 목록을 조회한다.
 
-    KRX API: data.krx.co.kr POST (지수 구성종목 조회)
+    # @MX:NOTE: KRX 데이터포털 API는 세션 인증 필요(LOGOUT 400 반환) — pykrx 라이브러리로 대체
+    pykrx는 동기 함수이므로 asyncio.to_thread()로 감싸 이벤트 루프 블로킹 방지.
     실패 시 빈 리스트 반환 — 스캔을 중단하고 로그 경고 출력.
     """
-    import httpx
     from datetime import datetime
 
-    today = datetime.now().strftime("%Y%m%d")
-    url = "http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd"
-    payload = {
-        "bld": "dbms/MDC/STAT/standard/MDCSTAT00601",
-        "indIdx": "1",
-        "indIdx2": "028",   # KOSPI 200 인덱스 코드
-        "trdDd": today,
-        "share": "1",
-        "money": "1",
-        "csvxls_isNo": "false",
-    }
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Referer": "http://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd?menuId=MDC0201020201",
-    }
+    def _sync_fetch() -> list[str]:
+        from pykrx import stock as pykrx_stock
+        today = datetime.now().strftime("%Y%m%d")
+        try:
+            # KOSPI 200 인덱스 코드: "1028"
+            tickers = pykrx_stock.get_index_portfolio_deposit_file("1028", date=today)
+            codes = [str(t).zfill(6) for t in tickers if t]
+            return codes
+        except Exception as e:
+            logger.warning("pykrx KOSPI 200 조회 실패: %s", e)
+            return []
+
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(url, data=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-
-        items = data.get("output", [])
-        codes: list[str] = []
-        for item in items:
-            code = item.get("ISU_SRT_CD") or item.get("isu_srt_cd") or ""
-            if code and len(code) == 6:
-                codes.append(code.strip())
-
-        logger.info("KOSPI 200 구성종목 %d개 조회 완료", len(codes))
+        codes = await asyncio.to_thread(_sync_fetch)
+        if codes:
+            logger.info("KOSPI 200 구성종목 %d개 조회 완료 (pykrx)", len(codes))
+        else:
+            logger.warning("KOSPI 200 구성종목 조회 결과 없음")
         return codes
     except Exception as e:
         logger.warning("KOSPI 200 구성종목 조회 실패: %s", e)
