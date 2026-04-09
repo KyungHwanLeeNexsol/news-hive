@@ -364,10 +364,11 @@ def match_keywords_and_notify(db: Session) -> dict:
                         stats["skipped_duplicates"] += 1
                         break  # 동일 뉴스에 이미 알림 발송됨
 
-                    # AI 관련성 게이트 (점수 < 임계값이면 스킵, -1=AI 불가 → 폴백 발송)
+                    # AI 관련성 게이트 (점수 < 임계값이면 스킵)
+                    company_name_for_check = stock_name_map.get(stock_id, "")
                     score = _check_relevance(
                         keyword=keyword,
-                        company_name=stock_name_map.get(stock_id, ""),
+                        company_name=company_name_for_check,
                         content_type="news",
                         content_id=article.id,
                     )
@@ -375,6 +376,13 @@ def match_keywords_and_notify(db: Session) -> dict:
                         stats.setdefault("filtered_low_relevance", 0)
                         stats["filtered_low_relevance"] += 1
                         break
+                    # AI 불가(-1) 폴백: 기업명이 본문에 없으면 차단
+                    # (rate limit 시 무관한 기사 오발송 방지)
+                    if score == -1 and company_name_for_check:
+                        if company_name_for_check.lower() not in search_text:
+                            stats.setdefault("filtered_low_relevance", 0)
+                            stats["filtered_low_relevance"] += 1
+                            break
 
                     # 알림 발송
                     channel = _dispatch_notification(
@@ -437,9 +445,10 @@ def match_keywords_and_notify(db: Session) -> dict:
                         stats["skipped_duplicates"] += 1
                         break
 
+                    company_name_for_check = stock_name_map.get(stock_id, "")
                     score = _check_relevance(
                         keyword=keyword,
-                        company_name=stock_name_map.get(stock_id, ""),
+                        company_name=company_name_for_check,
                         content_type="disclosure",
                         content_id=disclosure.id,
                     )
@@ -447,6 +456,11 @@ def match_keywords_and_notify(db: Session) -> dict:
                         stats.setdefault("filtered_low_relevance", 0)
                         stats["filtered_low_relevance"] += 1
                         break
+                    if score == -1 and company_name_for_check:
+                        if company_name_for_check.lower() not in search_text:
+                            stats.setdefault("filtered_low_relevance", 0)
+                            stats["filtered_low_relevance"] += 1
+                            break
 
                     # 알림 발송
                     channel = _dispatch_notification(
@@ -523,9 +537,10 @@ def match_keywords_and_notify(db: Session) -> dict:
                         stats["skipped_duplicates"] += 1
                         break
 
+                    company_name_for_check = stock_name_map.get(stock_id, "")
                     score = _check_relevance(
                         keyword=keyword,
-                        company_name=stock_name_map.get(stock_id, ""),
+                        company_name=company_name_for_check,
                         content_type="report",
                         content_id=report.id,
                     )
@@ -533,6 +548,11 @@ def match_keywords_and_notify(db: Session) -> dict:
                         stats.setdefault("filtered_low_relevance", 0)
                         stats["filtered_low_relevance"] += 1
                         break
+                    if score == -1 and company_name_for_check:
+                        if company_name_for_check.lower() not in search_text:
+                            stats.setdefault("filtered_low_relevance", 0)
+                            stats["filtered_low_relevance"] += 1
+                            break
 
                     # 알림 발송
                     channel = _dispatch_notification(
