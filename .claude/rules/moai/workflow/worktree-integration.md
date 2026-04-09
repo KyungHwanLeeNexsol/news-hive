@@ -69,19 +69,19 @@ For agents that need isolated execution (v2.1.49+):
 
 ```yaml
 ---
-name: team-coder
+name: my-implementer
 isolation: worktree   # Agent runs in its own isolated worktree
 background: true      # Agent runs without blocking main conversation
 ---
 ```
 
 When to use `isolation: worktree`:
-- Implementation agents that write files (team-coder, team-tester, team-designer)
+- Implementation teammates that write files (role_profiles: implementer, tester, designer)
 - Prevents file conflicts between parallel teammates
 - Each agent gets its own clean worktree at `.claude/worktrees/<auto-name>/`
 
 When NOT to use `isolation: worktree`:
-- Read-only agents (team-reader, team-validator)
+- Read-only teammates (role_profiles: researcher, analyst, reviewer)
 - `permissionMode: plan` already prevents writes; adding isolation adds overhead without benefit
 
 ### `background: true` in Agent Frontmatter
@@ -97,6 +97,12 @@ background: true   # Returns immediately; results delivered on next turn
 
 Use with `isolation: worktree` for optimal parallel execution in team mode.
 
+[HARD] Background agents auto-deny Write/Edit operations. Only use `background: true` for:
+- Read-only research and analysis agents
+- Agents whose write paths are pre-approved in settings.json `permissions.allow`
+
+For write-heavy agents without pre-approval, use `background: false` (foreground, sequential).
+
 Kill background agent: Press `Ctrl+X Ctrl+K` in Claude Code interface (v2.1.83+).
 
 ## Worktree Selection Rules [HARD]
@@ -105,7 +111,7 @@ Kill background agent: Press `Ctrl+X Ctrl+K` in Claude Code interface (v2.1.83+)
 
 ```
 Is this a team mode implementation with parallel agents?
-  YES → Use Task(isolation: "worktree") for write agents
+  YES → Use Agent(isolation: "worktree") for write agents
         Do NOT use isolation for read-only agents
   NO ↓
 
@@ -118,15 +124,15 @@ Is this a user-initiated parallel session?
   NO ↓
 
 Is this a one-shot sub-agent task?
-  YES → Use Task(isolation: "worktree") if agent writes files
-        Use Task() without isolation if agent is read-only
+  YES → Use Agent(isolation: "worktree") if agent writes files
+        Use Agent() without isolation if agent is read-only
   NO → No worktree needed
 ```
 
 ### HARD Rules
 
-- [HARD] Implementation agents in team mode (team-coder, team-tester, team-designer) MUST use `isolation: "worktree"` when spawned via Task()
-- [HARD] Read-only agents (team-reader, team-validator) MUST NOT use `isolation: "worktree"` — their `permissionMode: plan` already prevents writes
+- [HARD] Implementation teammates in team mode (role_profiles: implementer, tester, designer) MUST use `isolation: "worktree"` when spawned via Agent()
+- [HARD] Read-only teammates (role_profiles: researcher, analyst, reviewer) MUST NOT use `isolation: "worktree"` — their `mode: "plan"` already prevents writes
 - [HARD] One-shot sub-agents that write files (expert-backend, expert-frontend, manager-ddd, manager-tdd) SHOULD use `isolation: "worktree"` when making cross-file changes
 - [HARD] GitHub workflow agents (fixer agents in /moai github issues) MUST use `isolation: "worktree"` for branch isolation
 
@@ -138,7 +144,7 @@ Is this a one-shot sub-agent task?
 - **Parallel sessions**: Running multiple independent Claude sessions on same repo
 - **Quick experiments**: Testing code changes without affecting main workspace
 
-### Use `Task(isolation: "worktree")` for:
+### Use `Agent(isolation: "worktree")` for:
 
 - **Parallel team agents**: Multiple implementation teammates working simultaneously
 - **File conflict prevention**: Agents that write to different file patterns
@@ -162,7 +168,7 @@ PLAN PHASE
 
 RUN PHASE
   MoAI Worktree: SPEC implementation, persistent state
-  Team write agents: Task(isolation: "worktree") for parallel execution
+  Team write agents: Agent(isolation: "worktree") for parallel execution
   Team read agents: No worktree (quality validation, analysis)
 
 SYNC PHASE
@@ -174,7 +180,8 @@ SYNC PHASE
 ### Implementation Agents (isolation: worktree + background: true)
 
 ```yaml
-# team-coder, team-tester, team-designer
+# Implementation teammates (role_profiles: implementer, tester, designer)
+# Spawned via: Agent(subagent_type: "general-purpose", mode: "acceptEdits", isolation: "worktree")
 isolation: worktree   # Isolated worktree per agent
 background: true      # Non-blocking parallel execution
 permissionMode: acceptEdits
@@ -183,8 +190,9 @@ permissionMode: acceptEdits
 ### Research/Analysis Agents (no isolation needed)
 
 ```yaml
-# team-reader, team-validator
-# No isolation: worktree (read-only, permissionMode: plan prevents writes)
+# Read-only teammates (role_profiles: researcher, analyst, reviewer)
+# Spawned via: Agent(subagent_type: "general-purpose", mode: "plan")
+# No isolation: worktree (read-only, mode: plan prevents writes)
 permissionMode: plan  # Read-only mode already provides safety
 ```
 
@@ -252,6 +260,19 @@ Both share the same project structure. `src/auth/handler.go` resolves correctly 
 # CORRECT: No cd prefix — agent CWD is already worktree root
 "Run: go test ./..."
 ```
+
+## Minimum Version Requirements
+
+| Feature | Minimum Version | Notes |
+|---------|----------------|-------|
+| `isolation: worktree` in Agent frontmatter | 2.1.49 | Basic worktree isolation |
+| `background: true` in Agent frontmatter | 2.1.46 | Non-blocking agent execution |
+| `claude --worktree` user flag | 2.1.50 | User-initiated worktree sessions |
+| `Ctrl+X Ctrl+K` to kill background agent | 2.1.83 | Kill stuck background agents |
+| Worktree CWD isolation fix | **2.1.97** | Prior versions leaked agent CWD back to parent session |
+| Stop/SubagentStop hook stability | **2.1.97** | Prior versions failed on long-running sessions |
+
+**Recommended**: Claude Code **2.1.97 or later** for reliable worktree isolation and hook stability.
 
 ## Troubleshooting
 
