@@ -330,6 +330,12 @@ export interface PaperTradingStats {
   sharpe_ratio: number;
   mdd: number;
   sharpe_warning: boolean;
+  // KOSPI 벤치마크 대비 알파 (2026-04 교정)
+  benchmark_cumulative_return_pct?: number | null;
+  alpha_pct?: number | null;
+  alpha_win_rate?: number | null;
+  alpha_sample_size?: number;
+  alpha_warning?: boolean;
 }
 
 export interface PaperPosition {

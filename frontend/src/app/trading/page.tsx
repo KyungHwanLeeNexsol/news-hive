@@ -512,7 +512,7 @@ function PaperTradingTab() {
   return (
     <div className="flex flex-col gap-6">
       {/* 요약 카드 */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {/* 총 손익 */}
         <div
           className={`rounded-xl border p-4 flex flex-col gap-1 ${paperProfit ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'}`}
@@ -555,6 +555,39 @@ function PaperTradingTab() {
             {stats.win_rate.toFixed(1)}%
           </span>
           <span className="text-[11px] text-gray-400">청산 {stats.closed_trades}건 중</span>
+        </div>
+        {/* 코스피 대비 — 시장중립 알파 (2026-04 교정) */}
+        <div
+          className={`rounded-xl border p-4 flex flex-col gap-1 ${
+            stats.alpha_warning
+              ? 'bg-blue-50 border-blue-300'
+              : 'bg-white border-gray-200'
+          }`}
+        >
+          <span className="text-[11px] text-gray-500 font-medium flex items-center gap-1">
+            코스피 대비
+            {stats.alpha_warning && (
+              <span className="inline-block px-1.5 py-0 rounded text-[10px] font-bold bg-blue-100 text-blue-700 border border-blue-200">
+                시장 못이김
+              </span>
+            )}
+          </span>
+          <span className={`text-[18px] font-bold ${pctColor(stats.alpha_pct ?? null)}`}>
+            {stats.alpha_pct == null
+              ? '-'
+              : `${stats.alpha_pct >= 0 ? '+' : ''}${stats.alpha_pct.toFixed(2)}%`}
+          </span>
+          <span className="text-[11px] text-gray-400">
+            {stats.benchmark_cumulative_return_pct == null
+              ? 'KOSPI 데이터 없음'
+              : `KOSPI ${stats.benchmark_cumulative_return_pct >= 0 ? '+' : ''}${stats.benchmark_cumulative_return_pct.toFixed(2)}% / 내 ${stats.cumulative_return >= 0 ? '+' : ''}${stats.cumulative_return.toFixed(2)}%`}
+            {stats.alpha_win_rate != null && stats.alpha_sample_size != null && stats.alpha_sample_size > 0 && (
+              <>
+                <br />
+                시장초과 승률 {stats.alpha_win_rate.toFixed(1)}% ({stats.alpha_sample_size}건)
+              </>
+            )}
+          </span>
         </div>
       </div>
 
