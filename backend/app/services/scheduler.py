@@ -234,6 +234,31 @@ def _run_signal_verification():
 
 
 @retry_with_backoff(max_attempts=3)
+def _run_daily_briefing():
+    """데일리 브리핑 생성 및 매수/매도 시그널 발행 (평일 08:30 KST)."""
+    if not _is_kr_market_open():
+        logger.debug("주말 — 데일리 브리핑 스킵")
+        return
+
+    _start = _time.monotonic()
+    from app.services.fund_manager import generate_daily_briefing
+
+    db = SessionLocal()
+    try:
+        briefing = asyncio.run(generate_daily_briefing(db))
+        if briefing:
+            logger.info(f"Daily briefing generated: {briefing.id} ({briefing.market_sentiment})")
+        else:
+            logger.warning("Daily briefing generation returned None")
+    except Exception as e:
+        logger.error(f"Daily briefing generation failed: {e}")
+        raise
+    finally:
+        _record_job_duration("daily_briefing", _time.monotonic() - _start)
+        db.close()
+
+
+@retry_with_backoff(max_attempts=3)
 def _run_news_impact_backfill():
     """뉴스-가격 반응 1일/5일 backfill (REQ-NPI-006~009)."""
     _start = _time.monotonic()
@@ -806,6 +831,19 @@ def start_scheduler():
         id="market_cap_update",
         replace_existing=True,
         next_run_time=datetime.now(),
+    )
+    # 데일리 브리핑 + 매수/매도 시그널 생성: 매일 08:30 KST (장 시작 전, 평일만)
+    scheduler.add_job(
+        _run_daily_briefing,
+        "cron",
+        day_of_week="mon-fri",
+        hour=8,
+        minute=30,
+        timezone="Asia/Seoul",
+        id="daily_briefing",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
     )
     # 시그널 적중률 검증: 매일 18:00 KST (장 마감 후)
     scheduler.add_job(
