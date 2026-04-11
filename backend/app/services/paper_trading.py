@@ -86,7 +86,7 @@ def check_defensive_mode(db: Session) -> bool:
             cumulative_return, DEFENSIVE_MODE_ENTER_THRESHOLD,
         )
     elif was_defensive and cumulative_return >= DEFENSIVE_MODE_EXIT_THRESHOLD:
-        # 방어 모드 해제
+        # 방어 모드 해제 (수익률 회복)
         portfolio.is_defensive_mode = False
         portfolio.defensive_mode_entered_at = None
         db.commit()
@@ -94,6 +94,20 @@ def check_defensive_mode(db: Session) -> bool:
             "방어 모드 해제: 누적 수익률 %.2f%% (회복 임계값: %.1f%%)",
             cumulative_return, DEFENSIVE_MODE_EXIT_THRESHOLD,
         )
+    elif was_defensive and portfolio.defensive_mode_entered_at:
+        # 방어 모드 시간 기반 자동 해제: 7일 경과 시 매수 재개
+        # 매수 없이 수익률 회복이 불가능한 교착 상태 방지
+        from datetime import timedelta
+        DEFENSIVE_MODE_MAX_DAYS = 7
+        elapsed = datetime.now(timezone.utc) - portfolio.defensive_mode_entered_at
+        if elapsed > timedelta(days=DEFENSIVE_MODE_MAX_DAYS):
+            portfolio.is_defensive_mode = False
+            portfolio.defensive_mode_entered_at = None
+            db.commit()
+            logger.warning(
+                "방어 모드 시간 초과 해제: %d일 경과, 누적 수익률 %.2f%% (매수 재개)",
+                elapsed.days, cumulative_return,
+            )
 
     return portfolio.is_defensive_mode
 

@@ -1689,7 +1689,9 @@ async def analyze_stock(
   예: 브리핑에서 "관망"이면 시그널도 "hold"가 기본. "회피"면 "sell" 또는 "hold". "적극매수"/"매수"면 "buy".
 """
 
-    response, ai_model_used = await _ask_ai_with_model(prompt, free_only=True)
+    # 시그널 분석은 투자 의사결정 핵심이므로 유료 모델(Pro) 허용.
+    # 무료 모델은 instruction-following이 약해 hold 치우침/낮은 confidence 경향.
+    response, ai_model_used = await _ask_ai_with_model(prompt, free_only=False)
     parsed = _parse_json_response(response)
     if not parsed:
         return None
@@ -1807,6 +1809,16 @@ async def analyze_stock(
                 signal.confidence = max(0.0, min(1.0, signal.confidence + vol_info["confidence_adjustment"]))
         except Exception as vol_e:
             logger.warning("시장 변동성 레벨 계산 실패 (시그널 생성 계속): %s", vol_e)
+
+        # confidence 감산 하한선: buy/sell 시그널이 후속 보정으로 실행 임계값(0.4) 아래로
+        # 떨어지는 것을 방지. AI가 0.45+ confidence로 buy/sell을 판단했다면 최소 실행 가능해야 함.
+        _CONFIDENCE_FLOOR = 0.42
+        if signal.signal in ("buy", "sell") and signal.confidence < _CONFIDENCE_FLOOR:
+            logger.info(
+                "confidence 하한선 적용: %s %.2f → %.2f (signal=%s)",
+                stock.name, signal.confidence, _CONFIDENCE_FLOOR, signal.signal,
+            )
+            signal.confidence = _CONFIDENCE_FLOOR
 
         db.commit()
     except Exception as e:
@@ -2367,17 +2379,18 @@ async def _generate_signals_from_picks(
     if not isinstance(picks, list):
         return
 
-    # 종목명 + 브리핑 힌트 추출
-    stock_hints: list[tuple[str, dict]] = []
+    # 종목명/종목코드 + 브리핑 힌트 추출
+    stock_hints: list[tuple[str, str, dict]] = []  # (name, code, hint)
     for pick in picks:
         if isinstance(pick, dict):
             name = pick.get("stock", "").strip()
-            if name:
+            code = pick.get("stock_code", "").strip()
+            if name or code:
                 hint = {
                     "action": pick.get("action", ""),
                     "reasoning": pick.get("reasoning", ""),
                 }
-                stock_hints.append((name, hint))
+                stock_hints.append((name, code, hint))
 
     if not stock_hints:
         return
@@ -2392,19 +2405,33 @@ async def _generate_signals_from_picks(
         )
         stock_hints = stock_hints[:MAX_SIGNAL_PICKS]
 
-    stock_names = [name for name, _ in stock_hints]
-    logger.info(f"브리핑 추천 종목 {len(stock_names)}개에 대해 시그널 자동 생성: {stock_names}")
+    stock_labels = [name or code for name, code, _ in stock_hints]
+    logger.info(f"브리핑 추천 종목 {len(stock_labels)}개에 대해 시그널 자동 생성: {stock_labels}")
 
-    # DB에서 종목 매칭
+    # DB에서 종목 매칭 (종목코드 > 정확 이름 > 부분 이름 순으로 매칭)
     matched: list[tuple] = []  # (stock, hint)
-    for name, hint in stock_hints:
-        stock = db.query(Stock).filter(Stock.name == name).first()
-        if not stock:
-            stock = db.query(Stock).filter(Stock.name.ilike(f"%{name}%")).first()
+    for name, code, hint in stock_hints:
+        stock = None
+        # 1순위: 종목코드로 정확 매칭
+        if code:
+            stock = db.query(Stock).filter(Stock.stock_code == code).first()
+        # 2순위: 종목명 정확 매칭
+        if not stock and name:
+            stock = db.query(Stock).filter(Stock.name == name).first()
+        # 3순위: 종목명 부분 매칭 (결과가 1개일 때만 채택 — 모호한 매칭 방지)
+        if not stock and name:
+            partial = db.query(Stock).filter(Stock.name.ilike(f"%{name}%")).all()
+            if len(partial) == 1:
+                stock = partial[0]
+            elif len(partial) > 1:
+                logger.warning(
+                    "브리핑 추천 종목 '%s' 부분 매칭 %d건 — 모호하여 스킵: %s",
+                    name, len(partial), [s.name for s in partial[:5]],
+                )
         if stock:
             matched.append((stock, hint))
         else:
-            logger.warning(f"브리핑 추천 종목 '{name}'을 DB에서 찾을 수 없습니다")
+            logger.warning(f"브리핑 추천 종목 '{name or code}'을 DB에서 찾을 수 없습니다")
 
     # 각 종목에 대해 시그널 생성 (순차 실행 — AI API rate limit 고려)
     # REQ-023: CoT 불완전 분석 시 confidence 0.1 감산
