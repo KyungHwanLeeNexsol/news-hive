@@ -27,6 +27,9 @@ pydantic-settings==2.7.1
 # Commodity Price Tracking
 yfinance>=1.2.0
 
+# KRX 공매도 잔고 수집 (pykrx 내부 JSESSIONID monkey-patching 방식)
+pykrx>=1.0.39
+
 # Redis 캐시
 redis[hiredis]>=5.0.0
 
