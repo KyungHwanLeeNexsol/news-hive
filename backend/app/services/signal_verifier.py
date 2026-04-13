@@ -378,11 +378,13 @@ def get_accuracy_stats(db: Session, days: int = 30, ai_model: str | None = None)
     sell_correct = sum(1 for s in sell_signals if s.is_correct)
 
     # 신뢰도 구간별 적중률
+    # medium 하한선을 0.55(MIN_ACTION_CONFIDENCE)로 설정: 0.55 미만은 어차피 거래 실행 안 됨.
+    # 이전 0.4 기준에서는 유효 시그널(≥0.55)이 모두 medium에 집중되어 구간 분석이 무의미했음.
     confidence_buckets = {"high": [], "medium": [], "low": []}
     for s in verified:
         if s.confidence >= 0.7:
             confidence_buckets["high"].append(s.is_correct)
-        elif s.confidence >= 0.4:
+        elif s.confidence >= 0.55:
             confidence_buckets["medium"].append(s.is_correct)
         else:
             confidence_buckets["low"].append(s.is_correct)
@@ -440,10 +442,11 @@ def calibrate_confidence(raw_confidence: float, accuracy_stats: dict) -> float:
     if not by_confidence or accuracy_stats.get("total", 0) == 0:
         return raw_confidence
 
-    # 신뢰도 구간 결정 (high: 0.7+, medium: 0.4~0.7, low: ~0.4)
+    # 신뢰도 구간 결정 (high: 0.7+, medium: 0.55~0.7, low: ~0.55)
+    # get_accuracy_stats와 동일한 구간 기준 사용 (medium 하한 = MIN_ACTION_CONFIDENCE 0.55)
     if raw_confidence >= 0.7:
         bucket_key = "high"
-    elif raw_confidence >= 0.4:
+    elif raw_confidence >= 0.55:
         bucket_key = "medium"
     else:
         bucket_key = "low"

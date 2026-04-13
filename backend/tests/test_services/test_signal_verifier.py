@@ -134,14 +134,14 @@ class TestGetAccuracyStats:
             is_correct=True, return_pct=-10.0,
             verified_at=now, created_at=base_time,
         )
-        # medium confidence (0.4 ~ 0.7): 1건 중 0건 적중
+        # medium confidence (0.55 ~ 0.7): 1건 중 0건 적중
         make_fund_signal(
-            signal="buy", confidence=0.5,
+            signal="buy", confidence=0.65,
             price_at_signal=10000, price_after_5d=9000,
             is_correct=False, return_pct=-10.0,
             verified_at=now, created_at=base_time,
         )
-        # low confidence (< 0.4): 1건 중 1건 적중
+        # low confidence (< 0.55): 1건 중 1건 적중
         make_fund_signal(
             signal="buy", confidence=0.3,
             price_at_signal=10000, price_after_5d=11000,

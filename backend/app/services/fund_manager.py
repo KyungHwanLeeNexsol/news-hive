@@ -1819,15 +1819,17 @@ async def analyze_stock(
         except Exception as vol_e:
             logger.warning("시장 변동성 레벨 계산 실패 (시그널 생성 계속): %s", vol_e)
 
-        # confidence 감산 하한선: buy/sell 시그널이 후속 보정으로 거래 실행 임계값 아래로
-        # 떨어지는 것을 방지. AI가 MIN_ACTION_CONFIDENCE+ confidence로 buy/sell을 판단했다면 최소 실행 가능해야 함.
-        # REQ-AI-007-001: MIN_ACTION_CONFIDENCE(0.55) 참조 — 로컬 상수 제거
-        if signal.signal in ("buy", "sell") and signal.confidence < MIN_ACTION_CONFIDENCE:
+        # confidence 감산 하한선: market_context 보정(-0.10/-0.15), CoT 패널티(-0.10) 등
+        # 후속 감산이 거래 실행 임계값(paper_trading: MIN_ACTION_CONFIDENCE - 0.05) 아래로
+        # 떨어지는 것을 방지. floor는 code guard(MIN_ACTION_CONFIDENCE=0.55)와 구분하여
+        # 시장 리스크 시그널이 실제 거래를 막을 수 있도록 0.05 여유를 둔다.
+        _CONFIDENCE_FLOOR = MIN_ACTION_CONFIDENCE - 0.05  # 0.50 = 거래 실행 임계값과 동일
+        if signal.signal in ("buy", "sell") and signal.confidence < _CONFIDENCE_FLOOR:
             logger.info(
                 "confidence 하한선 적용: %s %.2f → %.2f (signal=%s)",
-                stock.name, signal.confidence, MIN_ACTION_CONFIDENCE, signal.signal,
+                stock.name, signal.confidence, _CONFIDENCE_FLOOR, signal.signal,
             )
-            signal.confidence = MIN_ACTION_CONFIDENCE
+            signal.confidence = _CONFIDENCE_FLOOR
 
         db.commit()
     except Exception as e:
