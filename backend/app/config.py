@@ -84,6 +84,10 @@ class Settings(BaseSettings):
     TELEGRAM_BOT_TOKEN: str = ""  # BotFather에서 발급받은 봇 토큰
     TELEGRAM_WEBHOOK_SECRET: str = ""  # 웹훅 시크릿 (setWebhook secret_token 파라미터와 동일하게 설정)
 
+    # --- KRX Open API ---
+    KRX_API_KEY: str = ""           # openapi.krx.co.kr REST API 인증키 (data-dbg.krx.co.kr)
+    KRX_DATA_JSESSIONID: str = ""   # data.krx.co.kr 로그인 세션 쿠키 (공매도 잔고 CSV 다운로드)
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 

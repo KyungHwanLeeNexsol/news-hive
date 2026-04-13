@@ -336,6 +336,74 @@ def _run_commodity_news_crawl():
         db.close()
 
 
+def _run_krx_session_keepalive():
+    """data.krx.co.kr 세션 연장 — 20분 간격으로 호출하여 JSESSIONID 만료 방지.
+
+    세션 타임아웃: 약 30분 비활성 시 만료.
+    로그인 시 NiceProtect 암호화로 자동 재로그인 불가 → 세션 연장 방식으로 대체.
+    KRX_DATA_JSESSIONID 미설정 시 조용히 건너뜀.
+    """
+    from app.services.krx_short_selling_crawler import keepalive_krx_session
+    asyncio.run(keepalive_krx_session())
+
+
+def _run_krx_short_selling_crawl():
+    """KRX 공매도 잔고 수집 — 전 영업일 기준 KOSPI/KOSDAQ 전 종목."""
+    _start = _time.monotonic()
+    from app.services.krx_short_selling_crawler import crawl_krx_short_selling
+
+    db = SessionLocal()
+    try:
+        count = asyncio.run(crawl_krx_short_selling(db))
+        logger.info(f"KRX 공매도 잔고 수집 완료: {count}건 저장")
+    except Exception as e:
+        logger.error(f"KRX 공매도 잔고 수집 실패: {e}")
+        raise
+    finally:
+        _record_job_duration("krx_short_selling_crawl", _time.monotonic() - _start)
+        db.close()
+
+
+def _run_macro_global_news_crawl():
+    """해외 거시경제 뉴스 크롤링 — 연준/CPI/반도체/달러 등 국내 증시 영향 매크로 뉴스."""
+    _start = _time.monotonic()
+    from app.services.crawlers.macro_news_crawler import fetch_macro_global_news
+    from app.models.news import NewsArticle
+
+    db = SessionLocal()
+    try:
+        articles = asyncio.run(fetch_macro_global_news())
+        existing_urls: set[str] = {
+            row[0] for row in db.query(NewsArticle.url).all()
+        }
+        new_count = 0
+        for art in articles:
+            url = art.get("url", "")
+            if not url or url in existing_urls:
+                continue
+            existing_urls.add(url)
+            try:
+                db.add(NewsArticle(
+                    title=art["title"][:500],
+                    url=url[:1000],
+                    source=art.get("source", "macro_global"),
+                    published_at=art.get("published_at"),
+                    summary=art.get("description", "")[:1000] if art.get("description") else None,
+                    sentiment="neutral",
+                ))
+                new_count += 1
+            except Exception as e:
+                logger.debug(f"매크로 뉴스 DB 저장 실패 ({url}): {e}")
+        db.commit()
+        logger.info(f"매크로 글로벌 뉴스 크롤링 완료: {new_count}건 저장 (전체 {len(articles)}건)")
+    except Exception as e:
+        logger.error(f"매크로 글로벌 뉴스 크롤링 실패: {e}")
+        raise
+    finally:
+        _record_job_duration("macro_global_news_crawl", _time.monotonic() - _start)
+        db.close()
+
+
 @retry_with_backoff(max_attempts=3)
 def _run_news_impact_cleanup():
     """90일 초과 뉴스-가격 반응 레코드 정리 (REQ-NPI-016)."""
@@ -927,6 +995,42 @@ def start_scheduler():
         "interval",
         minutes=30,
         id="commodity_news_crawl",
+        replace_existing=True,
+    )
+    # 해외 매크로 뉴스 크롤링: 매일 07:30 KST (장전 브리핑 전 수집)
+    scheduler.add_job(
+        _run_macro_global_news_crawl,
+        "cron",
+        hour=7,
+        minute=30,
+        timezone="Asia/Seoul",
+        id="macro_global_news_crawl",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    # KRX data.krx.co.kr 세션 연장: 20분 간격 (JSESSIONID 만료 방지)
+    # 세션 타임아웃(30분) 이전에 주기적으로 연장하여 공매도 수집이 항상 가능하도록 유지
+    scheduler.add_job(
+        _run_krx_session_keepalive,
+        "interval",
+        minutes=20,
+        id="krx_session_keepalive",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    # KRX 공매도 잔고 수집: 매일 18:30 KST (KRX 데이터 공시 후)
+    scheduler.add_job(
+        _run_krx_short_selling_crawl,
+        "cron",
+        day_of_week="mon-fri",
+        hour=18,
+        minute=30,
+        timezone="Asia/Seoul",
+        id="krx_short_selling_crawl",
+        max_instances=1,
+        coalesce=True,
         replace_existing=True,
     )
     # 뉴스-가격 반응 레코드 정리: 매일 03:00 KST
