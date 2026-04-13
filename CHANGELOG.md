@@ -4,6 +4,34 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fixed — SPEC-AI-007 사후 수정: CONFIDENCE_FLOOR 버그 및 신뢰도 구간 경계값 정렬 (2026-04-13)
+
+- `fund_manager.py` `_CONFIDENCE_FLOOR` 오설정 수정: `MIN_ACTION_CONFIDENCE`(0.55)와 동일하게 설정되어 market_context 패널티(-0.10/-0.15) 및 CoT 패널티(-0.10)가 무력화되던 버그 해결
+  - 변경: floor = `MIN_ACTION_CONFIDENCE` → `MIN_ACTION_CONFIDENCE - 0.05` (0.50)
+  - 효과: 시장 리스크 시그널이 실제로 거래를 막을 수 있게 됨
+- `signal_verifier.py` 신뢰도 구간(confidence_buckets) medium 하한선 조정: 0.40 → 0.55
+  - 기존: 0.40~0.70 범위로 설정 → 0.40~0.54 무효 시그널이 "medium" 버킷에 혼재
+  - 개선: `MIN_ACTION_CONFIDENCE`(0.55)를 기준으로 통일 → `get_accuracy_stats`와 `calibrate_confidence` 구간 일치
+- `test_signal_verifier.py` medium 구간 테스트 데이터 갱신: confidence 0.5 → 0.65
+
+### Added — SPEC-AI-007: Confidence 임계값 통일 및 모델별 적중률 분리 (2026-04-13)
+
+**배경**: gemini 모델이 실제보다 낮은 적중률을 참조하여 과도한 hold 시그널을 생성하는 자기강화 루프 발생. confidence 임계값이 프롬프트(0.7), 코드 가드(0.45), 거래 실행(0.40) 3개 레이어에 걸쳐 불일치.
+
+- `signal_verifier.py` `get_accuracy_stats()` 모델 필터 추가
+  - `ai_model: str | None = None` 파라미터 신설
+  - ai_model 지정 시 해당 모델의 시그널만 집계 → 타 모델 데이터 오염 차단
+  - 최소 샘플 가드 추가: 검증 데이터가 5건 미만이면 `low_sample_warning` 반환
+- `fund_manager.py` 임계값 상수 통일
+  - 모듈 레벨 상수 `MIN_ACTION_CONFIDENCE: float = 0.55` 선언
+  - 기존 로컬 상수 `_MIN_ACTION_CONFIDENCE = 0.45` 제거 및 통합
+  - AI 프롬프트 임계값 지시문 수정: "0.7 이상" → "0.55 이상"
+  - `get_accuracy_stats()` 호출 시 `ai_model=settings.GEMINI_MODEL` 전달
+  - `low_sample_warning` 수신 시 accuracy_text에 데이터 부족 경고 포함
+- `paper_trading.py` 거래 실행 임계값 통일
+  - `MIN_ACTION_CONFIDENCE` import 추가
+  - 하드코딩된 `0.4` → `MIN_ACTION_CONFIDENCE - 0.05` (0.50)으로 변경
+
 ### Performance — 모의투자 포트폴리오 조회 속도 개선 (2026-04-09)
 
 - `_fetch_prices_batch()` 추가: Naver 배치 API(`SERVICE_ITEM`) 사용 — 종목 N개를 1회 요청으로 조회

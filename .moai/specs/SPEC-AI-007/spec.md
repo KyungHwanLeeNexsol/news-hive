@@ -5,7 +5,7 @@
 | SPEC ID     | SPEC-AI-007                                               |
 | Title       | Confidence Threshold Unification & Per-Model Accuracy     |
 | Version     | 1.0.0                                                     |
-| Status      | Planned                                                   |
+| Status      | Completed                                                 |
 | Created     | 2026-04-13                                                |
 | Updated     | 2026-04-13                                                |
 | Author      | Nexsol                                                    |

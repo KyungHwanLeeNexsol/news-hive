@@ -20,3 +20,13 @@
   - paper_trading.py: MIN_ACTION_CONFIDENCE - 0.05 참조
 - Phase 2.9: MX 태그 추가 (ANCHOR on get_accuracy_stats, NOTE on MIN_ACTION_CONFIDENCE)
 - 테스트: 31/31 통과
+
+## Phase 3: Post-Implementation Bug Fix (2026-04-13)
+
+사후 분석에서 발견된 이슈 수정:
+- Issue 1 (High): `_CONFIDENCE_FLOOR = MIN_ACTION_CONFIDENCE` 동일 설정 버그 → `MIN_ACTION_CONFIDENCE - 0.05`로 수정
+- Issue 2 (Medium): `confidence_buckets` medium 하한선 0.40 → 0.55 조정 (MIN_ACTION_CONFIDENCE 기준 통일)
+- 테스트: 868/868 통과 (test_signal_verifier.py medium 구간 데이터 갱신 포함)
+- 배포: commit `159f3a7` — main 직접 반영
+
+## Status: Completed
