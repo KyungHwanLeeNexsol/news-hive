@@ -73,5 +73,9 @@ class FundSignal(Base):
         String(20), nullable=True, default="legacy_fixed"
     )
 
+    # 페이퍼 트레이딩 체결 여부 — 09:05 KST 배치 체결 시 True로 마킹
+    # @MX:NOTE: 신호 생성(08:30)과 체결(09:05)을 분리하여 실제 장중 시가 기준 체결 시뮬레이션
+    paper_executed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
+
     stock = relationship("Stock")
     disclosure = relationship("Disclosure", foreign_keys=[disclosure_id])

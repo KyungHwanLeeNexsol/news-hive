@@ -422,6 +422,39 @@ def _run_ks200_daily_scan():
         db.close()
 
 
+def _run_fund_morning_execute():
+    """오늘 생성된 AI 펀드 시그널을 장 시작 시가에 체결 (매일 09:05 KST, 평일).
+
+    08:30 데일리 브리핑에서 생성된 미체결 FundSignal(paper_executed=False)을
+    장 시작 직후 현재가(시가)로 일괄 체결한다.
+    실제 투자자와 동일한 장중 체결 조건을 시뮬레이션한다.
+    """
+    if not _is_kr_market_open():
+        logger.debug("주말 — AI 펀드 신호 체결 스킵")
+        return
+
+    _start = _time.monotonic()
+    from app.services.paper_trading import execute_pending_fund_signals
+
+    db = SessionLocal()
+    try:
+        exec_result = asyncio.run(execute_pending_fund_signals(db))
+        if exec_result["buy_executed"] or exec_result["sell_executed"]:
+            logger.info(
+                "AI 펀드 매매 체결: 매수=%d, 매도=%d, 스킵=%d",
+                exec_result["buy_executed"],
+                exec_result["sell_executed"],
+                exec_result["skipped"],
+            )
+        else:
+            logger.debug("AI 펀드 체결 대상 신호 없음")
+    except Exception as e:
+        logger.error("AI 펀드 신호 체결 실패: %s", e)
+    finally:
+        _record_job_duration("fund_morning_execute", _time.monotonic() - _start)
+        db.close()
+
+
 def _run_ks200_morning_execute():
     """전날 저장된 KS200 신호를 시장 시가에 실행 (매일 09:05 KST = 00:05 UTC, 평일).
 
@@ -841,6 +874,20 @@ def start_scheduler():
         minute=30,
         timezone="Asia/Seoul",
         id="daily_briefing",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    # AI 펀드 시그널 배치 체결: 매일 09:05 KST (장 시작 직후)
+    # 08:30 브리핑에서 생성된 미체결 FundSignal을 장 시작 시가로 일괄 체결
+    scheduler.add_job(
+        _run_fund_morning_execute,
+        "cron",
+        day_of_week="mon-fri",
+        hour=9,
+        minute=5,
+        timezone="Asia/Seoul",
+        id="fund_morning_execute",
         max_instances=1,
         coalesce=True,
         replace_existing=True,

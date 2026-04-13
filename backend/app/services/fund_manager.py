@@ -1851,12 +1851,9 @@ async def analyze_stock(
     except Exception:
         logger.debug("시그널 WebSocket 브로드캐스트 실패", exc_info=True)
 
-    # REQ-AI-013: 페이퍼 트레이딩 자동 매매
-    try:
-        from app.services.paper_trading import execute_signal_trade
-        await execute_signal_trade(db, signal)
-    except Exception as e:
-        logger.warning("페이퍼 트레이딩 자동 매매 실패: %s", e)
+    # REQ-AI-013: 페이퍼 트레이딩 체결은 09:05 KST 배치 작업(_run_fund_morning_execute)이 담당.
+    # 신호 생성(08:30)과 체결(09:05)을 분리하여 실제 장 시작 시가 기준으로 체결.
+    # paper_executed=False로 저장 → 09:05 스케줄러가 현재가 조회 후 체결 처리.
 
     return signal
 
