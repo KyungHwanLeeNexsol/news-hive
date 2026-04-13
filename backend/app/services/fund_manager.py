@@ -25,6 +25,10 @@ from app.services.ai_client import ask_ai_free as _ask_ai, ask_ai_with_openai_fa
 
 logger = logging.getLogger(__name__)
 
+# @MX:NOTE: confidence 임계값 단일 소스 — 프롬프트 지시/코드 가드/거래 실행 3개 레이어가 이 상수를 참조
+# @MX:SPEC: SPEC-AI-007 (REQ-AI-007-001)
+MIN_ACTION_CONFIDENCE: float = 0.55
+
 
 def _parse_json_response(text: str) -> dict | None:
     """Extract JSON from a Gemini response that may include markdown code blocks."""
@@ -1545,14 +1549,19 @@ async def analyze_stock(
     peers = results[2] if sector else []
 
     # 과거 시그널 적중률 조회
+    from app.config import settings
     from app.services.signal_verifier import get_accuracy_stats, calibrate_confidence
     from app.services.factor_scoring import build_factor_scores_json
     from app.services.prompt_versioner import get_current_version, get_ab_versions
     from app.services.news_price_impact_service import get_sector_news_impact_stats
     from app.services.improvement_loop import get_active_factor_weights
-    accuracy = get_accuracy_stats(db, days=30)
+    # REQ-AI-007-003: primary 모델(gemini-2.5-flash)로 필터링하여 오염 없는 적중률 전달.
+    # ai_model_used는 _ask_ai_with_model() 호출 후 확정되므로, 설정된 primary 모델명을 사용.
+    accuracy = get_accuracy_stats(db, days=30, ai_model=settings.GEMINI_MODEL)
     accuracy_text = "아직 검증된 시그널 없음"
-    if accuracy["total"] > 0:
+    if accuracy.get("low_sample_warning"):
+        accuracy_text = accuracy["low_sample_warning"]
+    elif accuracy["total"] > 0:
         accuracy_text = (
             f"최근 30일 적중률: {accuracy['accuracy']}% "
             f"({accuracy['correct']}/{accuracy['total']}건), "
@@ -1681,7 +1690,7 @@ async def analyze_stock(
 - 예시2: 현재가 12,300원 → target_price: 14000, stop_loss: 11500
 
 주의사항:
-- confidence가 0.7 이상이어야 buy/sell 시그널을 내세요. 확신이 부족하면 hold.
+- confidence가 0.55 이상이어야 buy/sell 시그널을 내세요. 확신이 부족하면 hold.
 - 데이터가 부족하면 그만큼 confidence를 낮추세요.
 - target_price와 stop_loss는 반드시 0이 아닌 구체적 정수로 기입. null/0 금지.
 - 투자 판단 근거는 구체적인 데이터를 인용하여 전문적으로 작성하세요.
@@ -1701,15 +1710,15 @@ async def analyze_stock(
 
     confidence_val = min(max(float(parsed.get("confidence", 0.5)), 0.0), 1.0)
 
-    # 코드 레벨 가드: AI가 프롬프트 지시(confidence >= 0.7 for buy)를 무시하고
+    # 코드 레벨 가드: AI가 프롬프트 지시(confidence >= MIN_ACTION_CONFIDENCE)를 무시하고
     # 낮은 confidence로 buy/sell을 출력하는 경우 강제로 hold 변환.
     # gpt-4o-mini 등 fallback 모델의 instruction-following 불완전성 대응.
-    _MIN_ACTION_CONFIDENCE = 0.45
-    if parsed.get("signal") in ("buy", "sell") and confidence_val < _MIN_ACTION_CONFIDENCE:
+    # REQ-AI-007-001: 모듈 레벨 MIN_ACTION_CONFIDENCE(0.55) 참조 — 로컬 상수 제거
+    if parsed.get("signal") in ("buy", "sell") and confidence_val < MIN_ACTION_CONFIDENCE:
         logger.info(
             "낮은 confidence로 buy/sell 강제 hold 변환: %s (conf=%.2f < %.2f, signal=%s)",
             stock.name,
-            confidence_val, _MIN_ACTION_CONFIDENCE, parsed["signal"],
+            confidence_val, MIN_ACTION_CONFIDENCE, parsed["signal"],
         )
         parsed["signal"] = "hold"
 
@@ -1810,15 +1819,15 @@ async def analyze_stock(
         except Exception as vol_e:
             logger.warning("시장 변동성 레벨 계산 실패 (시그널 생성 계속): %s", vol_e)
 
-        # confidence 감산 하한선: buy/sell 시그널이 후속 보정으로 실행 임계값(0.4) 아래로
-        # 떨어지는 것을 방지. AI가 0.45+ confidence로 buy/sell을 판단했다면 최소 실행 가능해야 함.
-        _CONFIDENCE_FLOOR = 0.42
-        if signal.signal in ("buy", "sell") and signal.confidence < _CONFIDENCE_FLOOR:
+        # confidence 감산 하한선: buy/sell 시그널이 후속 보정으로 거래 실행 임계값 아래로
+        # 떨어지는 것을 방지. AI가 MIN_ACTION_CONFIDENCE+ confidence로 buy/sell을 판단했다면 최소 실행 가능해야 함.
+        # REQ-AI-007-001: MIN_ACTION_CONFIDENCE(0.55) 참조 — 로컬 상수 제거
+        if signal.signal in ("buy", "sell") and signal.confidence < MIN_ACTION_CONFIDENCE:
             logger.info(
                 "confidence 하한선 적용: %s %.2f → %.2f (signal=%s)",
-                stock.name, signal.confidence, _CONFIDENCE_FLOOR, signal.signal,
+                stock.name, signal.confidence, MIN_ACTION_CONFIDENCE, signal.signal,
             )
-            signal.confidence = _CONFIDENCE_FLOOR
+            signal.confidence = MIN_ACTION_CONFIDENCE
 
         db.commit()
     except Exception as e:

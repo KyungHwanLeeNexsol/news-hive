@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.models.fund_signal import FundSignal
 from app.models.stock import Stock
 from app.models.virtual_portfolio import PortfolioSnapshot, VirtualPortfolio, VirtualTrade
+from app.services.fund_manager import MIN_ACTION_CONFIDENCE
 
 logger = logging.getLogger(__name__)
 
@@ -115,14 +116,15 @@ def check_defensive_mode(db: Session) -> bool:
 async def execute_signal_trade(db: Session, signal: FundSignal) -> VirtualTrade | None:
     """시그널 기반 가상 매매를 실행한다.
 
-    - buy 시그널 + confidence >= 0.4 → long 포지션 진입
+    - buy 시그널 + confidence >= MIN_ACTION_CONFIDENCE - 0.05 → long 포지션 진입
     - sell 시그널은 기존 long 포지션 청산 (신규 short은 미지원)
     - hold 시그널은 무시
-    임계값 0.4: fund_manager의 최소 0.45 가드 통과 + Bayesian calibration 후 ~0.49 수준
+    # REQ-AI-007-001: 거래 실행 임계값 = MIN_ACTION_CONFIDENCE(0.55) - 0.05 = 0.50
+    # fund_manager 코드 가드(0.55) 통과 후 Bayesian calibration 고려한 실행 임계값
     """
     if signal.signal == "hold":
         return None
-    if signal.signal == "buy" and signal.confidence < 0.4:
+    if signal.signal == "buy" and signal.confidence < MIN_ACTION_CONFIDENCE - 0.05:
         return None
 
     # REQ-021: 방어 모드 점검 및 매수 차단

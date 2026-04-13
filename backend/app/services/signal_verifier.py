@@ -326,8 +326,16 @@ async def fast_verify(db: Session) -> dict:
     return stats
 
 
-def get_accuracy_stats(db: Session, days: int = 30) -> dict:
+# @MX:ANCHOR: 여러 서비스(fund_manager, API 라우터 등)에서 호출하는 공개 인터페이스 (fan_in >= 7)
+# @MX:REASON: ai_model=None 기본값은 하위 호환 계약 — 변경 시 모든 호출처 영향
+# @MX:SPEC: SPEC-AI-007 (REQ-AI-007-002, REQ-AI-007-004)
+def get_accuracy_stats(db: Session, days: int = 30, ai_model: str | None = None) -> dict:
     """최근 N일간 시그널 적중률 통계를 산출한다.
+
+    Args:
+        db: DB 세션
+        days: 조회 기간 (일)
+        ai_model: 특정 AI 모델로 필터링. None이면 전체 모델 합산 (하위 호환).
 
     Returns:
         {
@@ -338,18 +346,19 @@ def get_accuracy_stats(db: Session, days: int = 30) -> dict:
             "buy_accuracy": 매수 시그널 적중률,
             "sell_accuracy": 매도 시그널 적중률,
             "by_confidence": {상/중/하 신뢰도별 적중률},
+            "low_sample_warning": 검증 시그널 5건 미만 시 "데이터 부족 (N건)" 문자열 (선택적),
         }
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
-    verified = (
-        db.query(FundSignal)
-        .filter(
-            FundSignal.verified_at.isnot(None),
-            FundSignal.created_at >= cutoff,
-        )
-        .all()
+    # REQ-AI-007-002: ai_model 지정 시 해당 모델만 필터링, None이면 전체 합산 (하위 호환)
+    query = db.query(FundSignal).filter(
+        FundSignal.verified_at.isnot(None),
+        FundSignal.created_at >= cutoff,
     )
+    if ai_model is not None:
+        query = query.filter(FundSignal.ai_model == ai_model)
+    verified = query.all()
 
     if not verified:
         return {
@@ -392,7 +401,7 @@ def get_accuracy_stats(db: Session, days: int = 30) -> dict:
     for s in failed:
         error_distribution[s.error_category] = error_distribution.get(s.error_category, 0) + 1
 
-    return {
+    result: dict = {
         "total": total,
         "correct": correct,
         "accuracy": round(correct / total * 100, 1) if total else 0.0,
@@ -402,6 +411,13 @@ def get_accuracy_stats(db: Session, days: int = 30) -> dict:
         "by_confidence": by_confidence,
         "error_distribution": error_distribution,
     }
+
+    # REQ-AI-007-004: 최소 샘플 가드 — 5건 미만 시 신뢰도 낮음 경고 추가
+    _MIN_SAMPLE_COUNT = 5
+    if 0 < total < _MIN_SAMPLE_COUNT:
+        result["low_sample_warning"] = f"데이터 부족 ({total}건)"
+
+    return result
 
 
 def calibrate_confidence(raw_confidence: float, accuracy_stats: dict) -> float:
