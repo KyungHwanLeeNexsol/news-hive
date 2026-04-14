@@ -267,9 +267,10 @@ class TestGatherMacroAlerts:
     """_gather_macro_alerts 매크로 리스크 조회 검증."""
 
     def test_no_alerts(self, db: Session) -> None:
-        """활성 알림이 없으면 빈 리스트를 반환한다."""
+        """활성 알림이 없으면 alerts/global_news 모두 빈 리스트를 반환한다."""
         result = _gather_macro_alerts(db)
-        assert result == []
+        assert result["alerts"] == []
+        assert result["global_news"] == []
 
     def test_active_alerts_returned(
         self, db: Session, make_macro_alert,
@@ -280,9 +281,9 @@ class TestGatherMacroAlerts:
 
         result = _gather_macro_alerts(db)
 
-        assert len(result) == 1
-        assert result[0]["keyword"] == "금리인상"
-        assert result[0]["level"] == "warning"
+        assert len(result["alerts"]) == 1
+        assert result["alerts"][0]["keyword"] == "금리인상"
+        assert result["alerts"][0]["level"] == "warning"
 
     def test_alert_fields(
         self, db: Session, make_macro_alert,
@@ -297,8 +298,8 @@ class TestGatherMacroAlerts:
 
         result = _gather_macro_alerts(db)
 
-        assert len(result) == 1
-        alert = result[0]
+        assert len(result["alerts"]) == 1
+        alert = result["alerts"][0]
         assert alert["level"] == "critical"
         assert alert["keyword"] == "환율급등"
         assert alert["title"] == "원달러 환율 급등"

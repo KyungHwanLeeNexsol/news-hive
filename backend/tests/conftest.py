@@ -139,6 +139,7 @@ def test_engine():
     from app.models.improvement_log import ImprovementLog  # noqa: F401, F811
     from app.models.vip_trading import VIPDisclosure, VIPPortfolio, VIPTrade  # noqa: F401
     from app.models.ks200_trading import KS200Portfolio, KS200Trade, KS200Signal  # noqa: F401
+    from app.models.stock_forum import StockForumPost, StockForumHourly  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     yield engine
