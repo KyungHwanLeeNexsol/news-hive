@@ -9,17 +9,20 @@ import json
 import logging
 import re
 from datetime import date, datetime, timedelta, timezone
+from statistics import mean, median
 
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.daily_briefing import DailyBriefing
 from app.models.disclosure import Disclosure
 from app.models.fund_signal import FundSignal
+from app.models.krx_short_selling import KrxShortSelling
 from app.models.macro_alert import MacroAlert
 from app.models.news import NewsArticle
 from app.models.news_relation import NewsStockRelation
 from app.models.portfolio_report import PortfolioReport
 from app.models.sector import Sector
+from app.models.securities_report import SecuritiesReport
 from app.models.stock import Stock
 from app.services.ai_client import ask_ai_free as _ask_ai, ask_ai_with_openai_fallback as _ask_ai_with_model
 
@@ -323,6 +326,272 @@ def _gather_disclosures(db: Session, stock_id: int, days: int = 7) -> list[dict]
         }
         for d in disclosures
     ]
+
+
+def _gather_short_selling_data(db: Session, stock_id: int, days: int = 10) -> dict | None:
+    """최근 공매도 잔고 추이 수집.
+
+    공매도 잔고 급증은 기관의 하락 베팅 강화, 잔고 감소는 숏커버링(반등 가능성)을 시사한다.
+    최근 N일 데이터를 집계하여 추이 방향(증가/감소/횡보)을 반환한다.
+    """
+    cutoff = datetime.now(timezone.utc).date() - timedelta(days=days)
+    records = (
+        db.query(KrxShortSelling)
+        .filter(
+            KrxShortSelling.stock_id == stock_id,
+            KrxShortSelling.trade_date >= cutoff,
+        )
+        .order_by(KrxShortSelling.trade_date.asc())
+        .all()
+    )
+    if not records:
+        return None
+
+    # 최신 vs 5일 전 잔고 비교로 추이 판단
+    latest = records[-1]
+    oldest = records[0]
+    balance_change_pct: float | None = None
+    if oldest.short_balance and oldest.short_balance > 0 and latest.short_balance is not None:
+        balance_change_pct = round(
+            (latest.short_balance - oldest.short_balance) / oldest.short_balance * 100, 2
+        )
+
+    trend = "데이터 부족"
+    if balance_change_pct is not None:
+        if balance_change_pct >= 10:
+            trend = "급증 (하락 베팅 강화)"
+        elif balance_change_pct >= 3:
+            trend = "증가"
+        elif balance_change_pct <= -10:
+            trend = "급감 (숏커버링, 반등 가능성)"
+        elif balance_change_pct <= -3:
+            trend = "감소"
+        else:
+            trend = "횡보"
+
+    return {
+        "latest_date": latest.trade_date.strftime("%Y-%m-%d"),
+        "short_ratio": latest.short_ratio,          # 공매도 비율 (%)
+        "short_balance": latest.short_balance,       # 최신 잔고 주수
+        "balance_change_pct": balance_change_pct,    # N일 전 대비 변화율 (%)
+        "trend": trend,
+        "data_days": len(records),
+    }
+
+
+def _gather_securities_reports(db: Session, stock_id: int, days: int = 14) -> list[dict]:
+    """최근 증권사 리포트 수집 (목표주가, 투자의견, 핵심 내용 포함).
+
+    애널리스트 목표주가 상향/하향은 단기 주가에 직접 영향을 주므로
+    analyze_stock() 프롬프트에 포함하여 AI가 컨센서스와 비교 판단할 수 있게 한다.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    reports = (
+        db.query(SecuritiesReport)
+        .filter(
+            SecuritiesReport.stock_id == stock_id,
+            SecuritiesReport.published_at >= cutoff,
+        )
+        .order_by(SecuritiesReport.published_at.desc())
+        .limit(5)
+        .all()
+    )
+    return [
+        {
+            "securities_firm": r.securities_firm,
+            "title": r.title,
+            "opinion": r.opinion,
+            "target_price": r.target_price,
+            "published_at": r.published_at.strftime("%Y-%m-%d") if r.published_at else None,
+            "summary": r.content[:300] if r.content else None,
+        }
+        for r in reports
+    ]
+
+
+def _gather_forum_sentiment(db: Session, stock_id: int) -> dict | None:
+    """
+    # @MX:NOTE — 종토방 역발상 지표 조회. 직접 매수/매도 신호 아님 (weight: 0.2)
+    StockForumHourly 테이블에서 최근 종토방 집계 데이터를 조회합니다.
+    SPEC-AI-008이 배포되지 않은 경우 None 반환 (graceful fallback).
+    """
+    try:
+        from app.models.stock_forum import StockForumHourly
+    except ImportError:
+        return None
+
+    try:
+        # 최근 2시간 이내 가장 최신 집계 레코드
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+        record = (
+            db.query(StockForumHourly)
+            .filter(
+                StockForumHourly.stock_id == stock_id,
+                StockForumHourly.aggregated_at >= cutoff,
+            )
+            .order_by(StockForumHourly.aggregated_at.desc())
+            .first()
+        )
+        if record is None:
+            return None
+        neutral_ratio = (record.neutral_count / record.total_posts) if record.total_posts > 0 else 0.0
+        return {
+            "total_posts": record.total_posts,
+            "bullish_ratio": record.bullish_ratio,
+            "bearish_ratio": 1.0 - record.bullish_ratio - neutral_ratio,
+            "comment_volume": record.comment_volume,
+            "avg_7d_volume": record.avg_7d_volume,
+            "volume_surge": record.volume_surge,
+            "overheating_alert": record.overheating_alert,
+            "aggregated_at": record.aggregated_at.isoformat() if record.aggregated_at else None,
+        }
+    except Exception:
+        # 테이블 미존재 시 (SPEC-AI-008 미배포) graceful fallback
+        return None
+
+
+# @MX:ANCHOR: analyze_stock()에서 호출되는 핵심 함수. 증권사 컨센서스 집계
+# @MX:REASON: 높은 fan_in — analyze_stock()은 스케줄러/브리핑/API 모두에서 호출됨
+# @MX:SPEC: SPEC-AI-009
+def _gather_securities_consensus(
+    db: Session,
+    stock_id: int,
+    current_price: int | None,
+) -> dict:
+    """증권사 리포트 기반 컨센서스 집계 (최근 90일).
+
+    여러 증권사의 투자의견과 목표주가를 정규화하여 컨센서스 지표를 계산한다.
+    buy_ratio, avg_target_price, premium_pct 등을 종합해 consensus_signal을 결정한다.
+    """
+    _EMPTY: dict = {
+        "report_count": 0,
+        "consensus_signal": "insufficient",
+        "avg_target_price": None,
+        "median_target_price": None,
+        "price_range": None,
+        "buy_ratio": 0.0,
+        "hold_ratio": 0.0,
+        "sell_ratio": 0.0,
+        "premium_pct": None,
+        "target_price_trend": "stable",
+        "firms": [],
+    }
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+    reports = (
+        db.query(SecuritiesReport)
+        .filter(
+            SecuritiesReport.stock_id == stock_id,
+            SecuritiesReport.published_at >= cutoff,
+        )
+        .order_by(SecuritiesReport.published_at.desc())
+        .all()
+    )
+
+    if not reports:
+        return _EMPTY
+
+    # 투자의견 정규화 (한국 증권사 표기 포함)
+    BUY_OPINIONS = {"매수", "비중확대", "강력매수", "적극매수", "buy", "strong buy", "outperform", "overweight"}
+    SELL_OPINIONS = {"매도", "비중축소", "sell", "underperform", "underweight"}
+
+    buy_count = 0
+    hold_count = 0
+    sell_count = 0
+    for r in reports:
+        raw = (r.opinion or "").strip().lower()
+        if raw in BUY_OPINIONS:
+            buy_count += 1
+        elif raw in SELL_OPINIONS:
+            sell_count += 1
+        else:
+            # 미분류(HOLD_OPINIONS 및 unknown) 모두 hold로 처리
+            hold_count += 1
+
+    total = len(reports)
+    buy_ratio = round(buy_count / total, 4)
+    hold_ratio = round(hold_count / total, 4)
+    sell_ratio = round(sell_count / total, 4)
+
+    # 목표주가 계산
+    target_prices = [r.target_price for r in reports if r.target_price is not None]
+    avg_target_price: int | None = None
+    median_target_price: int | None = None
+    price_range: dict | None = None
+    premium_pct: float | None = None
+
+    if target_prices:
+        avg_target_price = int(mean(target_prices))
+        median_target_price = int(median(target_prices))
+        price_range = {"min": min(target_prices), "max": max(target_prices)}
+        if current_price and current_price > 0:
+            premium_pct = round((avg_target_price - current_price) / current_price * 100, 1)
+
+    # consensus_signal 결정 (우선순위 순)
+    if total < 2:
+        consensus_signal = "insufficient"
+    elif sell_ratio >= 0.5 or (premium_pct is not None and premium_pct < 0):
+        consensus_signal = "caution"
+    elif total >= 3 and buy_ratio >= 0.7 and premium_pct is not None and premium_pct >= 15:
+        consensus_signal = "strong_buy"
+    elif buy_ratio >= 0.6 and (premium_pct is None or premium_pct >= 5):
+        consensus_signal = "buy"
+    else:
+        consensus_signal = "neutral"
+
+    # 목표주가 트렌드: 최근 30일 vs 31-90일 평균 비교
+    now_utc = datetime.now(timezone.utc)
+    recent_cutoff = now_utc - timedelta(days=30)
+    old_cutoff = now_utc - timedelta(days=90)
+
+    recent_prices = [
+        r.target_price
+        for r in reports
+        if r.target_price is not None and r.published_at is not None and r.published_at >= recent_cutoff
+    ]
+    old_prices = [
+        r.target_price
+        for r in reports
+        if r.target_price is not None
+        and r.published_at is not None
+        and old_cutoff <= r.published_at < recent_cutoff
+    ]
+
+    target_price_trend = "stable"
+    if recent_prices and old_prices:
+        recent_avg = mean(recent_prices)
+        old_avg = mean(old_prices)
+        if old_avg > 0:
+            diff = recent_avg - old_avg
+            if diff > old_avg * 0.03:
+                target_price_trend = "rising"
+            elif diff < old_avg * -0.03:
+                target_price_trend = "falling"
+
+    # 최근순으로 중복 없는 증권사 목록 (최대 5개)
+    seen: set[str] = set()
+    firms: list[str] = []
+    for r in reports:
+        firm = r.securities_firm
+        if firm not in seen:
+            seen.add(firm)
+            firms.append(firm)
+        if len(firms) >= 5:
+            break
+
+    return {
+        "report_count": total,
+        "consensus_signal": consensus_signal,
+        "avg_target_price": avg_target_price,
+        "median_target_price": median_target_price,
+        "price_range": price_range,
+        "buy_ratio": buy_ratio,
+        "hold_ratio": hold_ratio,
+        "sell_ratio": sell_ratio,
+        "premium_pct": premium_pct,
+        "target_price_trend": target_price_trend,
+        "firms": firms,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1215,10 +1484,14 @@ async def _gather_pick_candidates(db: Session, recent_news: list) -> list[dict]:
     return candidates
 
 
-def _gather_macro_alerts(db: Session) -> list[dict]:
-    """Gather active macro risk alerts."""
+def _gather_macro_alerts(db: Session) -> dict:
+    """Gather active macro risk alerts + recent global macro news.
+
+    Returns:
+        dict with 'alerts' (원자재/거시 리스크 알림) and 'global_news' (해외 매크로 뉴스).
+    """
     alerts = db.query(MacroAlert).filter(MacroAlert.is_active == True).all()  # noqa: E712
-    return [
+    alert_list = [
         {
             "level": a.level,
             "keyword": a.keyword,
@@ -1227,6 +1500,28 @@ def _gather_macro_alerts(db: Session) -> list[dict]:
         }
         for a in alerts
     ]
+
+    # 최근 2일 내 해외 매크로 뉴스 (source='macro_global') 상위 5건
+    cutoff = datetime.now(timezone.utc) - timedelta(days=2)
+    global_news = (
+        db.query(NewsArticle)
+        .filter(
+            NewsArticle.source == "macro_global",
+            NewsArticle.collected_at >= cutoff,
+        )
+        .order_by(NewsArticle.collected_at.desc())
+        .limit(5)
+        .all()
+    )
+    global_news_list = [
+        {
+            "title": n.title,
+            "published_at": n.published_at.strftime("%Y-%m-%d %H:%M") if n.published_at else None,
+        }
+        for n in global_news
+    ]
+
+    return {"alerts": alert_list, "global_news": global_news_list}
 
 
 async def _gather_market_data(stock_code: str, *, pages: int = 10) -> dict:
@@ -1511,6 +1806,9 @@ def _format_briefing_hint(hint: dict | None) -> str:
 # Core analysis functions
 # ---------------------------------------------------------------------------
 
+# @MX:ANCHOR: [AUTO] 최고 fan_in 함수. scheduler, daily_briefing, API 엔드포인트에서 모두 호출됨
+# @MX:REASON: 이 함수를 수정하면 전체 AI 매수 시그널 생성 파이프라인에 영향
+# @MX:SPEC: SPEC-AI-010
 async def analyze_stock(
     db: Session, stock_id: int, briefing_hint: dict | None = None,
 ) -> FundSignal | None:
@@ -1534,6 +1832,12 @@ async def analyze_stock(
     disclosures = _gather_disclosures(db, stock_id)
     macro_alerts = _gather_macro_alerts(db)
     sentiment_trend = _gather_sentiment_trend(db, stock_id=stock_id)
+    forum_sentiment = _gather_forum_sentiment(db, stock_id)
+    securities_reports = _gather_securities_reports(db, stock_id)
+    # market_data는 비동기 수집 후 확정되므로 current_price=None으로 전달
+    # @MX:NOTE — 증권사 컨센서스: 90일 윈도우 집계. strong_buy 시 AI 판단 긍정적으로 유도
+    consensus = _gather_securities_consensus(db, stock_id, current_price=None)
+    short_selling_data = _gather_short_selling_data(db, stock_id)
 
     # Gather async data in parallel (market, financial, peer comparison)
     coros = [
@@ -1608,6 +1912,52 @@ async def analyze_stock(
         sentiment_trend.get('trend', 'stable'), '안정적'
     )
 
+    # @MX:NOTE — 종토방 섹션: 직접 신호 아님, 역발상 참고 지표 (가중치 0.2). 단독 매수 금지
+    if forum_sentiment:
+        forum_section = (
+            f"\n## 1-2. 종토방 감성 (역발상 지표, 가중치 0.2)\n"
+            f"- 게시글 수: {forum_sentiment['total_posts']}건, 매수 비율: {forum_sentiment['bullish_ratio']*100:.0f}%\n"
+            f"- 댓글 볼륨: {forum_sentiment['comment_volume']} (7일 평균: {forum_sentiment['avg_7d_volume']:.0f})"
+        )
+        if forum_sentiment.get('overheating_alert'):
+            forum_section += "\n※ 종토방이 과열 상태입니다. 개인투자자 쏠림에 의한 고점 가능성을 고려하세요."
+        if forum_sentiment.get('volume_surge'):
+            forum_section += "\n※ 종토방 댓글 급증 감지: 시장 관심도 급등. 공시/뉴스와 교차 확인 필요."
+        forum_section += "\n"
+    else:
+        forum_section = ""  # SPEC-AI-008 미배포 또는 데이터 없음
+
+    # @MX:NOTE — 증권사 컨센서스: 90일 윈도우 집계. strong_buy 시 AI 판단 긍정적으로 유도
+    if consensus and consensus.get('report_count', 0) >= 2:
+        _signal_label = {
+            "strong_buy": "강력매수",
+            "buy": "매수",
+            "neutral": "중립",
+            "caution": "주의",
+            "insufficient": "데이터 부족",
+        }.get(consensus.get('consensus_signal', ''), '중립')
+        _avg_tp = consensus.get('avg_target_price')
+        _premium = consensus.get('premium_pct')
+        _tp_text = (
+            f"{_avg_tp:,}원 (현재가 대비 {_premium:+.1f}%)"
+            if _avg_tp and _premium is not None
+            else "N/A"
+        )
+        consensus_section = (
+            f"\n## 9-1. 증권사 컨센서스\n"
+            f"- 분석 리포트: {consensus['report_count']}건 (90일)\n"
+            f"- 평균 목표주가: {_tp_text}\n"
+            f"- 매수/중립/매도 비율: {consensus['buy_ratio']*100:.0f}%/{consensus['hold_ratio']*100:.0f}%/{consensus['sell_ratio']*100:.0f}%\n"
+            f"- 컨센서스 신호: {_signal_label}\n"
+            f"- 목표주가 추세: {consensus.get('target_price_trend', 'stable')}\n"
+        )
+        if consensus.get('consensus_signal') == 'strong_buy':
+            consensus_section += "※ 증권사 다수가 강력 매수를 추천하며 현재가 대비 상당한 상승 여력이 있습니다.\n"
+        elif consensus.get('consensus_signal') == 'caution':
+            consensus_section += "※ 증권사 의견에 주의 신호가 있습니다. 추가 확인 후 신중하게 접근하세요.\n"
+    else:
+        consensus_section = ""  # 데이터 부족
+
     # Build comprehensive prompt
     prompt = f"""당신은 하버드 MBA 출신의 20년 경력 전문 펀드매니저입니다.
 아래 데이터를 종합적으로 분석하여 투자 판단을 내려주세요.
@@ -1630,7 +1980,7 @@ async def analyze_stock(
 - 이전 4일: 긍정 {sentiment_trend['prev_4d']['positive']}건, 부정 {sentiment_trend['prev_4d']['negative']}건, 중립 {sentiment_trend['prev_4d']['neutral']}건 (점수: {sentiment_trend['score_prev']})
 - 추세: {trend_label}
 ※ 센티먼트가 악화되고 있다면 매수에 신중하고, 개선 중이라면 긍정적으로 평가하세요.
-
+{forum_section}
 ## 2. 섹터 뉴스 동향
 {json.dumps(sector_news, ensure_ascii=False, indent=2) if sector_news else '섹터 뉴스 없음'}
 
@@ -1658,8 +2008,12 @@ async def analyze_stock(
 ## 5. 재무제표 데이터
 {json.dumps(financial_data, ensure_ascii=False, indent=2) if financial_data else '재무 데이터 없음'}
 
-## 6. 매크로 리스크
-{json.dumps(macro_alerts, ensure_ascii=False, indent=2) if macro_alerts else '현재 매크로 리스크 없음'}
+## 6. 매크로 리스크 및 해외 거시경제 뉴스
+### 6-1. 국내 매크로 리스크 알림
+{json.dumps(macro_alerts.get("alerts"), ensure_ascii=False, indent=2) if macro_alerts.get("alerts") else '현재 매크로 리스크 없음'}
+### 6-2. 해외 거시경제 동향 (최근 2일)
+{json.dumps(macro_alerts.get("global_news"), ensure_ascii=False, indent=2) if macro_alerts.get("global_news") else '해외 거시경제 뉴스 없음'}
+※ 연준 금리 인상/인하 시그널, 미국 CPI 예상치 초과, 반도체 공급망 이슈 등은 국내 증시에 직접 영향을 줍니다.
 
 ## 7. 동종업계 비교
 {json.dumps(peers, ensure_ascii=False, indent=2) if peers else '동종업계 비교 데이터 없음'}
@@ -1667,7 +2021,20 @@ async def analyze_stock(
   섹터 전체가 하락 중인데 해당 종목만 상승하면 과열 경계, 섹터 반등 시 후발주자면 기회로 판단.
 {impact_text}
 
-## 8. 데일리 브리핑 판단 참고
+## 8. 공매도 잔고 추이 (최근 10일)
+{json.dumps(short_selling_data, ensure_ascii=False, indent=2) if short_selling_data else '공매도 데이터 없음 (수집 전 또는 해당 없음)'}
+※ 공매도 잔고 추이 해석:
+  - 잔고 급증(+10% 이상): 기관/외국인이 하락에 베팅 중 → 매수 신중
+  - 잔고 급감(-10% 이상): 숏커버링 발생 → 단기 반등 가능성
+  - short_ratio가 5% 초과: 공매도 압력 높음, 주가 상승 저항 존재
+
+## 9. 증권사 리포트 (최근 14일 애널리스트 분석)
+{json.dumps(securities_reports, ensure_ascii=False, indent=2) if securities_reports else '최근 증권사 리포트 없음'}
+※ 애널리스트 목표주가 상향은 강한 매수 근거, 하향은 경고 신호입니다.
+  컨센서스 목표주가(여러 증권사 평균)와 현재가의 괴리가 클수록 상승 여력을 시사합니다.
+  단, 리포트 발행일 이후 주가가 이미 목표가에 근접했다면 추가 상승 여력에 주의하세요.
+{consensus_section}
+## 10. 데일리 브리핑 판단 참고
 {_format_briefing_hint(briefing_hint) if briefing_hint else '(독립 분석 — 브리핑 참고 정보 없음)'}
 
 ## 분석 요청
@@ -2161,7 +2528,7 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
 - 추세: {market_trend_label}
 
 ## 매크로 리스크 현황
-{json.dumps(macro_alerts, ensure_ascii=False, indent=2) if macro_alerts else '현재 특이 리스크 없음'}
+{json.dumps(macro_alerts.get("alerts"), ensure_ascii=False, indent=2) if macro_alerts.get("alerts") else '현재 특이 리스크 없음'}
 
 ## 최근 주요 공시
 {json.dumps(disc_list, ensure_ascii=False, indent=2) if disc_list else '주요 공시 없음'}
@@ -2520,7 +2887,7 @@ async def analyze_portfolio(db: Session, stock_ids: list[int]) -> PortfolioRepor
 {json.dumps(portfolio_data, ensure_ascii=False, indent=2)}
 
 ## 매크로 리스크 현황
-{json.dumps(macro_alerts, ensure_ascii=False, indent=2) if macro_alerts else '없음'}
+{json.dumps(macro_alerts.get("alerts"), ensure_ascii=False, indent=2) if macro_alerts.get("alerts") else '없음'}
 
 **중요: 반드시 한국어로 응답하세요.**
 

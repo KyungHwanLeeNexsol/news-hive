@@ -364,6 +364,31 @@ def _run_krx_short_selling_crawl():
         db.close()
 
 
+def _run_forum_crawl():
+    """종목토론방 크롤링 및 시간별 집계 — SPEC-AI-008 역발상 지표 수집."""
+    _start = _time.monotonic()
+    from app.services.forum_crawler import crawl_and_aggregate
+    from app.models.stock import Stock
+
+    db = SessionLocal()
+    try:
+        stocks = db.query(Stock).order_by(Stock.id).limit(50).all()
+        succeeded = 0
+        for stock in stocks:
+            try:
+                asyncio.run(crawl_and_aggregate(db, stock.id, stock.stock_code))
+                succeeded += 1
+            except Exception as e:
+                logger.error(f"Forum crawl 실패 ({stock.stock_code}): {e}")
+        logger.info(f"종토방 크롤링 완료: {succeeded}/{len(stocks)}개 종목 처리")
+    except Exception as e:
+        logger.error(f"종토방 크롤링 잡 실패: {e}")
+        raise
+    finally:
+        _record_job_duration("forum_crawl", _time.monotonic() - _start)
+        db.close()
+
+
 def _run_macro_global_news_crawl():
     """해외 거시경제 뉴스 크롤링 — 연준/CPI/반도체/달러 등 국내 증시 영향 매크로 뉴스."""
     _start = _time.monotonic()
@@ -1029,6 +1054,16 @@ def start_scheduler():
         minute=30,
         timezone="Asia/Seoul",
         id="krx_short_selling_crawl",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    # SPEC-AI-008: 종목토론방 크롤링 및 역발상 지표 집계 (30분 간격, 장 시간 내에서만 실행)
+    scheduler.add_job(
+        _run_forum_crawl,
+        "interval",
+        minutes=30,
+        id="forum_crawl",
         max_instances=1,
         coalesce=True,
         replace_existing=True,
