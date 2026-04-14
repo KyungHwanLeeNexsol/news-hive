@@ -68,9 +68,20 @@ async def get_positions(db: Session = Depends(get_db)):
 
 @router.get("/trades")
 def get_trade_history(limit: int = 50, db: Session = Depends(get_db)):
-    """청산된 매매 이력."""
+    """전체 매매 이력 (보유 중 포함). 오픈 포지션은 상단에, 청산 거래는 최신순으로 표시."""
     portfolio = get_or_create_portfolio(db)
-    trades = (
+    # 오픈 포지션: 진입일 최신순
+    open_trades = (
+        db.query(VirtualTrade)
+        .filter(
+            VirtualTrade.portfolio_id == portfolio.id,
+            VirtualTrade.is_open.is_(True),
+        )
+        .order_by(VirtualTrade.entry_date.desc())
+        .all()
+    )
+    # 청산된 거래: 청산일 최신순
+    closed_trades = (
         db.query(VirtualTrade)
         .filter(
             VirtualTrade.portfolio_id == portfolio.id,
@@ -80,9 +91,15 @@ def get_trade_history(limit: int = 50, db: Session = Depends(get_db)):
         .limit(limit)
         .all()
     )
+    trades = open_trades + closed_trades
+
+    # 종목 정보 일괄 조회
+    stock_ids = list({t.stock_id for t in trades})
+    stocks_map = {s.id: s for s in db.query(Stock).filter(Stock.id.in_(stock_ids)).all()} if stock_ids else {}
+
     result = []
     for t in trades:
-        stock = db.query(Stock).filter(Stock.id == t.stock_id).first()
+        stock = stocks_map.get(t.stock_id)
         result.append({
             "id": t.id,
             "stock_name": stock.name if stock else "Unknown",
@@ -93,6 +110,7 @@ def get_trade_history(limit: int = 50, db: Session = Depends(get_db)):
             "pnl": t.pnl,
             "return_pct": t.return_pct,
             "exit_reason": t.exit_reason,
+            "is_open": t.is_open,
             "entry_date": t.entry_date.isoformat() if t.entry_date else None,
             "exit_date": t.exit_date.isoformat() if t.exit_date else None,
         })

@@ -691,33 +691,44 @@ function PaperTradingTab() {
               </thead>
               <tbody>
                 {trades.map((trade, i) => (
-                  <tr key={i} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
+                  <tr
+                    key={i}
+                    className={`border-b border-gray-100 hover:bg-gray-50 transition-colors ${trade.is_open ? 'bg-indigo-50/40' : ''}`}
+                  >
                     <td className="px-4 py-3 font-semibold text-gray-800">{trade.stock_name}</td>
                     <td className="px-4 py-3 text-right text-gray-700">{fmt(trade.entry_price)}원</td>
-                    <td className="px-4 py-3 text-right text-gray-700">{fmt(trade.exit_price)}원</td>
+                    <td className="px-4 py-3 text-right text-gray-700">
+                      {trade.exit_price != null ? `${fmt(trade.exit_price)}원` : '-'}
+                    </td>
                     <td className={`px-4 py-3 text-right font-semibold ${pctColor(trade.pnl)}`}>
-                      {trade.pnl >= 0 ? '+' : ''}
-                      {fmt(trade.pnl)}원
+                      {trade.pnl != null ? `${trade.pnl >= 0 ? '+' : ''}${fmt(trade.pnl)}원` : '-'}
                     </td>
                     <td className={`px-4 py-3 text-right font-semibold ${pctColor(trade.return_pct)}`}>
-                      {trade.return_pct >= 0 ? '+' : ''}
-                      {trade.return_pct.toFixed(2)}%
+                      {trade.return_pct != null ? `${trade.return_pct >= 0 ? '+' : ''}${trade.return_pct.toFixed(2)}%` : '-'}
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <span
-                        className={`inline-block px-2 py-0.5 rounded text-[11px] font-medium ${
-                          trade.exit_reason === 'target_hit'
-                            ? 'bg-green-50 text-green-700 border border-green-200'
-                            : trade.exit_reason === 'stop_loss'
-                              ? 'bg-red-50 text-red-700 border border-red-200'
-                              : 'bg-gray-50 text-gray-500 border border-gray-200'
-                        }`}
-                      >
-                        {exitReasonLabel[trade.exit_reason] || trade.exit_reason}
-                      </span>
+                      {trade.is_open ? (
+                        <span className="inline-block px-2 py-0.5 rounded text-[11px] font-medium bg-indigo-50 text-indigo-700 border border-indigo-200">
+                          보유 중
+                        </span>
+                      ) : (
+                        <span
+                          className={`inline-block px-2 py-0.5 rounded text-[11px] font-medium ${
+                            trade.exit_reason === 'target_hit'
+                              ? 'bg-green-50 text-green-700 border border-green-200'
+                              : trade.exit_reason === 'stop_loss'
+                                ? 'bg-red-50 text-red-700 border border-red-200'
+                                : 'bg-gray-50 text-gray-500 border border-gray-200'
+                          }`}
+                        >
+                          {(trade.exit_reason && exitReasonLabel[trade.exit_reason]) || trade.exit_reason || '-'}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-right text-gray-400">{trade.entry_date.slice(0, 10)}</td>
-                    <td className="px-4 py-3 text-right text-gray-400">{trade.exit_date.slice(0, 10)}</td>
+                    <td className="px-4 py-3 text-right text-gray-400">
+                      {trade.exit_date ? trade.exit_date.slice(0, 10) : '-'}
+                    </td>
                   </tr>
                 ))}
               </tbody>

@@ -353,12 +353,13 @@ export interface PaperPosition {
 export interface PaperTrade {
   stock_name: string;
   entry_price: number;
-  exit_price: number;
-  pnl: number;
-  return_pct: number;
-  exit_reason: string;
+  exit_price: number | null;
+  pnl: number | null;
+  return_pct: number | null;
+  exit_reason: string | null;
+  is_open: boolean;
   entry_date: string;
-  exit_date: string;
+  exit_date: string | null;
 }
 
 export interface PaperSnapshot {
