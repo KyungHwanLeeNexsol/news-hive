@@ -16,7 +16,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.stock_forum import StockForumHourly, StockForumPost
-from app.services.circuit_breaker import circuit_breaker
+from app.services.circuit_breaker import api_circuit_breaker as circuit_breaker
 
 logger = logging.getLogger(__name__)
 
