@@ -158,15 +158,15 @@ async def crawl_stock_forum(stock_code: str, pages: int = 3) -> list[dict[str, A
                 if len(cols) < 6:
                     continue
 
-                # 컬럼 순서: 제목(0), 작성자(1), 날짜(2), 조회(3), 찬성(4), 반대(5)
-                title_tag = cols[0].find("a")
+                # 실제 컬럼 순서: 날짜(0), 제목(1), 작성자(2), 조회(3), 찬성(4), 반대(5)
+                title_tag = cols[1].find("a")
                 title_text = title_tag.get_text(strip=True) if title_tag else ""
                 content = title_text[:200] if title_text else None
 
-                nickname_tag = cols[1].find("span") or cols[1]
+                nickname_tag = cols[2].find("span") or cols[2]
                 nickname = nickname_tag.get_text(strip=True)[:100] if nickname_tag else None
 
-                date_str = cols[2].get_text(strip=True)
+                date_str = cols[0].get_text(strip=True)
                 post_date: datetime | None = None
                 if date_str:
                     for fmt in ("%Y.%m.%d %H:%M", "%Y.%m.%d"):
