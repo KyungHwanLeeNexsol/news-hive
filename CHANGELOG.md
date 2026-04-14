@@ -4,6 +4,38 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Added — SPEC-AI-008: 네이버 종토방 크롤러 및 이상 활성화 탐지 (2026-04-14)
+
+- `StockForumPost`, `StockForumHourly` 모델 추가: 종토방 게시글 및 시간별 집계 데이터
+- Alembic 마이그레이션 048: `stock_forum_posts`, `stock_forum_hourly` 테이블 생성
+- `backend/app/services/forum_crawler.py`: httpx + BeautifulSoup 기반 종토방 크롤러 (30분 간격)
+  - 감성 키워드 기반 bullish/bearish/neutral 분류 (AI 비용 절감)
+  - `overheating_alert`: bullish_ratio > 80% 연속 2회 플래그
+  - `volume_surge`: comment_volume이 7일 평균 3배 초과 플래그
+- 스케줄러 `forum_crawl` 잡 등록 (30분 주기)
+- 관련 버그 수정: circuit_breaker 임포트 오류, 네이버 HTML 컬럼 순서 오류
+
+### Added — SPEC-AI-009: 증권사 컨센서스 목표주가 집계 및 fund_manager 통합 (2026-04-14)
+
+- `_gather_securities_consensus()` 함수 추가: 90일 윈도우 목표주가 집계
+  - 평균/중앙값 목표가, 최저/최고가, 프리미엄 비율 계산
+  - 매수/보유/매도 의견 비율 통계
+  - `consensus_signal` 생성: strong_buy / buy / neutral / caution / insufficient
+  - 목표주가 추세: 최근 30일 vs 31~90일 비교
+- `analyze_stock()` AI 프롬프트에 "## 9-1. 증권사 컨센서스" 섹션 추가
+- 기존 `SecuritiesReport` 테이블만 활용 (신규 DB 테이블 불필요)
+
+### Added — SPEC-AI-010: fund_manager 감성 분석 통합 (종토방 + 증권사 컨센서스) (2026-04-14)
+
+- `_gather_forum_sentiment()` 함수 추가: 종토방 역발상 지표 lazy import로 미배포 시 graceful 처리
+- `analyze_stock()` 프롬프트 확장
+  - "## 1-2. 종토방 감성 (역발상 지표)" 섹션 추가
+  - overheating_alert 발생 시: "※ 종토방이 과열 상태입니다. 개인투자자 쏠림에 의한 고점 가능성을 고려하세요"
+  - volume_surge 발생 시: "※ 종토방 댓글 급증 감지: 시장 관심도 급등. 공시/뉴스와 교차 확인 필요"
+  - "## 9-1. 증권사 컨센서스" 섹션 통합 (SPEC-AI-009)
+- `macro_news_crawler.py`: 7개 거시경제 카테고리 RSS 크롤러 추가
+  - 주요 카테고리: Fed 정책, 인플레이션, 반도체, 한국 수출, 유가, 환율, 금리 추이
+
 ### Fixed — SPEC-AI-007 사후 수정: CONFIDENCE_FLOOR 버그 및 신뢰도 구간 경계값 정렬 (2026-04-13)
 
 - `fund_manager.py` `_CONFIDENCE_FLOOR` 오설정 수정: `MIN_ACTION_CONFIDENCE`(0.55)와 동일하게 설정되어 market_context 패널티(-0.10/-0.15) 및 CoT 패널티(-0.10)가 무력화되던 버그 해결
