@@ -539,15 +539,16 @@ async def take_daily_snapshot(db: Session) -> PortfolioSnapshot | None:
         today_kst = datetime.now(ZoneInfo("Asia/Seoul")).date()
         benchmark_value = await get_kospi_close(today_kst)
 
-        # 기준일: 첫 스냅샷 날짜 또는 포트폴리오 생성일
-        first_snap = (
-            db.query(PortfolioSnapshot)
-            .filter(PortfolioSnapshot.portfolio_id == portfolio.id)
-            .order_by(PortfolioSnapshot.snapshot_date.asc())
+        # 기준일: 첫 매수 체결일 → 포트폴리오 생성일 → 오늘
+        # @MX:NOTE: 스냅샷 생성일이 아닌 실제 첫 매수 시점을 기준으로 해야 KOSPI 수익률이 공정하게 비교됨
+        first_trade = (
+            db.query(VirtualTrade)
+            .filter(VirtualTrade.portfolio_id == portfolio.id)
+            .order_by(VirtualTrade.entry_date.asc())
             .first()
         )
-        if first_snap and first_snap.snapshot_date:
-            base_date = first_snap.snapshot_date.astimezone(ZoneInfo("Asia/Seoul")).date()
+        if first_trade and first_trade.entry_date:
+            base_date = first_trade.entry_date.astimezone(ZoneInfo("Asia/Seoul")).date()
         elif portfolio.created_at:
             base_date = portfolio.created_at.astimezone(ZoneInfo("Asia/Seoul")).date()
         else:
