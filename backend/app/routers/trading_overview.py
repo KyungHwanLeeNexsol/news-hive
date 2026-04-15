@@ -36,9 +36,9 @@ async def get_trading_overview(db: Session = Depends(get_db)):
     ks200_portfolio = get_or_create_ks200_portfolio(db)
     vip_portfolio = get_or_create_vip_portfolio(db)
 
-    # ─── 통계 (KS200/VIP는 실시간 가격 조회 포함) ───
-    paper_stats = get_portfolio_stats(db)
-    ks200_stats, vip_stats = await asyncio.gather(
+    # ─── 통계 (3개 모델 모두 실시간 가격 조회 병렬 실행) ───
+    paper_stats, ks200_stats, vip_stats = await asyncio.gather(
+        get_portfolio_stats(db),
         get_ks200_portfolio_stats(db),
         get_vip_portfolio_stats(db),
     )

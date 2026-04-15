@@ -611,8 +611,8 @@ async def take_daily_snapshot(db: Session) -> PortfolioSnapshot | None:
     return snapshot
 
 
-def get_portfolio_stats(db: Session) -> dict:
-    """포트폴리오 종합 성과 통계."""
+async def get_portfolio_stats(db: Session) -> dict:
+    """포트폴리오 종합 성과 통계 (오픈 포지션 실시간 평가 포함)."""
     portfolio = db.query(VirtualPortfolio).filter(VirtualPortfolio.is_active.is_(True)).first()
     if not portfolio:
         return {"error": "활성 포트폴리오 없음"}
@@ -665,11 +665,27 @@ def get_portfolio_stats(db: Session) -> dict:
     # 누적 수익률
     cumulative_return = snapshots[-1].cumulative_return_pct if snapshots else 0
 
-    # 총 손익 — 오픈 포지션을 진입가 기준으로 합산
-    # @MX:NOTE: sync 함수라 실시간 가격 조회 불가. 진입가 기준 position_value 를 사용해야
-    # 스냅샷 생성 이후 신규 매수/청산이 발생해도 total_pnl 이 왜곡되지 않는다.
-    # (스냅샷 positions_value 는 어제 기준이라 오늘 매수분 누락 → 큰 마이너스 오표시 버그)
-    position_value = sum(t.entry_price * t.quantity for t in open_trades)
+    # 총 손익 — 오픈 포지션 실시간 가격 기반 평가 (KS200과 동일 방식)
+    # @MX:NOTE: 실시간 가격 조회 실패 시 진입가로 폴백 → 가격 오류가 total_pnl 을 왜곡하지 않음.
+    # @MX:NOTE: 스냅샷 positions_value 는 어제 기준이라 오늘 매수분 누락 버그 있음 — 직접 합산으로 회피.
+    from app.models.stock import Stock as _Stock
+    from app.services.vip_follow_trading import _fetch_prices_batch
+
+    open_stock_ids = {t.stock_id for t in open_trades if t.stock_id}
+    stocks_map: dict[int, str] = {}
+    if open_stock_ids:
+        rows = db.query(_Stock.id, _Stock.stock_code).filter(_Stock.id.in_(open_stock_ids)).all()
+        stocks_map = {r.id: r.stock_code for r in rows}
+
+    stock_codes = [stocks_map[t.stock_id] for t in open_trades if t.stock_id and t.stock_id in stocks_map]
+    prices_map: dict[str, int] = await _fetch_prices_batch(stock_codes) if stock_codes else {}
+
+    position_value = 0
+    for t in open_trades:
+        code = stocks_map.get(t.stock_id) if t.stock_id else None
+        cp = prices_map.get(code) if code else None
+        position_value += (cp if cp else t.entry_price) * t.quantity
+
     total_value_live = portfolio.current_cash + position_value
     total_pnl = round(total_value_live - portfolio.initial_capital)
     total_return_pct = round(total_pnl / portfolio.initial_capital * 100, 2) if portfolio.initial_capital > 0 else 0.0

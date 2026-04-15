@@ -13,9 +13,9 @@ router = APIRouter(prefix="/api/paper-trading", tags=["paper-trading"])
 
 
 @router.get("/stats")
-def get_stats(db: Session = Depends(get_db)):
-    """포트폴리오 종합 성과 통계."""
-    return get_portfolio_stats(db)
+async def get_stats(db: Session = Depends(get_db)):
+    """포트폴리오 종합 성과 통계 (오픈 포지션 실시간 평가 포함)."""
+    return await get_portfolio_stats(db)
 
 
 @router.get("/positions")
