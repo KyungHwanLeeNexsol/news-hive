@@ -4,6 +4,15 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Improved — 모의투자 비교 대시보드 개선 (2026-04-15)
+
+- **AI 펀드매니저 총 수익 계산 개선**: `get_portfolio_stats` async 전환, 오픈 포지션 실시간 현재가 반영
+  - `_fetch_prices_batch` 배치 조회로 오픈 포지션 평가금액 산출 (현재가 없으면 매수가 fallback)
+  - `GET /api/paper-trading/stats` 응답의 `total_return_pct`, `total_pnl`이 미실현 손익 포함
+- **모의투자 개요 API 병렬 최적화**: `GET /api/trading/overview` — 3개 모델 stats를 `asyncio.gather`로 동시 조회
+- **비교탭 경쟁 대시보드 UI**: 순위(🥇🥈🥉) + 상대 비율 바 + 컬럼 칸반 포지션 카드 + 트레이드 피드 레이아웃
+  - 포지션 카드 색상: 수익률에 따라 red(이익)/blue(손실) 강도 자동 적용 (한국 주식 색상 관례)
+
 ### Added — SPEC-AI-008: 네이버 종토방 크롤러 및 이상 활성화 탐지 (2026-04-14)
 
 - `StockForumPost`, `StockForumHourly` 모델 추가: 종토방 게시글 및 시간별 집계 데이터

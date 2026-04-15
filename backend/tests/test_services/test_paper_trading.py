@@ -321,22 +321,24 @@ class TestCheckExitConditionsDefensive:
 class TestGetPortfolioStatsDefensive:
     """get_portfolio_stats에 방어 모드 상태가 포함되는지 테스트."""
 
-    def test_includes_defensive_mode_false(self, db, portfolio):
+    @pytest.mark.asyncio
+    async def test_includes_defensive_mode_false(self, db, portfolio):
         """정상 모드에서 is_defensive_mode가 False로 반환된다."""
-        stats = get_portfolio_stats(db)
+        stats = await get_portfolio_stats(db)
 
         assert "is_defensive_mode" in stats
         assert stats["is_defensive_mode"] is False
         assert stats["defensive_mode_entered_at"] is None
 
-    def test_includes_defensive_mode_true(self, db, portfolio):
+    @pytest.mark.asyncio
+    async def test_includes_defensive_mode_true(self, db, portfolio):
         """방어 모드에서 is_defensive_mode가 True로 반환된다."""
         now = datetime.now(timezone.utc)
         portfolio.is_defensive_mode = True
         portfolio.defensive_mode_entered_at = now
         db.flush()
 
-        stats = get_portfolio_stats(db)
+        stats = await get_portfolio_stats(db)
 
         assert stats["is_defensive_mode"] is True
         assert stats["defensive_mode_entered_at"] is not None
