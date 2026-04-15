@@ -11,6 +11,7 @@ import {
   fetchPaperTradingStats,
   fetchPaperPositions,
   fetchPaperTrades,
+  fetchTradingOverview,
 } from '@/lib/api';
 import type {
   VIPPortfolioStats,
@@ -23,9 +24,11 @@ import type {
   PaperPosition,
   PaperTrade,
   PaperSnapshot,
+  TradingOverview,
+  TradingModel,
 } from '@/lib/types';
 
-type Tab = 'vip' | 'ks200' | 'paper';
+type Tab = 'vip' | 'ks200' | 'paper' | 'compare';
 
 function fmt(n: number | null | undefined): string {
   if (n == null) return '-';
@@ -740,11 +743,229 @@ function PaperTradingTab() {
   );
 }
 
+// ─── 모델 뱃지 ───
+const MODEL_BADGE: Record<TradingModel, { bg: string; text: string; label: string }> = {
+  paper: { bg: 'bg-violet-50 border-violet-200', text: 'text-violet-700', label: 'AI펀드' },
+  ks200: { bg: 'bg-amber-50 border-amber-200', text: 'text-amber-700', label: 'KS200' },
+  vip: { bg: 'bg-emerald-50 border-emerald-200', text: 'text-emerald-700', label: 'VIP추종' },
+};
+
+function ModelBadge({ model }: { model: TradingModel }) {
+  const b = MODEL_BADGE[model];
+  return (
+    <span className={`inline-block px-2 py-0.5 rounded border text-[11px] font-bold ${b.bg} ${b.text}`}>
+      {b.label}
+    </span>
+  );
+}
+
+// ─── 전체 비교 탭 ───
+function ComparisonTab() {
+  const [data, setData] = useState<TradingOverview | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [tradeFilter, setTradeFilter] = useState<TradingModel | 'all'>('all');
+
+  useEffect(() => {
+    fetchTradingOverview()
+      .then(setData)
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : '불러오기 실패'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) return <div className="text-center py-16 text-gray-400 text-[14px]">로딩 중...</div>;
+  if (error) return <div className="text-center py-16 text-red-500 text-[14px]">{error}</div>;
+  if (!data) return null;
+
+  const models = ['paper', 'ks200', 'vip'] as TradingModel[];
+
+  const filteredPositions = data.positions;
+  const filteredTrades =
+    tradeFilter === 'all' ? data.trades : data.trades.filter((t) => t.model === tradeFilter);
+
+  return (
+    <div className="flex flex-col gap-6">
+      {/* ─── 모델 비교 카드 ─── */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {models.map((m) => {
+          const s = data.models[m];
+          const isPos = s.total_return_pct >= 0;
+          return (
+            <div
+              key={m}
+              className={`rounded-xl border p-5 flex flex-col gap-3 ${
+                isPos ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[13px] font-bold text-gray-700">{s.label}</span>
+                <ModelBadge model={m} />
+              </div>
+              <div>
+                <span className={`text-[28px] font-bold leading-none ${pctColor(s.total_return_pct)}`}>
+                  {s.total_return_pct >= 0 ? '+' : ''}{s.total_return_pct.toFixed(2)}%
+                </span>
+              </div>
+              <div className="flex gap-4 text-[12px] text-gray-500">
+                <span>승률 <strong className="text-gray-800">{s.win_rate.toFixed(1)}%</strong></span>
+                <span>보유 <strong className="text-gray-800">{s.open_positions}종목</strong></span>
+                <span>청산 <strong className="text-gray-800">{s.closed_trades}건</strong></span>
+              </div>
+              <div className="pt-1 border-t border-gray-200/60">
+                <span className={`text-[13px] font-semibold ${pctColor(s.total_pnl)}`}>
+                  {s.total_pnl >= 0 ? '+' : ''}{fmt(s.total_pnl)}원
+                </span>
+                <span className="text-[11px] text-gray-400 ml-1">총 손익</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ─── 전체 오픈 포지션 ─── */}
+      <div>
+        <div className="flex items-baseline justify-between mb-3">
+          <h2 className="text-[15px] font-bold text-gray-800">
+            전체 오픈 포지션
+            <span className="text-[13px] text-gray-500 font-normal ml-1">({filteredPositions.length}종목)</span>
+          </h2>
+          {filteredPositions.length > 0 && (() => {
+            const totalInvest = filteredPositions.reduce((s, p) => s + p.invest_amount, 0);
+            const totalCur = filteredPositions.reduce((s, p) => s + p.current_value, 0);
+            const ret = totalInvest > 0 ? ((totalCur - totalInvest) / totalInvest) * 100 : 0;
+            return (
+              <span className={`text-[13px] font-bold ${pctColor(ret)}`}>
+                {ret >= 0 ? '+' : ''}{ret.toFixed(2)}%
+              </span>
+            );
+          })()}
+        </div>
+        {filteredPositions.length === 0 ? (
+          <div className="text-center py-8 text-gray-400 text-[13px]">보유 종목이 없습니다</div>
+        ) : (
+          <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
+            <table className="w-full text-[13px]">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-200">
+                  <th className="text-left px-4 py-3 font-semibold text-gray-600">모델</th>
+                  <th className="text-left px-4 py-3 font-semibold text-gray-600">종목</th>
+                  <th className="text-right px-4 py-3 font-semibold text-gray-600">매수가</th>
+                  <th className="text-right px-4 py-3 font-semibold text-gray-600">현재가</th>
+                  <th className="text-right px-4 py-3 font-semibold text-gray-600">수량</th>
+                  <th className="text-right px-4 py-3 font-semibold text-gray-600">투자금</th>
+                  <th className="text-right px-4 py-3 font-semibold text-gray-600">수익률</th>
+                  <th className="text-right px-4 py-3 font-semibold text-gray-600">매수일</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredPositions.map((p, i) => (
+                  <tr key={i} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
+                    <td className="px-4 py-3"><ModelBadge model={p.model} /></td>
+                    <td className="px-4 py-3 font-semibold text-gray-800">{p.stock_name}</td>
+                    <td className="px-4 py-3 text-right text-gray-700">{fmt(p.entry_price)}원</td>
+                    <td className="px-4 py-3 text-right text-gray-700">
+                      {p.current_price != null ? `${fmt(p.current_price)}원` : '-'}
+                    </td>
+                    <td className="px-4 py-3 text-right text-gray-600">{p.quantity.toLocaleString('ko-KR')}</td>
+                    <td className="px-4 py-3 text-right text-gray-600">{fmt(p.invest_amount)}원</td>
+                    <td className={`px-4 py-3 text-right font-bold ${pctColor(p.unrealized_pct)}`}>
+                      {p.unrealized_pct != null
+                        ? `${p.unrealized_pct >= 0 ? '+' : ''}${p.unrealized_pct.toFixed(2)}%`
+                        : '-'}
+                    </td>
+                    <td className="px-4 py-3 text-right text-gray-400">
+                      {p.entry_date ? p.entry_date.slice(0, 10) : '-'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* ─── 거래 내역 통합 ─── */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-[15px] font-bold text-gray-800">
+            전체 거래 내역
+            <span className="text-[13px] text-gray-500 font-normal ml-1">
+              (최근 {filteredTrades.length}건)
+            </span>
+          </h2>
+          {/* 모델 필터 */}
+          <div className="flex gap-1 bg-gray-100 p-1 rounded-lg">
+            {(['all', 'paper', 'ks200', 'vip'] as const).map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => setTradeFilter(f)}
+                className={`px-3 py-1 rounded text-[12px] font-semibold transition-all ${
+                  tradeFilter === f ? 'bg-white text-[#1261c4] shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                {f === 'all' ? '전체' : MODEL_BADGE[f].label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {filteredTrades.length === 0 ? (
+          <div className="text-center py-8 text-gray-400 text-[13px]">거래 내역이 없습니다</div>
+        ) : (
+          <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
+            <table className="w-full text-[13px]">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-200">
+                  <th className="text-left px-4 py-3 font-semibold text-gray-600">모델</th>
+                  <th className="text-left px-4 py-3 font-semibold text-gray-600">종목</th>
+                  <th className="text-right px-4 py-3 font-semibold text-gray-600">매수가</th>
+                  <th className="text-right px-4 py-3 font-semibold text-gray-600">매도가</th>
+                  <th className="text-right px-4 py-3 font-semibold text-gray-600">손익</th>
+                  <th className="text-right px-4 py-3 font-semibold text-gray-600">수익률</th>
+                  <th className="text-right px-4 py-3 font-semibold text-gray-600">매수일</th>
+                  <th className="text-right px-4 py-3 font-semibold text-gray-600">매도일</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredTrades.map((t, i) => (
+                  <tr key={i} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
+                    <td className="px-4 py-3"><ModelBadge model={t.model} /></td>
+                    <td className="px-4 py-3 font-semibold text-gray-800">{t.stock_name}</td>
+                    <td className="px-4 py-3 text-right text-gray-700">{fmt(t.entry_price)}원</td>
+                    <td className="px-4 py-3 text-right text-gray-700">
+                      {t.exit_price != null ? `${fmt(t.exit_price)}원` : '-'}
+                    </td>
+                    <td className={`px-4 py-3 text-right font-semibold ${pctColor(t.pnl)}`}>
+                      {t.pnl != null ? `${t.pnl >= 0 ? '+' : ''}${fmt(t.pnl)}원` : '-'}
+                    </td>
+                    <td className={`px-4 py-3 text-right font-bold ${pctColor(t.return_pct)}`}>
+                      {t.return_pct != null
+                        ? `${t.return_pct >= 0 ? '+' : ''}${t.return_pct.toFixed(2)}%`
+                        : '-'}
+                    </td>
+                    <td className="px-4 py-3 text-right text-gray-400">
+                      {t.entry_date ? t.entry_date.slice(0, 10) : '-'}
+                    </td>
+                    <td className="px-4 py-3 text-right text-gray-400">
+                      {t.exit_date ? t.exit_date.slice(0, 10) : '-'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── 메인 페이지 ───
 export default function TradingPage() {
-  const [tab, setTab] = useState<Tab>('vip');
+  const [tab, setTab] = useState<Tab>('compare');
 
   const tabs: { key: Tab; label: string; desc: string }[] = [
+    { key: 'compare', label: '전체 비교', desc: '3개 모델 통합 포트폴리오 비교 — 종목별 매수/매도가, 손익률 한눈에' },
     { key: 'vip', label: 'VIP 추종', desc: '브이아이피자산운용 대량보유 공시 추종' },
     { key: 'ks200', label: 'KS200 스윙', desc: 'Stochastics Slow + 이격도 기반 스윙 트레이딩' },
     { key: 'paper', label: 'AI 펀드매니저', desc: 'AI 펀드매니저 시그널 기반 페이퍼 트레이딩' },
@@ -778,6 +999,7 @@ export default function TradingPage() {
       <p className="text-[12px] text-gray-400 mb-5">{tabs.find((t) => t.key === tab)?.desc}</p>
 
       {/* 콘텐츠 */}
+      {tab === 'compare' && <ComparisonTab />}
       {tab === 'vip' && <VIPTab />}
       {tab === 'ks200' && <KS200Tab />}
       {tab === 'paper' && <PaperTradingTab />}

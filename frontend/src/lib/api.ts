@@ -941,3 +941,9 @@ export async function fetchKS200Trades(limit = 30, offset = 0): Promise<KS200Tra
   if (!res.ok) throw new Error('KS200 거래 내역 조회 실패');
   return res.json();
 }
+
+export async function fetchTradingOverview(): Promise<import('./types').TradingOverview> {
+  const res = await fetchWithRetry(`${API_BASE}/trading/overview`);
+  if (!res.ok) throw new Error('모의투자 통합 현황 조회 실패');
+  return res.json();
+}

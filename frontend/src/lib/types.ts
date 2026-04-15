@@ -531,3 +531,52 @@ export interface KS200TradeHistory {
   return_pct: number | null;
   is_open: boolean;
 }
+
+// ── 모의투자 통합 비교 대시보드 ──
+
+export type TradingModel = 'paper' | 'ks200' | 'vip';
+
+export interface ModelSummary {
+  label: string;
+  total_return_pct: number;
+  win_rate: number;
+  open_positions: number;
+  closed_trades: number;
+  total_pnl: number;
+  initial_capital: number;
+}
+
+export interface OverviewPosition {
+  model: TradingModel;
+  model_label: string;
+  stock_name: string;
+  stock_code: string | null;
+  entry_price: number;
+  current_price: number | null;
+  quantity: number;
+  invest_amount: number;
+  current_value: number;
+  unrealized_pct: number | null;
+  entry_date: string | null;
+}
+
+export interface OverviewTrade {
+  model: TradingModel;
+  model_label: string;
+  stock_name: string;
+  stock_code: string | null;
+  entry_price: number;
+  exit_price: number | null;
+  quantity: number;
+  pnl: number | null;
+  return_pct: number | null;
+  exit_reason: string | null;
+  entry_date: string | null;
+  exit_date: string | null;
+}
+
+export interface TradingOverview {
+  models: Record<TradingModel, ModelSummary>;
+  positions: OverviewPosition[];
+  trades: OverviewTrade[];
+}

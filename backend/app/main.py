@@ -167,6 +167,7 @@ from app.routers import following as following_router  # noqa: E402
 from app.routers import macro_rates as macro_rates_router  # noqa: E402
 from app.routers.vip_trading import router as vip_trading_router  # noqa: E402
 from app.routers.ks200_trading import router as ks200_trading_router  # noqa: E402
+from app.routers.trading_overview import router as trading_overview_router  # noqa: E402
 
 app.include_router(sectors.router)
 app.include_router(stocks.router)
@@ -185,6 +186,7 @@ app.include_router(following_router.router)
 app.include_router(macro_rates_router.router)
 app.include_router(vip_trading_router)
 app.include_router(ks200_trading_router)
+app.include_router(trading_overview_router)
 
 # WebSocket 엔드포인트 등록
 from app.websocket import router as ws_router  # noqa: E402
