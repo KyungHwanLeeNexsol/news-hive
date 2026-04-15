@@ -518,13 +518,13 @@ async def _execute_vip_sell(
     stock_name = stock.name if stock else f"stock_id={trade.stock_id}"
 
     logger.info(
-        "VIP 매도: %s %d주 @ %d원 (reason=%s, %s, 회수금: %d원)",
+        "VIP 매도: %s %d주 @ %d원 (reason=%s, %s, 순회수금: %d원)",
         stock_name,
         quantity,
         current_price,
         reason,
         "전량" if is_full_exit else "부분",
-        sell_amount,
+        net_proceeds,
     )
 
 

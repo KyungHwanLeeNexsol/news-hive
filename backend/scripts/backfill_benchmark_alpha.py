@@ -24,7 +24,6 @@ from app.models.fund_signal import FundSignal  # noqa: E402
 from app.models.virtual_portfolio import (  # noqa: E402
     PortfolioSnapshot,
     VirtualPortfolio,
-    VirtualTrade,
 )
 from app.services.benchmark import (  # noqa: E402
     get_kospi_close,
