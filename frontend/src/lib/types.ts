@@ -326,6 +326,9 @@ export interface PaperTradingStats {
   win_rate: number;
   avg_return: number;
   total_pnl: number;
+  total_return_pct?: number;
+  realized_pnl?: number;
+  position_value?: number;
   cumulative_return: number;
   sharpe_ratio: number;
   mdd: number;

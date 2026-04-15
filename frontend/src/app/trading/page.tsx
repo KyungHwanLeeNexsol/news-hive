@@ -504,9 +504,9 @@ function PaperTradingTab() {
     );
   }
 
+  // KS200과 동일하게 미실현 포지션 평가금액을 포함한 총 손익/수익률 사용
+  const returnPct = stats.total_return_pct ?? 0;
   const totalValue = stats.initial_capital + stats.total_pnl;
-  const returnPct =
-    stats.initial_capital > 0 ? ((totalValue - stats.initial_capital) / stats.initial_capital) * 100 : 0;
   const paperProfit = stats.total_pnl >= 0;
 
   return (

@@ -612,8 +612,8 @@ def get_portfolio_stats(db: Session) -> dict:
     returns = [t.return_pct for t in closed_trades if t.return_pct is not None]
     avg_return = round(sum(returns) / len(returns), 2) if returns else 0
 
-    # 총 손익
-    total_pnl = sum(t.pnl for t in closed_trades if t.pnl is not None)
+    # 실현 손익 (청산 완료 거래만)
+    realized_pnl = sum(t.pnl for t in closed_trades if t.pnl is not None)
 
     # 스냅샷 기반 성과
     snapshots = (
@@ -646,6 +646,13 @@ def get_portfolio_stats(db: Session) -> dict:
 
     # 누적 수익률
     cumulative_return = snapshots[-1].cumulative_return_pct if snapshots else 0
+
+    # 총 손익 (미실현 포함) — KS200과 동일하게 현금 + 포지션 평가금액 기반
+    # @MX:NOTE: realized_pnl(청산)만 쓰면 오픈 포지션 수익이 누락된다. KS200 방식과 동일하게 스냅샷 포지션 가치를 포함한다.
+    position_value = snapshots[-1].positions_value if snapshots else 0
+    total_value_live = portfolio.current_cash + position_value
+    total_pnl = round(total_value_live - portfolio.initial_capital)
+    total_return_pct = round(total_pnl / portfolio.initial_capital * 100, 2) if portfolio.initial_capital > 0 else 0.0
 
     # KOSPI 벤치마크 대비 알파 (2026-04 교정)
     # @MX:NOTE: 승률만 보고 전략 품질을 오판하지 않도록 알파를 노출한다.
@@ -687,6 +694,9 @@ def get_portfolio_stats(db: Session) -> dict:
         "win_rate": win_rate,
         "avg_return": avg_return,
         "total_pnl": total_pnl,
+        "total_return_pct": total_return_pct,
+        "realized_pnl": realized_pnl,
+        "position_value": position_value,
         "cumulative_return": cumulative_return,
         "sharpe_ratio": sharpe_ratio,
         "mdd": mdd,
