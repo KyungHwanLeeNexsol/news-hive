@@ -759,7 +759,7 @@ function ModelBadge({ model }: { model: TradingModel }) {
   );
 }
 
-// ─── 전체 비교 탭 ───
+// ─── 전체 비교 탭 (경쟁 대시보드) ───
 function ComparisonTab() {
   const [data, setData] = useState<TradingOverview | null>(null);
   const [loading, setLoading] = useState(true);
@@ -777,123 +777,167 @@ function ComparisonTab() {
   if (error) return <div className="text-center py-16 text-red-500 text-[14px]">{error}</div>;
   if (!data) return null;
 
-  const models = ['paper', 'ks200', 'vip'] as TradingModel[];
+  // 수익률 기준 내림차순 정렬 → 순위 결정
+  const rankedModels = (['paper', 'ks200', 'vip'] as TradingModel[])
+    .map((m) => ({ model: m, ...data.models[m] }))
+    .sort((a, b) => b.total_return_pct - a.total_return_pct);
 
-  const filteredPositions = data.positions;
+  const rankMedal = ['🥇', '🥈', '🥉'];
+  const maxAbsReturn = Math.max(...rankedModels.map((m) => Math.abs(m.total_return_pct)), 1);
+
+  // 칸반 포지션: 모델별 그룹화
+  const positionsByModel = rankedModels.reduce<Record<string, typeof data.positions>>((acc, { model }) => {
+    acc[model] = data.positions.filter((p) => p.model === model);
+    return acc;
+  }, {});
+
+  // 포지션 카드 색상 (한국: 빨강=수익, 파랑=손실)
+  function positionCardClass(pct: number | null): string {
+    if (pct == null) return 'bg-gray-50 border-gray-200';
+    if (pct > 10) return 'bg-red-200 border-red-300';
+    if (pct > 5) return 'bg-red-100 border-red-200';
+    if (pct > 0) return 'bg-red-50 border-red-100';
+    if (pct > -5) return 'bg-blue-50 border-blue-100';
+    return 'bg-blue-100 border-blue-200';
+  }
+
   const filteredTrades =
     tradeFilter === 'all' ? data.trades : data.trades.filter((t) => t.model === tradeFilter);
 
+  const exitReasonLabel: Record<string, string> = {
+    target_hit: '목표가',
+    stop_loss: '손절',
+    timeout: '기간만료',
+    signal_sell: '매도시그널',
+  };
+
   return (
     <div className="flex flex-col gap-6">
-      {/* ─── 모델 비교 카드 ─── */}
+      {/* ─── 섹션 1: 순위 비교 카드 ─── */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        {models.map((m) => {
-          const s = data.models[m];
-          const isPos = s.total_return_pct >= 0;
+        {rankedModels.map(({ model, label, total_return_pct, win_rate, open_positions, closed_trades, total_pnl }, idx) => {
+          const isPos = total_return_pct >= 0;
+          const barWidth = Math.round((Math.abs(total_return_pct) / maxAbsReturn) * 100);
           return (
             <div
-              key={m}
+              key={model}
               className={`rounded-xl border p-5 flex flex-col gap-3 ${
-                isPos ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'
-              }`}
+                idx === 0 ? 'ring-2 ring-offset-1 ring-amber-300 shadow-md' : ''
+              } ${isPos ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'}`}
             >
+              {/* 순위 메달 + 모델명 */}
               <div className="flex items-center justify-between">
-                <span className="text-[13px] font-bold text-gray-700">{s.label}</span>
-                <ModelBadge model={m} />
+                <div className="flex items-center gap-2">
+                  <span className="text-[22px] leading-none">{rankMedal[idx]}</span>
+                  <span className="text-[13px] font-bold text-gray-700">{label}</span>
+                </div>
+                <ModelBadge model={model} />
               </div>
+              {/* 수익률 대형 */}
               <div>
-                <span className={`text-[28px] font-bold leading-none ${pctColor(s.total_return_pct)}`}>
-                  {s.total_return_pct >= 0 ? '+' : ''}{s.total_return_pct.toFixed(2)}%
+                <span className={`text-[34px] font-bold leading-none ${pctColor(total_return_pct)}`}>
+                  {total_return_pct >= 0 ? '+' : ''}{total_return_pct.toFixed(2)}%
                 </span>
               </div>
-              <div className="flex gap-4 text-[12px] text-gray-500">
-                <span>승률 <strong className="text-gray-800">{s.win_rate.toFixed(1)}%</strong></span>
-                <span>보유 <strong className="text-gray-800">{s.open_positions}종목</strong></span>
-                <span>청산 <strong className="text-gray-800">{s.closed_trades}건</strong></span>
+              {/* 상대적 수익률 바 */}
+              <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all ${isPos ? 'bg-red-400' : 'bg-blue-400'}`}
+                  style={{ width: `${barWidth}%` }}
+                />
               </div>
-              <div className="pt-1 border-t border-gray-200/60">
-                <span className={`text-[13px] font-semibold ${pctColor(s.total_pnl)}`}>
-                  {s.total_pnl >= 0 ? '+' : ''}{fmt(s.total_pnl)}원
+              {/* 3분할 지표 */}
+              <div className="grid grid-cols-3 gap-1 text-center pt-1">
+                <div>
+                  <div className={`text-[16px] font-bold ${win_rate >= 50 ? 'text-[#e12343]' : 'text-[#1261c4]'}`}>
+                    {win_rate.toFixed(0)}%
+                  </div>
+                  <div className="text-[11px] text-gray-400">승률</div>
+                </div>
+                <div>
+                  <div className="text-[16px] font-bold text-gray-700">{open_positions}</div>
+                  <div className="text-[11px] text-gray-400">보유종목</div>
+                </div>
+                <div>
+                  <div className="text-[16px] font-bold text-gray-700">{closed_trades}</div>
+                  <div className="text-[11px] text-gray-400">청산건수</div>
+                </div>
+              </div>
+              {/* 누적 손익 */}
+              <div className="pt-2 border-t border-gray-200/60">
+                <span className={`text-[13px] font-semibold ${pctColor(total_pnl)}`}>
+                  {total_pnl >= 0 ? '+' : ''}{fmt(total_pnl)}원
                 </span>
-                <span className="text-[11px] text-gray-400 ml-1">총 손익</span>
+                <span className="text-[11px] text-gray-400 ml-1">누적 손익</span>
               </div>
             </div>
           );
         })}
       </div>
 
-      {/* ─── 전체 오픈 포지션 ─── */}
+      {/* ─── 섹션 2: 포지션 칸반 (3열) ─── */}
       <div>
-        <div className="flex items-baseline justify-between mb-3">
-          <h2 className="text-[15px] font-bold text-gray-800">
-            전체 오픈 포지션
-            <span className="text-[13px] text-gray-500 font-normal ml-1">({filteredPositions.length}종목)</span>
-          </h2>
-          {filteredPositions.length > 0 && (() => {
-            const totalInvest = filteredPositions.reduce((s, p) => s + p.invest_amount, 0);
-            const totalCur = filteredPositions.reduce((s, p) => s + p.current_value, 0);
-            const ret = totalInvest > 0 ? ((totalCur - totalInvest) / totalInvest) * 100 : 0;
-            return (
-              <span className={`text-[13px] font-bold ${pctColor(ret)}`}>
-                {ret >= 0 ? '+' : ''}{ret.toFixed(2)}%
-              </span>
-            );
-          })()}
-        </div>
-        {filteredPositions.length === 0 ? (
+        <h2 className="text-[15px] font-bold text-gray-800 mb-3">
+          오픈 포지션
+          <span className="text-[13px] text-gray-500 font-normal ml-1">({data.positions.length}종목)</span>
+        </h2>
+        {data.positions.length === 0 ? (
           <div className="text-center py-8 text-gray-400 text-[13px]">보유 종목이 없습니다</div>
         ) : (
-          <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
-            <table className="w-full text-[13px]">
-              <thead>
-                <tr className="bg-gray-50 border-b border-gray-200">
-                  <th className="text-left px-4 py-3 font-semibold text-gray-600">모델</th>
-                  <th className="text-left px-4 py-3 font-semibold text-gray-600">종목</th>
-                  <th className="text-right px-4 py-3 font-semibold text-gray-600">매수가</th>
-                  <th className="text-right px-4 py-3 font-semibold text-gray-600">현재가</th>
-                  <th className="text-right px-4 py-3 font-semibold text-gray-600">수량</th>
-                  <th className="text-right px-4 py-3 font-semibold text-gray-600">투자금</th>
-                  <th className="text-right px-4 py-3 font-semibold text-gray-600">수익률</th>
-                  <th className="text-right px-4 py-3 font-semibold text-gray-600">매수일</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredPositions.map((p, i) => (
-                  <tr key={i} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
-                    <td className="px-4 py-3"><ModelBadge model={p.model} /></td>
-                    <td className="px-4 py-3 font-semibold text-gray-800">{p.stock_name}</td>
-                    <td className="px-4 py-3 text-right text-gray-700">{fmt(p.entry_price)}원</td>
-                    <td className="px-4 py-3 text-right text-gray-700">
-                      {p.current_price != null ? `${fmt(p.current_price)}원` : '-'}
-                    </td>
-                    <td className="px-4 py-3 text-right text-gray-600">{p.quantity.toLocaleString('ko-KR')}</td>
-                    <td className="px-4 py-3 text-right text-gray-600">{fmt(p.invest_amount)}원</td>
-                    <td className={`px-4 py-3 text-right font-bold ${pctColor(p.unrealized_pct)}`}>
-                      {p.unrealized_pct != null
-                        ? `${p.unrealized_pct >= 0 ? '+' : ''}${p.unrealized_pct.toFixed(2)}%`
-                        : '-'}
-                    </td>
-                    <td className="px-4 py-3 text-right text-gray-400">
-                      {p.entry_date ? p.entry_date.slice(0, 10) : '-'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="grid grid-cols-3 gap-3">
+            {rankedModels.map(({ model }, idx) => {
+              const positions = positionsByModel[model] ?? [];
+              const badge = MODEL_BADGE[model];
+              return (
+                <div key={model} className="flex flex-col gap-2">
+                  {/* 열 헤더 */}
+                  <div className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border ${badge.bg}`}>
+                    <span className="text-[14px] leading-none">{rankMedal[idx]}</span>
+                    <span className={`text-[12px] font-bold ${badge.text}`}>{badge.label}</span>
+                    <span className={`ml-auto text-[11px] font-medium ${badge.text} opacity-70`}>
+                      {positions.length}종목
+                    </span>
+                  </div>
+                  {/* 포지션 카드 */}
+                  {positions.length === 0 ? (
+                    <div className="text-center py-6 text-gray-400 text-[12px] bg-gray-50 rounded-lg border border-dashed border-gray-200">
+                      보유 없음
+                    </div>
+                  ) : (
+                    positions.map((p, i) => (
+                      <div
+                        key={i}
+                        className={`rounded-lg border p-3 flex flex-col gap-1.5 ${positionCardClass(p.unrealized_pct)}`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <span className="text-[13px] font-bold text-gray-800 leading-tight">{p.stock_name}</span>
+                          <span className={`text-[15px] font-bold flex-shrink-0 ${pctColor(p.unrealized_pct)}`}>
+                            {p.unrealized_pct != null
+                              ? `${p.unrealized_pct >= 0 ? '+' : ''}${p.unrealized_pct.toFixed(1)}%`
+                              : '-'}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between text-[11px] text-gray-500">
+                          <span>{fmt(p.invest_amount)}원</span>
+                          <span>{p.entry_date ? p.entry_date.slice(0, 10) : '-'}</span>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
 
-      {/* ─── 거래 내역 통합 ─── */}
+      {/* ─── 섹션 3: 거래 피드 ─── */}
       <div>
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-[15px] font-bold text-gray-800">
-            전체 거래 내역
-            <span className="text-[13px] text-gray-500 font-normal ml-1">
-              (최근 {filteredTrades.length}건)
-            </span>
+            최근 거래
+            <span className="text-[13px] text-gray-500 font-normal ml-1">({filteredTrades.length}건)</span>
           </h2>
-          {/* 모델 필터 */}
           <div className="flex gap-1 bg-gray-100 p-1 rounded-lg">
             {(['all', 'paper', 'ks200', 'vip'] as const).map((f) => (
               <button
@@ -912,47 +956,47 @@ function ComparisonTab() {
         {filteredTrades.length === 0 ? (
           <div className="text-center py-8 text-gray-400 text-[13px]">거래 내역이 없습니다</div>
         ) : (
-          <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
-            <table className="w-full text-[13px]">
-              <thead>
-                <tr className="bg-gray-50 border-b border-gray-200">
-                  <th className="text-left px-4 py-3 font-semibold text-gray-600">모델</th>
-                  <th className="text-left px-4 py-3 font-semibold text-gray-600">종목</th>
-                  <th className="text-right px-4 py-3 font-semibold text-gray-600">매수가</th>
-                  <th className="text-right px-4 py-3 font-semibold text-gray-600">매도가</th>
-                  <th className="text-right px-4 py-3 font-semibold text-gray-600">손익</th>
-                  <th className="text-right px-4 py-3 font-semibold text-gray-600">수익률</th>
-                  <th className="text-right px-4 py-3 font-semibold text-gray-600">매수일</th>
-                  <th className="text-right px-4 py-3 font-semibold text-gray-600">매도일</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredTrades.map((t, i) => (
-                  <tr key={i} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
-                    <td className="px-4 py-3"><ModelBadge model={t.model} /></td>
-                    <td className="px-4 py-3 font-semibold text-gray-800">{t.stock_name}</td>
-                    <td className="px-4 py-3 text-right text-gray-700">{fmt(t.entry_price)}원</td>
-                    <td className="px-4 py-3 text-right text-gray-700">
-                      {t.exit_price != null ? `${fmt(t.exit_price)}원` : '-'}
-                    </td>
-                    <td className={`px-4 py-3 text-right font-semibold ${pctColor(t.pnl)}`}>
-                      {t.pnl != null ? `${t.pnl >= 0 ? '+' : ''}${fmt(t.pnl)}원` : '-'}
-                    </td>
-                    <td className={`px-4 py-3 text-right font-bold ${pctColor(t.return_pct)}`}>
-                      {t.return_pct != null
-                        ? `${t.return_pct >= 0 ? '+' : ''}${t.return_pct.toFixed(2)}%`
-                        : '-'}
-                    </td>
-                    <td className="px-4 py-3 text-right text-gray-400">
-                      {t.entry_date ? t.entry_date.slice(0, 10) : '-'}
-                    </td>
-                    <td className="px-4 py-3 text-right text-gray-400">
-                      {t.exit_date ? t.exit_date.slice(0, 10) : '-'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="flex flex-col gap-1.5">
+            {filteredTrades.map((t, i) => {
+              const isWin = t.return_pct != null && t.return_pct > 0;
+              return (
+                <div
+                  key={i}
+                  className={`flex items-center gap-3 px-4 py-2.5 rounded-lg border text-[13px] ${
+                    isWin
+                      ? 'bg-red-50/60 border-red-100'
+                      : t.return_pct != null
+                      ? 'bg-blue-50/60 border-blue-100'
+                      : 'bg-white border-gray-100'
+                  }`}
+                >
+                  <ModelBadge model={t.model} />
+                  <span className="font-semibold text-gray-800 flex-1 min-w-0 truncate">{t.stock_name}</span>
+                  {t.exit_reason && (
+                    <span
+                      className={`text-[11px] px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${
+                        t.exit_reason === 'target_hit'
+                          ? 'bg-red-100 text-red-700'
+                          : t.exit_reason === 'stop_loss'
+                          ? 'bg-blue-100 text-blue-700'
+                          : 'bg-gray-100 text-gray-600'
+                      }`}
+                    >
+                      {exitReasonLabel[t.exit_reason] ?? t.exit_reason}
+                    </span>
+                  )}
+                  <span className={`font-bold flex-shrink-0 ${pctColor(t.return_pct)}`}>
+                    {t.return_pct != null ? `${t.return_pct >= 0 ? '+' : ''}${t.return_pct.toFixed(2)}%` : '-'}
+                  </span>
+                  <span className={`flex-shrink-0 text-[12px] ${pctColor(t.pnl)}`}>
+                    {t.pnl != null ? `${t.pnl >= 0 ? '+' : ''}${fmt(t.pnl)}원` : ''}
+                  </span>
+                  <span className="text-gray-400 flex-shrink-0 text-[12px]">
+                    {t.exit_date ? t.exit_date.slice(0, 10) : '-'}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
