@@ -745,9 +745,9 @@ function PaperTradingTab() {
 
 // ─── 모델 뱃지 ───
 const MODEL_BADGE: Record<TradingModel, { bg: string; text: string; label: string }> = {
-  paper: { bg: 'bg-violet-50 border-violet-200', text: 'text-violet-700', label: 'AI펀드' },
-  ks200: { bg: 'bg-amber-50 border-amber-200', text: 'text-amber-700', label: 'KS200' },
-  vip: { bg: 'bg-emerald-50 border-emerald-200', text: 'text-emerald-700', label: 'VIP추종' },
+  paper: { bg: 'bg-violet-100 border-violet-300', text: 'text-violet-700', label: 'AI펀드' },
+  ks200: { bg: 'bg-amber-100 border-amber-300', text: 'text-amber-700', label: 'KS200' },
+  vip: { bg: 'bg-emerald-100 border-emerald-300', text: 'text-emerald-700', label: 'VIP추종' },
 };
 
 function ModelBadge({ model }: { model: TradingModel }) {
@@ -818,12 +818,13 @@ function ComparisonTab() {
         {rankedModels.map(({ model, label, total_return_pct, win_rate, open_positions, closed_trades, total_pnl }, idx) => {
           const isPos = total_return_pct >= 0;
           const barWidth = Math.round((Math.abs(total_return_pct) / maxAbsReturn) * 100);
+          const cardBg = MODEL_BADGE[model as TradingModel].bg;
           return (
             <div
               key={model}
               className={`rounded-xl border p-5 flex flex-col gap-3 ${
-                idx === 0 ? 'ring-2 ring-offset-1 ring-amber-300 shadow-md' : ''
-              } ${isPos ? 'bg-red-50 border-red-200' : 'bg-blue-50 border-blue-200'}`}
+                idx === 0 ? 'ring-2 ring-offset-2 ring-amber-400 shadow-lg' : 'shadow-sm'
+              } ${cardBg}`}
             >
               {/* 순위 메달 + 모델명 */}
               <div className="flex items-center justify-between">
@@ -840,9 +841,9 @@ function ComparisonTab() {
                 </span>
               </div>
               {/* 상대적 수익률 바 */}
-              <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+              <div className="h-2 bg-white/60 rounded-full overflow-hidden">
                 <div
-                  className={`h-full rounded-full transition-all ${isPos ? 'bg-red-400' : 'bg-blue-400'}`}
+                  className={`h-full rounded-full transition-all ${isPos ? 'bg-red-500' : 'bg-blue-500'}`}
                   style={{ width: `${barWidth}%` }}
                 />
               </div>
