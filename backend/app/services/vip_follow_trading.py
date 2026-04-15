@@ -35,6 +35,11 @@ PROFIT_LOCK_THRESHOLD = 50.0
 # 부분 익절 비율 (현재 보유 수량의 30%)
 PARTIAL_SELL_PCT = 0.30
 
+# 삼성증권 온라인(MTS) 기준 수수료/거래세
+# @MX:NOTE: 매수/매도 각각 0.014% 수수료, 매도 시 거래세 0.18% (KOSPI 증권거래세 0.03% + 농특세 0.15%)
+COMMISSION_RATE = 0.00014       # 수수료: 0.014%
+TRANSACTION_TAX_RATE = 0.0018   # 거래세: 0.18% (매도 시에만)
+
 
 def get_or_create_vip_portfolio(db: Session) -> VIPPortfolio:
     """활성 VIP 포트폴리오를 가져오거나 생성한다.
@@ -422,6 +427,8 @@ async def _execute_vip_buy(
         return None
 
     invest_amount = current_price * quantity
+    buy_commission = round(invest_amount * COMMISSION_RATE)
+    total_buy_cost = invest_amount + buy_commission
 
     trade = VIPTrade(
         portfolio_id=portfolio.id,
@@ -431,19 +438,20 @@ async def _execute_vip_buy(
         entry_price=current_price,
         quantity=quantity,
     )
-    portfolio.current_cash -= invest_amount
+    portfolio.current_cash -= total_buy_cost
 
     db.add(trade)
     db.commit()
     db.refresh(trade)
 
     logger.info(
-        "VIP %d차 매수: %s %d주 @ %d원 (투자금: %d원, 잔여현금: %d원)",
+        "VIP %d차 매수: %s %d주 @ %d원 (투자금: %d원, 수수료: %d원, 잔여현금: %d원)",
         split_sequence,
         stock.name,
         quantity,
         current_price,
         invest_amount,
+        buy_commission,
         portfolio.current_cash,
     )
     return trade
@@ -472,18 +480,27 @@ async def _execute_vip_sell(
         VIPPortfolio.id == trade.portfolio_id
     ).first()
 
-    sell_amount = current_price * quantity
+    # 매도 수수료 + 거래세 차감 (삼성증권 MTS 기준)
+    gross_proceeds = current_price * quantity
+    sell_commission = round(gross_proceeds * COMMISSION_RATE)
+    transaction_tax = round(gross_proceeds * TRANSACTION_TAX_RATE)
+    net_proceeds = gross_proceeds - sell_commission - transaction_tax
+
     is_full_exit = quantity >= trade.quantity
 
     if is_full_exit:
-        # 전량 청산
-        pnl = (current_price - trade.entry_price) * trade.quantity
-        return_pct = (current_price - trade.entry_price) / trade.entry_price * 100
+        # 전량 청산 — PnL = 순매도금액 - (매수금액 + 매수수수료 추정치)
+        cost_basis = trade.entry_price * trade.quantity
+        buy_commission_est = round(cost_basis * COMMISSION_RATE)
+        total_cost = cost_basis + buy_commission_est
+
+        pnl = net_proceeds - total_cost
+        return_pct = pnl / total_cost * 100 if total_cost > 0 else 0.0
 
         trade.exit_price = current_price
         trade.exit_date = datetime.now(timezone.utc)
         trade.exit_reason = reason
-        trade.pnl = pnl
+        trade.pnl = round(pnl)
         trade.return_pct = round(return_pct, 2)
         trade.quantity = 0
         trade.is_open = False
@@ -493,7 +510,7 @@ async def _execute_vip_sell(
         trade.partial_sold = True
 
     if portfolio:
-        portfolio.current_cash += sell_amount
+        portfolio.current_cash += net_proceeds
 
     db.commit()
 
