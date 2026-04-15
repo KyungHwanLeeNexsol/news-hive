@@ -17,6 +17,11 @@ MAX_POSITION_PCT = 0.10  # 종목당 최대 투자 비율 10%
 POSITION_SIZE = int(INITIAL_CAPITAL * MAX_POSITION_PCT)  # 10,000,000원
 MAX_OPEN_POSITIONS = 10
 
+# 삼성증권 온라인(MTS) 기준 수수료/거래세
+# @MX:NOTE: 매수/매도 각각 0.014% 수수료, 매도 시 거래세 0.18% (KOSPI 증권거래세 0.03% + 농특세 0.15%)
+COMMISSION_RATE = 0.00014       # 수수료: 0.014%
+TRANSACTION_TAX_RATE = 0.0018   # 거래세: 0.18% (매도 시에만)
+
 
 def get_or_create_ks200_portfolio(db: Session) -> KS200Portfolio:
     """KS200 포트폴리오를 조회하거나 없으면 생성한다.
@@ -245,7 +250,8 @@ def _execute_backfill_buy(
         return None
 
     total_cost = exec_price * quantity
-    portfolio.current_cash -= total_cost
+    buy_commission = round(total_cost * COMMISSION_RATE)
+    portfolio.current_cash -= (total_cost + buy_commission)
 
     trade = KS200Trade(
         portfolio_id=portfolio.id,
@@ -258,11 +264,12 @@ def _execute_backfill_buy(
     )
     db.add(trade)
     logger.info(
-        "백필 매수 체결: %s %d주 @ %d원 (투자금=%d원, 잔고=%d원, 기준일=%s)",
+        "백필 매수 체결: %s %d주 @ %d원 (투자금=%d원, 수수료=%d원, 잔고=%d원, 기준일=%s)",
         signal.stock_code,
         quantity,
         exec_price,
         total_cost,
+        buy_commission,
         portfolio.current_cash,
         signal.signal_date.date() if signal.signal_date else "unknown",
     )
@@ -381,7 +388,8 @@ async def _execute_buy(
         return None
 
     total_cost = current_price * quantity
-    portfolio.current_cash -= total_cost
+    buy_commission = round(total_cost * COMMISSION_RATE)
+    portfolio.current_cash -= (total_cost + buy_commission)
 
     trade = KS200Trade(
         portfolio_id=portfolio.id,
@@ -394,11 +402,12 @@ async def _execute_buy(
     )
     db.add(trade)
     logger.info(
-        "KS200 매수 체결: %s %d주 @ %d원 (투자금=%d원, 잔고=%d원)",
+        "KS200 매수 체결: %s %d주 @ %d원 (투자금=%d원, 수수료=%d원, 잔고=%d원)",
         signal.stock_code,
         quantity,
         current_price,
         total_cost,
+        buy_commission,
         portfolio.current_cash,
     )
     return trade
@@ -451,17 +460,26 @@ def _close_position(
     reason: str = "signal_sell",
 ) -> None:
     """포지션을 청산하고 손익을 계산한다."""
-    proceeds = exit_price * trade.quantity
-    portfolio.current_cash += proceeds
+    # 매도 수수료 + 거래세 차감 (삼성증권 MTS 기준)
+    sell_proceeds = exit_price * trade.quantity
+    sell_commission = round(sell_proceeds * COMMISSION_RATE)
+    transaction_tax = round(sell_proceeds * TRANSACTION_TAX_RATE)
+    net_proceeds = sell_proceeds - sell_commission - transaction_tax
+    portfolio.current_cash += net_proceeds
 
-    pnl = proceeds - (trade.entry_price * trade.quantity)
-    return_pct = pnl / (trade.entry_price * trade.quantity) * 100.0
+    # PnL = 순매도금액 - (매수금액 + 매수수수료 추정치)
+    cost_basis = trade.entry_price * trade.quantity
+    buy_commission_est = round(cost_basis * COMMISSION_RATE)
+    total_cost = cost_basis + buy_commission_est
+
+    pnl = net_proceeds - total_cost
+    return_pct = pnl / total_cost * 100.0 if total_cost > 0 else 0.0
 
     trade.exit_price = exit_price
     trade.exit_date = datetime.now(timezone.utc)
     trade.exit_reason = reason
-    trade.pnl = pnl
-    trade.return_pct = return_pct
+    trade.pnl = round(pnl)
+    trade.return_pct = round(return_pct, 4)
     trade.is_open = False
 
     logger.info(
