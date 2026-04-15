@@ -665,9 +665,11 @@ def get_portfolio_stats(db: Session) -> dict:
     # 누적 수익률
     cumulative_return = snapshots[-1].cumulative_return_pct if snapshots else 0
 
-    # 총 손익 (미실현 포함) — KS200과 동일하게 현금 + 포지션 평가금액 기반
-    # @MX:NOTE: realized_pnl(청산)만 쓰면 오픈 포지션 수익이 누락된다. KS200 방식과 동일하게 스냅샷 포지션 가치를 포함한다.
-    position_value = snapshots[-1].positions_value if snapshots else 0
+    # 총 손익 — 오픈 포지션을 진입가 기준으로 합산
+    # @MX:NOTE: sync 함수라 실시간 가격 조회 불가. 진입가 기준 position_value 를 사용해야
+    # 스냅샷 생성 이후 신규 매수/청산이 발생해도 total_pnl 이 왜곡되지 않는다.
+    # (스냅샷 positions_value 는 어제 기준이라 오늘 매수분 누락 → 큰 마이너스 오표시 버그)
+    position_value = sum(t.entry_price * t.quantity for t in open_trades)
     total_value_live = portfolio.current_cash + position_value
     total_pnl = round(total_value_live - portfolio.initial_capital)
     total_return_pct = round(total_pnl / portfolio.initial_capital * 100, 2) if portfolio.initial_capital > 0 else 0.0
