@@ -175,11 +175,11 @@ function ModelHistorySection({ model }: { model: TradingModel }) {
                 }
               />
               <Tooltip
-                formatter={(value: number) => [
-                  `${value >= 0 ? '+' : ''}${value.toLocaleString('ko-KR')}원`,
-                  '손익',
-                ]}
-                labelFormatter={(label: string) => `${label} 주차`}
+                formatter={(value) => {
+                  const v = typeof value === 'number' ? value : 0;
+                  return [`${v >= 0 ? '+' : ''}${v.toLocaleString('ko-KR')}원`, '손익'];
+                }}
+                labelFormatter={(label) => `${String(label)} 주차`}
               />
               <Bar dataKey="pnl" radius={[3, 3, 0, 0]}>
                 {weekly.map((entry, index) => (
@@ -237,11 +237,11 @@ function ModelHistorySection({ model }: { model: TradingModel }) {
                 }
               />
               <Tooltip
-                formatter={(value: number) => [
-                  `${value >= 0 ? '+' : ''}${value.toLocaleString('ko-KR')}원`,
-                  '손익',
-                ]}
-                labelFormatter={(label: string) => label}
+                formatter={(value) => {
+                  const v = typeof value === 'number' ? value : 0;
+                  return [`${v >= 0 ? '+' : ''}${v.toLocaleString('ko-KR')}원`, '손익'];
+                }}
+                labelFormatter={(label) => String(label)}
               />
               <Bar dataKey="pnl" radius={[3, 3, 0, 0]}>
                 {monthly.map((entry, index) => (
