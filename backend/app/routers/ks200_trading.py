@@ -50,10 +50,9 @@ async def get_ks200_portfolio(db: Session = Depends(get_db)):
 @router.get("/positions")
 async def get_ks200_positions(db: Session = Depends(get_db)):
     """현재 오픈 포지션 목록 조회 (미실현 수익률 포함)."""
-    import asyncio
     from app.models.stock import Stock
     from app.services.ks200_trading import get_or_create_ks200_portfolio
-    from app.services.vip_follow_trading import _fetch_price
+    from app.services.vip_follow_trading import _fetch_prices_batch
 
     portfolio = get_or_create_ks200_portfolio(db)
     open_trades = (
@@ -71,11 +70,13 @@ async def get_ks200_positions(db: Session = Depends(get_db)):
     stocks = db.query(Stock).filter(Stock.id.in_(stock_ids)).all()
     stock_name_map: dict[int, str] = {s.id: s.name for s in stocks}
 
-    # 현재가 병렬 조회
-    prices = await asyncio.gather(*[_fetch_price(t.stock_code) for t in open_trades])
+    # 현재가 배치 조회 (배치 API 1회 호출 — 개별 semaphore 조회 대비 대폭 빠름)
+    stock_codes = [t.stock_code for t in open_trades if t.stock_code]
+    price_map = await _fetch_prices_batch(stock_codes)
 
     result = []
-    for trade, current_price in zip(open_trades, prices):
+    for trade in open_trades:
+        current_price = price_map.get(trade.stock_code) if trade.stock_code else None
         invest_amount = trade.entry_price * trade.quantity
         current_value = (current_price * trade.quantity) if current_price else invest_amount
         unrealized_pct = round(

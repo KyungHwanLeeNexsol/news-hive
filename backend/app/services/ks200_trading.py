@@ -495,7 +495,7 @@ def _close_position(
 
 async def get_ks200_portfolio_stats(db: Session) -> dict:
     """KS200 포트폴리오 현황 통계를 반환한다."""
-    from app.services.naver_finance import fetch_current_price
+    from app.services.vip_follow_trading import _fetch_prices_batch
 
     portfolio = get_or_create_ks200_portfolio(db)
     open_trades = (
@@ -507,17 +507,13 @@ async def get_ks200_portfolio_stats(db: Session) -> dict:
         .all()
     )
 
-    # 오픈 포지션 평가금액 계산
-    position_value = 0
-    for trade in open_trades:
-        try:
-            price = await fetch_current_price(trade.stock_code)
-            if price and price > 0:
-                position_value += price * trade.quantity
-            else:
-                position_value += trade.entry_price * trade.quantity
-        except Exception:
-            position_value += trade.entry_price * trade.quantity
+    # 오픈 포지션 평가금액 계산 — 배치 API 1회 호출 (순차 개별 조회 → 성능 개선)
+    open_stock_codes = [t.stock_code for t in open_trades if t.stock_code]
+    prices = await _fetch_prices_batch(open_stock_codes)
+    position_value = sum(
+        prices.get(t.stock_code, t.entry_price) * t.quantity
+        for t in open_trades
+    )
 
     total_value = portfolio.current_cash + position_value
     total_pnl = total_value - portfolio.initial_capital
