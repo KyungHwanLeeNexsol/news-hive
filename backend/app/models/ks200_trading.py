@@ -67,6 +67,9 @@ class KS200Trade(Base):
     # "signal_sell": 신호 청산, "manual": 수동 청산
     exit_reason: Mapped[str | None] = mapped_column(String(30), nullable=True)
 
+    # 분할 매수 차수: 1 = 1차 매수(50%), 2 = 2차 추가 매수(나머지 50%)
+    tranche: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
+
     # 실현 손익 (청산 시 계산)
     pnl: Mapped[int | None] = mapped_column(Integer, nullable=True)
     return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)

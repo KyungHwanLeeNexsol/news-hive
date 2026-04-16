@@ -13,9 +13,10 @@ from app.models.stock import Stock
 logger = logging.getLogger(__name__)
 
 INITIAL_CAPITAL = 100_000_000
-MAX_POSITION_PCT = 0.10  # 종목당 최대 투자 비율 10%
-POSITION_SIZE = int(INITIAL_CAPITAL * MAX_POSITION_PCT)  # 10,000,000원
-MAX_OPEN_POSITIONS = 10
+# @MX:NOTE: 분할 매수 전략 — 종목당 500만원(1차 250만원 → 신호 재발생 시 2차 250만원)
+# @MX:REASON: 최대 종목 수 제한 없이 현금 허용 한도까지 최대한 편입하기 위해 종목당 투자금 축소
+POSITION_SIZE = 5_000_000     # 종목당 총 투자금 500만원
+FIRST_BUY_SIZE = 2_500_000    # 1차 매수금: 250만원 (50%)
 
 # 삼성증권 온라인(MTS) 기준 수수료/거래세
 # @MX:NOTE: 매수/매도 각각 0.014% 수수료, 매도 시 거래세 0.18% (KOSPI 증권거래세 0.03% + 농특세 0.15%)
@@ -188,50 +189,25 @@ def _execute_backfill_buy(
     portfolio: KS200Portfolio,
     signal: KS200Signal,
 ) -> KS200Trade | None:
-    """백필 매수 신호를 실행한다 (price_at_signal 기반).
+    """백필 매수 신호를 실행한다 (price_at_signal 기반, 분할 매수 지원).
 
     현재가 조회 없이 신호 발생 시점의 가격을 체결가로 사용한다.
+    - 미보유: 1차 매수 (FIRST_BUY_SIZE, tranche=1)
+    - 1차만 보유: 2차 추가 매수 (FIRST_BUY_SIZE, tranche=2)
+    - 1+2차 모두 보유(완성): 스킵
     조건 불충족 시 None 반환.
     """
-    # 현재 오픈 포지션 수 확인
-    open_count = (
-        db.query(KS200Trade)
-        .filter(
-            KS200Trade.portfolio_id == portfolio.id,
-            KS200Trade.is_open.is_(True),
-        )
-        .count()
-    )
-    if open_count >= MAX_OPEN_POSITIONS:
-        logger.debug("백필 매수 스킵 (%s): 최대 포지션 수 초과", signal.stock_code)
-        return None
+    exec_price = signal.price_at_signal
 
-    # 잔고 확인
-    if portfolio.current_cash < signal.price_at_signal:
+    # 잔고가 최소 1주 매수 가능한지 확인
+    if portfolio.current_cash < exec_price:
         logger.debug(
             "백필 매수 스킵 (%s): 잔고 부족 (잔고=%d, 주가=%d)",
             signal.stock_code,
             portfolio.current_cash,
-            signal.price_at_signal,
+            exec_price,
         )
         return None
-
-    # 동일 종목 기존 포지션 확인
-    existing_position = (
-        db.query(KS200Trade)
-        .filter(
-            KS200Trade.portfolio_id == portfolio.id,
-            KS200Trade.stock_code == signal.stock_code,
-            KS200Trade.is_open.is_(True),
-        )
-        .first()
-    )
-    if existing_position is not None:
-        logger.debug("백필 매수 스킵 (%s): 이미 보유 중", signal.stock_code)
-        return None
-
-    # 체결가는 신호 발생 시점의 가격 (현재가 조회 없음)
-    exec_price = signal.price_at_signal
 
     # stock_id 조회
     stock = (
@@ -243,7 +219,25 @@ def _execute_backfill_buy(
         logger.warning("백필 매수 스킵 (%s): stocks 테이블에 없는 종목", signal.stock_code)
         return None
 
-    invest_amount = min(POSITION_SIZE, portfolio.current_cash)
+    # 동일 종목 오픈 포지션 조회 (분할 매수 차수 파악)
+    open_positions = (
+        db.query(KS200Trade)
+        .filter(
+            KS200Trade.portfolio_id == portfolio.id,
+            KS200Trade.stock_code == signal.stock_code,
+            KS200Trade.is_open.is_(True),
+        )
+        .all()
+    )
+    existing_tranches = {t.tranche for t in open_positions}
+
+    if 1 in existing_tranches and 2 in existing_tranches:
+        logger.debug("백필 매수 스킵 (%s): 1+2차 분할 매수 완성", signal.stock_code)
+        return None
+
+    next_tranche = 2 if 1 in existing_tranches else 1
+
+    invest_amount = min(FIRST_BUY_SIZE, portfolio.current_cash)
     quantity = invest_amount // exec_price
     if quantity <= 0:
         logger.debug("백필 매수 스킵 (%s): 매수 가능 수량 0", signal.stock_code)
@@ -260,11 +254,13 @@ def _execute_backfill_buy(
         entry_price=exec_price,
         quantity=quantity,
         entry_date=signal.signal_date,
+        tranche=next_tranche,
         is_open=True,
     )
     db.add(trade)
     logger.info(
-        "백필 매수 체결: %s %d주 @ %d원 (투자금=%d원, 수수료=%d원, 잔고=%d원, 기준일=%s)",
+        "백필 매수 체결(%d차): %s %d주 @ %d원 (투자금=%d원, 수수료=%d원, 잔고=%d원, 기준일=%s)",
+        next_tranche,
         signal.stock_code,
         quantity,
         exec_price,
@@ -310,56 +306,14 @@ async def _execute_buy(
     portfolio: KS200Portfolio,
     signal: KS200Signal,
 ) -> KS200Trade | None:
-    """매수 신호를 실행한다.
+    """매수 신호를 실행한다 (분할 매수 지원).
 
-    조건 불충족 시 None 반환:
-    - 최대 포지션 수 초과 (MAX_OPEN_POSITIONS=10)
-    - 현금 부족 (POSITION_SIZE=10,000,000원 미만)
-    - 동일 종목 이미 보유 중
+    - 미보유: 1차 매수 (FIRST_BUY_SIZE=250만원, tranche=1)
+    - 1차만 보유 + 신호 재발생: 2차 추가 매수 (FIRST_BUY_SIZE=250만원, tranche=2)
+    - 1+2차 모두 보유(완성): 스킵
+    - 최대 종목 수 제한 없음 — 현금 부족 시에만 스킵
     """
     from app.services.naver_finance import fetch_current_price
-
-    # 현재 오픈 포지션 수 확인
-    open_count = (
-        db.query(KS200Trade)
-        .filter(
-            KS200Trade.portfolio_id == portfolio.id,
-            KS200Trade.is_open.is_(True),
-        )
-        .count()
-    )
-    if open_count >= MAX_OPEN_POSITIONS:
-        logger.debug(
-            "매수 스킵 (%s): 최대 포지션 수 초과 (%d/%d)",
-            signal.stock_code,
-            open_count,
-            MAX_OPEN_POSITIONS,
-        )
-        return None
-
-    # 잔고 충분 여부 확인 (최소 1주 매수 가능해야 함)
-    if portfolio.current_cash < signal.price_at_signal:
-        logger.debug(
-            "매수 스킵 (%s): 잔고 부족 (잔고=%d, 주가=%d)",
-            signal.stock_code,
-            portfolio.current_cash,
-            signal.price_at_signal,
-        )
-        return None
-
-    # 동일 종목 기존 포지션 확인
-    existing_position = (
-        db.query(KS200Trade)
-        .filter(
-            KS200Trade.portfolio_id == portfolio.id,
-            KS200Trade.stock_code == signal.stock_code,
-            KS200Trade.is_open.is_(True),
-        )
-        .first()
-    )
-    if existing_position is not None:
-        logger.debug("매수 스킵 (%s): 이미 보유 중", signal.stock_code)
-        return None
 
     # 현재가 조회 (실제 체결가)
     try:
@@ -370,11 +324,14 @@ async def _execute_buy(
         logger.warning("현재가 조회 실패 (%s), 신호가 사용: %s", signal.stock_code, e)
         current_price = signal.price_at_signal
 
-    # 매수 수량 산정: POSITION_SIZE와 잔고 중 작은 금액으로 최대 수량
-    invest_amount = min(POSITION_SIZE, portfolio.current_cash)
-    quantity = invest_amount // current_price
-    if quantity <= 0:
-        logger.debug("매수 스킵 (%s): 매수 가능 수량 0", signal.stock_code)
+    # 잔고 충분 여부 확인 (최소 1주 매수 가능해야 함)
+    if portfolio.current_cash < current_price:
+        logger.debug(
+            "매수 스킵 (%s): 잔고 부족 (잔고=%d, 주가=%d)",
+            signal.stock_code,
+            portfolio.current_cash,
+            current_price,
+        )
         return None
 
     # stock_id 조회
@@ -385,6 +342,31 @@ async def _execute_buy(
     )
     if stock is None:
         logger.warning("매수 스킵 (%s): stocks 테이블에 없는 종목", signal.stock_code)
+        return None
+
+    # 동일 종목 오픈 포지션 조회 (분할 매수 차수 파악)
+    open_positions = (
+        db.query(KS200Trade)
+        .filter(
+            KS200Trade.portfolio_id == portfolio.id,
+            KS200Trade.stock_code == signal.stock_code,
+            KS200Trade.is_open.is_(True),
+        )
+        .all()
+    )
+    existing_tranches = {t.tranche for t in open_positions}
+
+    if 1 in existing_tranches and 2 in existing_tranches:
+        logger.debug("매수 스킵 (%s): 1+2차 분할 매수 완성", signal.stock_code)
+        return None
+
+    next_tranche = 2 if 1 in existing_tranches else 1
+
+    # 매수 수량 산정: FIRST_BUY_SIZE와 잔고 중 작은 금액으로 최대 수량
+    invest_amount = min(FIRST_BUY_SIZE, portfolio.current_cash)
+    quantity = invest_amount // current_price
+    if quantity <= 0:
+        logger.debug("매수 스킵 (%s): 매수 가능 수량 0", signal.stock_code)
         return None
 
     total_cost = current_price * quantity
@@ -398,11 +380,13 @@ async def _execute_buy(
         entry_price=current_price,
         quantity=quantity,
         entry_date=datetime.now(timezone.utc),
+        tranche=next_tranche,
         is_open=True,
     )
     db.add(trade)
     logger.info(
-        "KS200 매수 체결: %s %d주 @ %d원 (투자금=%d원, 수수료=%d원, 잔고=%d원)",
+        "KS200 매수 체결(%d차): %s %d주 @ %d원 (투자금=%d원, 수수료=%d원, 잔고=%d원)",
+        next_tranche,
         signal.stock_code,
         quantity,
         current_price,
@@ -542,5 +526,4 @@ async def get_ks200_portfolio_stats(db: Session) -> dict:
         "total_return_pct": round(total_return_pct, 2),
         "realized_pnl": realized_pnl,
         "open_positions": len(open_trades),
-        "max_positions": MAX_OPEN_POSITIONS,
     }
