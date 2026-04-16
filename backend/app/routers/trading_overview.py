@@ -1,8 +1,10 @@
 """모의투자 3개 모델 통합 비교 대시보드 API."""
 import asyncio
 import logging
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -234,3 +236,209 @@ async def get_trading_overview(db: Session = Depends(get_db)):
         "positions": positions,
         "trades": trades,
     }
+
+
+# ─── 모델 조회 헬퍼 ───────────────────────────────────────────────────────────
+
+def _get_model_portfolio_and_class(model: str, db: Session):
+    """model 파라미터에 따라 (portfolio, TradeClass, stock_code_fn) 반환."""
+    from app.models.ks200_trading import KS200Trade
+    from app.models.virtual_portfolio import VirtualTrade
+    from app.models.vip_trading import VIPTrade
+    from app.services.ks200_trading import get_or_create_ks200_portfolio
+    from app.services.paper_trading import get_or_create_portfolio
+    from app.services.vip_follow_trading import get_or_create_vip_portfolio
+
+    if model == "paper":
+        portfolio = get_or_create_portfolio(db)
+        return portfolio, VirtualTrade, None
+    elif model == "ks200":
+        portfolio = get_or_create_ks200_portfolio(db)
+        return portfolio, KS200Trade, None
+    elif model == "vip":
+        portfolio = get_or_create_vip_portfolio(db)
+        return portfolio, VIPTrade, None
+    else:
+        raise HTTPException(status_code=400, detail="model은 paper, ks200, vip 중 하나여야 합니다.")
+
+
+@router.get("/trades")
+def get_model_trades(
+    model: str = Query(..., description="paper, ks200, vip"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """모델별 전체 매매 기록 조회 (청산 완료 거래).
+
+    매입단가, 매입날짜, 매입금액, 매도날짜, 수익률, 손익 등을 반환한다.
+    """
+    from app.models.stock import Stock
+
+    portfolio, TradeClass, _ = _get_model_portfolio_and_class(model, db)
+
+    trades = (
+        db.query(TradeClass)
+        .filter(
+            TradeClass.portfolio_id == portfolio.id,
+            TradeClass.is_open.is_(False),
+        )
+        .order_by(TradeClass.exit_date.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+    # 종목명/코드 조회
+    stock_ids = [t.stock_id for t in trades if t.stock_id]
+    stocks_map = {s.id: s for s in db.query(Stock).filter(Stock.id.in_(stock_ids)).all()} if stock_ids else {}
+
+    result = []
+    for t in trades:
+        s = stocks_map.get(t.stock_id) if t.stock_id else None
+        # KS200Trade는 stock_code 직접 보유, 나머지는 Stock에서 조회
+        stock_code = getattr(t, "stock_code", None) or (s.stock_code if s else None)
+        stock_name = (s.name if s else None) or stock_code or "Unknown"
+        invest_amount = t.entry_price * t.quantity
+        result.append({
+            "stock_code": stock_code,
+            "stock_name": stock_name,
+            "entry_price": t.entry_price,
+            "entry_date": t.entry_date.isoformat() if t.entry_date else None,
+            "invest_amount": invest_amount,
+            "quantity": t.quantity,
+            "exit_price": t.exit_price,
+            "exit_date": t.exit_date.isoformat() if t.exit_date else None,
+            "exit_reason": getattr(t, "exit_reason", None),
+            "pnl": t.pnl,
+            "return_pct": t.return_pct,
+            "is_profit": (t.pnl or 0) > 0,
+        })
+    return result
+
+
+@router.get("/performance/weekly")
+def get_model_weekly_performance(
+    model: str = Query(..., description="paper, ks200, vip"),
+    weeks: int = Query(12, ge=1, le=52),
+    db: Session = Depends(get_db),
+):
+    """모델별 주간 성과 기록 (최근 N주).
+
+    각 주차별 실현 손익, 거래 수, 승률을 반환한다.
+    """
+    portfolio, TradeClass, _ = _get_model_portfolio_and_class(model, db)
+
+    # 조회 기간: 최근 N주
+    now = datetime.now(tz=timezone.utc)
+    since = now - timedelta(weeks=weeks)
+
+    closed_trades = (
+        db.query(TradeClass)
+        .filter(
+            TradeClass.portfolio_id == portfolio.id,
+            TradeClass.is_open.is_(False),
+            TradeClass.exit_date >= since,
+        )
+        .order_by(TradeClass.exit_date.asc())
+        .all()
+    )
+
+    # 주차별 집계 (ISO 주차: YYYY-WW)
+    weekly: dict[str, dict] = defaultdict(lambda: {"pnl": 0, "trades": 0, "wins": 0})
+    for t in closed_trades:
+        if not t.exit_date:
+            continue
+        exit_dt = t.exit_date if t.exit_date.tzinfo else t.exit_date.replace(tzinfo=timezone.utc)
+        # ISO 주차 레이블 (예: "2026-W15")
+        iso = exit_dt.isocalendar()
+        key = f"{iso.year}-W{iso.week:02d}"
+        weekly[key]["pnl"] += t.pnl or 0
+        weekly[key]["trades"] += 1
+        if (t.pnl or 0) > 0:
+            weekly[key]["wins"] += 1
+
+    # 빈 주차 채우기 (최근 N주 전체 포함)
+    result = []
+    for i in range(weeks - 1, -1, -1):
+        week_start = now - timedelta(weeks=i)
+        iso = week_start.isocalendar()
+        key = f"{iso.year}-W{iso.week:02d}"
+        data = weekly.get(key, {"pnl": 0, "trades": 0, "wins": 0})
+        trades_cnt = data["trades"]
+        wins_cnt = data["wins"]
+        result.append({
+            "week": key,
+            "pnl": data["pnl"],
+            "trade_count": trades_cnt,
+            "win_count": wins_cnt,
+            "win_rate": round(wins_cnt / trades_cnt * 100, 1) if trades_cnt else 0.0,
+        })
+    return result
+
+
+@router.get("/performance/monthly")
+def get_model_monthly_performance(
+    model: str = Query(..., description="paper, ks200, vip"),
+    months: int = Query(12, ge=1, le=24),
+    db: Session = Depends(get_db),
+):
+    """모델별 월간 성과 기록 (최근 N개월).
+
+    각 월별 실현 손익, 거래 수, 승률을 반환한다.
+    """
+    portfolio, TradeClass, _ = _get_model_portfolio_and_class(model, db)
+
+    now = datetime.now(tz=timezone.utc)
+    # 조회 시작: 현재 월 기준 N개월 전 1일
+    start_year = now.year
+    start_month = now.month - months
+    while start_month <= 0:
+        start_month += 12
+        start_year -= 1
+    since = datetime(start_year, start_month, 1, tzinfo=timezone.utc)
+
+    closed_trades = (
+        db.query(TradeClass)
+        .filter(
+            TradeClass.portfolio_id == portfolio.id,
+            TradeClass.is_open.is_(False),
+            TradeClass.exit_date >= since,
+        )
+        .order_by(TradeClass.exit_date.asc())
+        .all()
+    )
+
+    # 월별 집계 (YYYY-MM)
+    monthly: dict[str, dict] = defaultdict(lambda: {"pnl": 0, "trades": 0, "wins": 0})
+    for t in closed_trades:
+        if not t.exit_date:
+            continue
+        exit_dt = t.exit_date if t.exit_date.tzinfo else t.exit_date.replace(tzinfo=timezone.utc)
+        key = exit_dt.strftime("%Y-%m")
+        monthly[key]["pnl"] += t.pnl or 0
+        monthly[key]["trades"] += 1
+        if (t.pnl or 0) > 0:
+            monthly[key]["wins"] += 1
+
+    # 빈 월 채우기 (최근 N개월 전체 포함)
+    result = []
+    for i in range(months - 1, -1, -1):
+        # i개월 전
+        m = now.month - i
+        y = now.year
+        while m <= 0:
+            m += 12
+            y -= 1
+        key = f"{y}-{m:02d}"
+        data = monthly.get(key, {"pnl": 0, "trades": 0, "wins": 0})
+        trades_cnt = data["trades"]
+        wins_cnt = data["wins"]
+        result.append({
+            "month": key,
+            "pnl": data["pnl"],
+            "trade_count": trades_cnt,
+            "win_count": wins_cnt,
+            "win_rate": round(wins_cnt / trades_cnt * 100, 1) if trades_cnt else 0.0,
+        })
+    return result
