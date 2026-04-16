@@ -580,3 +580,36 @@ export interface TradingOverview {
   positions: OverviewPosition[];
   trades: OverviewTrade[];
 }
+
+// ── 모델 공통 성과 API ──
+
+export interface ModelTradeRecord {
+  stock_code: string | null;
+  stock_name: string;
+  entry_price: number;
+  entry_date: string | null;
+  invest_amount: number;
+  quantity: number;
+  exit_price: number | null;
+  exit_date: string | null;
+  exit_reason: string | null;
+  pnl: number | null;
+  return_pct: number | null;
+  is_profit: boolean;
+}
+
+export interface WeeklyPerformance {
+  week: string;
+  pnl: number;
+  trade_count: number;
+  win_count: number;
+  win_rate: number;
+}
+
+export interface MonthlyPerformance {
+  month: string;
+  pnl: number;
+  trade_count: number;
+  win_count: number;
+  win_rate: number;
+}

@@ -947,3 +947,31 @@ export async function fetchTradingOverview(): Promise<import('./types').TradingO
   if (!res.ok) throw new Error('모의투자 통합 현황 조회 실패');
   return res.json();
 }
+
+export async function fetchModelTrades(
+  model: import('./types').TradingModel,
+  limit = 100,
+  offset = 0,
+): Promise<import('./types').ModelTradeRecord[]> {
+  const res = await fetchWithRetry(`${API_BASE}/trading/trades?model=${model}&limit=${limit}&offset=${offset}`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function fetchModelWeeklyPerformance(
+  model: import('./types').TradingModel,
+  weeks = 12,
+): Promise<import('./types').WeeklyPerformance[]> {
+  const res = await fetchWithRetry(`${API_BASE}/trading/performance/weekly?model=${model}&weeks=${weeks}`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function fetchModelMonthlyPerformance(
+  model: import('./types').TradingModel,
+  months = 12,
+): Promise<import('./types').MonthlyPerformance[]> {
+  const res = await fetchWithRetry(`${API_BASE}/trading/performance/monthly?model=${model}&months=${months}`);
+  if (!res.ok) return [];
+  return res.json();
+}

@@ -12,6 +12,9 @@ import {
   fetchPaperPositions,
   fetchPaperTrades,
   fetchTradingOverview,
+  fetchModelTrades,
+  fetchModelWeeklyPerformance,
+  fetchModelMonthlyPerformance,
 } from '@/lib/api';
 import type {
   VIPPortfolioStats,
@@ -26,7 +29,11 @@ import type {
   PaperSnapshot,
   TradingOverview,
   TradingModel,
+  ModelTradeRecord,
+  WeeklyPerformance,
+  MonthlyPerformance,
 } from '@/lib/types';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, Cell, ResponsiveContainer } from 'recharts';
 
 type Tab = 'vip' | 'ks200' | 'paper' | 'compare';
 
@@ -61,6 +68,229 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
       <span className="text-[12px] text-gray-500 font-medium">{label}</span>
       <span className="text-[18px] font-bold text-gray-900">{value}</span>
       {sub && <span className="text-[12px] text-gray-400">{sub}</span>}
+    </div>
+  );
+}
+
+// ─── 모델별 성과 히스토리 섹션 ───
+function ModelHistorySection({ model }: { model: TradingModel }) {
+  const [tradeHistory, setTradeHistory] = useState<ModelTradeRecord[]>([]);
+  const [weekly, setWeekly] = useState<WeeklyPerformance[]>([]);
+  const [monthly, setMonthly] = useState<MonthlyPerformance[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    Promise.all([
+      fetchModelTrades(model, 50),
+      fetchModelWeeklyPerformance(model, 12),
+      fetchModelMonthlyPerformance(model, 12),
+    ])
+      .then(([t, w, m]) => {
+        setTradeHistory(t);
+        setWeekly(w);
+        setMonthly(m);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [model]);
+
+  if (loading) return <div className="text-center py-8 text-gray-400 text-[13px]">성과 기록 로딩 중...</div>;
+
+  return (
+    <div className="flex flex-col gap-6">
+      {/* 매매 기록 */}
+      <div>
+        <h2 className="text-[15px] font-bold text-gray-800 mb-3">
+          매매 기록{' '}
+          <span className="text-[13px] text-gray-500 font-normal">({tradeHistory.length}건 청산)</span>
+        </h2>
+        <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
+          <table className="w-full text-[13px]">
+            <thead>
+              <tr className="bg-gray-50 border-b border-gray-200">
+                <th className="text-left px-4 py-3 font-semibold text-gray-600">종목명</th>
+                <th className="text-right px-4 py-3 font-semibold text-gray-600">매입단가</th>
+                <th className="text-right px-4 py-3 font-semibold text-gray-600">매입금액</th>
+                <th className="text-right px-4 py-3 font-semibold text-gray-600">매입일</th>
+                <th className="text-right px-4 py-3 font-semibold text-gray-600">매도가</th>
+                <th className="text-right px-4 py-3 font-semibold text-gray-600">매도일</th>
+                <th className="text-right px-4 py-3 font-semibold text-gray-600">손익</th>
+                <th className="text-right px-4 py-3 font-semibold text-gray-600">수익률</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tradeHistory.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="text-center py-8 text-gray-400">
+                    청산 기록이 없습니다
+                  </td>
+                </tr>
+              ) : (
+                tradeHistory.map((t, i) => (
+                  <tr key={i} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
+                    <td className="px-4 py-3 font-semibold text-gray-800">{t.stock_name}</td>
+                    <td className="px-4 py-3 text-right text-gray-700">{fmt(t.entry_price)}원</td>
+                    <td className="px-4 py-3 text-right text-gray-700">{fmt(t.invest_amount)}원</td>
+                    <td className="px-4 py-3 text-right text-gray-400">{formatDate(t.entry_date)}</td>
+                    <td className="px-4 py-3 text-right text-gray-700">
+                      {t.exit_price != null ? `${fmt(t.exit_price)}원` : '-'}
+                    </td>
+                    <td className="px-4 py-3 text-right text-gray-400">{formatDate(t.exit_date)}</td>
+                    <td className={`px-4 py-3 text-right font-semibold ${pctColor(t.pnl)}`}>
+                      {t.pnl != null ? `${t.pnl >= 0 ? '+' : ''}${fmt(t.pnl)}원` : '-'}
+                    </td>
+                    <td className={`px-4 py-3 text-right font-semibold ${pctColor(t.return_pct)}`}>
+                      {fmtPct(t.return_pct)}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* 주간 성과 */}
+      <div>
+        <h2 className="text-[15px] font-bold text-gray-800 mb-3">주간 성과 (최근 12주)</h2>
+        <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={weekly} margin={{ top: 4, right: 8, left: 8, bottom: 4 }}>
+              <XAxis
+                dataKey="week"
+                tick={{ fontSize: 11, fill: '#999' }}
+                tickFormatter={(v: string) => {
+                  const parts = v.split('-W');
+                  return parts[1] ? `W${parts[1]}` : v;
+                }}
+              />
+              <YAxis
+                tick={{ fontSize: 11, fill: '#999' }}
+                tickFormatter={(v: number) =>
+                  Math.abs(v) >= 1000000
+                    ? `${(v / 1000000).toFixed(1)}M`
+                    : Math.abs(v) >= 1000
+                      ? `${(v / 1000).toFixed(0)}K`
+                      : String(v)
+                }
+              />
+              <Tooltip
+                formatter={(value: number) => [
+                  `${value >= 0 ? '+' : ''}${value.toLocaleString('ko-KR')}원`,
+                  '손익',
+                ]}
+                labelFormatter={(label: string) => `${label} 주차`}
+              />
+              <Bar dataKey="pnl" radius={[3, 3, 0, 0]}>
+                {weekly.map((entry, index) => (
+                  <Cell
+                    key={index}
+                    fill={entry.pnl >= 0 ? '#e12343' : '#1261c4'}
+                    fillOpacity={entry.pnl === 0 ? 0.15 : 0.85}
+                  />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+          <div className="flex gap-6 mt-3 text-[12px] text-gray-500 border-t border-gray-100 pt-3">
+            <span>
+              거래 완료:{' '}
+              <span className="font-semibold text-gray-700">
+                {weekly.reduce((s, w) => s + w.trade_count, 0)}건
+              </span>
+            </span>
+            <span>
+              수익 주차:{' '}
+              <span className="font-semibold text-[#e12343]">
+                {weekly.filter((w) => w.pnl > 0).length}주
+              </span>
+            </span>
+            <span>
+              손실 주차:{' '}
+              <span className="font-semibold text-[#1261c4]">
+                {weekly.filter((w) => w.pnl < 0).length}주
+              </span>
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* 월간 성과 */}
+      <div>
+        <h2 className="text-[15px] font-bold text-gray-800 mb-3">월간 성과 (최근 12개월)</h2>
+        <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={monthly} margin={{ top: 4, right: 8, left: 8, bottom: 4 }}>
+              <XAxis
+                dataKey="month"
+                tick={{ fontSize: 11, fill: '#999' }}
+                tickFormatter={(v: string) => v.slice(5)}
+              />
+              <YAxis
+                tick={{ fontSize: 11, fill: '#999' }}
+                tickFormatter={(v: number) =>
+                  Math.abs(v) >= 1000000
+                    ? `${(v / 1000000).toFixed(1)}M`
+                    : Math.abs(v) >= 1000
+                      ? `${(v / 1000).toFixed(0)}K`
+                      : String(v)
+                }
+              />
+              <Tooltip
+                formatter={(value: number) => [
+                  `${value >= 0 ? '+' : ''}${value.toLocaleString('ko-KR')}원`,
+                  '손익',
+                ]}
+                labelFormatter={(label: string) => label}
+              />
+              <Bar dataKey="pnl" radius={[3, 3, 0, 0]}>
+                {monthly.map((entry, index) => (
+                  <Cell
+                    key={index}
+                    fill={entry.pnl >= 0 ? '#e12343' : '#1261c4'}
+                    fillOpacity={entry.pnl === 0 ? 0.15 : 0.85}
+                  />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full text-[12px]">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  <th className="text-left py-2 text-gray-500 font-medium">월</th>
+                  <th className="text-right py-2 text-gray-500 font-medium">손익</th>
+                  <th className="text-right py-2 text-gray-500 font-medium">거래수</th>
+                  <th className="text-right py-2 text-gray-500 font-medium">승률</th>
+                </tr>
+              </thead>
+              <tbody>
+                {monthly.filter((m) => m.trade_count > 0).length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="text-center py-4 text-gray-400">
+                      기록 없음
+                    </td>
+                  </tr>
+                ) : (
+                  monthly
+                    .filter((m) => m.trade_count > 0)
+                    .map((m, i) => (
+                      <tr key={i} className="border-b border-gray-50">
+                        <td className="py-1.5 text-gray-600">{m.month}</td>
+                        <td className={`py-1.5 text-right font-semibold ${pctColor(m.pnl)}`}>
+                          {m.pnl >= 0 ? '+' : ''}
+                          {fmt(m.pnl)}원
+                        </td>
+                        <td className="py-1.5 text-right text-gray-600">{m.trade_count}건</td>
+                        <td className="py-1.5 text-right text-gray-600">{m.win_rate.toFixed(1)}%</td>
+                      </tr>
+                    ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -268,6 +498,7 @@ function VIPTab() {
           </table>
         </div>
       </div>
+      <ModelHistorySection model="vip" />
     </div>
   );
 }
@@ -465,6 +696,7 @@ function KS200Tab() {
           </table>
         </div>
       </div>
+      <ModelHistorySection model="ks200" />
     </div>
   );
 }
@@ -739,6 +971,7 @@ function PaperTradingTab() {
           )}
         </div>
       </div>
+      <ModelHistorySection model="paper" />
     </div>
   );
 }
