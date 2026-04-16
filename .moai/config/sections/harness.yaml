@@ -54,3 +54,37 @@ harness:
         cg: thorough
         solo: auto
         team: auto
+    model_upgrade_review:
+        checklist:
+            - action: If model handles longer coherent work, switch evaluator_mode from per-sprint to final-pass
+              affects: levels.thorough.evaluator_mode
+              id: sprint_necessity
+              question: Are per-sprint evaluations still needed, or can the model handle end-to-run evaluation?
+            - action: If no context anxiety, reduce auto_clear frequency or increase token_threshold
+              affects: workflow.yaml auto_clear.token_threshold
+              id: context_reset_necessity
+              question: Does the model still exhibit context anxiety near window limits?
+            - action: If self-evaluation is reliable, consider reducing gan_loop.max_iterations
+              affects: config.yaml gan_loop.max_iterations
+              id: evaluator_skepticism
+              question: Has model self-evaluation improved enough to reduce evaluator iterations?
+            - action: If coordination improved, consider increasing parallel agent limits
+              affects: workflow.yaml team settings
+              id: parallel_safety
+              question: Can the model safely coordinate more parallel agents without conflicts?
+            - action: Review each skipped phase — remove skip if model can handle the phase efficiently
+              affects: levels.minimal.skip_phases
+              id: guardrail_necessity
+              question: Are any minimal-level skip_phases still necessary for the upgraded model?
+            - action: If model handles complexity better, raise minimal threshold (more tasks qualify as minimal)
+              affects: auto_detection.rules
+              id: harness_level_thresholds
+              question: Should auto_detection thresholds be adjusted for improved model capabilities?
+        enabled: true
+        output:
+            report_path: .moai/reports/harness-review.md
+            require_approval: true
+        trigger:
+            manual_command: moai review --harness
+            on_model_change: true
+            review_interval_days: 90

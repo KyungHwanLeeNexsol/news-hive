@@ -32,13 +32,18 @@ if command -v moai &> /dev/null; then
 fi
 
 # Try detected Go bin path from initialization
-if [ -f "C:/Users/zuge3/go/bin/moai" ]; then
-	exec "C:/Users/zuge3/go/bin/moai" hook post-tool < "$temp_file" 2>/dev/null
+if [ -f "C:/Users/Nexsol/go/bin/moai" ]; then
+	exec "C:/Users/Nexsol/go/bin/moai" hook post-tool < "$temp_file" 2>/dev/null
 fi
 
 # Try default ~/go/bin/moai
 if [ -f "$HOME/go/bin/moai" ]; then
 	exec "$HOME/go/bin/moai" hook post-tool < "$temp_file" 2>/dev/null
+fi
+
+# Try ~/.local/bin/moai (Linux install location)
+if [ -f "$HOME/.local/bin/moai" ]; then
+	exec "$HOME/.local/bin/moai" hook post-tool < "$temp_file" 2>/dev/null
 fi
 
 # Not found - exit silently (Claude Code handles missing hooks gracefully)
