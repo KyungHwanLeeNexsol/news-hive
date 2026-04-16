@@ -72,6 +72,37 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
   );
 }
 
+// ISO 주차 문자열 ("2026-W15") → 월~금 날짜 범위 계산
+function isoWeekToDates(weekStr: string): { mon: Date; fri: Date } | null {
+  const match = weekStr.match(/^(\d{4})-W(\d{2})$/);
+  if (!match) return null;
+  const year = parseInt(match[1], 10);
+  const week = parseInt(match[2], 10);
+  // Jan 4 는 항상 ISO 1주차에 속함
+  const jan4 = new Date(Date.UTC(year, 0, 4));
+  const dow = jan4.getUTCDay() || 7; // 0(일)→7 변환
+  const week1Mon = new Date(Date.UTC(year, 0, 4 - (dow - 1)));
+  const mon = new Date(week1Mon);
+  mon.setUTCDate(week1Mon.getUTCDate() + (week - 1) * 7);
+  const fri = new Date(mon);
+  fri.setUTCDate(mon.getUTCDate() + 4);
+  return { mon, fri };
+}
+
+function weekXLabel(weekStr: string): string {
+  const d = isoWeekToDates(weekStr);
+  if (!d) return weekStr;
+  return `${d.mon.getUTCMonth() + 1}/${d.mon.getUTCDate()}`;
+}
+
+function weekTooltipLabel(weekStr: string): string {
+  const d = isoWeekToDates(weekStr);
+  if (!d) return weekStr;
+  const DAY_KO = ['일', '월', '화', '수', '목', '금', '토'];
+  const fmt = (dt: Date) => `${dt.getUTCMonth() + 1}/${dt.getUTCDate()}(${DAY_KO[dt.getUTCDay()]})`;
+  return `${fmt(d.mon)} ~ ${fmt(d.fri)}`;
+}
+
 // ─── 모델별 성과 히스토리 섹션 ───
 function ModelHistorySection({ model }: { model: TradingModel }) {
   const [tradeHistory, setTradeHistory] = useState<ModelTradeRecord[]>([]);
@@ -159,10 +190,7 @@ function ModelHistorySection({ model }: { model: TradingModel }) {
               <XAxis
                 dataKey="week"
                 tick={{ fontSize: 11, fill: '#999' }}
-                tickFormatter={(v: string) => {
-                  const parts = v.split('-W');
-                  return parts[1] ? `W${parts[1]}` : v;
-                }}
+                tickFormatter={(v: string) => weekXLabel(v)}
               />
               <YAxis
                 tick={{ fontSize: 11, fill: '#999' }}
@@ -179,7 +207,7 @@ function ModelHistorySection({ model }: { model: TradingModel }) {
                   const v = typeof value === 'number' ? value : 0;
                   return [`${v >= 0 ? '+' : ''}${v.toLocaleString('ko-KR')}원`, '손익'];
                 }}
-                labelFormatter={(label) => `${String(label)} 주차`}
+                labelFormatter={(label) => weekTooltipLabel(String(label))}
               />
               <Bar dataKey="pnl" radius={[3, 3, 0, 0]}>
                 {weekly.map((entry, index) => (
