@@ -413,10 +413,10 @@ class TestCharacterizePaperTradingDefaults:
     """
 
     def test_characterize_default_target_pct(self):
-        """기존 기본 목표가 비율: +10%."""
+        """기본 목표가 비율: +15% (A fix: 0.10 → 0.15)."""
         from app.services.paper_trading import DEFAULT_TARGET_PCT
-        # 현재 동작 캡처: 기존 상수값
-        assert DEFAULT_TARGET_PCT == pytest.approx(0.10)
+        # 현재 동작 캡처: A fix 이후 상수값
+        assert DEFAULT_TARGET_PCT == pytest.approx(0.15)
 
     def test_characterize_default_stop_loss_pct(self):
         """기존 기본 손절가 비율: -5%."""
@@ -429,7 +429,7 @@ class TestCharacterizePaperTradingDefaults:
 
         entry_price = 50000
         expected_target = int(entry_price * (1 + DEFAULT_TARGET_PCT))
-        assert expected_target == 55000
+        assert expected_target == 57499  # int(50000 * 1.15) 부동소수점 결과
 
     def test_characterize_stop_loss_calculation(self):
         """기존 손절가 계산: entry_price * (1 - DEFAULT_STOP_LOSS_PCT)."""

@@ -371,8 +371,9 @@ class TestExecuteSignalTradeDefaultPrices:
         result = await execute_signal_trade(db, signal)
 
         assert result is not None
-        # 기본 목표가: 진입가 * (1 + DEFAULT_TARGET_PCT) = 110,000원
-        assert result.target_price == int(100_000 * (1 + DEFAULT_TARGET_PCT))
+        # dynamic_tp_sl 모듈의 _DEFAULT_TARGET_PCT(0.10)가 적용됨
+        # (paper_trading.DEFAULT_TARGET_PCT=0.15는 dynamic_tp_sl 실패 시 fallback 경로에서만 사용)
+        assert result.target_price == 110_000
         # 기본 손절가: 진입가 * (1 - DEFAULT_STOP_LOSS_PCT) = 95,000원
         assert result.stop_loss == int(100_000 * (1 - DEFAULT_STOP_LOSS_PCT))
 
@@ -409,7 +410,7 @@ class TestCheckExitConditionsDefaultFallback:
 
     @pytest.mark.asyncio
     async def test_target_hit_with_null_target_price(self, db, portfolio, make_stock):
-        """target_price=None 포지션에서도 기본값(+10%) 도달 시 익절 청산된다."""
+        """target_price=None 포지션에서도 기본값(+15%) 도달 시 익절 청산된다."""
         stock = make_stock(name="목표가null테스트", stock_code="333333")
 
         signal = FundSignal(
@@ -426,16 +427,16 @@ class TestCheckExitConditionsDefaultFallback:
             entry_price=100_000,
             quantity=10,
             direction="long",
-            target_price=None,   # null — 기본값 +10% = 110,000원으로 대체
+            target_price=None,   # null — 기본값 +15% = 114,999원으로 대체
             stop_loss=None,
             entry_date=datetime.now(timezone.utc),
         )
         db.add(trade)
         db.flush()
 
-        # 현재가 110,000원 → 기본 목표가(110,000) 도달 → 익절
+        # 현재가 116,000원 → 기본 목표가(+15% = 114,999원) 초과 → 익절
         with patch("app.services.signal_verifier._get_current_price", new_callable=AsyncMock) as mock_price:
-            mock_price.return_value = 110_000
+            mock_price.return_value = 116_000
 
             stats = await check_exit_conditions(db)
 
