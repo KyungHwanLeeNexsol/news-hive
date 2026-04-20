@@ -375,11 +375,14 @@ def _run_forum_crawl():
         stocks = db.query(Stock).order_by(Stock.id).limit(50).all()
         succeeded = 0
         for stock in stocks:
+            stock_code = stock.stock_code
+            stock_id = stock.id
             try:
-                asyncio.run(crawl_and_aggregate(db, stock.id, stock.stock_code))
+                asyncio.run(crawl_and_aggregate(db, stock_id, stock_code))
                 succeeded += 1
             except Exception as e:
-                logger.error(f"Forum crawl 실패 ({stock.stock_code}): {e}")
+                db.rollback()
+                logger.error(f"Forum crawl 실패 ({stock_code}): {e}")
         logger.info(f"종토방 크롤링 완료: {succeeded}/{len(stocks)}개 종목 처리")
     except Exception as e:
         logger.error(f"종토방 크롤링 잡 실패: {e}")
