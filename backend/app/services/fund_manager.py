@@ -32,6 +32,10 @@ logger = logging.getLogger(__name__)
 # @MX:SPEC: SPEC-AI-007 (REQ-AI-007-001)
 MIN_ACTION_CONFIDENCE: float = 0.55
 
+# 시장 데이터 TTL 캐시: analyze_stock/선행탐지 간 1시간 내 중복 API 호출 방지
+_MARKET_DATA_CACHE: dict[str, tuple[float, dict]] = {}
+_MARKET_DATA_CACHE_TTL: float = 3600.0  # 1시간(초)
+
 
 def _parse_json_response(text: str) -> dict | None:
     """Extract JSON from a Gemini response that may include markdown code blocks."""
@@ -1526,6 +1530,13 @@ def _gather_macro_alerts(db: Session) -> dict:
 
 async def _gather_market_data(stock_code: str, *, pages: int = 10) -> dict:
     """Gather market data from KIS API and Naver Finance + technical indicators."""
+    _cache_key = f"{stock_code}:{pages}"
+    _cached = _MARKET_DATA_CACHE.get(_cache_key)
+    if _cached:
+        _ts, _data = _cached
+        if datetime.now(timezone.utc).timestamp() - _ts < _MARKET_DATA_CACHE_TTL:
+            return _data
+
     from app.services.kis_api import fetch_kis_stock_price
     from app.services.naver_finance import fetch_stock_fundamentals, fetch_stock_price_history, fetch_investor_trading
     from app.services.technical_indicators import calculate_technical_indicators, format_technical_for_prompt
@@ -1693,6 +1704,7 @@ async def _gather_market_data(stock_code: str, *, pages: int = 10) -> dict:
             elif foreign_5d < 0 and foreign_20d < 0:
                 result["supply_trend"] = "외국인 지속 매도 (수급 부담)"
 
+    _MARKET_DATA_CACHE[_cache_key] = (datetime.now(timezone.utc).timestamp(), result)
     return result
 
 
@@ -1823,6 +1835,29 @@ async def analyze_stock(
     stock = db.query(Stock).filter(Stock.id == stock_id).first()
     if not stock:
         return None
+
+    # 오늘(KST) 이미 생성된 시그널 재사용 — 중복 API 호출/비용 방지
+    # signal_type=None 인 일반 시그널만 체크 (공시 기반 시그널은 별도 흐름)
+    _now_utc = datetime.now(timezone.utc)
+    _kst_today_start_utc = (_now_utc + timedelta(hours=9)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    ) - timedelta(hours=9)
+    _existing_today = (
+        db.query(FundSignal)
+        .filter(
+            FundSignal.stock_id == stock_id,
+            FundSignal.created_at >= _kst_today_start_utc,
+            FundSignal.signal_type.is_(None),
+        )
+        .order_by(FundSignal.created_at.desc())
+        .first()
+    )
+    if _existing_today:
+        logger.info(
+            "오늘 시그널 이미 존재: %s (id=%d, signal=%s) — 재생성 건너뜀",
+            stock.name, _existing_today.id, _existing_today.signal,
+        )
+        return _existing_today
 
     sector = db.query(Sector).filter(Sector.id == stock.sector_id).first()
 
@@ -2037,9 +2072,17 @@ async def analyze_stock(
 ## 10. 데일리 브리핑 판단 참고
 {_format_briefing_hint(briefing_hint) if briefing_hint else '(독립 분석 — 브리핑 참고 정보 없음)'}
 
-## 분석 요청
-위 데이터를 기반으로 전문 펀드매니저의 관점에서 종합적으로 분석하고,
-반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트 없이 JSON만 출력하세요.
+## 분석 요청 (5단계 사고 과정)
+위 데이터를 아래 5단계로 사고한 뒤, JSON으로 응답하세요.
+
+[STEP 1: 매크로/섹터 환경] 시장 변동성·섹터 뉴스·매크로 리스크가 이 종목에 유리/불리한지 판단
+[STEP 2: 팩터 분석] 뉴스 센티먼트·기술적(RSI·MACD·BB)·수급(외국인·기관)·밸류에이션 4가지 강약점
+[STEP 3: 리스크 평가] 공매도 잔고·종토방 과열·이평선 역배열·하락 추세 등 하방 리스크
+[STEP 4: 시그널 결론] STEP 1~3 종합 → buy/sell/hold 및 confidence 결정 근거 (0.55 미만이면 반드시 hold)
+[STEP 5: TP/SL 설정] 기술적 지지/저항선 기반 target_price, stop_loss 산정
+
+위 5단계 사고를 reasoning 필드에 요약하고, 반드시 아래 JSON 형식으로만 응답하세요.
+다른 텍스트 없이 JSON만 출력하세요.
 
 {{
   "signal": "buy" 또는 "sell" 또는 "hold",
@@ -2095,6 +2138,24 @@ async def analyze_stock(
     ai_target = int(ai_target) if ai_target and int(ai_target) > 0 else None
     ai_stop = int(ai_stop) if ai_stop and int(ai_stop) > 0 else None
 
+    # 현재가 대비 유효 범위 검증: 비정상 값 무효화 후 동적 계산으로 폴백
+    if price_at_signal and ai_target:
+        _target_pct = (ai_target - price_at_signal) / price_at_signal
+        if not (0.01 <= _target_pct <= 0.30):
+            logger.warning(
+                "AI target_price 범위 오류 무효화: %s target=%d (%.1f%%), price=%d",
+                stock.name, ai_target, _target_pct * 100, price_at_signal,
+            )
+            ai_target = None
+    if price_at_signal and ai_stop:
+        _stop_pct = (price_at_signal - ai_stop) / price_at_signal
+        if not (0.01 <= _stop_pct <= 0.20):
+            logger.warning(
+                "AI stop_loss 범위 오류 무효화: %s stop=%d (%.1f%% downside), price=%d",
+                stock.name, ai_stop, _stop_pct * 100, price_at_signal,
+            )
+            ai_stop = None
+
     # TP/SL 방식 결정: AI 제공 > 동적 계산
     tp_sl_method = "legacy_fixed"
     final_target = ai_target
@@ -2124,6 +2185,14 @@ async def analyze_stock(
             final_target = int(price_at_signal * 1.10)
             final_stop = int(price_at_signal * 0.95)
             tp_sl_method = "legacy_fixed"
+
+    # 종토방 과열 코드 레벨 가드: 커뮤니티 쏠림 고점 매수 방지 (-0.10)
+    # 프롬프트 힌트만으로는 AI가 무시할 수 있으므로 코드에서 직접 보정
+    if parsed.get("signal") == "buy" and forum_sentiment and forum_sentiment.get("overheating_alert"):
+        confidence_val = max(0.0, confidence_val - 0.10)
+        logger.info(
+            "종토방 과열 가드 적용: %s confidence -0.10 → %.2f", stock.name, confidence_val,
+        )
 
     signal = FundSignal(
         stock_id=stock_id,
@@ -2186,17 +2255,11 @@ async def analyze_stock(
         except Exception as vol_e:
             logger.warning("시장 변동성 레벨 계산 실패 (시그널 생성 계속): %s", vol_e)
 
-        # confidence 감산 하한선: market_context 보정(-0.10/-0.15), CoT 패널티(-0.10) 등
-        # 후속 감산이 거래 실행 임계값(paper_trading: MIN_ACTION_CONFIDENCE - 0.05) 아래로
-        # 떨어지는 것을 방지. floor는 code guard(MIN_ACTION_CONFIDENCE=0.55)와 구분하여
-        # 시장 리스크 시그널이 실제 거래를 막을 수 있도록 0.05 여유를 둔다.
-        _CONFIDENCE_FLOOR = MIN_ACTION_CONFIDENCE - 0.05  # 0.50 = 거래 실행 임계값과 동일
-        if signal.signal in ("buy", "sell") and signal.confidence < _CONFIDENCE_FLOOR:
-            logger.info(
-                "confidence 하한선 적용: %s %.2f → %.2f (signal=%s)",
-                stock.name, signal.confidence, _CONFIDENCE_FLOOR, signal.signal,
-            )
-            signal.confidence = _CONFIDENCE_FLOOR
+        # confidence floor 제거: 변동성/MTF 리스크 보정(-0.10/-0.15)이 실제로
+        # 거래를 막을 수 있도록 0.0까지 내려가도록 허용.
+        # 이전 floor(MIN_ACTION_CONFIDENCE - 0.05 = 0.50)는 paper_trading 실행 임계값과
+        # 동일하여 리스크 보정이 사실상 무효화되었음.
+        signal.confidence = max(0.0, signal.confidence)
 
         db.commit()
     except Exception as e:

@@ -25,6 +25,8 @@ MAX_HOLD_DAYS = 10
 MAX_OPEN_POSITIONS = 10
 # 일일 신규 매수 제한 — 하루에 한꺼번에 매수 폭주 방지
 MAX_DAILY_TRADES = 5
+# 섹터별 동시 보유 포지션 제한 — 특정 섹터 쏠림 방지
+MAX_SECTOR_POSITIONS = 3
 
 # 방어 모드 임계값 (REQ-021)
 DEFENSIVE_MODE_ENTER_THRESHOLD = -10.0  # 누적 수익률 -10% 이하 → 방어 모드 진입
@@ -177,6 +179,25 @@ async def execute_signal_trade(db: Session, signal: FundSignal) -> VirtualTrade 
             open_count, MAX_OPEN_POSITIONS, stock.name,
         )
         return None
+
+    # 섹터 집중도 제한: 동일 섹터 포지션 MAX_SECTOR_POSITIONS 초과 방지
+    if stock.sector_id:
+        sector_count = (
+            db.query(sa_func.count(VirtualTrade.id))
+            .join(Stock, VirtualTrade.stock_id == Stock.id)
+            .filter(
+                VirtualTrade.portfolio_id == portfolio.id,
+                VirtualTrade.is_open.is_(True),
+                Stock.sector_id == stock.sector_id,
+            )
+            .scalar()
+        )
+        if sector_count >= MAX_SECTOR_POSITIONS:
+            logger.info(
+                "섹터 집중도 제한: sector_id=%s 포지션 %d/%d, 신규 매수 차단 (%s)",
+                stock.sector_id, sector_count, MAX_SECTOR_POSITIONS, stock.name,
+            )
+            return None
 
     # 일일 신규 매수 한도 체크
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
