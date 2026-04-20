@@ -759,6 +759,56 @@ async def _detect_quiet_accumulation(
     return results
 
 
+async def _get_technical_multiplier(stock_code: str) -> float:
+    """기술적 지표 상태를 confidence 승수로 변환한다 (C안: 정보 우위 스코어링).
+
+    KS200의 Stochastic Slow + Disparity Index를 '트리거'가 아닌 '승수'로 활용.
+    - 뉴스 시그널이 트리거, 기술적 지표가 진입 품질을 보강/억제.
+    - 과매도 상태 = KS200과 같은 방향 진입 → confidence 증폭
+    - 과매수 상태 = 이미 오른 종목 진입 차단 → confidence 억제
+
+    Returns: 1.0 (중립), 1.3 (과매도), 0.5 (과매수), 1.15 / 0.7 (부분)
+    """
+    from app.services.naver_finance import fetch_stock_price_history
+    from app.services.ks200_signal import (
+        calculate_stochastics_slow,
+        calculate_disparity,
+        STOCH_LOWER,
+        STOCH_UPPER,
+        DISP_LOWER,
+        DISP_UPPER,
+    )
+
+    try:
+        prices = await fetch_stock_price_history(stock_code, pages=3)
+        if not prices or len(prices) < 21:
+            return 1.0
+
+        curr_stoch, _ = calculate_stochastics_slow(prices)
+        curr_disp, _ = calculate_disparity(prices)
+
+        if curr_stoch is None or curr_disp is None:
+            return 1.0
+
+        # 두 지표 모두 과매수: 진입 품질 나쁨 → 60% 억제
+        if curr_stoch > STOCH_UPPER and curr_disp > DISP_UPPER:
+            return 0.5
+        # 두 지표 모두 과매도: 진입 품질 우수 (KS200 진입 조건과 일치) → 30% 증폭
+        if curr_stoch < STOCH_LOWER and curr_disp < DISP_LOWER:
+            return 1.3
+        # 한 지표만 과매수
+        if curr_stoch > STOCH_UPPER or curr_disp > DISP_UPPER:
+            return 0.7
+        # 한 지표만 과매도
+        if curr_stoch < STOCH_LOWER or curr_disp < DISP_LOWER:
+            return 1.15
+
+        return 1.0
+    except Exception:
+        # 지표 계산 실패 시 중립값 반환 — 시그널 생성 중단 없음
+        return 1.0
+
+
 async def _detect_news_price_divergence(
     scanned_stocks: list[dict],
     db: Session,
@@ -2260,6 +2310,21 @@ async def analyze_stock(
         # 이전 floor(MIN_ACTION_CONFIDENCE - 0.05 = 0.50)는 paper_trading 실행 임계값과
         # 동일하여 리스크 보정이 사실상 무효화되었음.
         signal.confidence = max(0.0, signal.confidence)
+
+        # C안: 기술적 타이밍 승수 적용 (뉴스=트리거, 기술적 지표=진입 품질 보강)
+        # - 과매도 진입: KS200과 방향 일치 → confidence 증폭 (최대 30%)
+        # - 과매수 진입: 이미 오른 종목 → confidence 억제 (최대 50%)
+        try:
+            tech_mult = await _get_technical_multiplier(stock.stock_code)
+            if tech_mult != 1.0:
+                pre_tech = signal.confidence
+                signal.confidence = max(0.0, min(1.0, signal.confidence * tech_mult))
+                logger.info(
+                    "기술적 승수 적용: %s (mult=%.2f, conf %.2f→%.2f)",
+                    stock.name, tech_mult, pre_tech, signal.confidence,
+                )
+        except Exception as tech_e:
+            logger.warning("기술적 승수 계산 실패 (시그널 생성 계속): %s", tech_e)
 
         # 최종 confidence 미달 시 hold 변환 (Bayesian/MTF/변동성 보정 후 재체크)
         # 모든 감산 적용 후 실행 임계값 미달이면 DB에 "buy"로 저장하되 미체결되는
