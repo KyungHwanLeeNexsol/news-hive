@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # 포지션 사이징: 총 자본의 최대 10%를 한 종목에 투자
 MAX_POSITION_PCT = 0.10
 # 타임아웃: 포지션 최대 보유 기간 (영업일 기준)
-MAX_HOLD_DAYS = 10
+MAX_HOLD_DAYS = 20
 # 동시 보유 포지션 수 제한 — 현금 고갈 및 과도한 분산 방지
 MAX_OPEN_POSITIONS = 10
 # 일일 신규 매수 제한 — 하루에 한꺼번에 매수 폭주 방지
@@ -34,7 +34,7 @@ DEFENSIVE_MODE_EXIT_THRESHOLD = -5.0    # 누적 수익률 -5% 이상 → 방어
 DEFENSIVE_STOP_LOSS_PCT = 0.03          # 방어 모드 시 손절 기준: 진입가 대비 -3%
 
 # 기본 목표가/손절가 비율 (시그널에 미설정 시 진입가 기반 자동 계산)
-DEFAULT_TARGET_PCT = 0.10   # 진입가 대비 +10% 익절
+DEFAULT_TARGET_PCT = 0.15   # 진입가 대비 +15% 익절
 DEFAULT_STOP_LOSS_PCT = 0.05  # 진입가 대비 -5% 손절
 
 # 삼성증권 온라인(MTS) 기준 수수료/거래세
@@ -119,6 +119,15 @@ def check_defensive_mode(db: Session) -> bool:
             )
 
     return portfolio.is_defensive_mode
+
+
+def _position_pct_by_confidence(confidence: float) -> float:
+    """confidence 구간별 포지션 비율 반환."""
+    if confidence >= 0.75:
+        return 0.15
+    if confidence >= 0.60:
+        return 0.10
+    return 0.05
 
 
 async def execute_signal_trade(db: Session, signal: FundSignal) -> VirtualTrade | None:
@@ -221,7 +230,8 @@ async def execute_signal_trade(db: Session, signal: FundSignal) -> VirtualTrade 
     if not entry_price or entry_price <= 0:
         return None
 
-    max_invest = int(portfolio.current_cash * MAX_POSITION_PCT)
+    signal_conf = float(signal.confidence) if signal.confidence is not None else 0.5
+    max_invest = int(portfolio.current_cash * _position_pct_by_confidence(signal_conf))
     if max_invest < entry_price:
         logger.info("자금 부족: cash=%d, 필요=%d", portfolio.current_cash, entry_price)
         return None

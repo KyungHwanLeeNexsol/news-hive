@@ -16,6 +16,10 @@ from app.models.stock import Stock
 
 logger = logging.getLogger(__name__)
 
+# REQ-AI-004: Bayesian 보정을 적용하기 위한 최소 검증 샘플 수.
+# 샘플이 부족하면 31% 정확도로 추정된 값이 신뢰도를 과도하게 낮추는 문제를 방지한다.
+_MIN_CALIBRATION_SAMPLES: int = 500
+
 # REQ-AI-003: 허용되는 오류 카테고리 목록
 _VALID_ERROR_CATEGORIES = frozenset({
     "macro_shock",
@@ -438,8 +442,12 @@ def calibrate_confidence(raw_confidence: float, accuracy_stats: dict) -> float:
     by_confidence = accuracy_stats.get("by_confidence", {})
     overall_accuracy = accuracy_stats.get("accuracy", 0.0)
 
-    # 과거 데이터가 없으면 원시 신뢰도 그대로 반환
-    if not by_confidence or accuracy_stats.get("total", 0) == 0:
+    # 과거 데이터가 없거나 샘플이 부족하면 원시 신뢰도 그대로 반환
+    if not by_confidence or accuracy_stats.get("total", 0) < _MIN_CALIBRATION_SAMPLES:
+        logger.debug(
+            "Bayesian 보정 건너뜀: 검증 샘플 %d < %d",
+            accuracy_stats.get("total", 0), _MIN_CALIBRATION_SAMPLES,
+        )
         return raw_confidence
 
     # 신뢰도 구간 결정 (high: 0.7+, medium: 0.55~0.7, low: ~0.55)

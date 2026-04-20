@@ -2261,6 +2261,17 @@ async def analyze_stock(
         # 동일하여 리스크 보정이 사실상 무효화되었음.
         signal.confidence = max(0.0, signal.confidence)
 
+        # 최종 confidence 미달 시 hold 변환 (Bayesian/MTF/변동성 보정 후 재체크)
+        # 모든 감산 적용 후 실행 임계값 미달이면 DB에 "buy"로 저장하되 미체결되는
+        # 좀비 시그널을 방지하고 정확한 시그널 통계를 유지한다.
+        _exec_threshold = MIN_ACTION_CONFIDENCE - 0.05  # 0.50
+        if signal.signal in ("buy", "sell") and signal.confidence < _exec_threshold:
+            logger.info(
+                "최종 confidence 미달 hold 변환: %s (conf=%.2f < %.2f, original_signal=%s)",
+                stock.name, signal.confidence, _exec_threshold, signal.signal,
+            )
+            signal.signal = "hold"
+
         db.commit()
     except Exception as e:
         db.rollback()
