@@ -24,7 +24,7 @@ def _record_job_duration(job_id: str, duration: float) -> None:
     except Exception:
         pass
 
-scheduler = BackgroundScheduler()
+scheduler = BackgroundScheduler(job_defaults={"misfire_grace_time": 30})
 
 
 @retry_with_backoff(max_attempts=3)

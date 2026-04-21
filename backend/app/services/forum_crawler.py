@@ -13,6 +13,7 @@ from typing import Any
 import httpx
 from bs4 import BeautifulSoup
 from sqlalchemy import func
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.models.stock_forum import StockForumHourly, StockForumPost
@@ -225,39 +226,31 @@ async def save_forum_posts(
     Returns:
         신규 저장된 게시글 수.
     """
-    new_count = 0
-    for post_data in posts:
-        # 중복 체크: (stock_code, post_date, nickname) UniqueConstraint 기준
-        exists = (
-            db.query(StockForumPost.id)
-            .filter(
-                StockForumPost.stock_code == post_data["stock_code"],
-                StockForumPost.post_date == post_data["post_date"],
-                StockForumPost.nickname == post_data["nickname"],
-            )
-            .first()
-        )
-        if exists:
-            continue
+    if not posts:
+        return 0
 
-        post = StockForumPost(
-            stock_id=stock_id,
-            stock_code=stock_code,
-            content=post_data.get("content"),
-            nickname=post_data.get("nickname"),
-            post_date=post_data.get("post_date"),
-            view_count=post_data.get("view_count", 0),
-            agree_count=post_data.get("agree_count", 0),
-            disagree_count=post_data.get("disagree_count", 0),
-            sentiment=post_data.get("sentiment", "neutral"),
-        )
-        db.add(post)
-        new_count += 1
-
-    if new_count > 0:
-        db.commit()
-
-    return new_count
+    # ON CONFLICT DO NOTHING: race condition 없이 중복 건너뜀
+    # uq_forum_post (stock_code, post_date, nickname) 기준
+    rows = [
+        {
+            "stock_id": stock_id,
+            "stock_code": stock_code,
+            "content": p.get("content"),
+            "nickname": p.get("nickname"),
+            "post_date": p.get("post_date"),
+            "view_count": p.get("view_count", 0),
+            "agree_count": p.get("agree_count", 0),
+            "disagree_count": p.get("disagree_count", 0),
+            "sentiment": p.get("sentiment", "neutral"),
+        }
+        for p in posts
+    ]
+    stmt = pg_insert(StockForumPost).values(rows).on_conflict_do_nothing(
+        constraint="uq_forum_post"
+    )
+    result = db.execute(stmt)
+    db.commit()
+    return result.rowcount
 
 
 async def aggregate_forum_hourly(
