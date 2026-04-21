@@ -4,6 +4,15 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fixed — APScheduler misfire_grace_time 및 종토방 PendingRollbackError 수정 (2026-04-21)
+
+- **APScheduler `misfire_grace_time` 1초 → 30초로 증가** (`scheduler.py`):
+  - `vip_follow_trading` 2차 매수 체크가 KST 09:00(UTC 00:00) 장 시작 시 ~1.1초 동기 블로킹 발생
+  - 기본값(1초) 초과로 동시 등록된 5개 잡이 매일 자정 skip되던 문제 해결
+- **종토방 `save_forum_posts` TOCTOU 경쟁 조건 제거** (`forum_crawler.py`):
+  - SELECT-then-INSERT 패턴 → `INSERT ON CONFLICT DO NOTHING` (PostgreSQL dialect) 로 교체
+  - `uq_forum_post` 제약조건 기반 원자적 삽입으로 `UniqueViolation` → `PendingRollbackError` 서비스 장애 완전 차단
+
 ### Improved — 모의투자 비교 대시보드 개선 (2026-04-15)
 
 - **AI 펀드매니저 총 수익 계산 개선**: `get_portfolio_stats` async 전환, 오픈 포지션 실시간 현재가 반영
