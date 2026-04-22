@@ -5,6 +5,10 @@
 """
 import json
 import logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
@@ -336,8 +340,14 @@ def build_factor_scores_json(
     financials: dict,
     impact_stats: dict | None = None,
     weights: dict[str, float] | None = None,
+    stock_id: int | None = None,
+    db: "Session | None" = None,
 ) -> tuple[str, float]:
     """전체 팩터 점수를 JSON 문자열과 composite_score로 반환.
+
+    Args:
+        stock_id: 지주사 할인 적용 여부 확인용 (optional)
+        db: DB 세션 (stock_id와 함께 전달 시 지주사 판별 쿼리 실행)
 
     Returns:
         (factor_scores_json, composite_score)
@@ -351,6 +361,21 @@ def build_factor_scores_json(
 
     # composite_score는 4-factor 점수만으로 계산 (mtf/volume_spike는 이미 내부에서 반영됨)
     composite = compute_composite_score(scores, weights)
+
+    # SPEC-AI-011: 지주사 할인 적용 (-5). 운영 실체 대비 지주사 랭킹 하향 유도.
+    if stock_id is not None and db is not None:
+        from app.models.stock_relation import StockRelation  # 순환 임포트 방지를 위한 지연 임포트
+        is_holding = (
+            db.query(StockRelation)
+            .filter(
+                StockRelation.target_stock_id == stock_id,
+                StockRelation.relation_type == "holding_company",
+            )
+            .first()
+        ) is not None
+        if is_holding:
+            composite = max(0.0, round(composite - 5.0, 1))
+            scores["holding_company_discount"] = -5
 
     # REQ-AI-014: 멀티 타임프레임 분석 결과 포함 (compute_technical_score 내부와 동일 결과 재사용)
     mtf = analyze_multi_timeframe(market_data)

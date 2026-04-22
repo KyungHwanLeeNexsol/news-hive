@@ -40,7 +40,7 @@ class StockRelation(Base):
     target_sector_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("sectors.id", ondelete="CASCADE"), nullable=True
     )
-    # 'competitor' | 'supplier' | 'equipment' | 'material' | 'customer'
+    # 'competitor' | 'supplier' | 'equipment' | 'material' | 'customer' | 'holding_company' | 'subsidiary'
     relation_type: Mapped[str] = mapped_column(String(20), nullable=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)

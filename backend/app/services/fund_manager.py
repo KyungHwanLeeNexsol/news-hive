@@ -24,6 +24,7 @@ from app.models.portfolio_report import PortfolioReport
 from app.models.sector import Sector
 from app.models.securities_report import SecuritiesReport
 from app.models.stock import Stock
+from app.models.stock_relation import StockRelation
 from app.services.ai_client import ask_ai_free as _ask_ai, ask_ai_with_openai_fallback as _ask_ai_with_model
 
 logger = logging.getLogger(__name__)
@@ -1538,6 +1539,132 @@ async def _gather_pick_candidates(db: Session, recent_news: list) -> list[dict]:
     return candidates
 
 
+def _is_holding_company(
+    db: Session,
+    stock_id: int,
+    cache: dict[int, bool] | None = None,
+) -> bool:
+    """stock_id가 지주사인지 확인한다.
+
+    holding_company 관계에서 target_stock_id로 등록된 종목이 지주사임.
+    """
+    if cache is not None and stock_id in cache:
+        return cache[stock_id]
+    result = (
+        db.query(StockRelation)
+        .filter(
+            StockRelation.target_stock_id == stock_id,
+            StockRelation.relation_type == "holding_company",
+        )
+        .first()
+    ) is not None
+    if cache is not None:
+        cache[stock_id] = result
+    return result
+
+
+def _get_subsidiaries(
+    db: Session,
+    holding_stock_ids: list[int],
+) -> dict[int, list[int]]:
+    """지주사 ID 목록에서 자회사 ID 목록을 반환한다.
+
+    Returns:
+        {holding_stock_id: [subsidiary_stock_id, ...]}
+    """
+    if not holding_stock_ids:
+        return {}
+    rows = (
+        db.query(StockRelation.target_stock_id, StockRelation.source_stock_id)
+        .filter(
+            StockRelation.target_stock_id.in_(holding_stock_ids),
+            StockRelation.relation_type == "holding_company",
+            StockRelation.source_stock_id.isnot(None),
+        )
+        .all()
+    )
+    result: dict[int, list[int]] = {hid: [] for hid in holding_stock_ids}
+    for target_id, source_id in rows:
+        if target_id in result:
+            result[target_id].append(source_id)
+    return result
+
+
+def _expand_candidates_with_subsidiaries(
+    db: Session,
+    candidate_data: list[dict],
+    holding_company_cache: dict[int, bool] | None = None,
+) -> tuple[list[dict], dict[int, list[int]]]:
+    """지주사 후보 발견 시 자회사를 후보 풀에 추가한다.
+
+    지주사가 뉴스에 언급된 경우 실제 사업 운영 주체인 자회사를
+    후보 풀에 포함시켜 AI가 올바른 종목을 선택할 수 있게 한다.
+
+    Returns:
+        (expanded_candidates, {holding_stock_id: [subsidiary_stock_id, ...]})
+    """
+    if not candidate_data:
+        return candidate_data, {}
+
+    codes = [
+        c.get("code") or c.get("stock_code")
+        for c in candidate_data
+        if c.get("code") or c.get("stock_code")
+    ]
+    if not codes:
+        return candidate_data, {}
+
+    stocks = (
+        db.query(Stock)
+        .options(selectinload(Stock.sector))
+        .filter(Stock.stock_code.in_(codes))
+        .all()
+    )
+
+    holding_ids = [
+        s.id for s in stocks
+        if _is_holding_company(db, s.id, holding_company_cache)
+    ]
+    if not holding_ids:
+        return candidate_data, {}
+
+    subsidiary_map = _get_subsidiaries(db, holding_ids)
+    all_sub_ids = [sid for sids in subsidiary_map.values() for sid in sids]
+    if not all_sub_ids:
+        return candidate_data, {}
+
+    sub_stocks = (
+        db.query(Stock)
+        .options(selectinload(Stock.sector))
+        .filter(Stock.id.in_(all_sub_ids))
+        .all()
+    )
+    sub_stock_map: dict[int, Stock] = {s.id: s for s in sub_stocks}
+
+    existing_codes = {c.get("code") or c.get("stock_code") for c in candidate_data}
+    expanded = list(candidate_data)
+    for holding_id, sub_ids in subsidiary_map.items():
+        for sub_id in sub_ids:
+            sub = sub_stock_map.get(sub_id)
+            if not sub or sub.stock_code in existing_codes:
+                continue
+            sector = sub.sector
+            expanded.append({
+                "name": sub.name,
+                "code": sub.stock_code,
+                "sector": sector.name if sector else "미분류",
+                "news_count": 0,
+                "holding_company_subsidiary": True,
+            })
+            existing_codes.add(sub.stock_code)
+            logger.info(
+                "[SPEC-AI-011] 지주사 %d의 자회사 %s(%s) 후보 풀 추가",
+                holding_id, sub.name, sub.stock_code,
+            )
+
+    return expanded, subsidiary_map
+
+
 def _gather_macro_alerts(db: Session) -> dict:
     """Gather active macro risk alerts + recent global macro news.
 
@@ -2280,6 +2407,8 @@ async def analyze_stock(
             financials=financial_data or {},
             impact_stats=impact_stats,
             weights=_active_weights,
+            stock_id=stock.id,
+            db=db,
         )
         signal.factor_scores = factor_json
         signal.composite_score = comp_score
@@ -2489,6 +2618,12 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
             seen_codes.add(code)
             candidate_data.append(c)
 
+    # SPEC-AI-011: 지주사 후보 발견 시 자회사를 후보 풀에 추가 ([:10] cap 이전에 수행)
+    _holding_cache: dict[int, bool] = {}
+    candidate_data, _subsidiary_map = _expand_candidates_with_subsidiaries(
+        db, candidate_data, _holding_cache
+    )
+
     candidate_data = candidate_data[:10]
 
     leading_count = len(leading_data)
@@ -2500,6 +2635,27 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
     )
 
     candidate_text = json.dumps(candidate_data, ensure_ascii=False, indent=2) if candidate_data else '후보 종목 데이터 없음'
+
+    # SPEC-AI-011: 지주사-자회사 컨텍스트 주입
+    holding_context_text = ""
+    if _subsidiary_map:
+        all_holding_ids = list(_subsidiary_map.keys())
+        all_sub_ids_flat = [sid for sids in _subsidiary_map.values() for sid in sids]
+        _h_stocks = db.query(Stock).filter(Stock.id.in_(all_holding_ids)).all()
+        _s_stocks = db.query(Stock).filter(Stock.id.in_(all_sub_ids_flat)).all()
+        _hid_name = {s.id: s.name for s in _h_stocks}
+        _sid_name = {s.id: s.name for s in _s_stocks}
+        lines = ["## 지배구조 주의사항"]
+        for hid, sub_ids in _subsidiary_map.items():
+            hname = _hid_name.get(hid, f"지주사#{hid}")
+            sub_names = [_sid_name.get(s, f"자회사#{s}") for s in sub_ids]
+            lines.append(
+                f"- {hname}은(는) 지주회사입니다. "
+                f"사업 운영 뉴스의 실제 수혜 종목은 운영 자회사({', '.join(sub_names)})입니다. "
+                "지주사 대신 운영 실체를 우선 검토하세요."
+            )
+        lines.append("")
+        holding_context_text = "\n".join(lines) + "\n"
 
     # REQ-AI-020: 시장 변동성 레벨 (브리핑 상단 표시)
     volatility_text = ""
@@ -2693,7 +2849,7 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
   - **leading_signals가 있는 종목은 아직 가격이 움직이지 않은 선행 신호 기반 후보입니다. 진입 근거를 선행 지표 중심으로 분석하세요.**
 
 {candidate_text}
-{volatility_text}{sector_momentum_text}{earnings_text}{commodity_context_text}{historical_pattern_text}{news_impact_text}{defensive_mode_text}
+{holding_context_text}{volatility_text}{sector_momentum_text}{earnings_text}{commodity_context_text}{historical_pattern_text}{news_impact_text}{defensive_mode_text}
 ## Chain-of-Thought 분석 (5단계)
 아래 5단계를 **반드시 순서대로** 수행하고, 각 단계의 분석 결과를 JSON의 "cot_reasoning" 필드에 포함하세요.
 

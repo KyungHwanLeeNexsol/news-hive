@@ -1,186 +1,197 @@
-# NewsHive - 섹터 기반 투자 뉴스 추적 앱
+# NewsHive - Product Documentation
 
-## 프로젝트 개요
+## Project Overview
 
-NewsHive는 국내 주식 투자자가 관심 종목과 산업 섹터에 관련된 뉴스를 자동으로 수집하고 AI로 분류하여 투자 인사이트를 제공하는 웹 애플리케이션입니다.
+**Project Name**: NewsHive
 
-단일 종목만 추적할 경우 놓치기 쉬운 **산업 섹터 단위의 중요 뉴스**를 포착하는 것이 핵심 목표입니다. 예를 들어 대창단조에 투자 중인 투자자가 현대제철 중기사업부 매각 뉴스를 자동으로 받아볼 수 있도록 합니다.
+**Description**: AI-powered Korean stock market intelligence platform that automatically tracks sector-level news, analyzes stock relationships, and generates briefings for independent investors and fund managers.
 
----
+**Target Audience**: 
+- Korean retail investors and independent fund managers
+- Users seeking comprehensive sector-level market intelligence
+- Traders using AI-driven decision support for paper trading
 
-## 대상 사용자
-
-- 국내 주식 개인 투자자
-- 특정 산업 섹터를 집중적으로 분석하는 투자자
-- 뉴스 모니터링에 많은 시간을 쓰고 싶지 않은 바쁜 직장인 투자자
-
----
-
-## 해결하는 문제
-
-| 문제 | NewsHive의 해결 방법 |
-|------|---------------------|
-| 단일 종목 뉴스만 보면 산업 흐름을 놓침 | 섹터 단위로 종목을 묶어 간접 연관 뉴스까지 수집 |
-| 뉴스 소스가 여러 곳에 분산되어 있음 | Naver, Google RSS, Yahoo, 한국 RSS 등 다중 소스 통합 |
-| 뉴스의 투자 관련성 판단이 어려움 | AI가 직접 언급(direct) / 간접 영향(indirect) 분류 |
-| 매일 뉴스를 수동으로 확인해야 함 | 30분 간격 자동 수집 + 오전 8:30 일일 브리핑 |
-| 기술적 분석 지표 해석이 어려움 | RSI, MACD, 볼린저 밴드 자동 계산 및 투자 시그널 제공 |
-| 원자재 가격 변동의 섹터 영향 파악 어려움 | 13개 원자재 실시간 시세 + 섹터 상관관계 자동 표시 |
-| 원자재 뉴스 오탐 (관련 없는 기사 노출) | 키워드 매칭을 제목만으로 제한하여 정확도 개선 |
+**Project Status**: Active development with core features implemented and additional AI-driven capabilities in progress.
 
 ---
 
-## 핵심 기능
+## Core Features
 
-### 1. 멀티 소스 뉴스 수집
+### 1. Sector-Based News Tracking
+Automatically collects and organizes news by sector, enabling investors to spot industry-level trends that affect multiple holdings.
 
-- **Naver 뉴스 검색 API**: 한국어 종목/섹터 키워드 검색
-- **Google News RSS**: 영문 글로벌 뉴스 파싱
-- **Yahoo Finance RSS**: 글로벌 금융 뉴스
-- **한국 RSS 피드**: 국내 경제 전문 미디어
-- **URL 기반 중복 제거**: Fuzzy 매칭으로 유사 기사 필터링
+### 2. Multi-Source News Collection
+Aggregates news from:
+- Naver News (Korean news portal)
+- Google News RSS feeds
+- DART corporate disclosure database
+- Custom macro news crawlers
 
-### 2. AI 뉴스 분류 및 감성 분석
+Collection runs on 30-minute intervals via APScheduler background jobs.
 
-- 멀티 프로바이더 AI 클라이언트 (Gemini, Groq, OpenRouter) 폴백 전략
-- 뉴스와 종목/섹터의 관련성 자동 태깅
-- 직접 언급(direct) / 간접 영향(indirect) 분류
-- AI 생성 뉴스 요약
+### 3. AI-Powered News Classification
+Claude/Gemini AI automatically:
+- Classifies sentiment (strong_positive, positive, mixed, neutral, negative, strong_negative)
+- Assigns urgency levels (breaking, important, routine)
+- Tags relevant stocks and sectors
+- Generates AI summaries
 
-### 3. 실시간 주가 데이터
+### 4. Stock Relationship Propagation
+AI-inferred supply chain and competitive relationships enable indirect news impact discovery.
 
-- Naver Finance 크롤링
-- KIS(한국투자증권) Open API 연동
-- 실시간 시세 및 등락률 표시
+### 5. News-to-Price Impact Tracking
+Captures and analyzes price reactions to news events at T+1D and T+5D intervals.
 
-### 10. 원자재 시세 실시간 표시
+### 6. Intelligent Stock Following System
+Users can follow specific stocks and receive AI-generated keyword matching with real-time Telegram notifications.
 
-- yfinance 기반 13개 원자재 가격 자동 수집 (에너지, 금속, 농산물)
-- 장 중: 1분봉 데이터 (15분 지연 실시간), 장 외: 최근 거래일 종가
-- 석탄, 리튬, 희토류 등 선물 미지원 품목은 ETF 프록시(COAL, LIT, REMX) 사용
-- 섹터-원자재 상관관계 매핑: 유가 상승 시 해당 섹터에 자동 리스크/기회 표시
-- 3% 이상 급변동 시 MacroAlert 자동 생성
+### 7. Fund Manager Stock Selection
+Automated stock candidate selection using multi-factor scoring:
+- News sentiment factor (25%)
+- Technical factor (25%)
+- Supply-demand factor (25%)
+- Valuation factor (25%)
 
-### 4. DART 공시 크롤러
+Top 10 candidates ranked by composite score for daily consideration.
 
-- 금융감독원 DART API 연동
-- 주요 공시 자동 수집 및 분류
-- 공시 유형별 필터링
+### 8. Daily AI-Generated Briefing
+Scheduled briefing generation that includes macro alerts, sector momentum, candidate analysis, KS200 signals, and disclosure impacts.
 
-### 5. 일일 AI 브리핑
+### 9. KS200 Index Trading Signals
+Technical indicator-based buy/sell signals for Korean 200 index with paper trading simulation.
 
-- 매일 오전 8:30 KST 자동 생성
-- 전일 주요 뉴스 요약
-- 섹터별 이슈 정리
-- 투자 관점 인사이트 포함
-- **선행 매수 신호**: 가격 상승 이전 시점 포착 (SPEC-AI-003)
-  - 조용한 수급 축적: 외국인+기관 동시 순매수 + 낮은 가격 변동
-  - 뉴스-가격 괴리: 호재 뉴스 후 미반영 가격 윈도우
-  - 볼린저 밴드 압축: 에너지 축적 후 브레이크아웃 임박 신호
-  - 섹터 로테이션 낙오자: 모멘텀 섹터 내 평균 회귀 기회
-
-### 6. 뉴스-가격 반응 추적 (SPEC-NEWS-001)
-
-- 뉴스 발행 시점의 종목 주가 자동 스냅샷 캡처
-- T+1일, T+5일 후 가격 변화율 자동 백필 (매일 18:30 KST)
-- 종목별 뉴스 패턴 통계: 평균 수익률, 승률 (30일 집계)
-- 데일리 AI 브리핑에 뉴스-가격 반응 데이터 통합
-- 종목 상세 페이지에서 통계 카드 표시
-
-### 7. 투자 시그널 시스템
-
-- **기술적 지표**: RSI, MACD, 볼린저 밴드 자동 계산
-- **트렌드 분석**: 이동평균선 기반 추세 분석
-- **백테스팅**: 과거 데이터 기반 전략 검증
-- **매크로 리스크 알림**: 거시경제 위험 지표 모니터링
-
-### 14. 동적 익절/손절 시스템 (SPEC-AI-005)
-
-- **ATR 기반 동적 TP/SL**: Average True Range로 변동성에 맞춰 익절/손절 거리 자동 결정
-  - 손절가: Entry Price - (ATR × 1.5)
-  - 익절가: Entry Price + (ATR × 2.0)
-- **트레일링 스탑**: 최고가 기준 -1.0×ATR 추적으로 수익 확보
-- **페이퍼 트레이딩 연동**: 시뮬레이션 거래에서 자동으로 TP/SL 적용
-- **TP/SL 통계 API**: 종목별 익절/손절 적중률 및 평균 수익률 조회
-- **백테스트 기능**: 과거 신호에 대해 ATR 기반 TP/SL 적용 시뮬레이션
-- **레거시 포지션 마이그레이션**: POST `/api/paper-trading/migrate-tp-sl`로 기존 고정 TP/SL 포지션을 ATR 기반으로 일괄 재계산
-- **향후 계획 (SPEC-AI-006)**: 종료 거래 100건+ 확보 후 ATR 배수 자동 튜닝 시스템 구현 예정
-
-### 15. 글로벌 매크로 위젯
-
-- **플로팅 패널**: 화면 우하단 고정 버튼으로 언제든지 접근 가능
-- **환율 조회**: USD/KRW, JPY/KRW, EUR/KRW (Yahoo Finance 15분 지연, yfinance 1분봉 우선)
-- **기준금리 현황**: 미국(연준), 일본(BOJ), 한국(BOK) 기준금리 실시간 표시
-- **D-DAY 카운트다운**: 각국 금리 결정 회의 일정까지 잔여 일수 자동 계산
-- **자동 갱신**: 3분 주기 자동 데이터 갱신 + 수동 새로고침 지원
-
-### 8. 사용자 관심 종목 (Watchlist)
-
-- 로컬스토리지 기반 관심 종목 저장
-- 관심 종목 중심 뉴스 피드
-
-### 9. 관리자 포털
-
-- 인증 기반 관리자 접근
-- 섹터 및 종목 CRUD
-- 수동 뉴스 수집 트리거
-- 시스템 상태 모니터링
-
-### 11. 사용자 인증 시스템
-
-- 이메일 기반 회원가입/로그인 (JWT 토큰 인증)
-- 이메일 인증 토큰 발송 및 검증
-- 사용자 프로필 관리 및 관심종목 서버 동기화
-- AuthProvider 컴포넌트로 프론트엔드 전역 인증 상태 관리
-
-### 12. 푸시 알림
-
-- Web Push API 기반 브라우저 푸시 알림
-- Service Worker를 통한 백그라운드 알림 수신
-- 구독 관리 엔드포인트 (구독/해지)
-
-### 13. 공시 충격 분석 (SPEC-AI-004)
-
-- **갭업 풀백 전략**: 장마감 후 공시 갭업 종목의 다음날 풀백 자동 감지 (10:00~11:30 KST 모니터링)
-- **동종업계 파급 탐지**: 대형 공시 후 같은 섹터 미반응 종목 자동 탐지
-- **백테스트 통계 API**: 공시 시그널 유형별 적중률/수익률 통계 조회
-- **페이퍼트레이딩 자동 연동**: 공시 기반 시그널 발생 시 가상 매수 자동 실행
+### 10. Disclosure Impact Analysis
+Monitors corporate disclosures from DART with AI impact scoring and preemptive signal generation.
 
 ---
 
-## 주요 사용 시나리오
+## Key Business Logic
 
-### 시나리오 1: 섹터 투자자의 아침 루틴
+### News Pipeline
+Multi-source collection → Article ingestion → AI classification → Stock/sector tagging → Relationship propagation → Impact scoring → User notifications
 
-오전 8:30에 자동으로 생성된 일일 브리핑을 확인합니다. 건설기계 섹터 뉴스를 한 번에 파악하고, 관련 종목(대창단조, 진성이엔씨, 현대제철)의 최신 뉴스를 확인합니다.
+### Fund Manager Stock Selection
+Daily scheduler triggers candidate gathering with recent news → Factor scoring (4 dimensions) → Composite scoring → Top 10 ranking
 
-### 시나리오 2: 투자 시그널 확인
+### Corporate Governance Enhancement (SPEC-AI-011)
+Detects holding companies → Identifies subsidiaries → Applies holding company discount (-5 points) → Alerts in briefing
 
-특정 종목의 RSI가 과매도 구간에 진입했을 때 시그널을 확인하고, MACD 및 볼린저 밴드와 함께 종합적인 판단을 내립니다.
+### Briefing Generation Pipeline
+Macro alerts → Sector momentum → Candidate analysis → KS200 signals → Disclosure impact → AI briefing generation → Push notifications
 
-### 시나리오 3: 공시 모니터링
-
-DART에 올라온 주요 공시(유상증자, 분기보고서 등)를 자동으로 수신하고, 관련 뉴스와 함께 확인합니다.
-
----
-
-## 현재 상태
-
-- **개발 단계**: Phase 6 (AI 예측 고도화 + 동적 위험 관리)
-- **배포 현황**: Oracle Cloud VM (백엔드) + Vercel (프론트엔드) 운영 중
-- **스케줄러**: 17개 예약 작업 실행 중 (페이퍼 트레이딩 리스크 업데이트 추가)
-- **데이터베이스**: PostgreSQL 16, Alembic 마이그레이션 42회 적용
-- **SPEC 현황**: SPEC-AI-003 완료, SPEC-AI-004 완료, SPEC-AI-005 완료 (동적 TP/SL), AI 키워드 생성 강화 (증권사 리포트 본문 크로스참조)
-- **CI/CD**: pytest-xdist로 테스트 11분 → 8초 단축, 서비스 컨테이너 최적화
+### KS200 Trading System
+Technical indicators (RSI, MACD, Bollinger Bands) → Signal generation → Paper trading simulation → Backtesting → Daily performance reporting
 
 ---
 
-## 필요한 외부 API 키
+## Core Data Models
 
-- **Naver Developers**: 뉴스 검색 API (Client ID / Secret)
-- **Google Gemini**: AI 분류 및 브리핑 생성
-- **OpenRouter**: AI 폴백 프로바이더
-- **Groq**: AI 폴백 프로바이더 (고속)
-- **KIS Open API**: 실시간 주가 조회
-- **DART API**: 금융감독원 공시 조회
-- **NewsAPI.org** (선택): 영문 글로벌 뉴스
+| Model | Purpose |
+|-------|---------|
+| NewsArticle | News articles with sentiment, urgency, and AI summary |
+| Stock | Stock ticker, company info, sector classification |
+| Sector | Sector metadata and classification |
+| StockRelation | Supply chain and competitive relationships |
+| NewsStockRelation | Article relevance to stocks |
+| FundSignal | Fund manager candidates with factor scores |
+| KS200Signal | Index trading signals |
+| StockFollowing | User stock watch lists |
+| StockKeyword | Following keywords (4 categories) |
+| Disclosure | Corporate disclosures from DART |
+| Commodity | Commodity tracking |
+| MacroAlert | Economic alerts |
+
+---
+
+## Technology Stack
+
+| Category | Technology | Version | Purpose |
+|----------|-----------|---------|---------|
+| Framework | FastAPI | 0.115.6 | Async web framework for REST API |
+| Language | Python | 3.12 | Backend implementation |
+| Database | PostgreSQL | 16 | Primary data storage |
+| Cache | Redis | 7 | Caching and session storage |
+| Scheduler | APScheduler | 3.10.4 | Background job scheduling |
+| ORM | SQLAlchemy | 2.0 | Database abstraction with async support |
+| Migrations | Alembic | — | Database version control |
+| AI - Primary | Google GenAI | 1.14.0 | Gemini API for classification (free tier) |
+| AI - Fallback | OpenAI SDK | — | OpenRouter API integration |
+| Frontend | Next.js | 16.1.6 | React server-side rendering framework |
+| Frontend | React | 19.2.4 | UI component library |
+| Language | TypeScript | 5.9.3 | Type-safe frontend code |
+| Styling | Tailwind CSS | 4.2.0 | Utility-first CSS framework |
+| State | Zustand | 5.0.12 | Lightweight state management |
+| Charts | Recharts | 3.8.1 | React charting library |
+| Technical | Lightweight-charts | 5.1.0 | Professional trading charts |
+| Testing | pytest | 8.3.4 | Python testing framework |
+| Testing | pytest-asyncio | — | Async test support |
+| Linting | ruff | — | Python linter and formatter |
+| Type Check | mypy | — | Static type checking |
+| Package Mgr | uv | — | Fast Python package manager |
+| Deployment | systemd | — | Linux service management |
+| Deployment | Vercel | — | Frontend hosting platform |
+
+---
+
+## Rate Limiting & Constraints
+
+### AI API Constraints
+- **Gemini**: 20 requests/day limit (free tier) - CRITICAL BOTTLENECK
+- **Rate Limiting**: Essential to prevent quota exhaustion
+- **Fallback**: OpenRouter API for overflow scenarios
+
+### Infrastructure Constraints
+- **Single OCI VM**: No horizontal scaling
+- **Memory**: Limited concurrent operations
+- **Deployment**: Bare metal (no Docker in production)
+
+### Market Data Constraints
+- **Korean Exchange (KRX)**: Trading hours only (09:00-15:30 KST)
+- **News Sources**: Korean language focused
+- **API Reliability**: Naver API periodically returns 401 errors
+
+---
+
+## Deployment
+
+### Backend
+- **Host**: OCI VM (140.245.76.242:8000)
+- **Service**: systemd unit `newshive`
+- **Runtime**: uvicorn ASGI server
+- **Deploy**: `scripts/deploy.sh` (git pull + pip install + alembic + systemctl restart)
+- **Logs**: `journalctl -u newshive -n 50 --no-pager`
+
+### Frontend
+- **Platform**: Vercel
+- **Branch**: main (automatic deployment)
+- **Backend URL**: BACKEND_INTERNAL_URL=http://140.245.76.242:8000
+
+### Database
+- **Local**: docker-compose.yml (PostgreSQL + Redis)
+- **Production**: PostgreSQL 16 on OCI (TBD)
+
+---
+
+## Known Issues & Limitations
+
+### API Reliability
+- Naver News API: Periodic 401 errors (key rotation needed)
+- Some stock codes don't return data from Naver polling; mobile API fallback added
+
+### Development
+- Python 3.12: f-string dict literals with bracket access cause SyntaxError
+
+### Feature Limitations
+- Paper trading only (no real order execution)
+- Gemini free tier: 20 requests/day (rate limiting critical)
+- Single VM: No horizontal scaling
+
+---
+
+## Success Metrics
+
+- Backend uptime > 99%
+- API response time < 2 seconds (p95)
+- News collection 100% job completion
+- AI classification accuracy > 85%
+- Stock relevance precision > 80%

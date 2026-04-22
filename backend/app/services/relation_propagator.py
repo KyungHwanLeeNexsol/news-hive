@@ -149,6 +149,10 @@ def propagate_news(
             continue
         seen_propagated.add(prop_key)
 
+        # 지배구조 관계는 뉴스 전파 대상이 아님 (자회사 확장은 fund_manager.py에서 별도 처리)
+        if sr.relation_type in ("holding_company", "subsidiary"):
+            continue
+
         # 감성 계산: 경쟁사는 반전, 나머지는 동일
         if sr.relation_type == "competitor":
             propagated_sentiment = _invert_sentiment(article_sentiment)

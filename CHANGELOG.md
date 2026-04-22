@@ -4,6 +4,35 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Added — SPEC-AI-011: 지배구조 인식 기반 종목선택 개선 (2026-04-22)
+
+**배경**: AI 펀드매니저가 HD조선 관련 뉴스를 처리할 때 실제 수혜 종목(HD한국조선해양)이 아닌 지주사(HD현대)를 선택하는 문제 발생. 지주사는 운영 실체가 없어 뉴스 수혜가 자회사로 귀속됨.
+
+- **`StockRelation` 지배구조 타입 추가** (`stock_relation.py`):
+  - `holding_company` / `subsidiary` relation_type 지원
+  - 방향 규약: `target_stock_id = 지주사`, `source_stock_id = 자회사`
+- **Alembic 마이그레이션 050** (`050_spec_ai_011_holding_company.py`):
+  - `idx_stock_relations_source_type` 복합 인덱스 생성 `(source_stock_id, relation_type)`
+  - HD현대(267250) → 4개 자회사 시드 데이터: HD한국조선해양(009540), HD현대오일뱅크(329180), 현대일렉트릭(010620), HD현대미포(010140)
+- **`relation_propagator.py` 지배구조 관계 전파 차단**:
+  - `holding_company` / `subsidiary` 타입은 뉴스 감성 전파 대상에서 제외
+  - 자회사 확장은 `fund_manager.py`에서 별도 처리
+- **`fund_manager.py` 자회사 후보 확장 로직** (3개 헬퍼 함수 추가):
+  - `_is_holding_company(db, stock_id)`: 지주사 여부 판별 (인메모리 캐시 지원)
+  - `_get_subsidiaries(db, holding_ids)`: 지주사 → 자회사 ID 매핑
+  - `_expand_candidates_with_subsidiaries(db, candidates)`: 지주사 후보 발견 시 자회사를 후보 풀에 자동 추가
+  - `generate_daily_briefing` 파이프라인에서 `[:10]` cap 이전에 확장 수행
+- **브리핑 프롬프트 지주사 경고 주입** (`fund_manager.py`):
+  - 지주사 후보 존재 시 `## 지배구조 주의사항` 섹션을 프롬프트에 주입
+  - "지주사는 운영 자회사 대신 검토하세요" 맥락 제공
+- **`factor_scoring.py` 지주사 할인 팩터** (`build_factor_scores_json`):
+  - 지주사 종목의 `composite_score`에 -5 할인 적용 (floor 0)
+  - `factor_scores` JSON에 `holding_company_discount: -5` 필드 추가
+  - `stock_id` / `db` 파라미터 추가 (기본값 `None`, 하위 호환성 유지)
+- **단위 테스트 20개 추가** (`test_spec_ai_011_holding_company.py`):
+  - `TestIsHoldingCompany` (5), `TestGetSubsidiaries` (4), `TestExpandCandidatesWithSubsidiaries` (5), `TestBuildFactorScoresJsonHoldingDiscount` (5), `TestRelationPropagatorGuard` (1)
+  - 전체 테스트 888개 통과
+
 ### Fixed — APScheduler misfire_grace_time 및 종토방 PendingRollbackError 수정 (2026-04-21)
 
 - **APScheduler `misfire_grace_time` 1초 → 30초로 증가** (`scheduler.py`):
