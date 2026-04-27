@@ -35,8 +35,8 @@ except ImportError:
     # python-json-logger 미설치 시 기본 로깅 유지
     logging.basicConfig(level=logging.INFO)
 
-# yfinance 실패 다운로드 스팸 억제 (10분마다 144회 → journald 덮어쓰기 방지)
-logging.getLogger("yfinance").setLevel(logging.ERROR)
+# yfinance 실패 다운로드 스팸 억제 (ERROR 레벨 → CRITICAL만 통과, journald 덮어쓰기 방지)
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 
 def _run_migrations():
