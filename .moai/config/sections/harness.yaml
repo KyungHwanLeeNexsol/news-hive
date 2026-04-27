@@ -15,6 +15,11 @@ harness:
                     - security_keywords OR payment_keywords present
                     - spec_priority == critical
                     - domain in [auth, payment, migration, public_api]
+    default_profile: default
+    effort_mapping:
+        minimal: medium
+        standard: high
+        thorough: xhigh
     escalation:
         enabled: true
         max_escalations: 2
@@ -26,6 +31,8 @@ harness:
         minimal:
             description: Fast iteration for simple changes
             evaluator: false
+            plan_audit:
+                enabled: false
             skip_phases:
                 - 0
                 - 0.5
@@ -40,6 +47,10 @@ harness:
             description: Balanced quality for most development
             evaluator: true
             evaluator_mode: final-pass
+            plan_audit:
+                enabled: true
+                max_iterations: 3
+                require_must_pass: true
             skip_phases: []
             sprint_contract: false
         thorough:
@@ -47,6 +58,11 @@ harness:
             evaluator: true
             evaluator_mode: per-sprint
             evaluator_profile: strict
+            plan_audit:
+                cross_validate_with_evaluator_active: true
+                enabled: true
+                max_iterations: 3
+                require_must_pass: true
             playwright_testing: true
             skip_phases: []
             sprint_contract: true

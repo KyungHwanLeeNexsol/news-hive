@@ -377,10 +377,11 @@ function VIPTab() {
           <span className="text-[17px] font-bold text-gray-800">{fmt(stats.total_value)}원</span>
           <span className="text-[11px] text-gray-400">초기자본 {fmt(stats.initial_capital)}원</span>
         </div>
-        {/* 잔여 현금 */}
+        {/* 예수금 */}
         <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-col gap-1">
-          <span className="text-[11px] text-gray-400 font-medium">잔여 현금</span>
+          <span className="text-[11px] text-gray-400 font-medium">예수금</span>
           <span className="text-[17px] font-bold text-gray-700">{fmt(stats.current_cash)}원</span>
+          <span className="text-[11px] text-gray-400">주식평가금액 {fmt(invested)}원</span>
         </div>
         {/* 투자 중 */}
         <div className="bg-indigo-50 rounded-xl border border-indigo-200 p-4 flex flex-col gap-1">
@@ -583,8 +584,9 @@ function KS200Tab() {
               <span className="text-[11px] text-gray-400">초기자본 {fmt(stats.initial_capital)}원</span>
             </div>
             <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-col gap-1">
-              <span className="text-[11px] text-gray-400 font-medium">잔여 현금</span>
+              <span className="text-[11px] text-gray-400 font-medium">예수금</span>
               <span className="text-[17px] font-bold text-gray-700">{fmt(stats.current_cash)}원</span>
+              <span className="text-[11px] text-gray-400">주식평가금액 {fmt(stats.position_value)}원</span>
             </div>
             <div className="bg-indigo-50 rounded-xl border border-indigo-200 p-4 flex flex-col gap-1">
               <span className="text-[11px] text-indigo-400 font-medium">투자 중</span>
@@ -800,16 +802,17 @@ function PaperTradingTab() {
           <span className="text-[17px] font-bold text-gray-800">{fmt(totalValue)}원</span>
           <span className="text-[11px] text-gray-400">초기자본 {fmt(stats.initial_capital)}원</span>
         </div>
-        {/* 잔여 현금 */}
+        {/* 예수금 */}
         <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-col gap-1">
-          <span className="text-[11px] text-gray-400 font-medium">잔여 현금</span>
+          <span className="text-[11px] text-gray-400 font-medium">예수금</span>
           <span className="text-[17px] font-bold text-gray-700">{fmt(stats.current_cash)}원</span>
+          <span className="text-[11px] text-gray-400">주식평가금액 {fmt(stats.position_value ?? 0)}원</span>
         </div>
         {/* 투자 중 */}
         <div className="bg-indigo-50 rounded-xl border border-indigo-200 p-4 flex flex-col gap-1">
           <span className="text-[11px] text-indigo-400 font-medium">투자 중</span>
-          <span className="text-[17px] font-bold text-indigo-700">{stats.open_positions}종목</span>
-          <span className="text-[11px] text-indigo-400">보유 포지션</span>
+          <span className="text-[17px] font-bold text-indigo-700">{fmt(stats.position_value ?? 0)}원</span>
+          <span className="text-[11px] text-indigo-400">{stats.open_positions}종목</span>
         </div>
         {/* 승률 */}
         <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-col gap-1">
