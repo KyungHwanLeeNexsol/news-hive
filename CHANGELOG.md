@@ -4,6 +4,15 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Improved — 거래 페이지 UI 용어 및 표시 개선 (2026-04-27)
+
+- **"잔여 현금" → "예수금" 레이블 변경** (`trading/page.tsx`):
+  - VIPTab, KS200Tab, PaperTradingTab 세 탭 모두 반영
+  - 증권 업계 표준 용어 "예수금"으로 통일
+- **현금 카드에 주식평가금액 서브라인 추가**:
+  - 예수금 카드 하단에 `주식평가금액 {금액}원` 표시
+  - "투자 중" 카드: 포지션 수 → 포지션 평가금액으로 변경
+
 ### Fixed — APScheduler DB JobStore 적용 및 yfinance 로그 스팸 억제 (2026-04-27)
 
 - **APScheduler SQLAlchemyJobStore 적용** (`scheduler.py`):
