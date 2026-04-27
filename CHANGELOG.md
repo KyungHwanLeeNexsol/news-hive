@@ -4,6 +4,19 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fixed — APScheduler DB JobStore 적용 및 yfinance 로그 스팸 억제 (2026-04-27)
+
+- **APScheduler SQLAlchemyJobStore 적용** (`scheduler.py`):
+  - 기존 MemoryJobStore는 OOM SIGKILL 재시작 시 스케줄러 상태 소멸 → 당일 브리핑 누락
+  - `apscheduler_jobs` PostgreSQL 테이블에 잡 상태 영속화 (37개 잡 등록 확인)
+  - OOM 재시작 후 `misfire_grace_time(30s)` 내 누락 잡 자동 재실행
+  - 근본 원인: OCI E2.1.Micro 1GB VM 메모리 402MB 도달 → SIGKILL (Apr 24, Apr 25 각 1회)
+- **yfinance 로그 스팸 완전 차단** (`main.py`):
+  - `ZC=F, ALI=F, ZS=F, ZW=F` 등 미상장 선물 티커 "Failed downloads" 오류가 10분마다 10건씩 출력
+  - 하루 144회 ERROR 로그가 journald를 덮어써 OOM 발생 시각 추적 불가
+  - `logging.getLogger("yfinance").setLevel(logging.CRITICAL)` 적용으로 완전 차단
+  - 검증: 서버 배포 후 10분 경과, yfinance 로그 0건 확인
+
 ### Added — SPEC-AI-011: 지배구조 인식 기반 종목선택 개선 (2026-04-22)
 
 **배경**: AI 펀드매니저가 HD조선 관련 뉴스를 처리할 때 실제 수혜 종목(HD한국조선해양)이 아닌 지주사(HD현대)를 선택하는 문제 발생. 지주사는 운영 실체가 없어 뉴스 수혜가 자회사로 귀속됨.
