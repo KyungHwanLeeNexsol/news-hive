@@ -4,6 +4,7 @@ import threading
 import time as _time
 from datetime import datetime
 
+from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from app.config import settings
@@ -24,7 +25,10 @@ def _record_job_duration(job_id: str, duration: float) -> None:
     except Exception:
         pass
 
-scheduler = BackgroundScheduler(job_defaults={"misfire_grace_time": 30})
+scheduler = BackgroundScheduler(
+    jobstores={"default": SQLAlchemyJobStore(url=settings.DATABASE_URL)},
+    job_defaults={"misfire_grace_time": 30},
+)
 
 
 @retry_with_backoff(max_attempts=3)
