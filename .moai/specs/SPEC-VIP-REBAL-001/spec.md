@@ -1,9 +1,10 @@
 ---
 id: SPEC-VIP-REBAL-001
 title: VIP 포트폴리오 비중 미러링 리밸런싱
-status: Planned
+status: completed
 priority: High
 created: 2026-04-30
+implemented: 2026-04-30
 lifecycle: spec-anchored
 ---
 
@@ -12,6 +13,7 @@ lifecycle: spec-anchored
 ## HISTORY
 
 - 2026-04-30: 초안 작성. SPEC-VIP-001(VIP 추종 자동매매)의 후속 SPEC. 2차 매수 시 가용 현금 부족 문제를 VIP 종료 포지션 청산 + VIP 비중 미러링 리밸런싱으로 해결.
+- 2026-04-30: 구현 완료. DDD ANALYZE-PRESERVE-IMPROVE 사이클. `backend/app/services/vip_follow_trading.py`에 4개 헬퍼 함수(`_get_vip_target_weights`, `_exit_vip_closed_positions`, `_rebalance_to_vip_weights`, `_try_rebalance_for_second_buy`) 추가, `check_second_buy_pending()` VIP_REBALANCE_ENABLED 분기 확장. 테스트 23/23 PASS (10 AC + 13 기존 보존).
 
 ---
 

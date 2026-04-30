@@ -4,6 +4,27 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Added — SPEC-VIP-REBAL-001: VIP 포트폴리오 비중 미러링 리밸런싱 (2026-04-30)
+
+**배경**: VIP 추종 매매에서 2차 매수 시 가용 현금 부족으로 매수를 단순 포기하던 문제 해결. VIP가 이미 종료한 종목이 포트폴리오에 남아 자본이 묶이는 상황을 해소.
+
+- **`_exit_vip_closed_positions()` 신규 함수** (`vip_follow_trading.py`):
+  - 가장 최근 공시가 `reduce`/`below5`인 종목의 오픈 포지션 전량 청산
+  - `exit_reason="vip_rebalance_exit"`, 종목 단위 그룹 청산, `stock_id` 오름차순 처리
+- **`_get_vip_target_weights()` 신규 함수** (`vip_follow_trading.py`):
+  - VIP `stake_pct` 비율 기반 목표 비중 산출 (`Σ ≈ 1.0`)
+  - `None` stake_pct → 다른 종목 평균값 대체; 전부 None → 1/N 균등 배분
+- **`_rebalance_to_vip_weights()` 신규 함수** (`vip_follow_trading.py`):
+  - `|current_weight - target_weight| > 0.03` 초과 시만 리밸런싱 실행
+  - 매도(trim) 우선 처리 후 매수, 단일 포지션 보호(1개 이하 시 스킵)
+- **`_try_rebalance_for_second_buy()` 신규 함수** (`vip_follow_trading.py`):
+  - `asyncio.Lock` 동시 실행 방지, 종료포지션청산 → 비중조정 → 현금 충족 여부 반환
+- **`check_second_buy_pending()` 확장** (`vip_follow_trading.py`):
+  - 현금 부족 시 `VIP_REBALANCE_ENABLED` 확인 후 리밸런싱 재시도
+  - 성공 시 `_execute_vip_buy()` 재호출로 2차 매수 실현
+- **신규 환경변수**: `VIP_REBALANCE_ENABLED` (기본값 `true`), `VIP_REBALANCE_THRESHOLD` (기본값 `0.03`)
+- **테스트 10개 추가** (`test_vip_follow_trading.py`): 전체 23/23 PASS
+
 ### Improved — 거래 페이지 UI 용어 및 표시 개선 (2026-04-27)
 
 - **"잔여 현금" → "예수금" 레이블 변경** (`trading/page.tsx`):

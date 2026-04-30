@@ -13,4 +13,5 @@
   - check_second_buy_pending() 수정: VIP_REBALANCE_ENABLED 분기 + 리밸런싱 재시도
   - 테스트: 23/23 PASS (10 AC + 13 기존 보존)
 - Phase 2.75 complete: import OK, ruff N/A (not installed in venv)
+- Phase 3 complete: docs sync — .env.example, CHANGELOG.md, spec.md(status→completed) 업데이트. PR 생성.
 
