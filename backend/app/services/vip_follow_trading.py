@@ -5,11 +5,16 @@ SPEC-VIP-001의 매매 로직 구현:
 - REQ-VIP-003: 5% 미만 공시 시 전량 매도
 - REQ-VIP-004: 수익률 50% 이상 시 30% 부분 익절
 
+SPEC-VIP-REBAL-001 리밸런싱 확장:
+- REQ-VIP-REBAL-001~005: 2차 매수 현금 부족 시 VIP 청산 포지션 정리 후 비중 리밸런싱 재시도
+
 기존 paper_trading.py, fund_manager.py와 완전히 분리된 독립 서비스.
 """
 import asyncio
 import json
 import logging
+import math
+import os
 import time
 from datetime import datetime, timezone
 
@@ -39,6 +44,17 @@ PARTIAL_SELL_PCT = 0.30
 # @MX:NOTE: 매수/매도 각각 0.014% 수수료, 매도 시 거래세 0.18% (KOSPI 증권거래세 0.03% + 농특세 0.15%)
 COMMISSION_RATE = 0.00014       # 수수료: 0.014%
 TRANSACTION_TAX_RATE = 0.0018   # 거래세: 0.18% (매도 시에만)
+
+# SPEC-VIP-REBAL-001: 리밸런싱 관련 상수
+# 비중 편차가 이 임계값을 초과할 때만 리밸런싱 실행 (기본 3%)
+REBALANCE_THRESHOLD: float = float(os.getenv("VIP_REBALANCE_THRESHOLD", "0.03"))
+# 리밸런싱을 실행할 최소 포지션 수 (2개 미만이면 리밸런싱 의미 없음)
+MIN_REBALANCE_POSITIONS: int = 2
+# 리밸런싱 관련 로그 접두어 — 로그 검색/필터링 용도
+REBALANCE_LOG_PREFIX: str = "[vip_rebal]"
+# @MX:WARN: [AUTO] 리밸런싱 동시 실행 방지 Lock — 동일 포트폴리오에 복수 리밸런싱이 중첩되면 현금 잔고 이중 차감 위험
+# @MX:REASON: 스케줄러가 복수 태스크를 병렬 실행할 때 _rebalance_lock 미적용 시 race condition 발생
+_rebalance_lock: asyncio.Lock = asyncio.Lock()
 
 
 def get_or_create_vip_portfolio(db: Session) -> VIPPortfolio:
@@ -193,6 +209,417 @@ async def _handle_exit_disclosure(db: Session, disclosure: VIPDisclosure) -> int
     return await close_positions_for_stock(db, stock.id, "vip_sell")
 
 
+# ---------------------------------------------------------------------------
+# SPEC-VIP-REBAL-001: 리밸런싱 보조 함수
+# ---------------------------------------------------------------------------
+
+
+def _get_vip_target_weights(db: Session, portfolio_id: int) -> dict[int, float]:
+    """VIP 공시 기반 목표 비중을 계산한다.
+
+    각 오픈 포지션 종목의 최신 VIPDisclosure.stake_pct 비율에 따라
+    정규화된 목표 비중 딕셔너리를 반환한다.
+
+    Args:
+        db: DB 세션
+        portfolio_id: VIPPortfolio.id
+
+    Returns:
+        {stock_id: target_weight} — 합계 ≈ 1.0 (빈 포지션이면 빈 딕셔너리)
+    """
+    # 오픈 포지션의 고유 종목 ID 목록
+    open_trades: list[VIPTrade] = (
+        db.query(VIPTrade)
+        .filter(
+            VIPTrade.portfolio_id == portfolio_id,
+            VIPTrade.is_open.is_(True),
+        )
+        .all()
+    )
+
+    stock_ids = list({t.stock_id for t in open_trades})
+    if not stock_ids:
+        return {}
+
+    # 종목별 최신 공시 stake_pct 수집
+    stake_map: dict[int, float | None] = {}
+    for sid in stock_ids:
+        latest = (
+            db.query(VIPDisclosure)
+            .filter(VIPDisclosure.stock_id == sid)
+            .order_by(VIPDisclosure.id.desc())
+            .first()
+        )
+        stake_map[sid] = latest.stake_pct if latest else None
+
+    # None 처리: 유효한 값들의 평균으로 대체, 전부 None이면 균등 비중
+    valid_stakes = [v for v in stake_map.values() if v is not None]
+    if not valid_stakes:
+        equal_weight = 1.0 / len(stock_ids)
+        return {sid: equal_weight for sid in stock_ids}
+
+    avg_stake = sum(valid_stakes) / len(valid_stakes)
+    filled: dict[int, float] = {
+        sid: (stake if stake is not None else avg_stake)
+        for sid, stake in stake_map.items()
+    }
+
+    total = sum(filled.values())
+    if total <= 0:
+        equal_weight = 1.0 / len(stock_ids)
+        return {sid: equal_weight for sid in stock_ids}
+
+    return {sid: w / total for sid, w in filled.items()}
+
+
+async def _exit_vip_closed_positions(db: Session, portfolio: VIPPortfolio) -> int:
+    """VIP가 이미 청산한 종목(reduce/below5)의 오픈 포지션을 모두 매도한다.
+
+    REQ-VIP-REBAL-001: 리밸런싱 1단계 — VIP 철수 종목 정리.
+    종목별 최신 공시 타입이 'reduce' 또는 'below5'이면 해당 포지션 전량 매도.
+
+    Args:
+        db: DB 세션
+        portfolio: 대상 VIPPortfolio
+
+    Returns:
+        회수된 현금 총액 (원, 정수) — 포지션 없으면 0
+    """
+    # 오픈 포지션 종목 목록 조회
+    open_trades: list[VIPTrade] = (
+        db.query(VIPTrade)
+        .filter(
+            VIPTrade.portfolio_id == portfolio.id,
+            VIPTrade.is_open.is_(True),
+        )
+        .all()
+    )
+
+    stock_ids = sorted({t.stock_id for t in open_trades})
+    if not stock_ids:
+        return 0
+
+    cash_before = portfolio.current_cash
+    exited_stock_ids: list[int] = []
+
+    for sid in stock_ids:
+        # 최신 공시 타입 확인
+        latest_disc = (
+            db.query(VIPDisclosure)
+            .filter(VIPDisclosure.stock_id == sid)
+            .order_by(VIPDisclosure.id.desc())
+            .first()
+        )
+        if not latest_disc or latest_disc.disclosure_type not in ("reduce", "below5"):
+            continue
+
+        # 해당 종목의 오픈 포지션 전량 매도
+        trades_to_exit = [t for t in open_trades if t.stock_id == sid]
+        stock = db.query(Stock).filter(Stock.id == sid).first()
+        if not stock or not stock.stock_code:
+            logger.warning(
+                "%s 종목 코드 없음(stock_id=%d), 청산 스킵",
+                REBALANCE_LOG_PREFIX,
+                sid,
+            )
+            continue
+
+        current_price = await _fetch_price(stock.stock_code)
+        if not current_price:
+            logger.warning(
+                "%s 현재가 조회 실패(stock_id=%d, code=%s), 청산 스킵",
+                REBALANCE_LOG_PREFIX,
+                sid,
+                stock.stock_code,
+            )
+            continue
+
+        for trade in trades_to_exit:
+            await _execute_vip_sell(
+                db, trade, current_price, trade.quantity, "vip_rebalance_exit"
+            )
+            logger.info(
+                "%s VIP 철수 포지션 청산: %s %d주 @ %d원 (reason=vip_rebalance_exit)",
+                REBALANCE_LOG_PREFIX,
+                stock.name,
+                trade.quantity,
+                current_price,
+            )
+        exited_stock_ids.append(sid)
+
+    if not exited_stock_ids:
+        return 0
+
+    # 실제 회수된 현금 = 커밋 후 포트폴리오 잔고 변화
+    db.refresh(portfolio)
+    cash_recovered = portfolio.current_cash - cash_before
+    logger.info(
+        "%s 철수 포지션 청산 완료: %d 종목, 회수 현금 %d원",
+        REBALANCE_LOG_PREFIX,
+        len(exited_stock_ids),
+        cash_recovered,
+    )
+    return max(0, cash_recovered)
+
+
+async def _rebalance_to_vip_weights(db: Session, portfolio: VIPPortfolio) -> int:
+    """VIP 목표 비중에 맞게 포지션을 조정한다.
+
+    REQ-VIP-REBAL-002~004: 현재 비중이 목표 비중과 REBALANCE_THRESHOLD 이상 차이날 때
+    - 초과 비중: 트리밍 매도
+    - 부족 비중: 추가 매수 (현금 여력 시)
+
+    포지션이 MIN_REBALANCE_POSITIONS 미만이면 즉시 반환(리밸런싱 불필요).
+
+    Args:
+        db: DB 세션
+        portfolio: 대상 VIPPortfolio
+
+    Returns:
+        순 현금 변화 (원, 정수) — 매도 수익 - 매수 비용
+    """
+    open_trades: list[VIPTrade] = (
+        db.query(VIPTrade)
+        .filter(
+            VIPTrade.portfolio_id == portfolio.id,
+            VIPTrade.is_open.is_(True),
+        )
+        .all()
+    )
+
+    distinct_stocks = list({t.stock_id for t in open_trades})
+
+    # REQ-VIP-REBAL-004: 포지션 수가 최소 기준 미달이면 리밸런싱 불필요
+    if len(distinct_stocks) <= MIN_REBALANCE_POSITIONS - 1:
+        logger.info(
+            "%s 오픈 포지션 수(%d) 최소 기준(%d) 미달 — 리밸런싱 스킵",
+            REBALANCE_LOG_PREFIX,
+            len(distinct_stocks),
+            MIN_REBALANCE_POSITIONS,
+        )
+        return 0
+
+    target_weights = _get_vip_target_weights(db, portfolio.id)
+    if not target_weights:
+        return 0
+
+    # 배치 현재가 조회
+    stocks_by_id: dict[int, Stock] = {}
+    for sid in distinct_stocks:
+        s = db.query(Stock).filter(Stock.id == sid).first()
+        if s:
+            stocks_by_id[sid] = s
+
+    stock_codes = [s.stock_code for s in stocks_by_id.values() if s.stock_code]
+    prices = await _fetch_prices_batch(stock_codes)
+
+    # 현재가 조회 실패 종목 제거
+    price_by_id: dict[int, int] = {}
+    for sid, stock in stocks_by_id.items():
+        if stock.stock_code and stock.stock_code in prices:
+            price_by_id[sid] = prices[stock.stock_code]
+
+    if not price_by_id:
+        return 0
+
+    # 포트폴리오 총 평가액 계산
+    holdings: dict[int, int] = {}  # stock_id → 보유 수량 합계
+    for trade in open_trades:
+        if trade.stock_id in price_by_id:
+            holdings[trade.stock_id] = holdings.get(trade.stock_id, 0) + trade.quantity
+
+    position_value = sum(price_by_id[sid] * qty for sid, qty in holdings.items())
+    total_portfolio_value = portfolio.current_cash + position_value
+    if total_portfolio_value <= 0:
+        return 0
+
+    # 현재 비중 계산
+    current_weights: dict[int, float] = {
+        sid: (price_by_id[sid] * holdings.get(sid, 0)) / total_portfolio_value
+        for sid in distinct_stocks
+        if sid in price_by_id
+    }
+
+    # 편차 기준 정렬 (절댓값 내림차순, 동일 시 stock_id 오름차순)
+    sorted_stocks = sorted(
+        [sid for sid in distinct_stocks if sid in price_by_id],
+        key=lambda sid: (
+            -abs(current_weights.get(sid, 0.0) - target_weights.get(sid, 0.0)),
+            sid,
+        ),
+    )
+
+    cash_delta = 0
+
+    # 1단계: 초과 비중 종목 트리밍 매도
+    for sid in sorted_stocks:
+        cw = current_weights.get(sid, 0.0)
+        tw = target_weights.get(sid, 0.0)
+        diff = cw - tw
+        if diff <= REBALANCE_THRESHOLD:
+            continue
+
+        trim_value = diff * total_portfolio_value
+        price = price_by_id[sid]
+        trim_qty = math.floor(trim_value / price)
+        if trim_qty <= 0:
+            continue
+
+        # 해당 종목의 첫 번째 오픈 트레이드에서 트리밍
+        trade_to_trim = next(
+            (t for t in open_trades if t.stock_id == sid and t.is_open), None
+        )
+        if not trade_to_trim:
+            continue
+
+        actual_qty = min(trim_qty, trade_to_trim.quantity)
+        await _execute_vip_sell(
+            db, trade_to_trim, price, actual_qty, "vip_rebalance_trim"
+        )
+        trim_proceeds = actual_qty * price  # 근사치 (수수료/세금 전)
+        cash_delta += trim_proceeds
+        logger.info(
+            "%s 비중 트리밍 매도: stock_id=%d %d주 @ %d원 (현재비중=%.1f%%, 목표=%.1f%%)",
+            REBALANCE_LOG_PREFIX,
+            sid,
+            actual_qty,
+            price,
+            cw * 100,
+            tw * 100,
+        )
+
+    # 포트폴리오 현금 잔고 갱신
+    db.refresh(portfolio)
+
+    # 2단계: 부족 비중 종목 추가 매수
+    split_invest = _calculate_position_size(portfolio.initial_capital) // SPLIT_COUNT
+
+    for sid in sorted_stocks:
+        cw = current_weights.get(sid, 0.0)
+        tw = target_weights.get(sid, 0.0)
+        diff = tw - cw
+        if diff <= REBALANCE_THRESHOLD:
+            continue
+
+        if portfolio.current_cash < split_invest:
+            break
+
+        stock = stocks_by_id.get(sid)
+        if not stock:
+            continue
+
+        latest_disc = (
+            db.query(VIPDisclosure)
+            .filter(VIPDisclosure.stock_id == sid)
+            .order_by(VIPDisclosure.id.desc())
+            .first()
+        )
+        if not latest_disc:
+            continue
+
+        # split_sequence=3으로 추가 매수 (리밸런싱 전용 시퀀스)
+        new_trade = await _execute_vip_buy(
+            db, portfolio, latest_disc, stock, split_sequence=3
+        )
+        if new_trade:
+            cash_delta -= split_invest
+            logger.info(
+                "%s 비중 추가 매수: stock_id=%d (현재비중=%.1f%%, 목표=%.1f%%)",
+                REBALANCE_LOG_PREFIX,
+                sid,
+                cw * 100,
+                tw * 100,
+            )
+
+    return cash_delta
+
+
+async def _try_rebalance_for_second_buy(
+    db: Session,
+    portfolio: VIPPortfolio,
+    target_stock_id: int,
+    required_cash: int,
+) -> bool:
+    """2차 매수를 위해 리밸런싱을 시도하고 필요 현금을 확보한다.
+
+    REQ-VIP-REBAL-005/010:
+    - 동시 호출 방지용 Lock 적용 (이미 실행 중이면 즉시 False 반환)
+    - Step 1: VIP 철수 포지션 청산
+    - Step 2: 비중 리밸런싱
+    - 각 단계 후 현금 잔고 재확인
+
+    Args:
+        db: DB 세션
+        portfolio: 대상 VIPPortfolio
+        target_stock_id: 2차 매수 대상 종목 ID (로그용)
+        required_cash: 2차 매수에 필요한 현금 (원)
+
+    Returns:
+        True: 리밸런싱 후 충분한 현금 확보됨 / False: 현금 부족 또는 Lock 경합
+    """
+    # 동시 실행 방지 — 이미 Lock이 잡혀 있으면 즉시 포기
+    if _rebalance_lock.locked():
+        logger.warning(
+            "%s 리밸런싱 Lock 경합 — 이미 실행 중이므로 스킵 (stock_id=%d)",
+            REBALANCE_LOG_PREFIX,
+            target_stock_id,
+        )
+        return False
+
+    async with _rebalance_lock:
+        logger.info(
+            "%s 리밸런싱 시작: stock_id=%d, 필요현금=%d원, 현재현금=%d원",
+            REBALANCE_LOG_PREFIX,
+            target_stock_id,
+            required_cash,
+            portfolio.current_cash,
+        )
+
+        # Step 1: VIP 철수 포지션 청산
+        try:
+            await _exit_vip_closed_positions(db, portfolio)
+        except Exception as e:
+            logger.error(
+                "%s Step1 철수 포지션 청산 실패: %s", REBALANCE_LOG_PREFIX, e
+            )
+
+        db.refresh(portfolio)
+        if portfolio.current_cash >= required_cash:
+            logger.info(
+                "%s Step1 후 현금 충분: %d원 >= %d원",
+                REBALANCE_LOG_PREFIX,
+                portfolio.current_cash,
+                required_cash,
+            )
+            return True
+
+        # Step 2: 비중 리밸런싱
+        try:
+            await _rebalance_to_vip_weights(db, portfolio)
+        except Exception as e:
+            logger.error(
+                "%s Step2 비중 리밸런싱 실패: %s", REBALANCE_LOG_PREFIX, e
+            )
+
+        db.refresh(portfolio)
+        if portfolio.current_cash >= required_cash:
+            logger.info(
+                "%s Step2 후 현금 충분: %d원 >= %d원",
+                REBALANCE_LOG_PREFIX,
+                portfolio.current_cash,
+                required_cash,
+            )
+            return True
+
+        logger.warning(
+            "%s VIP 잔여 현금 부족 (리밸런싱 후에도 부족): 현재=%d원, 필요=%d원",
+            REBALANCE_LOG_PREFIX,
+            portfolio.current_cash,
+            required_cash,
+        )
+        return False
+
+
 async def check_second_buy_pending(db: Session) -> int:
     """3거래일 경과한 1차 매수 포지션에 2차 매수를 실행한다.
 
@@ -252,6 +679,37 @@ async def check_second_buy_pending(db: Session) -> int:
             trade.entry_date.date(),
             elapsed,
         )
+
+        # 현금 부족 여부 사전 체크 + 리밸런싱 시도 (REQ-VIP-REBAL-005)
+        # @MX:NOTE: [AUTO] VIP_REBALANCE_ENABLED=false이면 기존 동작(현금 부족 시 스킵) 유지
+        vip_rebalance_enabled = (
+            os.getenv("VIP_REBALANCE_ENABLED", "true").lower() != "false"
+        )
+        split_invest = _calculate_position_size(portfolio.initial_capital) // SPLIT_COUNT
+
+        if portfolio.current_cash < split_invest:
+            if vip_rebalance_enabled:
+                success = await _try_rebalance_for_second_buy(
+                    db, portfolio, stock.id, split_invest
+                )
+                if not success:
+                    logger.warning(
+                        "VIP 잔여 현금 부족: cash=%d, 필요=%d (%s 2차 매수)",
+                        portfolio.current_cash,
+                        split_invest,
+                        stock.name,
+                    )
+                    continue
+                # 리밸런싱 성공 후 portfolio 잔고 반영
+                db.refresh(portfolio)
+            else:
+                logger.warning(
+                    "VIP 잔여 현금 부족: cash=%d, 필요=%d (%s 2차 매수)",
+                    portfolio.current_cash,
+                    split_invest,
+                    stock.name,
+                )
+                continue
 
         result = await _execute_vip_buy(db, portfolio, disclosure, stock, split_sequence=2)
         if result:
