@@ -768,7 +768,7 @@ async def _get_technical_multiplier(stock_code: str) -> float:
     - 과매도 상태 = KS200과 같은 방향 진입 → confidence 증폭
     - 과매수 상태 = 이미 오른 종목 진입 차단 → confidence 억제
 
-    Returns: 1.0 (중립), 1.3 (과매도), 0.5 (과매수), 1.15 / 0.7 (부분)
+    Returns: 1.0 (중립), 1.3 (과매도), 0.75 (과매수), 1.15 / 0.88 (부분)
     """
     from app.services.naver_finance import fetch_stock_price_history
     from app.services.ks200_signal import (
@@ -791,15 +791,15 @@ async def _get_technical_multiplier(stock_code: str) -> float:
         if curr_stoch is None or curr_disp is None:
             return 1.0
 
-        # 두 지표 모두 과매수: 진입 품질 나쁨 → 60% 억제
+        # 두 지표 모두 과매수: 진입 품질 낮음 → 25% 억제 (상승장 강제 차단 방지)
         if curr_stoch > STOCH_UPPER and curr_disp > DISP_UPPER:
-            return 0.5
+            return 0.75
         # 두 지표 모두 과매도: 진입 품질 우수 (KS200 진입 조건과 일치) → 30% 증폭
         if curr_stoch < STOCH_LOWER and curr_disp < DISP_LOWER:
             return 1.3
         # 한 지표만 과매수
         if curr_stoch > STOCH_UPPER or curr_disp > DISP_UPPER:
-            return 0.7
+            return 0.88
         # 한 지표만 과매도
         if curr_stoch < STOCH_LOWER or curr_disp < DISP_LOWER:
             return 1.15
@@ -2214,7 +2214,7 @@ async def analyze_stock(
 {market_data.get('technical_analysis', '기술적 분석 데이터 없음') if market_data else '기술적 분석 데이터 없음'}
 ※ 기술적 점수가 +30 이상이면 강한 매수 신호, -30 이하면 강한 매도 신호입니다.
   RSI 과매도 + MACD 골든크로스 조합은 강력한 반등 신호로 판단하세요.
-  RSI 과매수 + 볼린저 상단 돌파 조합은 조정 임박 가능성으로 판단하세요.
+  RSI 과매수 + 볼린저 상단 돌파 조합은 추세 지속 여부를 중심으로 판단하세요. 강한 상승 추세에서 과매수는 정상 상태이며, 수급·뉴스가 뒷받침된다면 추가 상승 여지가 있습니다. 조정 가능성은 confidence 값에 반영하세요.
   이동평균 정배열은 상승 추세 확인, 역배열은 하락 추세를 의미합니다.
 
 ## 5. 재무제표 데이터
@@ -2255,7 +2255,7 @@ async def analyze_stock(
 [STEP 1: 매크로/섹터 환경] 시장 변동성·섹터 뉴스·매크로 리스크가 이 종목에 유리/불리한지 판단
 [STEP 2: 팩터 분석] 뉴스 센티먼트·기술적(RSI·MACD·BB)·수급(외국인·기관)·밸류에이션 4가지 강약점
 [STEP 3: 리스크 평가] 공매도 잔고·종토방 과열·이평선 역배열·하락 추세 등 하방 리스크
-[STEP 4: 시그널 결론] STEP 1~3 종합 → buy/sell/hold 및 confidence 결정 근거 (0.55 미만이면 반드시 hold)
+[STEP 4: 시그널 결론] STEP 1~3 종합 → buy/sell/hold 및 confidence 결정 근거. 과매수 상태이더라도 추세와 수급이 강하면 buy 가능하며 confidence에 리스크를 반영하세요.
 [STEP 5: TP/SL 설정] 기술적 지지/저항선 기반 target_price, stop_loss 산정
 
 위 5단계 사고를 reasoning 필드에 요약하고, 반드시 아래 JSON 형식으로만 응답하세요.
@@ -2442,7 +2442,7 @@ async def analyze_stock(
 
         # C안: 기술적 타이밍 승수 적용 (뉴스=트리거, 기술적 지표=진입 품질 보강)
         # - 과매도 진입: KS200과 방향 일치 → confidence 증폭 (최대 30%)
-        # - 과매수 진입: 이미 오른 종목 → confidence 억제 (최대 50%)
+        # - 과매수 진입: 이미 오른 종목 → confidence 억제 (최대 25%, 상승장 과차단 방지)
         try:
             tech_mult = await _get_technical_multiplier(stock.stock_code)
             if tech_mult != 1.0:
