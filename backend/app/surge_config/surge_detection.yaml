@@ -25,6 +25,7 @@ surge_detection:
     min_surge_rate: 0.40
     min_sample_size: 20
     cache_ttl_hours: 24
+    disclosure_window_hours: 24
   ensemble:
     weights:
       theme_cluster: 0.25

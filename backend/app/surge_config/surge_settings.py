@@ -47,6 +47,7 @@ class DisclosurePatternConfig(BaseModel):
     min_surge_rate: float
     min_sample_size: int
     cache_ttl_hours: int
+    disclosure_window_hours: int
 
 
 class EnsembleWeightsConfig(BaseModel):

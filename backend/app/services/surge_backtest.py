@@ -30,6 +30,9 @@ class SurgeBacktestResult:
     by_combination: dict[str, dict] = field(default_factory=dict)
 
 
+# @MX:ANCHOR: [AUTO] GET /fund/surge-backtest API 경계 — 라우터에서 직접 호출
+# @MX:REASON: 공개 API 진입점으로 인터페이스 변경 시 라우터 + 테스트 동시 수정 필요
+# @MX:SPEC: SPEC-AI-012
 def compute_surge_backtest(
     db: Session,
     *,

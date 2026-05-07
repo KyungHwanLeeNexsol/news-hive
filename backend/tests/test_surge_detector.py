@@ -4,6 +4,7 @@ AC-SURGE-001: 테마 뉴스 클러스터링
 AC-SURGE-002: 거래량 이상 + 뉴스 콤보
 AC-SURGE-003: 공시 유형 급등 패턴
 AC-SURGE-004: 앙상블 스코어
+AC-SURGE-005: surge_candidate 5-day 중복 방지
 AC-SURGE-007: 설정 검증
 """
 
@@ -232,6 +233,7 @@ class TestSurgeConfig:
                 "min_surge_rate": 0.40,
                 "min_sample_size": 20,
                 "cache_ttl_hours": 24,
+                "disclosure_window_hours": 24,
             },
             "ensemble": {
                 "weights": {
@@ -657,3 +659,123 @@ class TestEnsembleScore:
             legacy_candidates=[],
         )
         assert isinstance(result, list)
+
+
+# ---------------------------------------------------------------------------
+# AC-SURGE-005: surge_candidate 5-day 중복 방지
+# ---------------------------------------------------------------------------
+
+class TestSurgeCandidateDeduplication:
+    """_gather_surge_candidates 5영업일 중복 방지 테스트 (AC-SURGE-005).
+
+    fund_manager._gather_surge_candidates가 동일 종목 기존 시그널 존재 시
+    INSERT 대신 UPDATE를 수행하는지 검증한다.
+    """
+
+    @pytest.mark.asyncio
+    async def test_dedup_updates_existing_signal_within_5_days(
+        self,
+        db: Session,
+        surge_config: SurgeDetectionConfig,
+        sector_it: Sector,
+        make_stock,
+        make_fund_signal,
+    ):
+        """5영업일 이내 동일 종목 surge_candidate 시그널이 있으면 UPDATE한다 (AC-SURGE-005)."""
+        from datetime import timezone as tz
+        from unittest.mock import patch
+
+        from app.services.fund_manager import _gather_surge_candidates
+        from app.services.surge_detector import SurgeCandidate
+
+        stock = make_stock("테스트전자", "000001", sector_it)
+
+        # 기존 시그널 생성 (3일 전)
+        existing_signal = make_fund_signal(
+            stock,
+            signal_type="surge_candidate",
+            confidence=0.60,
+            surge_metadata='{"test": true}',
+        )
+        # created_at을 3일 전으로 명시 (5일 이내)
+        from datetime import datetime, timedelta
+        existing_signal.created_at = datetime.now(tz.utc) - timedelta(days=3)
+        db.flush()
+
+        initial_count = db.query(FundSignal).filter(
+            FundSignal.signal_type == "surge_candidate"
+        ).count()
+        assert initial_count == 1
+
+        # gather_surge_candidates를 목 처리 — 같은 종목 후보 반환
+        mock_candidate = SurgeCandidate(
+            stock_code=stock.stock_code,
+            stock_name=stock.name,
+            theme_cluster_score=0.8,
+            combo_score=0.9,
+            pattern_score=0.7,
+            legacy_score=0.5,
+        )
+        with patch(
+            "app.services.fund_manager.gather_surge_candidates",
+            return_value=[mock_candidate],
+        ):
+            await _gather_surge_candidates(db, recent_news=[], leading_candidates=[])
+
+        # 시그널 수는 변하지 않아야 한다 (UPDATE, INSERT 아님)
+        final_count = db.query(FundSignal).filter(
+            FundSignal.signal_type == "surge_candidate"
+        ).count()
+        assert final_count == 1, f"INSERT가 발생했습니다 (expected 1, got {final_count})"
+
+        # 신뢰도가 새 앙상블 점수로 갱신됐어야 한다
+        db.refresh(existing_signal)
+        assert existing_signal.confidence > 0.60, "기존 시그널 confidence가 업데이트되지 않았습니다"
+
+    @pytest.mark.asyncio
+    async def test_creates_new_signal_when_older_than_5_days(
+        self,
+        db: Session,
+        surge_config: SurgeDetectionConfig,
+        sector_it: Sector,
+        make_stock,
+        make_fund_signal,
+    ):
+        """5영업일 초과 된 시그널은 중복으로 취급하지 않고 신규 INSERT한다 (AC-SURGE-005)."""
+        from datetime import timezone as tz
+        from unittest.mock import patch
+
+        from app.services.fund_manager import _gather_surge_candidates
+        from app.services.surge_detector import SurgeCandidate
+
+        stock = make_stock("오래된주식", "000002", sector_it)
+
+        # 기존 시그널 생성 (7일 전 — 5일 초과)
+        old_signal = make_fund_signal(
+            stock,
+            signal_type="surge_candidate",
+            confidence=0.60,
+        )
+        from datetime import datetime, timedelta
+        old_signal.created_at = datetime.now(tz.utc) - timedelta(days=7)
+        db.flush()
+
+        mock_candidate = SurgeCandidate(
+            stock_code=stock.stock_code,
+            stock_name=stock.name,
+            theme_cluster_score=0.8,
+            combo_score=0.9,
+            pattern_score=0.7,
+            legacy_score=0.5,
+        )
+        with patch(
+            "app.services.fund_manager.gather_surge_candidates",
+            return_value=[mock_candidate],
+        ):
+            await _gather_surge_candidates(db, recent_news=[], leading_candidates=[])
+
+        # 신규 시그널이 INSERT 됐어야 한다
+        final_count = db.query(FundSignal).filter(
+            FundSignal.signal_type == "surge_candidate"
+        ).count()
+        assert final_count == 2, f"신규 시그널이 생성되지 않았습니다 (expected 2, got {final_count})"

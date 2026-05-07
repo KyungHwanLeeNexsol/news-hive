@@ -1215,6 +1215,8 @@ async def _gather_disclosure_candidates(db: Session) -> list[dict]:
     return candidates
 
 
+# @MX:NOTE: [AUTO] SPEC-AI-012 급등 탐지 진입점 — generate_daily_briefing의 asyncio.gather에서 호출
+# @MX:SPEC: SPEC-AI-012
 async def _gather_surge_candidates(
     db: Session,
     recent_news: list,

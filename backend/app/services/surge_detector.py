@@ -6,12 +6,12 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import math
 import statistics
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from typing import Callable
 
 from sqlalchemy.orm import Session
 
@@ -150,7 +150,6 @@ def detect_theme_news_cluster(
 
     sectors_in_db = db.query(Sector).filter(Sector.name.in_(all_sector_names)).all()
     sector_id_to_name = {s.id: s.name for s in sectors_in_db}
-    sector_name_to_id = {s.name: s.id for s in sectors_in_db}
 
     sector_ids = [s.id for s in sectors_in_db]
     if not sector_ids:
@@ -346,8 +345,10 @@ def _get_volume_history(stock_code: str, baseline_days: int) -> list[float]:
     return []
 
 
+# @MX:NOTE: [AUTO] 테스트 주입용 프로바이더 — None이면 운영 경로(Naver API)를 사용
+# @MX:SPEC: SPEC-AI-012
 # 테스트 주입용 프로바이더 — None이면 운영 경로 사용
-_volume_provider: "((str, int) -> list[float]) | None" = None
+_volume_provider: Callable[[str, int], list[float]] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -457,8 +458,8 @@ def detect_disclosure_surge_pattern(
         logger.debug("[공시패턴] 급등률 데이터 없음")
         return []
 
-    # 최근 24시간 공시 조회
-    cutoff_dt = datetime.now(timezone.utc) - timedelta(hours=24)
+    # 최근 공시 조회 (window 크기는 config에서 읽음)
+    cutoff_dt = datetime.now(timezone.utc) - timedelta(hours=cfg.disclosure_window_hours)
     cutoff_str = cutoff_dt.strftime("%Y%m%d")
 
     recent_disclosures = (
@@ -536,6 +537,8 @@ def compute_ensemble_score(candidate: SurgeCandidate, config: SurgeDetectionConf
     return min(1.0, max(0.0, score))
 
 
+# @MX:NOTE: [AUTO] SPEC-AI-012 앙상블 파이프라인 진입점 — fund_manager._gather_surge_candidates에서 호출
+# @MX:SPEC: SPEC-AI-012
 def gather_surge_candidates(
     db: Session,
     recent_news: list,
