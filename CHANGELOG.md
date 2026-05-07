@@ -4,6 +4,14 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fixed — Alembic 마이그레이션 053 프로덕션 배포 오류 수정 (2026-05-07)
+
+- **근본 원인**: `sa.Enum._on_table_create()` 내부에서 `_resolve_for_literal(dialect)` 호출 시 새 PostgreSQL ENUM 객체가 생성되며 `create_type=False` 플래그가 소실 → `CREATE TYPE` 재시도 → `DuplicateObject` 오류
+- **수정** (`backend/alembic/versions/053_spec_ai_015_market_regime.py`):
+  - `sa.Enum.create(checkfirst=True)` → PL/pgSQL DO 블록 (`EXCEPTION WHEN duplicate_object THEN NULL`) — PostgreSQL 표준 idempotent 패턴
+  - 컬럼 타입 `sa.Enum(..., create_type=False)` → `postgresql.ENUM(..., create_type=False)` — dialect 변환 없이 플래그 직접 적용
+- **코드 품질** (`backend/app/services/surge_trading_service.py`): ruff F401 — `sqlalchemy.func` 미사용 import 제거
+
 ### Added — SPEC-AI-015: 시장 레짐 적응형 전략 (Market Regime Adaptive Strategy) (2026-05-07)
 
 **배경**: AI 펀드매니저가 상승장/하락장/횡보장에서 동일한 정적 파라미터를 사용하여 상승장 기회 손실과 하락장 과다 노출 문제 발생. 즉시 적용 fix(168e4cb) 후속으로 레짐 분류를 DB 영속화하고 모든 파라미터를 동적으로 관리.
