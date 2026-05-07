@@ -11,7 +11,6 @@ from decimal import Decimal
 from math import floor
 from typing import Optional
 
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 from zoneinfo import ZoneInfo
 
