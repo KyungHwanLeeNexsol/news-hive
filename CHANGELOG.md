@@ -4,6 +4,11 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fixed — /trading/surge Vercel 빌드 실패 수정 (2026-05-07)
+
+- **근본 원인**: recharts v3.8.1에서 `Tooltip` `formatter` 파라미터 타입이 `ValueType | undefined`로 확장됐으나, `surge/page.tsx`에서 `(v: number)`로 명시 → TypeScript strict 모드 빌드 실패 → Vercel이 이전 배포본 유지 → `/trading/surge` 라우트 404
+- **수정** (`frontend/src/app/trading/surge/page.tsx`): 명시적 `number` 타입 제거, `typeof v === 'number'` 런타임 체크로 대응 — `trading/page.tsx` 기존 패턴과 동일하게 통일
+
 ### Fixed — Alembic 마이그레이션 053 프로덕션 배포 오류 수정 (2026-05-07)
 
 - **근본 원인**: `sa.Enum._on_table_create()` 내부에서 `_resolve_for_literal(dialect)` 호출 시 새 PostgreSQL ENUM 객체가 생성되며 `create_type=False` 플래그가 소실 → `CREATE TYPE` 재시도 → `DuplicateObject` 오류
