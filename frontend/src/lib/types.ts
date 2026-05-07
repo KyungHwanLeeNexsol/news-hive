@@ -613,3 +613,53 @@ export interface MonthlyPerformance {
   win_count: number;
   win_rate: number;
 }
+
+// ─── SPEC-AI-013 급등예측 모의투자 타입 ───
+
+export interface SurgePortfolioStats {
+  initial_capital: number;
+  current_cash: number;
+  open_positions_count: number;
+  closed_trades_count: number;
+  total_trades_count: number;
+  current_value: number;
+  return_pct: number;
+}
+
+export interface SurgePosition {
+  id: number;
+  stock_code: string;
+  stock_name: string;
+  entry_price: number;
+  current_price: number | null;
+  quantity: number;
+  pnl_pct: number | null;
+  entry_date: string;
+  days_held: number;
+  surge_probability_score: number | null;
+}
+
+export interface SurgeTrade {
+  id: number;
+  stock_code: string;
+  stock_name: string;
+  entry_price: number;
+  exit_price: number | null;
+  quantity: number;
+  entry_date: string;
+  exit_date: string | null;
+  exit_reason: string | null;
+  pnl: number | null;
+  return_pct: number | null;
+  surge_probability_score: number | null;
+}
+
+export interface SurgeTradeHistory {
+  total: number;
+  items: SurgeTrade[];
+}
+
+export interface SurgePerformancePoint {
+  date: string;
+  cumulative_return_pct: number;
+}

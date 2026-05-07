@@ -975,3 +975,29 @@ export async function fetchModelMonthlyPerformance(
   if (!res.ok) return [];
   return res.json();
 }
+
+// ─── SPEC-AI-013 급등예측 모의투자 API ───
+
+export async function fetchSurgePortfolio(): Promise<import('./types').SurgePortfolioStats | null> {
+  const res = await fetchWithRetry(`${API_BASE}/surge-trading/portfolio`);
+  if (!res.ok) return null;
+  return res.json();
+}
+
+export async function fetchSurgePositions(): Promise<import('./types').SurgePosition[]> {
+  const res = await fetchWithRetry(`${API_BASE}/surge-trading/positions`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function fetchSurgeTrades(limit = 20, offset = 0): Promise<import('./types').SurgeTradeHistory> {
+  const res = await fetchWithRetry(`${API_BASE}/surge-trading/trades?limit=${limit}&offset=${offset}`);
+  if (!res.ok) return { total: 0, items: [] };
+  return res.json();
+}
+
+export async function fetchSurgePerformance(days = 30): Promise<import('./types').SurgePerformancePoint[]> {
+  const res = await fetchWithRetry(`${API_BASE}/surge-trading/performance?days=${days}`);
+  if (!res.ok) return [];
+  return res.json();
+}

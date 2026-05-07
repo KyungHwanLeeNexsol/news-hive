@@ -477,6 +477,77 @@ def _run_relation_inference():
         db.close()
 
 
+# ---------------------------------------------------------------------------
+# SPEC-AI-013: 급등예측 모의투자 포트폴리오 스케줄 작업
+# ---------------------------------------------------------------------------
+
+def _run_surge_execute_buys():
+    """급등예측 시그널 기반 매수 실행 (평일 09:00~15:30 KST, 30분 간격).
+
+    is_market_hours() 가드가 서비스 내부에서도 동작하므로
+    스케줄러 트리거가 정각(09:00)이 아닌 경우에도 안전하게 처리된다.
+
+    SPEC-AI-013 REQ-SURGE-TRADE-050, REQ-SURGE-TRADE-051
+    """
+    _start = _time.monotonic()
+    from app.services.surge_trading_service import execute_buy_orders
+
+    db = SessionLocal()
+    try:
+        result = execute_buy_orders(db)
+        if result["executed"] > 0:
+            logger.info(
+                "Surge 매수 실행 완료: executed=%d, skipped=%d, failed=%d",
+                result["executed"],
+                result["skipped"],
+                result["failed"],
+            )
+        else:
+            logger.debug(
+                "Surge 매수 실행: executed=0, skipped=%d, failed=%d",
+                result["skipped"],
+                result["failed"],
+            )
+    except Exception as e:
+        logger.error("Surge 매수 실행 잡 실패: %s", e)
+    finally:
+        _record_job_duration("surge_execute_buys", _time.monotonic() - _start)
+        db.close()
+
+
+def _run_surge_check_exits():
+    """급등예측 포지션 종료 조건 체크 (평일 09:00~15:30 KST, 5분 간격).
+
+    손절(-8%), 익절(+15%), 최대 보유 기간(5거래일) 조건 체크.
+
+    SPEC-AI-013 REQ-SURGE-TRADE-050, REQ-SURGE-TRADE-052
+    """
+    _start = _time.monotonic()
+    from app.services.surge_trading_service import check_exit_conditions
+
+    db = SessionLocal()
+    try:
+        result = check_exit_conditions(db)
+        if result["closed"] > 0:
+            logger.info(
+                "Surge 종료 체크 완료: closed=%d, still_open=%d, errors=%d",
+                result["closed"],
+                result["still_open"],
+                result["errors"],
+            )
+        else:
+            logger.debug(
+                "Surge 종료 체크: closed=0, still_open=%d, errors=%d",
+                result["still_open"],
+                result["errors"],
+            )
+    except Exception as e:
+        logger.error("Surge 종료 조건 체크 잡 실패: %s", e)
+    finally:
+        _record_job_duration("surge_check_exits", _time.monotonic() - _start)
+        db.close()
+
+
 def _is_kr_market_open() -> bool:
     """한국 주식시장 거래일 여부를 간이 판정한다 (주말 제외)."""
     from datetime import timezone, timedelta
@@ -1229,6 +1300,34 @@ def start_scheduler():
         hour=0,
         minute=5,
         id="ks200_morning_execute",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+
+    # SPEC-AI-013: 급등예측 모의투자 포트폴리오 작업
+    # 매수 실행: 평일 09:00~15:30 KST, 30분 간격
+    scheduler.add_job(
+        _run_surge_execute_buys,
+        "cron",
+        day_of_week="mon-fri",
+        hour="9-15",
+        minute="0,30",
+        timezone="Asia/Seoul",
+        id="surge_execute_buys",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    # 종료 조건 체크: 평일 09:00~15:30 KST, 5분 간격
+    scheduler.add_job(
+        _run_surge_check_exits,
+        "cron",
+        day_of_week="mon-fri",
+        hour="9-15",
+        minute="*/5",
+        timezone="Asia/Seoul",
+        id="surge_check_exits",
         max_instances=1,
         coalesce=True,
         replace_existing=True,
