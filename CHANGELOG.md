@@ -4,6 +4,11 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Changed — 급등 예측 탭 숨김 및 독립 URL 분리 (2026-05-07)
+
+- **탭 UI 제거** (`frontend/src/app/trading/page.tsx`): `/trading` 탭 목록에서 '급등 예측' 버튼 완전 제거 — 일반 사용자에게 비노출
+- **독립 URL 신설** (`frontend/src/app/trading/surge/page.tsx`): `/trading/surge` 직접 입력 시에만 접근 가능한 전용 페이지 생성
+
 ### Added — SPEC-AI-013: 급등예측 모의투자 포트폴리오 (2026-05-07)
 
 **배경**: SPEC-AI-012에서 생성되는 `FundSignal(signal_type="surge_candidate")` 시그널을 추적·검증할 독립 모의투자 모델이 없어 시그널 수익성 측정이 불가능한 상황. 기존 3개 모델(AI Fund/VIP/KS200)과 완전 분리된 4번째 모의투자 포트폴리오(급등예측 모델) 신설.
