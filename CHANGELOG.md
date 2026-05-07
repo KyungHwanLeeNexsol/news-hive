@@ -4,6 +4,13 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Changed — AI 펀드매니저 수익률 개선 (알파 생성 전략 적용) (2026-05-07)
+
+- **신뢰도 임계값 완화** (`backend/app/services/fund_manager.py`): `MIN_ACTION_CONFIDENCE` 0.55 → 0.50 — 상승장에서 과도한 hold 편향 및 현금 드래그 해소
+- **목표가 상한 확대** (`fund_manager.py`): 시그널/브리핑 프롬프트 목표가 범위 +5~20% → +5~30%, 검증 범위 0.30 → 0.35 — 모멘텀 종목에서 조기 익절 방지
+- **고확신 포지션 사이즈 확대** (`backend/app/services/paper_trading.py`): conf≥0.80 구간 신설(20%), conf≥0.70(15%), conf≥0.60(10%) 3단계로 재편 — 최고 확신 시그널에 알파 집중
+- **시장 레짐 바이어스 주입** (`fund_manager.py`): KOSPI 5일 수익률 기반 상승/하락/횡보 레짐을 `analyze_stock` 및 `generate_daily_briefing` 프롬프트에 실시간 주입 — AI가 시장 추세를 인식하여 buy/hold 결정에 반영
+
 ### Changed — 급등 예측 탭 숨김 및 독립 URL 분리 (2026-05-07)
 
 - **탭 UI 제거** (`frontend/src/app/trading/page.tsx`): `/trading` 탭 목록에서 '급등 예측' 버튼 완전 제거 — 일반 사용자에게 비노출

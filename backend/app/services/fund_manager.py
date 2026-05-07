@@ -37,7 +37,8 @@ logger = logging.getLogger(__name__)
 
 # @MX:NOTE: confidence 임계값 단일 소스 — 프롬프트 지시/코드 가드/거래 실행 3개 레이어가 이 상수를 참조
 # @MX:SPEC: SPEC-AI-007 (REQ-AI-007-001)
-MIN_ACTION_CONFIDENCE: float = 0.55
+# 0.55 → 0.50: 상승장 현금 드래그 감소 목적. 포지션 사이즈는 유지하여 리스크 중립.
+MIN_ACTION_CONFIDENCE: float = 0.50
 
 # 시장 데이터 TTL 캐시: analyze_stock/선행탐지 간 1시간 내 중복 API 호출 방지
 _MARKET_DATA_CACHE: dict[str, tuple[float, dict]] = {}
@@ -2297,10 +2298,29 @@ async def analyze_stock(
     else:
         consensus_section = ""  # 데이터 부족
 
+    # 시장 레짐 판단: market_data의 5일 추세 활용
+    _signal_market_regime = ""
+    _signal_regime_bias = ""
+    if market_data:
+        _price_5d = market_data.get("price_5d_trend")
+        if _price_5d is not None:
+            try:
+                _p5 = float(_price_5d)
+                if _p5 >= 1.5:
+                    _signal_market_regime = f"상승 추세 (KOSPI 5일 +{_p5:.1f}% 추정)"
+                    _signal_regime_bias = "※ 상승 추세 시장: 확신이 있다면 buy를 기본으로, hold는 명확한 반대 근거가 있을 때만."
+                elif _p5 <= -1.5:
+                    _signal_market_regime = f"하락 추세 (KOSPI 5일 {_p5:.1f}% 추정)"
+                    _signal_regime_bias = "※ 하락 추세 시장: 매수는 매우 강한 근거 있을 때만, 기본은 hold/sell."
+            except (TypeError, ValueError):
+                pass
+
     # Build comprehensive prompt
-    prompt = f"""당신은 하버드 MBA 출신의 20년 경력 전문 펀드매니저입니다.
+    prompt = f"""당신은 20년 경력 전문 펀드매니저입니다.
 아래 데이터를 종합적으로 분석하여 투자 판단을 내려주세요.
 뉴스의 본문 내용(content 필드)이 제공된 경우, 제목만이 아닌 본문의 구체적 수치/사실/발언을 근거로 분석하세요.
+{f'현재 시장 레짐: {_signal_market_regime}' if _signal_market_regime else ''}
+{_signal_regime_bias}
 
 ## 분석 대상
 - 종목명: {stock.name}
@@ -2391,7 +2411,7 @@ async def analyze_stock(
 {{
   "signal": "buy" 또는 "sell" 또는 "hold",
   "confidence": 0.0~1.0 사이의 확신도,
-  "target_price": 목표가(숫자, 반드시 설정. 현재가 대비 +5%~+20% 범위),
+  "target_price": 목표가(숫자, 반드시 설정. 현재가 대비 +5%~+30% 범위),
   "stop_loss": 손절가(숫자, 반드시 설정. 현재가 대비 -3%~-10% 범위),
   "reasoning": "3-5문장의 종합적인 투자 판단 근거. 뉴스/공시/재무/시세 데이터를 구체적으로 인용하여 분석.",
   "news_summary": "뉴스 동향이 주가에 미칠 영향 요약 (2-3문장)",
@@ -2404,7 +2424,8 @@ async def analyze_stock(
 - 예시2: 현재가 12,300원 → target_price: 14000, stop_loss: 11500
 
 주의사항:
-- confidence가 0.55 이상이어야 buy/sell 시그널을 내세요. 확신이 부족하면 hold.
+- confidence가 0.50 이상이어야 buy/sell 시그널을 내세요. 확신이 부족하면 hold.
+- 상승 추세 시장에서는 불확실성보다 모멘텀을 우선시하세요. 명확한 반대 근거 없이 hold를 남용하지 마세요.
 - 데이터가 부족하면 그만큼 confidence를 낮추세요.
 - target_price와 stop_loss는 반드시 0이 아닌 구체적 정수로 기입. null/0 금지.
 - 투자 판단 근거는 구체적인 데이터를 인용하여 전문적으로 작성하세요.
@@ -2445,7 +2466,7 @@ async def analyze_stock(
     # 현재가 대비 유효 범위 검증: 비정상 값 무효화 후 동적 계산으로 폴백
     if price_at_signal and ai_target:
         _target_pct = (ai_target - price_at_signal) / price_at_signal
-        if not (0.01 <= _target_pct <= 0.30):
+        if not (0.01 <= _target_pct <= 0.35):  # +5%~+30% 프롬프트 확대에 맞춰 검증 범위도 +35%로 여유
             logger.warning(
                 "AI target_price 범위 오류 무효화: %s target=%d (%.1f%%), price=%d",
                 stock.name, ai_target, _target_pct * 100, price_at_signal,
@@ -2933,8 +2954,25 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
     except Exception as e:
         logger.warning(f"방어 모드 상태 확인 실패 (브리핑 계속 진행): {e}")
 
+    # 시장 레짐 판단: KOSPI 5일 수익률 기준
+    if _kospi_ret_5d is not None:
+        if _kospi_ret_5d >= 1.5:
+            _market_regime = f"상승 추세 (KOSPI 5일 +{_kospi_ret_5d:.1f}%)"
+            _regime_bias = "※ 현재 상승 추세 시장입니다. 확신이 있다면 매수를 우선 고려하고, hold는 명확한 반대 근거가 있을 때만 선택하세요."
+        elif _kospi_ret_5d <= -1.5:
+            _market_regime = f"하락 추세 (KOSPI 5일 {_kospi_ret_5d:.1f}%)"
+            _regime_bias = "※ 현재 하락 추세 시장입니다. 매수는 매우 강한 근거가 있을 때만 추천하고, 관망/회피를 기본으로 하세요."
+        else:
+            _market_regime = f"횡보 구간 (KOSPI 5일 {_kospi_ret_5d:+.1f}%)"
+            _regime_bias = "※ 횡보 시장입니다. 개별 종목의 차별적 강도를 기준으로 판단하세요."
+    else:
+        _market_regime = "데이터 없음"
+        _regime_bias = ""
+
     prompt = f"""당신은 국내 최고 자산운용사의 CIO(최고투자책임자)이자 20년 경력 전문 펀드매니저입니다.
 오늘 날짜: {today.strftime('%Y년 %m월 %d일')}
+현재 시장 레짐: {_market_regime}
+{_regime_bias}
 
 **절대 규칙:**
 - 반드시 한국어로만 응답하세요. 영어 사용 금지.
@@ -3018,7 +3056,7 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
       "stock": "종목명 (반드시 위 후보 종목 데이터에 있는 종목명과 동일하게)",
       "action": "적극매수 또는 매수 또는 관망 또는 회피",
       "reason": "5-7문장으로 상세 분석. 반드시 다음 4가지를 모두 포함: [밸류에이션] PER {{}}, 업종평균 PER {{}}, PBR {{}}, ROE {{}}%로 업종 대비 저평가/고평가 판단. [주가흐름/수급] 5일 {{}}%, 20일 {{}}% 변동, 외국인 {{}}주/기관 {{}}주 순매수로 수급 양호/불량. [카탈리스트] 해당 종목과 관련된 뉴스/공시의 구체적 내용과 주가 영향 분석. [리스크] 매크로 리스크, 업황 리스크, 밸류에이션 리스크 등 구체적 위험 요소.",
-      "target_price": 현재가 대비 +5%~+20% 범위의 목표가 정수 (0 또는 null 금지),
+      "target_price": 현재가 대비 +5%~+30% 범위의 목표가 정수 (0 또는 null 금지),
       "stop_loss": 현재가 대비 -3%~-10% 범위의 손절가 정수 (0 또는 null 금지)
     }}
   ],

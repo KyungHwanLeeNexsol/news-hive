@@ -123,7 +123,9 @@ def check_defensive_mode(db: Session) -> bool:
 
 def _position_pct_by_confidence(confidence: float) -> float:
     """confidence 구간별 포지션 비율 반환."""
-    if confidence >= 0.75:
+    if confidence >= 0.80:
+        return 0.20  # 최고 확신: 20% (알파 집중 투자)
+    if confidence >= 0.70:
         return 0.15
     if confidence >= 0.60:
         return 0.10
