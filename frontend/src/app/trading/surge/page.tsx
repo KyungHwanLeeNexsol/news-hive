@@ -176,8 +176,11 @@ function SurgeContent() {
                   tickFormatter={(v: number) => `${v.toFixed(1)}%`}
                 />
                 <Tooltip
-                  formatter={(v: number) => [`${v.toFixed(2)}%`, '누적수익률']}
-                  labelFormatter={(l: string) => l}
+                  formatter={(v) => {
+                    const val = typeof v === 'number' ? v : 0;
+                    return [`${val.toFixed(2)}%`, '누적수익률'];
+                  }}
+                  labelFormatter={(l) => String(l)}
                 />
                 <Bar dataKey="cumulative_return_pct" radius={[3, 3, 0, 0]}>
                   {performance.map((entry, index) => (
