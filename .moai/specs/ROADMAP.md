@@ -19,12 +19,12 @@ This roadmap defines the systematic enhancement strategy across 5 tiers (0-4).
 |--------|-------|
 | Backend Files | 60+ Python files |
 | Frontend Pages | 12 pages (+/chat) |
-| DB Migrations | 16 applied |
-| Scheduler Jobs | 15 active (with retry) |
-| Test Coverage | ~60% (650+ tests) |
+| DB Migrations | 53 applied (053_spec_ai_015_market_regime 포함) |
+| Scheduler Jobs | 15+ active (with retry, market regime 갱신 포함) |
+| Test Coverage | ~85% (1022+ tests) |
 | Deployment | Oracle Cloud (BE) + Vercel (FE) |
-| Infrastructure | Redis cache, WebSocket, Prometheus, CI/CD |
-| Known Bugs | 1 (news_crawler.py classify_sentiment shadowing) |
+| Infrastructure | Redis cache, WebSocket, Prometheus, CI/CD, MarketRegime persistence |
+| Known Bugs | 0 (SPEC-AI-015 후속 이슈 없음) |
 
 ## SPEC Registry
 
@@ -71,6 +71,14 @@ This roadmap defines the systematic enhancement strategy across 5 tiers (0-4).
 | SPEC-AI-003 | Pre-emptive Buy Signal Detection | completed | SPEC-AI-002 |
 | SPEC-AI-004 | Disclosure-Based Pre-emptive Signal | completed | SPEC-AI-003 |
 | SPEC-AI-005 | Dynamic Target Price / Stop Loss | completed | SPEC-AI-004 |
+| SPEC-AI-007 | AI Fund Alignment Regime | completed | SPEC-AI-005 |
+| SPEC-AI-008 | AI Fund Manager V2 | completed | SPEC-AI-007 |
+| SPEC-AI-009 | AI Fund Performance Tracking | completed | SPEC-AI-008 |
+| SPEC-AI-010 | AI Fund Risk Management | completed | SPEC-AI-009 |
+| SPEC-AI-011 | AI Fund Signal Quality | completed | SPEC-AI-010 |
+| SPEC-AI-012 | 급등 징후 탐지 시스템 | completed | SPEC-AI-011 |
+| SPEC-AI-013 | 급등예측 모의투자 포트폴리오 | completed | SPEC-AI-012 |
+| SPEC-AI-015 | 시장 레짐 적응형 전략 | completed | SPEC-AI-007, SPEC-AI-003 |
 
 ### TIER 6: Self-Learning (Priority: Medium — 데이터 수집 후 진행)
 
@@ -120,6 +128,7 @@ Phase 2: SPEC-CACHE-001 + SPEC-REALTIME-001         ✅ COMPLETED (2026-03-29)
 Phase 3: SPEC-AUTH-001 -> SPEC-VIZ-001              ⚠️ AUTH pending, VIZ completed (2026-03-29)
 Phase 4: SPEC-SCALE-001                             ✅ COMPLETED (2026-03-29)
 Phase 5: SPEC-AI-001~005                            ✅ COMPLETED (2026-04-05)
+Phase 8: SPEC-AI-007~013, SPEC-AI-015 (AI 펀드매니저 강화)   ✅ COMPLETED (2026-05-07)
 Phase 6: SPEC-AI-006                                ⏳ PLANNED (100건+ 거래 데이터 확보 후)
 Phase 7: SPEC-FOLLOW-001                             ⏳ PLANNED
 ```

@@ -4,6 +4,23 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Added — SPEC-AI-015: 시장 레짐 적응형 전략 (Market Regime Adaptive Strategy) (2026-05-07)
+
+**배경**: AI 펀드매니저가 상승장/하락장/횡보장에서 동일한 정적 파라미터를 사용하여 상승장 기회 손실과 하락장 과다 노출 문제 발생. 즉시 적용 fix(168e4cb) 후속으로 레짐 분류를 DB 영속화하고 모든 파라미터를 동적으로 관리.
+
+- **MarketRegime DB 모델** (`backend/app/models/market_regime.py`, 마이그레이션 053):
+  - `market_regimes` 테이블 — date(UNIQUE), regime(ENUM: BULL/SIDEWAYS/BEAR), kospi_5d_return, kospi_20d_ma_position, confidence_score
+- **레짐 분류 서비스** (`backend/app/services/market_regime_service.py`):
+  - BULL: KOSPI 5일 수익률 ≥ +1.5% AND 20일 MA 위 / BEAR: ≤ -1.5% OR 20일 MA -2% 미만 / SIDEWAYS: 나머지
+  - 레짐별 파라미터 — BULL(0.48/20%/30%/7%/7건) · SIDEWAYS(0.55/15%/25%/5%/5건) · BEAR(0.65/10%/15%/4%/2건)
+  - 멱등성: UNIQUE constraint + IntegrityError catch + re-SELECT
+  - 데이터 부재 시 in-memory SIDEWAYS 기본값 반환 (시스템 무중단)
+- **AI 펀드매니저 통합** (`backend/app/services/fund_manager.py`): `analyze_stock()` / `generate_daily_briefing()` 동적 레짐 파라미터 주입
+- **모의투자 통합** (`backend/app/services/paper_trading.py`): `_position_pct_by_confidence(conf, db=None)` — 레짐별 포지션 사이징, db=None 시 기존 정적 사다리 역호환 유지
+- **스케줄러** (`backend/app/services/scheduler.py`): 매 평일 08:55 KST 레짐 갱신 잡 신설
+- **REST API** (`backend/app/routers/fund_manager.py`): `GET /api/fund/market-regime` — 오늘 레짐 + 최근 7일 이력 (데이터 부재 시 SIDEWAYS 기본값 200 OK)
+- **테스트**: 56개 신규 (서비스 30 + 특성화 26 + API 6), 전체 1022개 통과, 회귀 zero
+
 ### Changed — AI 펀드매니저 수익률 개선 (알파 생성 전략 적용) (2026-05-07)
 
 - **신뢰도 임계값 완화** (`backend/app/services/fund_manager.py`): `MIN_ACTION_CONFIDENCE` 0.55 → 0.50 — 상승장에서 과도한 hold 편향 및 현금 드래그 해소
