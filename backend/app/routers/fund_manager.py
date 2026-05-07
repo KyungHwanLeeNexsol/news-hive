@@ -539,3 +539,27 @@ async def get_model_health_endpoint(db: Session = Depends(get_db)):
     """
     from app.services.improvement_loop import get_model_health
     return get_model_health(db)
+
+
+# ---- SPEC-AI-012: 급등 징후 탐지 백테스트 ----
+
+
+@router.get("/surge-backtest")
+async def get_surge_backtest(
+    days: int = Query(default=30, ge=1, le=365, description="최근 N일 이내 시그널 분석"),
+    db: Session = Depends(get_db),
+):
+    """급등 징후 탐지 시그널 백테스트 결과를 조회합니다 (SPEC-AI-012).
+
+    surge_candidate 시그널 중 price_after_5d 검증이 완료된 것들의
+    방향성 적중률, 평균 수익률, 탐지기 조합별 성능을 반환합니다.
+    """
+    from app.services.surge_backtest import compute_surge_backtest
+
+    result = compute_surge_backtest(db, days=days)
+    return {
+        "total_signals": result.total_signals,
+        "directional_accuracy": result.directional_accuracy,
+        "average_return_pct": result.average_return_pct,
+        "by_combination": result.by_combination,
+    }

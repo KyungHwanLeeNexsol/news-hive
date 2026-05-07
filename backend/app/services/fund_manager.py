@@ -26,6 +26,12 @@ from app.models.securities_report import SecuritiesReport
 from app.models.stock import Stock
 from app.models.stock_relation import StockRelation
 from app.services.ai_client import ask_ai_free as _ask_ai, ask_ai_with_openai_fallback as _ask_ai_with_model
+from app.surge_config.surge_settings import get_surge_config
+from app.services.surge_detector import (
+    gather_surge_candidates,
+    surge_candidate_to_signal_metadata,
+    compute_ensemble_score,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1207,6 +1213,125 @@ async def _gather_disclosure_candidates(db: Session) -> list[dict]:
 
     logger.info("[공시후보] %d개 후보 수집", len(candidates))
     return candidates
+
+
+async def _gather_surge_candidates(
+    db: Session,
+    recent_news: list,
+    leading_candidates: list[dict],
+) -> list[dict]:
+    """SPEC-AI-012: 급등 징후 탐지 후보 수집 및 시그널 저장.
+
+    3개 탐지기(테마 클러스터, 거래량 콤보, 공시 패턴) + 앙상블 스코어링으로
+    급등 징후 후보를 탐지하고 FundSignal(signal_type="surge_candidate")로 저장.
+    5영업일 내 중복 시그널은 업데이트로 처리.
+
+    Args:
+        db: SQLAlchemy 동기 세션
+        recent_news: 브리핑용 최근 뉴스 목록
+        leading_candidates: _gather_leading_candidates 결과 (레거시 점수 계산용)
+
+    Returns:
+        후보 종목 dict 목록 (브리핑 풀 주입용, label="급등_징후")
+    """
+    try:
+        surge_config = get_surge_config()
+    except Exception as e:
+        logger.warning("[급등탐지] 설정 로드 실패: %s", e)
+        return []
+
+    try:
+        candidates = gather_surge_candidates(
+            db=db,
+            recent_news=recent_news,
+            config=surge_config,
+            legacy_candidates=leading_candidates,
+        )
+    except Exception as e:
+        logger.warning("[급등탐지] 탐지기 실행 실패: %s", e)
+        return []
+
+    if not candidates:
+        return []
+
+    results: list[dict] = []
+    # @MX:NOTE: 5영업일 중복 방지 — SPEC-AI-012 AC-SURGE-005 명시 기준
+    five_days_ago = datetime.now(timezone.utc) - timedelta(days=5)
+
+    for candidate in candidates:
+        stock = db.query(Stock).filter(Stock.stock_code == candidate.stock_code).first()
+        if not stock:
+            logger.debug("[급등탐지] %s 종목 DB 조회 실패", candidate.stock_code)
+            continue
+
+        ensemble_score = compute_ensemble_score(candidate, surge_config)
+        metadata = surge_candidate_to_signal_metadata(candidate, surge_config)
+        metadata_json = json.dumps(metadata, ensure_ascii=False)
+
+        # 5영업일 내 중복 시그널 확인 → 있으면 업데이트, 없으면 신규 생성
+        existing = (
+            db.query(FundSignal)
+            .filter(
+                FundSignal.stock_id == stock.id,
+                FundSignal.signal_type == "surge_candidate",
+                FundSignal.created_at >= five_days_ago,
+            )
+            .first()
+        )
+
+        if existing:
+            existing.confidence = ensemble_score
+            existing.surge_metadata = metadata_json
+            existing.reasoning = (
+                f"[SPEC-AI-012 급등 징후] 앙상블 점수: {ensemble_score:.3f}, "
+                f"탐지기: {', '.join(candidate.active_detectors)}"
+            )
+            try:
+                db.flush()
+                logger.debug("[급등탐지] %s 기존 시그널 업데이트", candidate.stock_code)
+            except Exception as e:
+                db.rollback()
+                logger.warning("[급등탐지] %s 시그널 업데이트 실패: %s", candidate.stock_code, e)
+        else:
+            signal = FundSignal(
+                stock_id=stock.id,
+                signal="buy",
+                confidence=ensemble_score,
+                reasoning=(
+                    f"[SPEC-AI-012 급등 징후] 앙상블 점수: {ensemble_score:.3f}, "
+                    f"탐지기: {', '.join(candidate.active_detectors)}"
+                ),
+                signal_type="surge_candidate",
+                surge_metadata=metadata_json,
+            )
+            db.add(signal)
+            try:
+                db.flush()
+                logger.info("[급등탐지] %s 시그널 저장 (score=%.3f)", candidate.stock_code, ensemble_score)
+            except Exception as e:
+                db.rollback()
+                logger.warning("[급등탐지] %s 시그널 저장 실패: %s", candidate.stock_code, e)
+
+        results.append({
+            "name": candidate.stock_name,
+            "stock_code": candidate.stock_code,
+            "label": "급등_징후",
+            "surge_score": ensemble_score,
+            "active_detectors": candidate.active_detectors,
+            "leading_signals": [
+                {
+                    "type": "surge_candidate",
+                    "strength": "strong" if ensemble_score >= 0.7 else "moderate",
+                    "detail": (
+                        f"급등 징후 앙상블: {ensemble_score:.3f} "
+                        f"({', '.join(candidate.active_detectors)})"
+                    ),
+                }
+            ],
+        })
+
+    logger.info("[급등탐지] 최종 %d개 후보 반환", len(results))
+    return results
 
 
 async def _gather_leading_candidates(
@@ -2569,12 +2694,13 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
         market_sentiment.get('trend', 'stable'), '안정적 →'
     )
 
-    # SPEC-AI-003 + SPEC-AI-004: 선행 매수 신호 후보 + 공시 기반 후보 병렬 수집
+    # SPEC-AI-003 + SPEC-AI-004 + SPEC-AI-012: 선행 매수 신호 후보 + 공시 기반 후보 + 급등 징후 후보 병렬 수집
     leading_data: list[dict] = []
     try:
-        leading_candidates, disclosure_candidates = await asyncio.gather(
+        leading_candidates, disclosure_candidates, surge_candidates_raw = await asyncio.gather(
             _gather_leading_candidates(db, recent_news),
             _gather_disclosure_candidates(db),
+            _gather_surge_candidates(db, recent_news, []),
             return_exceptions=True,
         )
         if isinstance(leading_candidates, Exception):
@@ -2583,6 +2709,9 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
         if isinstance(disclosure_candidates, Exception):
             logger.warning("공시 후보 탐지 실패: %s", disclosure_candidates)
             disclosure_candidates = []
+        if isinstance(surge_candidates_raw, Exception):
+            logger.warning("급등 징후 탐지 실패: %s", surge_candidates_raw)
+            surge_candidates_raw = []
 
         # 공시 후보를 선행 후보 앞에 배치 (미반영 갭 우선순위)
         seen_merge: set[str] = set()
@@ -2592,6 +2721,12 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
                 seen_merge.add(code)
                 leading_data.append(c)
         for c in leading_candidates:
+            code = c.get("code") or c.get("stock_code")
+            if code and code not in seen_merge:
+                seen_merge.add(code)
+                leading_data.append(c)
+        # SPEC-AI-012: 급등 징후 후보 추가 ([:10] cap 이전)
+        for c in surge_candidates_raw:
             code = c.get("code") or c.get("stock_code")
             if code and code not in seen_merge:
                 seen_merge.add(code)

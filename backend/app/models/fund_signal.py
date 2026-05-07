@@ -77,5 +77,9 @@ class FundSignal(Base):
     # @MX:NOTE: 신호 생성(08:30)과 체결(09:05)을 분리하여 실제 장중 시가 기준 체결 시뮬레이션
     paper_executed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
 
+    # SPEC-AI-012: 급등 징후 탐지 메타데이터 (JSON string)
+    # 포함 필드: surge_probability_score, surge_basis (list), 탐지기별 점수
+    surge_metadata: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     stock = relationship("Stock")
     disclosure = relationship("Disclosure", foreign_keys=[disclosure_id])
