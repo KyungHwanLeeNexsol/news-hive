@@ -32,7 +32,7 @@ def upgrade() -> None:
         sa.Column("date", sa.Date, nullable=False),
         sa.Column(
             "regime",
-            sa.Enum("BULL", "BEAR", "SIDEWAYS", name="market_regime_type"),
+            sa.Enum("BULL", "BEAR", "SIDEWAYS", name="market_regime_type", create_type=False),
             nullable=False,
         ),
         sa.Column("kospi_5d_return", sa.Float, nullable=False),
