@@ -10,6 +10,7 @@ Create Date: 2026-05-07
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects.postgresql import ENUM as PgEnum
 from sqlalchemy.sql import func
 
 revision = "053_spec_ai_015_market_regime"
@@ -19,12 +20,17 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # ENUM 타입 먼저 생성 (PostgreSQL 전용)
-    market_regime_type = sa.Enum(
-        "BULL", "BEAR", "SIDEWAYS",
-        name="market_regime_type",
+    # PL/pgSQL DO 블록으로 ENUM 타입 생성 - 이미 존재하면 예외를 무시하는 idempotent 패턴.
+    # sa.Enum(..., create_type=False)는 내부 dialect 변환 시 플래그가 소실되므로
+    # postgresql.ENUM + DO 블록 조합으로 확실하게 처리한다.
+    op.execute(
+        sa.text(
+            "DO $$ BEGIN "
+            "CREATE TYPE market_regime_type AS ENUM ('BULL', 'BEAR', 'SIDEWAYS'); "
+            "EXCEPTION WHEN duplicate_object THEN NULL; "
+            "END $$;"
+        )
     )
-    market_regime_type.create(op.get_bind(), checkfirst=True)
 
     op.create_table(
         "market_regimes",
@@ -32,7 +38,9 @@ def upgrade() -> None:
         sa.Column("date", sa.Date, nullable=False),
         sa.Column(
             "regime",
-            sa.Enum("BULL", "BEAR", "SIDEWAYS", name="market_regime_type", create_type=False),
+            # postgresql.ENUM에 create_type=False를 설정하면 op.create_table()이
+            # 테이블 생성 이벤트에서 ENUM 재생성을 시도하지 않는다.
+            PgEnum("BULL", "BEAR", "SIDEWAYS", name="market_regime_type", create_type=False),
             nullable=False,
         ),
         sa.Column("kospi_5d_return", sa.Float, nullable=False),
