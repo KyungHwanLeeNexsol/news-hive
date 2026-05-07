@@ -16,7 +16,10 @@ from app.schemas.fund_manager import (
     AnalyzeRequest,
     DailyBriefingResponse,
     FundSignalResponse,
+    MarketRegimeHistoryResponse,
+    MarketRegimeResponse,
     PortfolioReportResponse,
+    RegimeParamsResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -563,3 +566,49 @@ async def get_surge_backtest(
         "average_return_pct": result.average_return_pct,
         "by_combination": result.by_combination,
     }
+
+
+def _build_regime_response(regime) -> MarketRegimeResponse:
+    """MarketRegime 모델을 MarketRegimeResponse로 변환한다."""
+    from app.services.market_regime_service import get_regime_params, MarketRegimeEnum
+
+    regime_enum = MarketRegimeEnum(regime.regime) if isinstance(regime.regime, str) else regime.regime
+    params = get_regime_params(regime_enum)
+    return MarketRegimeResponse(
+        date=regime.date,
+        regime=regime_enum.value,
+        kospi_5d_return=regime.kospi_5d_return,
+        kospi_20d_ma_position=regime.kospi_20d_ma_position,
+        volatility_index=regime.volatility_index,
+        confidence_score=regime.confidence_score,
+        params=RegimeParamsResponse(
+            min_action_confidence=params.min_action_confidence,
+            max_position_pct_high=params.max_position_pct_high,
+            target_pct_max=params.target_pct_max,
+            stop_loss_pct_default=params.stop_loss_pct_default,
+            max_daily_trades=params.max_daily_trades,
+        ),
+    )
+
+
+@router.get("/market-regime", response_model=MarketRegimeHistoryResponse)
+async def get_market_regime(db: Session = Depends(get_db)):
+    """오늘의 시장 레짐과 최근 7일 히스토리를 반환합니다 (SPEC-AI-015).
+
+    DB에 오늘 레짐이 없으면 SIDEWAYS 기본값을 반환합니다 (DB 저장 없음).
+    """
+    from app.services.market_regime_service import (
+        get_or_create_today_regime,
+        get_recent_regimes,
+    )
+
+    today_regime = get_or_create_today_regime(db)
+    today_response = _build_regime_response(today_regime)
+
+    history_records = get_recent_regimes(db, days=7)
+    history_responses = [_build_regime_response(r) for r in history_records]
+
+    return MarketRegimeHistoryResponse(
+        today=today_response,
+        history=history_responses,
+    )

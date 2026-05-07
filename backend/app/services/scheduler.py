@@ -999,6 +999,31 @@ def _run_portfolio_snapshot():
         db.close()
 
 
+def _run_market_regime_update():
+    """시장 레짐 분류 실행 (평일 08:55 KST — 데일리 브리핑 5분 전).
+
+    SPEC-AI-015: 브리핑 실행 전 오늘의 시장 레짐을 사전 분류하여 DB에 캐시한다.
+    브리핑/시그널 생성 시 DB 조회로 즉시 참조 가능하도록 보장한다.
+    """
+    _start = _time.monotonic()
+    from app.services.market_regime_service import get_or_create_today_regime
+
+    db = SessionLocal()
+    try:
+        regime = get_or_create_today_regime(db)
+        logger.info(
+            "시장 레짐 분류 완료: %s (신뢰도=%.2f)",
+            regime.regime.value if hasattr(regime.regime, 'value') else str(regime.regime),
+            regime.confidence_score,
+        )
+    except Exception as e:
+        logger.error("시장 레짐 분류 실패: %s", e)
+        raise
+    finally:
+        _record_job_duration("market_regime_update", _time.monotonic() - _start)
+        db.close()
+
+
 def start_scheduler():
     """Start the background news crawl scheduler."""
     interval = settings.NEWS_CRAWL_INTERVAL_MINUTES
@@ -1037,6 +1062,19 @@ def start_scheduler():
         next_run_time=datetime.now(),
     )
     # 데일리 브리핑 + 매수/매도 시그널 생성: 매일 08:30 KST (장 시작 전, 평일만)
+    # SPEC-AI-015: 시장 레짐 사전 분류 (08:55 KST — 브리핑 5분 전)
+    scheduler.add_job(
+        _run_market_regime_update,
+        "cron",
+        day_of_week="mon-fri",
+        hour=8,
+        minute=55,
+        timezone="Asia/Seoul",
+        id="market_regime_update",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
     scheduler.add_job(
         _run_daily_briefing,
         "cron",

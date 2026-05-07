@@ -1,0 +1,283 @@
+"""시장 레짐 분류 서비스.
+
+SPEC-AI-015: KOSPI 5일 수익률과 20일 이동평균 위치를 기반으로
+시장 국면(상승장/하락장/횡보장)을 분류하고 레짐별 투자 파라미터를 제공한다.
+
+# @MX:ANCHOR: [AUTO] get_or_create_today_regime — paper_trading, fund_manager, scheduler에서 호출
+# @MX:REASON: 레짐 파라미터가 매수 비중, 손절 기준, 일일 최대 거래 수를 결정하는 핵심 함수
+# @MX:SPEC: SPEC-AI-015
+"""
+
+import asyncio
+import datetime
+import logging
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Optional
+
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.models.market_regime import MarketRegime, MarketRegimeEnum
+
+if TYPE_CHECKING:
+    pass
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class RegimeParams:
+    """레짐별 투자 파라미터."""
+    # 시그널 실행 최소 확신도
+    min_action_confidence: float
+    # 확신도 >= 0.80일 때 최대 포지션 비율
+    max_position_pct_high: float
+    # 목표가 최대 비율
+    target_pct_max: float
+    # 기본 손절 비율
+    stop_loss_pct_default: float
+    # 일일 최대 신규 매수 건수
+    max_daily_trades: int
+
+
+# @MX:NOTE: [AUTO] SPEC-AI-015 Table 1 기준 레짐별 파라미터 — 하드코딩 변경 금지
+# @MX:SPEC: SPEC-AI-015
+REGIME_PARAMS_MAP: dict[MarketRegimeEnum, RegimeParams] = {
+    MarketRegimeEnum.BULL: RegimeParams(
+        min_action_confidence=0.48,
+        max_position_pct_high=0.20,
+        target_pct_max=0.30,
+        stop_loss_pct_default=0.07,
+        max_daily_trades=7,
+    ),
+    MarketRegimeEnum.SIDEWAYS: RegimeParams(
+        min_action_confidence=0.55,
+        max_position_pct_high=0.15,
+        target_pct_max=0.25,
+        stop_loss_pct_default=0.05,
+        max_daily_trades=5,
+    ),
+    MarketRegimeEnum.BEAR: RegimeParams(
+        min_action_confidence=0.65,
+        max_position_pct_high=0.10,
+        target_pct_max=0.15,
+        stop_loss_pct_default=0.04,
+        max_daily_trades=2,
+    ),
+}
+
+
+def classify_market_regime(
+    kospi_5d_return: float,
+    kospi_20d_ma_position: float,
+    vol_level: Optional[float] = None,
+) -> tuple[MarketRegimeEnum, float]:
+    """KOSPI 지표를 기반으로 시장 레짐과 신뢰도를 분류한다.
+
+    분류 기준 (SPEC-AI-015):
+    - BULL:     kospi_5d_return >= +1.5% AND kospi_20d_ma_position > 0%
+    - BEAR:     kospi_5d_return <= -1.5% OR  kospi_20d_ma_position < -2%
+    - SIDEWAYS: 나머지 모든 경우
+
+    Args:
+        kospi_5d_return: KOSPI 5일 수익률 (%)
+        kospi_20d_ma_position: KOSPI 20일 MA 대비 현재가 위치 (%)
+        vol_level: 변동성 지수 (선택적, 현재 미사용)
+
+    Returns:
+        (regime, confidence_score) 튜플
+    """
+    # @MX:WARN: [AUTO] 분류 순서 중요 — BULL 조건을 BEAR보다 먼저 검사해야 함
+    # @MX:REASON: 5d_ret >= 1.5% AND ma_pos > 0% 이면 BULL, <= -1.5% OR ma_pos < -2% 이면 BEAR
+    if kospi_5d_return >= 1.5 and kospi_20d_ma_position > 0.0:
+        regime = MarketRegimeEnum.BULL
+        # BULL confidence: 5d_ret/3.0 * 0.5 + ma_pos/5.0 * 0.5
+        confidence = min(
+            1.0,
+            (kospi_5d_return / 3.0) * 0.5 + (max(0.0, kospi_20d_ma_position) / 5.0) * 0.5,
+        )
+    elif kospi_5d_return <= -1.5 or kospi_20d_ma_position < -2.0:
+        regime = MarketRegimeEnum.BEAR
+        # BEAR confidence: abs(5d_ret)/3.0 * 0.5 + abs(min(0, ma_pos))/5.0 * 0.5
+        confidence = min(
+            1.0,
+            (abs(kospi_5d_return) / 3.0) * 0.5
+            + (abs(min(0.0, kospi_20d_ma_position)) / 5.0) * 0.5,
+        )
+    else:
+        regime = MarketRegimeEnum.SIDEWAYS
+        confidence = 0.6
+
+    return regime, confidence
+
+
+def get_regime_params(regime: MarketRegimeEnum) -> RegimeParams:
+    """레짐에 해당하는 투자 파라미터를 반환한다.
+
+    Args:
+        regime: 시장 레짐 유형
+
+    Returns:
+        RegimeParams 인스턴스
+    """
+    return REGIME_PARAMS_MAP[regime]
+
+
+def get_or_create_today_regime(db: Session) -> MarketRegime:
+    """오늘 날짜의 시장 레짐을 조회하거나 새로 분류하여 생성한다.
+
+    - 오늘 레짐이 이미 존재하면 SELECT하여 반환 (멱등성)
+    - 없으면 KOSPI 데이터를 기반으로 분류 후 INSERT
+    - IntegrityError(경쟁 상태) 발생 시 re-SELECT
+    - 데이터 조회 불가 시 인메모리 SIDEWAYS 기본값 반환 (DB 미저장)
+
+    Args:
+        db: SQLAlchemy sync Session
+
+    Returns:
+        MarketRegime 인스턴스 (id=None인 경우 인메모리 기본값)
+    """
+    today = datetime.date.today()
+
+    # 이미 오늘 레짐이 존재하는지 확인
+    existing = (
+        db.query(MarketRegime)
+        .filter(MarketRegime.date == today)
+        .first()
+    )
+    if existing:
+        return existing
+
+    # KOSPI 데이터 수집
+    try:
+        kospi_5d_return, kospi_20d_ma_position = _fetch_kospi_indicators(db)
+    except Exception as e:
+        logger.warning(
+            "KOSPI 지표 수집 실패 — SIDEWAYS 기본값으로 대체: %s", e
+        )
+        return _make_default_regime(today)
+
+    # 레짐 분류
+    regime, confidence = classify_market_regime(kospi_5d_return, kospi_20d_ma_position)
+
+    # DB INSERT
+    new_regime = MarketRegime(
+        date=today,
+        regime=regime,
+        kospi_5d_return=kospi_5d_return,
+        kospi_20d_ma_position=kospi_20d_ma_position,
+        confidence_score=confidence,
+    )
+    db.add(new_regime)
+    try:
+        db.commit()
+        db.refresh(new_regime)
+        logger.info(
+            "시장 레짐 분류 완료: %s (신뢰도=%.2f, 5d_ret=%.2f%%, ma_pos=%.2f%%)",
+            regime.value, confidence, kospi_5d_return, kospi_20d_ma_position,
+        )
+        return new_regime
+    except IntegrityError:
+        # 경쟁 상태: 다른 프로세스가 먼저 INSERT — rollback 후 re-SELECT
+        db.rollback()
+        logger.info("IntegrityError 감지 — re-SELECT: date=%s", today)
+        existing = (
+            db.query(MarketRegime)
+            .filter(MarketRegime.date == today)
+            .first()
+        )
+        if existing:
+            return existing
+        # 극단적 경쟁 상태: 기본값 반환
+        logger.warning("re-SELECT 실패 — SIDEWAYS 기본값 반환")
+        return _make_default_regime(today)
+
+
+def get_recent_regimes(db: Session, days: int = 7) -> list[MarketRegime]:
+    """최근 N일간의 시장 레짐 데이터를 날짜 역순으로 반환한다.
+
+    Args:
+        db: SQLAlchemy sync Session
+        days: 조회할 일수 (기본 7일)
+
+    Returns:
+        MarketRegime 리스트 (날짜 역순)
+    """
+    cutoff = datetime.date.today() - datetime.timedelta(days=days)
+    return (
+        db.query(MarketRegime)
+        .filter(MarketRegime.date >= cutoff)
+        .order_by(MarketRegime.date.desc())
+        .all()
+    )
+
+
+def _fetch_kospi_indicators(db: Session) -> tuple[float, float]:
+    """KOSPI 5일 수익률과 20일 MA 위치를 계산하여 반환한다.
+
+    kospi_5d_return: SectorMomentum.avg_return_5d 전체 평균 (오늘 날짜)
+    kospi_20d_ma_position: benchmark._load_kospi_closes()로 계산
+
+    Args:
+        db: SQLAlchemy sync Session
+
+    Returns:
+        (kospi_5d_return, kospi_20d_ma_position) 튜플 (단위: %)
+
+    Raises:
+        ValueError: 데이터를 구할 수 없는 경우
+    """
+    today = datetime.date.today()
+
+    # KOSPI 5일 수익률: SectorMomentum 전체 평균
+    from app.models.sector_momentum import SectorMomentum
+
+    avg_row = (
+        db.query(func.avg(SectorMomentum.avg_return_5d))
+        .filter(SectorMomentum.date == today)
+        .scalar()
+    )
+    if avg_row is None:
+        raise ValueError(f"SectorMomentum 데이터 없음 (date={today})")
+    kospi_5d_return = float(avg_row)
+
+    # KOSPI 20일 MA 위치: benchmark에서 종가 로드
+    from app.services import benchmark
+
+    closes = asyncio.run(benchmark._load_kospi_closes(pages=3))
+    if not closes:
+        raise ValueError("KOSPI 종가 데이터 없음")
+
+    # 최근 날짜 기준 정렬
+    sorted_dates = sorted(closes.keys(), reverse=True)
+    if len(sorted_dates) < 2:
+        raise ValueError(f"KOSPI 종가 데이터 부족: {len(sorted_dates)}개")
+
+    # 가장 최근 종가
+    current_close = closes[sorted_dates[0]]
+
+    # 최근 20거래일 평균 (데이터가 20개 미만이면 있는 것만 사용)
+    recent_20 = sorted_dates[:20]
+    ma_20 = sum(closes[d] for d in recent_20) / len(recent_20)
+
+    if ma_20 <= 0:
+        raise ValueError("20일 MA 계산 오류: 0 이하")
+
+    kospi_20d_ma_position = (current_close - ma_20) / ma_20 * 100.0
+    return kospi_5d_return, kospi_20d_ma_position
+
+
+def _make_default_regime(today: datetime.date) -> MarketRegime:
+    """데이터 부재 시 반환할 인메모리 SIDEWAYS 기본값 (DB 저장 없음).
+
+    REQ-AI-015-040: 데이터 미사용 가능 시 SIDEWAYS + 신뢰도 0.5 반환.
+    """
+    return MarketRegime(
+        id=None,  # type: ignore[arg-type]
+        date=today,
+        regime=MarketRegimeEnum.SIDEWAYS,
+        kospi_5d_return=0.0,
+        kospi_20d_ma_position=0.0,
+        confidence_score=0.5,
+    )

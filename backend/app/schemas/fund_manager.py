@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Optional
 
 from pydantic import BaseModel
 
@@ -78,3 +79,35 @@ class PortfolioReportResponse(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     stock_ids: list[int] | None = None
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-015: 시장 레짐 응답 스키마
+# ---------------------------------------------------------------------------
+
+class RegimeParamsResponse(BaseModel):
+    """레짐별 투자 파라미터 응답."""
+    min_action_confidence: float
+    max_position_pct_high: float
+    target_pct_max: float
+    stop_loss_pct_default: float
+    max_daily_trades: int
+
+
+class MarketRegimeResponse(BaseModel):
+    """시장 레짐 단건 응답."""
+    date: date
+    regime: str  # "BULL" / "BEAR" / "SIDEWAYS"
+    kospi_5d_return: float
+    kospi_20d_ma_position: float
+    volatility_index: Optional[float] = None
+    confidence_score: float
+    params: RegimeParamsResponse
+
+    model_config = {"from_attributes": True}
+
+
+class MarketRegimeHistoryResponse(BaseModel):
+    """시장 레짐 현재 + 히스토리 응답."""
+    today: MarketRegimeResponse
+    history: list[MarketRegimeResponse]

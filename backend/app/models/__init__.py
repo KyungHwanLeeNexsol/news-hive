@@ -28,6 +28,7 @@ from app.models.following import (
     KeywordNotification,
 )
 from app.models.securities_report import SecuritiesReport
+from app.models.market_regime import MarketRegime, MarketRegimeEnum
 
 __all__ = [
     "Sector", "Stock", "NewsArticle", "NewsStockRelation",
@@ -42,4 +43,5 @@ __all__ = [
     "UserWatchlist", "UserPreferences", "PushSubscription",
     "StockFollowing", "StockKeyword", "KeywordNotification",
     "SecuritiesReport",
+    "MarketRegime", "MarketRegimeEnum",
 ]

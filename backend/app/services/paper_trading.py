@@ -121,8 +121,36 @@ def check_defensive_mode(db: Session) -> bool:
     return portfolio.is_defensive_mode
 
 
-def _position_pct_by_confidence(confidence: float) -> float:
-    """confidence 구간별 포지션 비율 반환."""
+def _position_pct_by_confidence(confidence: float, db: Session | None = None) -> float:
+    """confidence 구간별 포지션 비율 반환.
+
+    db가 None이면 정적 사다리 사용 (하위 호환성 유지).
+    db가 제공되면 오늘의 시장 레짐 파라미터를 사용한다.
+
+    # @MX:ANCHOR: [AUTO] paper_trading.execute_signal_trade에서 단일 호출
+    # @MX:REASON: 레짐별 max_position_pct_high가 포지션 사이징을 결정
+    # @MX:SPEC: SPEC-AI-015
+    """
+    if db is not None:
+        try:
+            from app.services.market_regime_service import (
+                get_or_create_today_regime,
+                get_regime_params,
+            )
+            today_regime = get_or_create_today_regime(db)
+            regime_params = get_regime_params(today_regime.regime)
+            # 레짐별 포지션 비율: confidence >= 0.80이면 max_position_pct_high, 아니면 비례 계산
+            if confidence >= 0.80:
+                return regime_params.max_position_pct_high
+            if confidence >= 0.70:
+                return regime_params.max_position_pct_high * 0.75
+            if confidence >= 0.60:
+                return regime_params.max_position_pct_high * 0.50
+            return regime_params.max_position_pct_high * 0.25
+        except Exception as e:
+            logger.warning("레짐 파라미터 조회 실패, 정적 사다리 사용: %s", e)
+
+    # 정적 사다리 (db=None 또는 레짐 서비스 장애 시 폴백)
     if confidence >= 0.80:
         return 0.20  # 최고 확신: 20% (알파 집중 투자)
     if confidence >= 0.70:
@@ -140,11 +168,29 @@ async def execute_signal_trade(db: Session, signal: FundSignal) -> VirtualTrade 
     - hold 시그널은 무시
     # REQ-AI-007-001: 거래 실행 임계값 = MIN_ACTION_CONFIDENCE(0.55) - 0.05 = 0.50
     # fund_manager 코드 가드(0.55) 통과 후 Bayesian calibration 고려한 실행 임계값
+    # SPEC-AI-015: 레짐별 MAX_DAILY_TRADES, DEFAULT_TARGET_PCT, DEFAULT_STOP_LOSS_PCT 적용
     """
     if signal.signal == "hold":
         return None
     if signal.signal == "buy" and signal.confidence < MIN_ACTION_CONFIDENCE - 0.05:
         return None
+
+    # SPEC-AI-015: 오늘의 레짐 파라미터 로드 (실패 시 기본값 유지)
+    _regime_max_daily_trades = MAX_DAILY_TRADES
+    _regime_target_pct = DEFAULT_TARGET_PCT
+    _regime_stop_loss_pct = DEFAULT_STOP_LOSS_PCT
+    try:
+        from app.services.market_regime_service import (
+            get_or_create_today_regime,
+            get_regime_params,
+        )
+        _today_regime = get_or_create_today_regime(db)
+        _regime_params = get_regime_params(_today_regime.regime)
+        _regime_max_daily_trades = _regime_params.max_daily_trades
+        _regime_target_pct = _regime_params.target_pct_max
+        _regime_stop_loss_pct = _regime_params.stop_loss_pct_default
+    except Exception as e:
+        logger.warning("레짐 파라미터 로드 실패, 기본값 사용: %s", e)
 
     # REQ-021: 방어 모드 점검 및 매수 차단
     is_defensive = check_defensive_mode(db)
@@ -220,10 +266,10 @@ async def execute_signal_trade(db: Session, signal: FundSignal) -> VirtualTrade 
         )
         .scalar()
     )
-    if today_trades >= MAX_DAILY_TRADES:
+    if today_trades >= _regime_max_daily_trades:
         logger.info(
             "일일 매수 한도 초과: %d/%d, 신규 매수 차단 (%s)",
-            today_trades, MAX_DAILY_TRADES, stock.name,
+            today_trades, _regime_max_daily_trades, stock.name,
         )
         return None
 
@@ -233,7 +279,8 @@ async def execute_signal_trade(db: Session, signal: FundSignal) -> VirtualTrade 
         return None
 
     signal_conf = float(signal.confidence) if signal.confidence is not None else 0.5
-    max_invest = int(portfolio.current_cash * _position_pct_by_confidence(signal_conf))
+    # SPEC-AI-015: db를 전달하여 레짐 기반 포지션 비율 사용
+    max_invest = int(portfolio.current_cash * _position_pct_by_confidence(signal_conf, db=db))
     if max_invest < entry_price:
         logger.info("자금 부족: cash=%d, 필요=%d", portfolio.current_cash, entry_price)
         return None
@@ -269,10 +316,10 @@ async def execute_signal_trade(db: Session, signal: FundSignal) -> VirtualTrade 
                 stock.name, dynamic_result["method"], final_target, final_stop,
             )
         except Exception as e:
-            # 동적 계산 실패 시 레거시 고정 비율 폴백
+            # 동적 계산 실패 시 레짐 기반 비율 폴백 (레짐 로드 실패 시 기본 상수)
             logger.warning("동적 TP/SL 계산 실패, 고정 비율 사용 (%s): %s", stock.name, e)
-            final_target = final_target or int(entry_price * (1 + DEFAULT_TARGET_PCT))
-            final_stop = final_stop or int(entry_price * (1 - DEFAULT_STOP_LOSS_PCT))
+            final_target = final_target or int(entry_price * (1 + _regime_target_pct))
+            final_stop = final_stop or int(entry_price * (1 - _regime_stop_loss_pct))
 
     # 매매 실행
     trade = VirtualTrade(

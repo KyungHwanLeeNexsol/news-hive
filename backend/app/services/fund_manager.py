@@ -2298,22 +2298,55 @@ async def analyze_stock(
     else:
         consensus_section = ""  # 데이터 부족
 
-    # 시장 레짐 판단: market_data의 5일 추세 활용
+    # SPEC-AI-015: 시장 레짐 서비스 기반 판단
     _signal_market_regime = ""
     _signal_regime_bias = ""
-    if market_data:
-        _price_5d = market_data.get("price_5d_trend")
-        if _price_5d is not None:
-            try:
-                _p5 = float(_price_5d)
-                if _p5 >= 1.5:
-                    _signal_market_regime = f"상승 추세 (KOSPI 5일 +{_p5:.1f}% 추정)"
-                    _signal_regime_bias = "※ 상승 추세 시장: 확신이 있다면 buy를 기본으로, hold는 명확한 반대 근거가 있을 때만."
-                elif _p5 <= -1.5:
-                    _signal_market_regime = f"하락 추세 (KOSPI 5일 {_p5:.1f}% 추정)"
-                    _signal_regime_bias = "※ 하락 추세 시장: 매수는 매우 강한 근거 있을 때만, 기본은 hold/sell."
-            except (TypeError, ValueError):
-                pass
+    _signal_min_confidence = str(MIN_ACTION_CONFIDENCE)
+    _signal_target_max = "25"  # SIDEWAYS 기본값 (25%)
+    _regime_params_for_guard = None  # confidence 가드용 파라미터
+    try:
+        from app.services.market_regime_service import (
+            get_or_create_today_regime,
+            get_regime_params,
+            MarketRegimeEnum,
+        )
+        _today_signal_regime = get_or_create_today_regime(db)
+        _today_signal_params = get_regime_params(_today_signal_regime.regime)
+        _regime_params_for_guard = _today_signal_params
+
+        _regime_label_map = {
+            MarketRegimeEnum.BULL: "상승장 (BULL)",
+            MarketRegimeEnum.BEAR: "하락장 (BEAR)",
+            MarketRegimeEnum.SIDEWAYS: "횡보장 (SIDEWAYS)",
+        }
+        _regime_bias_map = {
+            MarketRegimeEnum.BULL: "※ 상승 추세 시장: 확신이 있다면 buy를 기본으로, hold는 명확한 반대 근거가 있을 때만.",
+            MarketRegimeEnum.BEAR: "※ 하락 추세 시장: 매수는 매우 강한 근거 있을 때만, 기본은 hold/sell.",
+            MarketRegimeEnum.SIDEWAYS: "※ 횡보 시장: 개별 종목의 차별적 강도를 기준으로 판단하세요.",
+        }
+        _signal_market_regime = (
+            f"{_regime_label_map[_today_signal_regime.regime]} "
+            f"(신뢰도={_today_signal_regime.confidence_score:.2f})"
+        )
+        _signal_regime_bias = _regime_bias_map[_today_signal_regime.regime]
+        _signal_min_confidence = str(_today_signal_params.min_action_confidence)
+        _signal_target_max = str(int(_today_signal_params.target_pct_max * 100))
+    except Exception as _regime_err:
+        logger.warning("레짐 서비스 조회 실패, 기존 로직 폴백: %s", _regime_err)
+        # 폴백: market_data의 5일 추세 활용 (기존 로직)
+        if market_data:
+            _price_5d = market_data.get("price_5d_trend")
+            if _price_5d is not None:
+                try:
+                    _p5 = float(_price_5d)
+                    if _p5 >= 1.5:
+                        _signal_market_regime = f"상승 추세 (KOSPI 5일 +{_p5:.1f}% 추정)"
+                        _signal_regime_bias = "※ 상승 추세 시장: 확신이 있다면 buy를 기본으로, hold는 명확한 반대 근거가 있을 때만."
+                    elif _p5 <= -1.5:
+                        _signal_market_regime = f"하락 추세 (KOSPI 5일 {_p5:.1f}% 추정)"
+                        _signal_regime_bias = "※ 하락 추세 시장: 매수는 매우 강한 근거 있을 때만, 기본은 hold/sell."
+                except (TypeError, ValueError):
+                    pass
 
     # Build comprehensive prompt
     prompt = f"""당신은 20년 경력 전문 펀드매니저입니다.
@@ -2448,12 +2481,17 @@ async def analyze_stock(
     # 코드 레벨 가드: AI가 프롬프트 지시(confidence >= MIN_ACTION_CONFIDENCE)를 무시하고
     # 낮은 confidence로 buy/sell을 출력하는 경우 강제로 hold 변환.
     # gpt-4o-mini 등 fallback 모델의 instruction-following 불완전성 대응.
-    # REQ-AI-007-001: 모듈 레벨 MIN_ACTION_CONFIDENCE(0.55) 참조 — 로컬 상수 제거
-    if parsed.get("signal") in ("buy", "sell") and confidence_val < MIN_ACTION_CONFIDENCE:
+    # SPEC-AI-015: 레짐별 min_action_confidence 사용 (폴백: 모듈 상수)
+    _effective_min_confidence = (
+        _regime_params_for_guard.min_action_confidence
+        if _regime_params_for_guard is not None
+        else MIN_ACTION_CONFIDENCE
+    )
+    if parsed.get("signal") in ("buy", "sell") and confidence_val < _effective_min_confidence:
         logger.info(
             "낮은 confidence로 buy/sell 강제 hold 변환: %s (conf=%.2f < %.2f, signal=%s)",
             stock.name,
-            confidence_val, MIN_ACTION_CONFIDENCE, parsed["signal"],
+            confidence_val, _effective_min_confidence, parsed["signal"],
         )
         parsed["signal"] = "hold"
 
@@ -2954,20 +2992,46 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
     except Exception as e:
         logger.warning(f"방어 모드 상태 확인 실패 (브리핑 계속 진행): {e}")
 
-    # 시장 레짐 판단: KOSPI 5일 수익률 기준
-    if _kospi_ret_5d is not None:
-        if _kospi_ret_5d >= 1.5:
-            _market_regime = f"상승 추세 (KOSPI 5일 +{_kospi_ret_5d:.1f}%)"
-            _regime_bias = "※ 현재 상승 추세 시장입니다. 확신이 있다면 매수를 우선 고려하고, hold는 명확한 반대 근거가 있을 때만 선택하세요."
-        elif _kospi_ret_5d <= -1.5:
-            _market_regime = f"하락 추세 (KOSPI 5일 {_kospi_ret_5d:.1f}%)"
-            _regime_bias = "※ 현재 하락 추세 시장입니다. 매수는 매우 강한 근거가 있을 때만 추천하고, 관망/회피를 기본으로 하세요."
-        else:
-            _market_regime = f"횡보 구간 (KOSPI 5일 {_kospi_ret_5d:+.1f}%)"
-            _regime_bias = "※ 횡보 시장입니다. 개별 종목의 차별적 강도를 기준으로 판단하세요."
-    else:
-        _market_regime = "데이터 없음"
-        _regime_bias = ""
+    # SPEC-AI-015: 시장 레짐 서비스 기반 판단 (폴백: KOSPI 5일 수익률 기준)
+    _market_regime = "데이터 없음"
+    _regime_bias = ""
+    try:
+        from app.services.market_regime_service import (
+            get_or_create_today_regime,
+            MarketRegimeEnum as _BriefRegimeEnum,
+        )
+        _briefing_regime = get_or_create_today_regime(db)
+        _briefing_regime_label_map = {
+            _BriefRegimeEnum.BULL: "상승장 (BULL)",
+            _BriefRegimeEnum.BEAR: "하락장 (BEAR)",
+            _BriefRegimeEnum.SIDEWAYS: "횡보장 (SIDEWAYS)",
+        }
+        _briefing_regime_bias_map = {
+            _BriefRegimeEnum.BULL: "※ 현재 상승 추세 시장입니다. 확신이 있다면 매수를 우선 고려하고, hold는 명확한 반대 근거가 있을 때만 선택하세요.",
+            _BriefRegimeEnum.BEAR: "※ 현재 하락 추세 시장입니다. 매수는 매우 강한 근거가 있을 때만 추천하고, 관망/회피를 기본으로 하세요.",
+            _BriefRegimeEnum.SIDEWAYS: "※ 횡보 시장입니다. 개별 종목의 차별적 강도를 기준으로 판단하세요.",
+        }
+        _market_regime = (
+            f"{_briefing_regime_label_map[_briefing_regime.regime]} "
+            f"(신뢰도={_briefing_regime.confidence_score:.2f})"
+        )
+        _regime_bias = _briefing_regime_bias_map[_briefing_regime.regime]
+        # _kospi_ret_5d 기반 부가 정보가 있으면 레짐명에 보조 수치 추가
+        if _kospi_ret_5d is not None:
+            _market_regime += f" | KOSPI 5일 {_kospi_ret_5d:+.1f}%"
+    except Exception as _brief_regime_err:
+        logger.warning("브리핑 레짐 서비스 조회 실패, KOSPI 수익률 폴백: %s", _brief_regime_err)
+        # 폴백: 기존 KOSPI 5일 수익률 기준 로직
+        if _kospi_ret_5d is not None:
+            if _kospi_ret_5d >= 1.5:
+                _market_regime = f"상승 추세 (KOSPI 5일 +{_kospi_ret_5d:.1f}%)"
+                _regime_bias = "※ 현재 상승 추세 시장입니다. 확신이 있다면 매수를 우선 고려하고, hold는 명확한 반대 근거가 있을 때만 선택하세요."
+            elif _kospi_ret_5d <= -1.5:
+                _market_regime = f"하락 추세 (KOSPI 5일 {_kospi_ret_5d:.1f}%)"
+                _regime_bias = "※ 현재 하락 추세 시장입니다. 매수는 매우 강한 근거가 있을 때만 추천하고, 관망/회피를 기본으로 하세요."
+            else:
+                _market_regime = f"횡보 구간 (KOSPI 5일 {_kospi_ret_5d:+.1f}%)"
+                _regime_bias = "※ 횡보 시장입니다. 개별 종목의 차별적 강도를 기준으로 판단하세요."
 
     prompt = f"""당신은 국내 최고 자산운용사의 CIO(최고투자책임자)이자 20년 경력 전문 펀드매니저입니다.
 오늘 날짜: {today.strftime('%Y년 %m월 %d일')}
