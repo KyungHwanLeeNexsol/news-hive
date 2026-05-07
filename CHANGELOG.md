@@ -4,6 +4,38 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Added — SPEC-AI-012: 급등 징후 탐지 시스템 (2026-05-07)
+
+**배경**: 기존 4개 사전 탐지기(조용한 매집·뉴스-주가 괴리·볼린저밴드 압축·섹터 후행)와 SPEC-AI-004(공시 미반영 갭)만으로는 단기 급등 가능성이 높은 3개 신호 영역(테마 뉴스 클러스터링·거래량-뉴스 복합·공시 유형별 역사적 급등 패턴)이 미포착 상태였음. 룰 기반 앙상블 스코어로 신호 우선순위화 시스템을 구현.
+
+- **테마 뉴스 클러스터 탐지기** (`backend/app/services/surge_detector.py`):
+  - 48시간 이내 동일 테마 키워드가 N건 이상 출현한 종목군을 자동 발굴 (`min_news_count` 설정값 경유)
+  - 시총 필터·섹터-테마 매핑 적용, 중복 발굴 방지
+- **거래량 z-score + 뉴스 복합 신호 탐지기** (`backend/app/services/surge_detector.py`):
+  - 24시간 이내 거래량 z-score ≥ 임계값 AND 관련 뉴스 감성 점수 동시 충족 종목 포착
+  - z-score 기준값(`volume_zscore_threshold`)과 히스토리 기간(`lookback_days`) 모두 설정 파일 경유
+- **공시 유형별 역사적 급등률 탐지기** (`backend/app/services/surge_detector.py`):
+  - SPEC-AI-004 FundSignal 데이터를 재활용해 공시 유형별 5일 후 상승 비율(historical surge rate) 산출
+  - 24h 인메모리 캐시(`_surge_rate_cache`) 적용으로 DB 쿼리 최소화
+  - `min_sample_size`(최소 표본) · `min_surge_rate`(최소 비율) 설정 기반 필터링
+- **가중 앙상블 스코어링** (`backend/app/services/surge_detector.py`):
+  - `surge_probability_score = 0.25×테마 + 0.30×거래량_뉴스 + 0.25×공시패턴 + 0.20×레거시`
+  - 레거시 점수: 기존 4개 탐지기 트리거 수 / 4 (`min(1.0, n/4)`)
+  - `min_score_for_signal` 임계값 미달 시 `FundSignal` 생성 미실행
+- **surge_candidate 시그널 통합** (`backend/app/services/fund_manager.py`):
+  - `_gather_surge_candidates()` — `generate_daily_briefing`의 `asyncio.gather`에서 병렬 호출
+  - 5 거래일 이내 동일 종목 중복 시그널 방지 (UPDATE vs INSERT 분기)
+  - `FundSignal.surge_metadata` (Text, nullable) 컬럼에 탐지기 조합 JSON 저장
+- **신규 API 엔드포인트** (`backend/app/routers/fund_manager.py`):
+  - `GET /fund/surge-backtest?days=30` — 방향성 적중률·평균 5일 수익률·탐지기 조합별 통계 반환
+- **설정 외부화** (`backend/app/surge_config/surge_detection.yaml`):
+  - 모든 임계값(z-score, 테마 키워드 수, 공시 급등률, 앙상블 가중치 등) YAML 설정 경유
+  - `SurgeDetectionConfig` Pydantic v2 모델로 타입 안전 로딩 (`model_validator` 가중치 합 검증)
+- **DB 마이그레이션**: `051_spec_ai_012_surge_signal.py` — `fund_signals.surge_metadata` Text nullable 컬럼 추가
+- **테스트 22개 추가** (`test_surge_detector.py`, `test_surge_backtest.py`): 전체 920/920 PASS
+  - AC-SURGE-001 ~ 007 모두 충족
+  - 5-day 중복 방지 UPDATE/INSERT 분기 테스트(AC-SURGE-005) 포함
+
 ### Fixed — AI 펀드매니저 상승장 과매수 차단 완화 및 프롬프트 개선 (2026-05-06)
 
 **배경**: 한국증시 상승장에서 Stochastic >80 + 이격도 >103% 종목(과매수 상태)이 기술적 승수 0.5를 적용받아 AI confidence가 절반으로 낮아지고 실행 임계값(0.50)에 미달 처리됨. 상승장에서 과매수는 정상 상태임에도 매수 신호가 전혀 생성되지 않는 문제 해결.
