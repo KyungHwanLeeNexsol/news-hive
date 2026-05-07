@@ -4,6 +4,38 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Added — SPEC-AI-013: 급등예측 모의투자 포트폴리오 (2026-05-07)
+
+**배경**: SPEC-AI-012에서 생성되는 `FundSignal(signal_type="surge_candidate")` 시그널을 추적·검증할 독립 모의투자 모델이 없어 시그널 수익성 측정이 불가능한 상황. 기존 3개 모델(AI Fund/VIP/KS200)과 완전 분리된 4번째 모의투자 포트폴리오(급등예측 모델) 신설.
+
+- **급등예측 포트폴리오 데이터 모델** (`surge_portfolios`, `surge_trades` 테이블):
+  - 초기 자본 5,000,000 KRW, 기존 3개 모델과 자본·포지션·종료조건 완전 분리
+  - `FundSignal.paper_executed` 미수정 — `SurgeTrade` 조회 기반 중복 진입 차단(Option B)
+  - `surge_probability_score` 스냅샷 저장으로 진입 시점 시그널 정확도 역분석 지원
+- **자동 매수 로직** (`backend/app/services/surge_trading_service.py`):
+  - KST 평일 09:00~15:30 정규장 내에서만 매수 실행 — 장외 시간은 즉시 no-op
+  - `surge_probability_score ≥ 0.6` 시그널만 선택 (설정 가능)
+  - 포지션당 초기 자본의 20% (기본 1,000,000원), 일 최대 5 포지션 (설정 가능)
+  - async `fetch_current_price` 어댑터(`_get_current_price_sync`)로 sync 서비스에서 안전 호출
+- **자동 매도 로직** (`backend/app/services/surge_trading_service.py`):
+  - 손절: -8%, 익절: +15%, 최대 보유: 5 거래일 (주말 제외, 공휴일 1차 무시)
+  - 가격 조회 실패 시 매도 강제 실행 없음 — 다음 체크 사이클로 안전하게 연기
+  - 매도 시 `current_cash` 가산과 `SurgeTrade` 업데이트를 단일 트랜잭션으로 처리
+- **APScheduler 잡 2개** (`backend/app/services/scheduler.py`):
+  - `surge_execute_buys`: cron, 평일 09:00~15:30, 매 30분 간격
+  - `surge_check_exits`: cron, 평일 09:00~15:30, 매 5분 간격
+  - 두 잡 모두 `is_market_hours()` 내부 가드 추가로 오차 트리거(15:35 등) 안전 처리
+- **REST API** (`backend/app/routers/surge_trading.py`):
+  - `GET /api/surge-trading/portfolio` — 현재 평가액·현금·수익률·거래수 통계
+  - `GET /api/surge-trading/positions` — 보유 포지션 목록 (현재가·PnL% 포함)
+  - `GET /api/surge-trading/trades` — 종료 거래 이력 (페이징, exit_reason/pnl_pct/holding_days)
+  - `GET /api/surge-trading/performance` — 누적 수익률 시계열 (days 파라미터)
+  - `POST /api/surge-trading/execute` — 관리자 수동 매수 트리거 (X-Admin-Token 인증)
+- **DB 마이그레이션**: `052_spec_ai_013_surge_portfolio.py` — `surge_portfolios`·`surge_trades` 테이블, 3개 인덱스, 초기 포트폴리오 레코드(id=1) 자동 생성
+- **테스트 40개 추가** (`backend/tests/test_surge_trading.py`): 전체 960/960 PASS
+  - AC-SURGE-TRADE-001~031 전체 충족 (매수/매도/API/격리 시나리오 포함)
+- **프론트엔드** (`frontend/src/app/trading/page.tsx`): '급등 예측' 탭 추가, `SurgeTab` 인라인 컴포넌트, `frontend/src/lib/api.ts`·`types.ts` Surge 타입 5종·API 함수 4개 통합
+
 ### Added — SPEC-AI-012: 급등 징후 탐지 시스템 (2026-05-07)
 
 **배경**: 기존 4개 사전 탐지기(조용한 매집·뉴스-주가 괴리·볼린저밴드 압축·섹터 후행)와 SPEC-AI-004(공시 미반영 갭)만으로는 단기 급등 가능성이 높은 3개 신호 영역(테마 뉴스 클러스터링·거래량-뉴스 복합·공시 유형별 역사적 급등 패턴)이 미포착 상태였음. 룰 기반 앙상블 스코어로 신호 우선순위화 시스템을 구현.
