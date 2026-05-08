@@ -2,15 +2,15 @@ surge_detection:
   theme_cluster:
     keywords: ["반도체", "배터리", "수소", "전기차", "AI", "로봇", "방위산업", "바이오", "원전"]
     sector_theme_map:
-      반도체: ["IT", "전기·전자", "반도체"]
-      배터리: ["화학", "전기·전자"]
-      수소: ["에너지", "화학"]
-      전기차: ["자동차", "전기·전자"]
-      AI: ["IT", "소프트웨어"]
-      로봇: ["IT", "기계"]
-      방위산업: ["기계", "항공우주"]
-      바이오: ["의약품", "바이오"]
-      원전: ["에너지", "전기"]
+      반도체: ["IT서비스", "전자장비와기기", "반도체와반도체장비"]
+      배터리: ["화학", "전기장비"]
+      수소: ["화학", "에너지장비및서비스"]
+      전기차: ["자동차", "자동차부품", "전기장비"]
+      AI: ["IT서비스", "소프트웨어"]
+      로봇: ["IT서비스", "기계", "전자장비와기기"]
+      방위산업: ["기계", "우주항공과국방"]
+      바이오: ["제약", "생물공학", "생명과학도구및서비스"]
+      원전: ["전기유틸리티", "에너지장비및서비스"]
     cluster_window_hours: 48
     min_article_count: 3
     min_market_cap_krw: 100000000000
@@ -32,7 +32,7 @@ surge_detection:
       volume_news_combo: 0.30
       disclosure_pattern: 0.25
       legacy_detectors: 0.20
-    min_score_for_signal: 0.55
+    min_score_for_signal: 0.20
   backtest:
     enabled: true
     evaluation_horizon_days: 5
