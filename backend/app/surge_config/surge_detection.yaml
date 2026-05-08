@@ -32,7 +32,7 @@ surge_detection:
       volume_news_combo: 0.30
       disclosure_pattern: 0.25
       legacy_detectors: 0.20
-    min_score_for_signal: 0.20
+    min_score_for_signal: 0.30
   backtest:
     enabled: true
     evaluation_horizon_days: 5

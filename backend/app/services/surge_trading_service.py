@@ -78,6 +78,7 @@ def get_today_signals(
 
     FundSignal에는 stock_code 컬럼이 없으므로 Stock 테이블과 조인.
     surge_metadata JSON에서 surge_probability_score를 파싱하여 필터링.
+    단일 탐지기만 발동(확률 < 0.40)한 저품질 신호는 매수 대상에서 제외.
     """
     now_kst = datetime.now(KST)
     today_kst = now_kst.date()
@@ -109,9 +110,19 @@ def get_today_signals(
         else:
             continue
 
-        # surge_metadata에서 surge_probability_score 파싱
-        probability = _parse_surge_probability(signal.surge_metadata)
+        # surge_metadata에서 확률 및 탐지기 목록 파싱
+        probability, active_detectors = _parse_surge_metadata(signal.surge_metadata)
         if probability is None or probability < float(min_probability):
+            continue
+
+        # 단일 탐지기 필터: 하나만 발동 AND 확률 0.40 미만 → 저품질 신호 제외
+        if len(active_detectors) < 2 and probability < 0.40:
+            logger.info(
+                "surge signal 스킵(단일 탐지기): stock=%s 탐지기=%s probability=%.4f",
+                stock.stock_code,
+                active_detectors,
+                probability,
+            )
             continue
 
         result.append((signal, stock, probability))
@@ -131,6 +142,21 @@ def _parse_surge_probability(surge_metadata: Optional[str]) -> Optional[float]:
     except (json.JSONDecodeError, ValueError, TypeError):
         pass
     return None
+
+
+def _parse_surge_metadata(surge_metadata: Optional[str]) -> tuple[Optional[float], list[str]]:
+    """surge_metadata에서 (probability, active_detectors) 반환."""
+    if not surge_metadata:
+        return None, []
+    try:
+        data = json.loads(surge_metadata)
+        score = data.get("surge_probability_score")
+        basis = data.get("surge_basis") or []
+        probability = float(score) if score is not None else None
+        detectors = list(basis) if isinstance(basis, list) else []
+        return probability, detectors
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return None, []
 
 
 def get_open_position(db: Session, stock_code: str) -> Optional[SurgeTrade]:
@@ -271,14 +297,16 @@ def execute_buy_orders(
             db.commit()
             db.refresh(portfolio)
             executed += 1
+            _, trade_detectors = _parse_surge_metadata(signal.surge_metadata)
             logger.info(
-                "surge_execute_buys: %s(%s) 매수 완료 — 수량=%d, 단가=%s, 금액=%s, 확률=%.2f",
+                "surge_execute_buys: %s(%s) 매수 완료 — 수량=%d, 단가=%s, 금액=%s, 확률=%.2f, 탐지기=%s",
                 stock_name,
                 stock_code,
                 quantity,
                 current_price,
                 actual_amount,
                 probability,
+                trade_detectors,
             )
             details.append({
                 "stock_code": stock_code,
@@ -288,6 +316,7 @@ def execute_buy_orders(
                 "entry_price": float(current_price),
                 "amount": float(actual_amount),
                 "probability": probability,
+                "detectors": trade_detectors,
             })
         except Exception as e:
             db.rollback()
