@@ -72,7 +72,7 @@ def get_or_create_portfolio(db: Session) -> SurgePortfolio:
 
 def get_today_signals(
     db: Session,
-    min_probability: Decimal = Decimal("0.6"),
+    min_probability: Decimal = Decimal("0.20"),
 ) -> list:
     """오늘(KST) 생성된 surge_candidate 시그널 중 확률 임계값 이상 반환.
 
@@ -163,7 +163,7 @@ def execute_buy_orders(
     db: Session,
     max_daily_entries: int = 5,
     position_pct: Decimal = Decimal("0.20"),
-    min_probability: Decimal = Decimal("0.6"),
+    min_probability: Decimal = Decimal("0.20"),
 ) -> dict:
     # @MX:ANCHOR: [AUTO] 매수 실행 메인 함수 — 시그널 필터링부터 트랜잭션까지 전체 흐름 담당
     # @MX:REASON: [AUTO] 라우터(POST /surge/execute), 스케줄러(surge_execute_buys) 등 3개 이상 컴포넌트에서 참조
