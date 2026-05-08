@@ -4,6 +4,16 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fixed — 급등 모의투자 UI undefined 표시 수정 및 신호 품질 개선 (2026-05-08)
+
+- **포트폴리오 API 필드명 불일치 수정** (`backend/app/services/surge_trading_service.py`): `get_portfolio_stats()` 반환 키명이 프론트엔드 `SurgePortfolioStats` 타입과 불일치하여 "보유 종목 undefined건, 청산 undefined건" 표시 문제 해결
+  - `open_trades` → `open_positions_count`, `closed_trades` → `closed_trades_count`, `total_trades` → `total_trades_count`
+- **단일 탐지기 저확률 신호 매수 차단** (`surge_trading_service.py`): `theme_cluster` 하나만 발동(weight=0.25)하면 최대 0.25점으로 신호 품질이 낮아 무의미한 매수를 야기 → 탐지기 수 < 2 AND 확률 < 0.40이면 자동 스킵
+- **앙상블 임계값 상향** (`backend/app/surge_config/surge_detection.yaml`): `min_score_for_signal` 0.20 → 0.30 — 단일 탐지기(최대 0.25점) 이하 신호 원천 제외
+- **매수 로그 탐지기 정보 추가** (`surge_trading_service.py`): `execute_buy_orders()` 매수 성공 로그 및 반환 딕셔너리에 `detectors` 필드 추가 — 어떤 탐지기 조합으로 매수됐는지 추적 가능
+- **헬퍼 `_parse_surge_metadata()` 신규** (`surge_trading_service.py`): surge_metadata JSON에서 `(probability, active_detectors)` 튜플 반환 — 기존 `_parse_surge_probability()`에서 탐지기 목록 추출 기능 확장
+- **테스트 업데이트** (`backend/tests/test_surge_detector.py`, `test_surge_trading.py`): 필드명 동기화 및 `min_score_for_signal` 기대값 0.20 → 0.30 반영
+
 ### Fixed — 급등주 예측 0건 근본 원인 수정 (2026-05-08)
 
 - **근본 원인 1** (`backend/app/surge_config/surge_detection.yaml`): `sector_theme_map` 8개 섹터명이 DB `sectors` 테이블 실제 이름과 불일치 → `detect_theme_news_cluster`가 해당 섹터 종목 전부 제외
