@@ -594,9 +594,9 @@ class TestSurgeTradingRouter:
             "open_positions_value": Decimal("1700000"),
             "current_value": Decimal("5200000"),
             "return_pct": 4.0,
-            "total_trades": 2,
-            "open_trades": 2,
-            "closed_trades": 0,
+            "total_trades_count": 2,
+            "open_positions_count": 2,
+            "closed_trades_count": 0,
         }
         # DB 의존성 오버라이드
         from app.database import get_db

@@ -510,9 +510,9 @@ def get_portfolio_stats(db: Session) -> dict:
         "open_positions_value": open_positions_value,
         "current_value": current_value,
         "return_pct": round(return_pct, 4),
-        "total_trades": len(open_trades) + closed_count,
-        "open_trades": len(open_trades),
-        "closed_trades": closed_count,
+        "total_trades_count": len(open_trades) + closed_count,
+        "open_positions_count": len(open_trades),
+        "closed_trades_count": closed_count,
     }
 
 
