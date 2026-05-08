@@ -4,6 +4,15 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fixed — 급등주 예측 0건 근본 원인 수정 (2026-05-08)
+
+- **근본 원인 1** (`backend/app/surge_config/surge_detection.yaml`): `sector_theme_map` 8개 섹터명이 DB `sectors` 테이블 실제 이름과 불일치 → `detect_theme_news_cluster`가 해당 섹터 종목 전부 제외
+  - 수정 예: `반도체` → `반도체와반도체장비`, `IT` → `IT서비스`, `의약품` → `제약`, `바이오` → `생물공학`, `에너지` → `에너지장비및서비스`, `항공우주` → `우주항공과국방`, `전기` → `전기유틸리티`·`전기장비`
+- **근본 원인 2** (`surge_detection.yaml`): 앙상블 임계값 `min_score_for_signal` 0.55 → 0.20 완화 — 테마 클러스터 단독(weight=0.25) 최대 점수 0.25로 0.55 임계값은 사실상 도달 불가
+- **연쇄 수정** (`backend/app/services/surge_trading_service.py`): `get_today_signals()` / `execute_buy_orders()` 의 `min_probability` 기본값 0.6 → 0.20 — YAML 임계값과 통일
+- **테스트 업데이트** (`backend/tests/test_surge_detector.py`): `sector_semiconductor` 픽스처 섹터명 `반도체` → `반도체와반도체장비`, 특성화 테스트 임계값 0.55 → 0.20 반영
+- **결과**: 수동 실행 검증 — 434개 `surge_candidate` 시그널 생성 확인 (이전: 0건)
+
 ### Fixed — /trading/surge Vercel 빌드 실패 수정 (2026-05-07)
 
 - **근본 원인**: recharts v3.8.1에서 `Tooltip` `formatter` 파라미터 타입이 `ValueType | undefined`로 확장됐으나, `surge/page.tsx`에서 `(v: number)`로 명시 → TypeScript strict 모드 빌드 실패 → Vercel이 이전 배포본 유지 → `/trading/surge` 라우트 404

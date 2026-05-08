@@ -61,7 +61,7 @@ def sector_it(db: Session) -> Sector:
 @pytest.fixture
 def sector_semiconductor(db: Session) -> Sector:
     """반도체 섹터 픽스처."""
-    s = Sector(name="반도체")
+    s = Sector(name="반도체와반도체장비")
     db.add(s)
     db.flush()
     return s
@@ -202,7 +202,7 @@ class TestSurgeConfig:
     def test_characterize_config_loads_from_yaml(self, surge_config: SurgeDetectionConfig):
         """기본 YAML 설정 파일이 정상적으로 로드된다."""
         assert surge_config.theme_cluster.min_article_count == 3
-        assert surge_config.ensemble.min_score_for_signal == 0.55
+        assert surge_config.ensemble.min_score_for_signal == 0.20
         assert len(surge_config.theme_cluster.keywords) > 0
 
     def test_characterize_ensemble_weights_sum_to_one(self, surge_config: SurgeDetectionConfig):
