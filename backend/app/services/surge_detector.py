@@ -76,12 +76,15 @@ def detect_theme_news_cluster(
 ) -> list[SurgeCandidate]:
     """테마 뉴스 클러스터링으로 급등 후보를 탐지한다 (AC-SURGE-001).
 
-    최근 cluster_window_hours 내 뉴스에서 테마 키워드가 min_article_count개 이상
-    감지되면 해당 테마의 관련 섹터 종목을 후보로 반환한다.
+    cluster_window_hours 내 뉴스를 DB에서 직접 조회하여 테마 키워드가
+    min_article_count개 이상 감지되면 해당 섹터 종목을 후보로 반환한다.
+
+    # @MX:NOTE: recent_news 파라미터는 하위 호환성을 위해 유지하나 미사용.
+    # DB 직접 조회로 브리핑 50건 제한 우회. (SPEC-AI-012 신호 생성 복구)
 
     Args:
         db: SQLAlchemy 동기 세션
-        recent_news: 이미 조회된 뉴스 목록 (브리핑 함수에서 전달)
+        recent_news: 미사용 (하위 호환성 유지)
         config: SurgeDetectionConfig 설정
 
     Returns:
@@ -89,22 +92,14 @@ def detect_theme_news_cluster(
     """
     cfg = config.theme_cluster
     cutoff = datetime.now(timezone.utc) - timedelta(hours=cfg.cluster_window_hours)
-    # @MX:NOTE: SQLite(테스트)는 naive datetime 저장 — strip timezone으로 양쪽 호환
     cutoff_naive = cutoff.replace(tzinfo=None)
 
-    def _is_within_window(published_at: datetime | None) -> bool:
-        """공개된 시간이 기준 윈도우 안에 있는지 확인 (naive/aware 양쪽 호환)."""
-        if not published_at:
-            return False
-        if published_at.tzinfo is not None:
-            return published_at >= cutoff
-        return published_at >= cutoff_naive
-
-    # 1. 기준 시간 내 뉴스 필터링
-    window_news = [
-        n for n in recent_news
-        if _is_within_window(n.published_at)
-    ]
+    # 1. DB에서 직접 기준 시간 내 뉴스 조회 (브리핑 50건 제한 우회)
+    window_news = (
+        db.query(NewsArticle)
+        .filter(NewsArticle.published_at >= cutoff_naive)
+        .all()
+    )
 
     if not window_news:
         logger.debug("[테마클러스터] 기준 시간(%dh) 내 뉴스 없음", cfg.cluster_window_hours)
@@ -552,7 +547,7 @@ def gather_surge_candidates(
 
     Args:
         db: SQLAlchemy 동기 세션
-        recent_news: 브리핑용 최근 뉴스 목록
+        recent_news: 미사용 (detect_theme_news_cluster가 DB 직접 조회)
         config: SurgeDetectionConfig 설정
         legacy_candidates: _gather_leading_candidates 결과 (dict 목록)
 
@@ -560,7 +555,7 @@ def gather_surge_candidates(
         앙상블 점수 기준 정렬된 SurgeCandidate 목록
     """
     # 각 탐지기 실행
-    theme_results = detect_theme_news_cluster(db, recent_news, config)
+    theme_results = detect_theme_news_cluster(db, [], config)
     combo_results = detect_volume_surge_news_combo(db, config)
     pattern_results = detect_disclosure_surge_pattern(db, config)
 
