@@ -12,7 +12,7 @@ surge_detection:
       바이오: ["제약", "생물공학", "생명과학도구및서비스"]
       원전: ["전기유틸리티", "에너지장비및서비스"]
     cluster_window_hours: 48
-    min_article_count: 3
+    min_article_count: 2
     min_market_cap_krw: 100000000000
   volume_news_combo:
     volume_zscore_threshold: 2.5
@@ -32,7 +32,7 @@ surge_detection:
       volume_news_combo: 0.30
       disclosure_pattern: 0.25
       legacy_detectors: 0.20
-    min_score_for_signal: 0.30
+    min_score_for_signal: 0.20
   backtest:
     enabled: true
     evaluation_horizon_days: 5
