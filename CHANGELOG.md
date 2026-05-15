@@ -4,6 +4,26 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fixed — 테마 클러스터 탐지기 DB 직접 조회 전환 (2026-05-15)
+
+- **탐지기 쿼리 방식 전환** (`backend/app/services/surge_detector.py`): 테마 클러스터 탐지 시 인메모리 캐시 의존 방식에서 DB 직접 조회 방식으로 전환 — 캐시 만료/누락으로 인한 탐지 실패 방지
+- **안정성 향상**: 뉴스 수집 스케줄러와 탐지기 간 캐시 동기화 의존성 제거 → 탐지기가 항상 최신 DB 데이터 기반으로 동작
+
+### Fixed — 급등예측 임계값 과도 상향으로 인한 0건 재발 수정 (2026-05-15)
+
+- **근본 원인**: `min_score_for_signal` 0.20 → 0.30 상향(2026-05-08) 이후 단일 탐지기(theme_cluster) 최대 앙상블 점수 0.25가 임계값 0.30을 초과 불가 → 시그널 0건 재발
+- **임계값 복원** (`backend/app/surge_config/surge_detection.yaml`): `min_score_for_signal` 0.30 → 0.20 복원 — 단일 탐지기 신호도 통과 허용 (매수 차단은 `surge_trading_service.py`의 런타임 필터가 담당)
+- **테마 기사 조건 완화** (`surge_detection.yaml`): `min_article_count` 3 → 2 — 탐지 범위 확대로 더 많은 테마 클러스터 활성화
+- **테스트 동기화** (`backend/tests/test_surge_detector.py`): `min_article_count` 기대값 3 → 2, `min_score_for_signal` 기대값 0.30 → 0.20 반영 (58/58 패스)
+- **프로덕션 수동 검증**: 수정 후 즉시 탐지 실행 — 465개 `surge_candidate` 시그널 DB 저장 확인 (이전: 0건)
+
+### Changed — CI/CD 의존성 설치 최적화: pip → uv 전환 (2026-05-15)
+
+- **backend-test 잡 uv 전환** (`.github/workflows/ci.yml`): `actions/setup-python@v5` + `pip install -r requirements.txt` → `astral-sh/setup-uv@v5` + `uv pip install --system -r requirements.txt` — uv는 pip 대비 10-100배 빠른 패키지 설치 속도 제공
+- **backend-lint 잡 uvx 전환**: `pip install ruff` 단계 제거, `uvx ruff check backend/app/` 로 ruff를 별도 설치 없이 즉시 실행
+- **Python 버전 3.11 → 3.12** 통일 (로컬 개발환경 기준 맞춤)
+- **pytest 병렬 실행**: `-n 4` 플래그 추가 — 테스트 4개 워커 병렬 실행으로 CI 시간 단축
+
 ### Fixed — 급등 모의투자 UI undefined 표시 수정 및 신호 품질 개선 (2026-05-08)
 
 - **포트폴리오 API 필드명 불일치 수정** (`backend/app/services/surge_trading_service.py`): `get_portfolio_stats()` 반환 키명이 프론트엔드 `SurgePortfolioStats` 타입과 불일치하여 "보유 종목 undefined건, 청산 undefined건" 표시 문제 해결
