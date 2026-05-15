@@ -56,17 +56,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.11"
-          cache: "pip"
-          cache-dependency-path: backend/requirements.txt
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "backend/requirements.txt"
 
       - name: Install dependencies
-        run: |
-          cd backend
-          pip install -r requirements.txt
+        run: uv pip install --system -r backend/requirements.txt
 
       - name: Run tests (parallel)
         run: |
@@ -86,18 +84,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.11"
-
-      - name: Install ruff
-        run: pip install ruff
+          python-version: "3.12"
 
       - name: Run ruff check
-        run: |
-          cd backend
-          ruff check app/
+        run: uvx ruff check backend/app/
 
   # ──────────────────────────────────────────────
   # Job 3: 프론트엔드 체크 (frontend 변경 시만 실행)
