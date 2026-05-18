@@ -4,6 +4,20 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Changed — 급등 모의투자 초기자본 500만원 → 5천만원 상향 (2026-05-18)
+
+- **`get_or_create_portfolio()` 기본값 변경** (`backend/app/services/surge_trading_service.py`): `initial_capital` 5,000,000 → 50,000,000 — 신규 포지션 크기 `position_pct(20%) × 5천만원 = 1천만원/건`으로 실전 모의투자 규모 확대
+- **DB 레코드 즉시 반영**: `surge_portfolios` 테이블 `initial_capital=50,000,000`, `current_cash += 45,000,000` 직접 업데이트 — 기존 오픈 포지션 유지 상태에서 가용 자금 추가
+
+### Added — SPEC-AI-014 급등 모의투자 매수 안전장치 추가 (2026-05-18)
+
+- **매수 가능 시간 제한** (`surge_trading_service.py`): `is_buy_eligible_hours()` 신규 함수 — KST 평일 09:00~11:00만 신규 매수 허용 (`BUY_CUTOFF=11:00`), 테마주 1차 파동 이후 추격 매수 차단
+- **인트라데이 필터** (`surge_trading_service.py`): 실시간 등락률 조회 후 전일비 -3% 이하(테마 thesis 붕괴, `INTRADAY_CRASH_LIMIT`) 및 +15% 초과(당일 과열, `INTRADAY_OVERHEAT_LIMIT`) 종목 매수 자동 제외 — `_get_price_with_change_sync()` 신규
+- **동시 보유 한도** (`surge_trading_service.py`): `execute_buy_orders(max_open_positions=3)` 파라미터 추가 및 `count_open_positions()` 신규 — 오픈 포지션 3개 상한으로 초기자본 60% 이상 단일 배치 투입 차단, 항상 40% 예비 보장
+- **포지션 상세 정보 확장** (`surge_trading_service.py`): `get_open_positions_detail()` 반환값에 `total_investment`(총 매수금액), `current_value`(현재 평가금액) 필드 추가
+- **프론트엔드 포지션 뷰 확장** (`frontend/src/app/trading/surge/page.tsx`, `frontend/src/lib/types.ts`): 보유 포지션 테이블에 "총 매수금액" · "현재평가액" 컬럼 추가 (7열 → 9열)
+- **테스트** (`backend/tests/test_surge_trading.py`): `TestIsBuyEligibleHours` 신규 클래스(4건) + 인트라데이 필터 테스트(2건) + `AC-SURGE-TRADE-007` max_open_positions 한도 테스트 — 47/47 통과
+
 ### Added — SPEC-AI-014 급등 시그널 스코어링 고도화 (2026-05-18)
 
 - **종목 수준 개인화** (`backend/app/services/surge_detector.py` REQ-001): 기존 테마 단위 점수 산식(`min(1.0, theme_article_count/10) * sector_relevance`)이 동일 테마 442개 종목에 동일한 0.25점을 부여하던 문제 해결 — 종목 특화 기사 유무에 따라 60%/40% 블렌딩(`stock_article_score = min(1.0, stock_specific_count/5)`) 또는 0.5× 페널티로 변별력 확보
