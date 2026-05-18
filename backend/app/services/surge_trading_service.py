@@ -111,8 +111,8 @@ def get_or_create_portfolio(db: Session) -> SurgePortfolio:
     portfolio = db.query(SurgePortfolio).filter(SurgePortfolio.id == 1).first()
     if portfolio is None:
         portfolio = SurgePortfolio(
-            initial_capital=Decimal("5000000"),
-            current_cash=Decimal("5000000"),
+            initial_capital=Decimal("50000000"),
+            current_cash=Decimal("50000000"),
         )
         db.add(portfolio)
         db.commit()
