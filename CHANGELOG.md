@@ -4,6 +4,16 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Added — SPEC-AI-014 급등 시그널 스코어링 고도화 (2026-05-18)
+
+- **종목 수준 개인화** (`backend/app/services/surge_detector.py` REQ-001): 기존 테마 단위 점수 산식(`min(1.0, theme_article_count/10) * sector_relevance`)이 동일 테마 442개 종목에 동일한 0.25점을 부여하던 문제 해결 — 종목 특화 기사 유무에 따라 60%/40% 블렌딩(`stock_article_score = min(1.0, stock_specific_count/5)`) 또는 0.5× 페널티로 변별력 확보
+- **경량 거래량 보너스** (`surge_detector.py` REQ-002): 전일 대비 3% 초과 가격 변동 종목에 `theme_cluster_score += 0.10` 가산 — 가격 조회 실패 시 graceful fallback(보너스 없이 진행, 예외 전파 금지)
+- **뉴스 감성 통합** (`surge_detector.py` REQ-003): 종목 특화 기사 평균 감성 점수 기반 `sentiment_factor = 0.8 + 0.4 * avg_sentiment` (0.8~1.2 범위) 곱셈 인자로 theme_cluster 점수 조정
+- **다중 탐지기 합의 보너스** (`surge_detector.py` REQ-004): `compute_ensemble_score()`에 multiplier 추가 — 2탐지기 ×1.15, 3+ ×1.30, 1.0 상한 클램프. 단일 탐지기(theme_cluster 0.25점) 신호도 consensus 보너스 후 0.30 임계값 통과 가능
+- **가격 모멘텀 사전 필터** (`backend/app/services/surge_trading_service.py` REQ-005): `get_today_signals()`에 과열(5일 누적 +15% 초과) 및 낙폭(1일 -5% 미만) 종목 사전 제외 추가 — 가격 조회 실패 시 graceful fallback(통과), 단일 탐지기 런타임 임계값 0.40 → 0.30 완화
+- **Ensemble 가중치 재조정** (`backend/app/surge_config/surge_detection.yaml` REQ-006): theme_cluster 0.25→0.35, volume_news_combo 0.30→0.35, disclosure_pattern 0.25→0.20, legacy_detectors 0.20→0.10 (합계 1.00 유지)
+- **테스트**: `backend/tests/test_surge_scoring.py` 신규 생성 (T-001~T-011 26개 단위 테스트) + `test_surge_detector.py` 기댓값 수정 — 84/84 통과
+
 ### Fixed — 급등신호 재탐지 시 created_at 갱신으로 오늘 매수 실행 대상 포함 (2026-05-18)
 
 - **근본 원인** (`backend/app/services/fund_manager.py`): `_gather_surge_candidates()`에서 5일 이내 중복 시그널 업데이트 시 `confidence`, `surge_metadata`, `reasoning`만 갱신하고 `created_at`은 그대로 유지 → `get_today_signals()`의 KST 날짜 필터(`created_at.date() == today_kst`)에서 제외 → 매수 실행 대상 0건 발생
