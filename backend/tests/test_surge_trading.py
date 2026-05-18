@@ -343,12 +343,14 @@ class TestExecuteBuyOrders:
     @patch("app.services.surge_trading_service.get_or_create_portfolio")
     @patch("app.services.surge_trading_service.get_today_signals")
     @patch("app.services.surge_trading_service.count_today_entries", return_value=0)
+    @patch("app.services.surge_trading_service.count_open_positions", return_value=0)
     @patch("app.services.surge_trading_service.get_open_position", return_value=None)
     @patch("app.services.surge_trading_service._get_price_with_change_sync", return_value=(75000, 2.5))
     def test_ac_001_successful_buy(
         self,
         mock_price,
         mock_open_pos,
+        mock_open_count,
         mock_count,
         mock_signals,
         mock_portfolio,
@@ -381,10 +383,12 @@ class TestExecuteBuyOrders:
     @patch("app.services.surge_trading_service.get_or_create_portfolio")
     @patch("app.services.surge_trading_service.get_today_signals")
     @patch("app.services.surge_trading_service.count_today_entries", return_value=0)
+    @patch("app.services.surge_trading_service.count_open_positions", return_value=0)
     @patch("app.services.surge_trading_service.get_open_position")
     def test_ac_004_duplicate_position_skip(
         self,
         mock_open_pos,
+        mock_open_count,
         mock_count,
         mock_signals,
         mock_portfolio,
@@ -436,10 +440,12 @@ class TestExecuteBuyOrders:
     @patch("app.services.surge_trading_service.get_or_create_portfolio")
     @patch("app.services.surge_trading_service.get_today_signals")
     @patch("app.services.surge_trading_service.count_today_entries", return_value=0)
+    @patch("app.services.surge_trading_service.count_open_positions", return_value=0)
     @patch("app.services.surge_trading_service.get_open_position", return_value=None)
     def test_ac_006_insufficient_cash_skip(
         self,
         mock_open_pos,
+        mock_open_count,
         mock_count,
         mock_signals,
         mock_portfolio,
@@ -466,12 +472,14 @@ class TestExecuteBuyOrders:
     @patch("app.services.surge_trading_service.get_or_create_portfolio")
     @patch("app.services.surge_trading_service.get_today_signals")
     @patch("app.services.surge_trading_service.count_today_entries", return_value=0)
+    @patch("app.services.surge_trading_service.count_open_positions", return_value=0)
     @patch("app.services.surge_trading_service.get_open_position", return_value=None)
     @patch("app.services.surge_trading_service._get_price_with_change_sync", return_value=(75000, -4.0))
     def test_intraday_crash_skip(
         self,
         mock_price,
         mock_open_pos,
+        mock_open_count,
         mock_count,
         mock_signals,
         mock_portfolio,
@@ -495,12 +503,14 @@ class TestExecuteBuyOrders:
     @patch("app.services.surge_trading_service.get_or_create_portfolio")
     @patch("app.services.surge_trading_service.get_today_signals")
     @patch("app.services.surge_trading_service.count_today_entries", return_value=0)
+    @patch("app.services.surge_trading_service.count_open_positions", return_value=0)
     @patch("app.services.surge_trading_service.get_open_position", return_value=None)
     @patch("app.services.surge_trading_service._get_price_with_change_sync", return_value=(75000, 16.0))
     def test_intraday_overheat_skip(
         self,
         mock_price,
         mock_open_pos,
+        mock_open_count,
         mock_count,
         mock_signals,
         mock_portfolio,
@@ -519,6 +529,33 @@ class TestExecuteBuyOrders:
         assert result["executed"] == 0
         assert result["skipped"] == 1
         assert result["details"][0]["reason"] == "intraday_overheat"
+
+    @patch("app.services.surge_trading_service.is_buy_eligible_hours", return_value=True)
+    @patch("app.services.surge_trading_service.get_or_create_portfolio")
+    @patch("app.services.surge_trading_service.get_today_signals")
+    @patch("app.services.surge_trading_service.count_today_entries", return_value=0)
+    @patch("app.services.surge_trading_service.count_open_positions", return_value=3)
+    def test_ac_007_max_open_positions_reached(
+        self,
+        mock_open_count,
+        mock_count,
+        mock_signals,
+        mock_portfolio,
+        mock_hours,
+    ):
+        """AC-SURGE-TRADE-007: 동시 보유 한도(3) 도달 시 신규 매수 차단."""
+        from app.services.surge_trading_service import execute_buy_orders
+
+        signal = _make_fund_signal(probability=0.75)
+        stock = _make_stock(stock_code="005930")
+        mock_signals.return_value = [(signal, stock, 0.75)]
+        mock_portfolio.return_value = _make_portfolio()
+
+        db = _make_db()
+        result = execute_buy_orders(db)
+        assert result["executed"] == 0
+        assert result["skipped"] == 1
+        assert result["details"][0]["reason"] == "max_open_positions"
 
 
 # ---------------------------------------------------------------------------

@@ -272,9 +272,19 @@ def count_today_entries(db: Session) -> int:
     )
 
 
+def count_open_positions(db: Session) -> int:
+    """현재 오픈 포지션 수."""
+    return (
+        db.query(SurgeTrade)
+        .filter(SurgeTrade.is_open.is_(True))
+        .count()
+    )
+
+
 def execute_buy_orders(
     db: Session,
     max_daily_entries: int = 5,
+    max_open_positions: int = 3,
     position_pct: Decimal = Decimal("0.20"),
     min_probability: Decimal = Decimal("0.20"),
 ) -> dict:
@@ -298,6 +308,7 @@ def execute_buy_orders(
     today_signals = get_today_signals(db, min_probability=min_probability)
 
     today_count = count_today_entries(db)
+    open_count = count_open_positions(db)
     executed = 0
     skipped = 0
     failed = 0
@@ -316,6 +327,17 @@ def execute_buy_orders(
             )
             skipped += 1
             details.append({"stock_code": stock_code, "action": "skipped", "reason": "daily_limit"})
+            continue
+
+        # 동시 보유 한도 체크 (자본 보전: 항상 일부 현금 유지)
+        if open_count + executed >= max_open_positions:
+            logger.info(
+                "surge_execute_buys: 동시 보유 한도(%d) 도달 — %s 스킵",
+                max_open_positions,
+                stock_code,
+            )
+            skipped += 1
+            details.append({"stock_code": stock_code, "action": "skipped", "reason": "max_open_positions"})
             continue
 
         # 동일 종목 오픈 포지션 중복 체크
