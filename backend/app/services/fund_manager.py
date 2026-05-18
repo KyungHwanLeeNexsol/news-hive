@@ -1289,6 +1289,9 @@ async def _gather_surge_candidates(
                 f"[SPEC-AI-012 급등 징후] 앙상블 점수: {ensemble_score:.3f}, "
                 f"탐지기: {', '.join(candidate.active_detectors)}"
             )
+            # created_at 갱신: get_today_signals가 오늘 날짜로 필터링하므로
+            # 매일 재탐지 시 날짜를 오늘로 업데이트해야 매수 실행 대상에 포함됨
+            existing.created_at = datetime.now(timezone.utc)
             try:
                 db.flush()
                 logger.debug("[급등탐지] %s 기존 시그널 업데이트", candidate.stock_code)
