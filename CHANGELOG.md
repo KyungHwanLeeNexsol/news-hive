@@ -4,6 +4,12 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fixed — 급등신호 재탐지 시 created_at 갱신으로 오늘 매수 실행 대상 포함 (2026-05-18)
+
+- **근본 원인** (`backend/app/services/fund_manager.py`): `_gather_surge_candidates()`에서 5일 이내 중복 시그널 업데이트 시 `confidence`, `surge_metadata`, `reasoning`만 갱신하고 `created_at`은 그대로 유지 → `get_today_signals()`의 KST 날짜 필터(`created_at.date() == today_kst`)에서 제외 → 매수 실행 대상 0건 발생
+- **수정** (`fund_manager.py`): UPDATE 분기에 `existing.created_at = datetime.now(timezone.utc)` 3줄 추가 — 매일 재탐지 시 날짜를 오늘로 갱신하여 당일 매수 실행 대상에 포함
+- **검증**: 수정 후 즉시 `_gather_surge_candidates()` 수동 실행 → 442개 급등 시그널 당일 매수 실행 대상 포함 확인 (이전: 0건)
+
 ### Fixed — 테마 클러스터 탐지기 DB 직접 조회 전환 (2026-05-15)
 
 - **탐지기 쿼리 방식 전환** (`backend/app/services/surge_detector.py`): 테마 클러스터 탐지 시 인메모리 캐시 의존 방식에서 DB 직접 조회 방식으로 전환 — 캐시 만료/누락으로 인한 탐지 실패 방지
