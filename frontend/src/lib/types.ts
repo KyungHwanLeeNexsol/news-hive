@@ -633,6 +633,8 @@ export interface SurgePosition {
   entry_price: number;
   current_price: number | null;
   quantity: number;
+  total_investment: number;
+  current_value: number | null;
   pnl_pct: number | null;
   entry_date: string;
   days_held: number;

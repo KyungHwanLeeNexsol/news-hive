@@ -117,6 +117,8 @@ function SurgeContent() {
                 <th className="text-right px-4 py-3 font-semibold text-gray-600">매입단가</th>
                 <th className="text-right px-4 py-3 font-semibold text-gray-600">현재가</th>
                 <th className="text-right px-4 py-3 font-semibold text-gray-600">수량</th>
+                <th className="text-right px-4 py-3 font-semibold text-gray-600">총 매수금액</th>
+                <th className="text-right px-4 py-3 font-semibold text-gray-600">현재평가액</th>
                 <th className="text-right px-4 py-3 font-semibold text-gray-600">수익률</th>
                 <th className="text-right px-4 py-3 font-semibold text-gray-600">보유일</th>
                 <th className="text-right px-4 py-3 font-semibold text-gray-600">급등확률</th>
@@ -125,7 +127,7 @@ function SurgeContent() {
             <tbody>
               {positions.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="text-center py-8 text-gray-400">
+                  <td colSpan={9} className="text-center py-8 text-gray-400">
                     보유 중인 종목이 없습니다
                   </td>
                 </tr>
@@ -141,6 +143,10 @@ function SurgeContent() {
                       {p.current_price != null ? `${fmt(p.current_price)}원` : '-'}
                     </td>
                     <td className="px-4 py-3 text-right text-gray-700">{p.quantity}주</td>
+                    <td className="px-4 py-3 text-right text-gray-700">{fmt(p.total_investment)}원</td>
+                    <td className="px-4 py-3 text-right text-gray-700">
+                      {p.current_value != null ? `${fmt(p.current_value)}원` : '-'}
+                    </td>
                     <td className={`px-4 py-3 text-right font-semibold ${pctColor(p.pnl_pct)}`}>
                       {fmtPct(p.pnl_pct)}
                     </td>

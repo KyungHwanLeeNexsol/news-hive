@@ -678,13 +678,18 @@ def get_open_positions_detail(db: Session) -> list:
                 * 100
             )
         days_held = calculate_trading_days_elapsed(trade.entry_date, today)
+        total_investment = trade.entry_price * trade.quantity
+        current_price_dec = Decimal(str(current_price)) if current_price else None
+        current_value = current_price_dec * trade.quantity if current_price_dec is not None else None
         result.append({
             "id": trade.id,
             "stock_code": trade.stock_code,
             "stock_name": trade.stock_name,
             "entry_price": trade.entry_price,
-            "current_price": Decimal(str(current_price)) if current_price else None,
+            "current_price": current_price_dec,
             "quantity": trade.quantity,
+            "total_investment": total_investment,
+            "current_value": current_value,
             "pnl_pct": round(pnl_pct, 4) if pnl_pct is not None else None,
             "entry_date": trade.entry_date,
             "days_held": days_held,
