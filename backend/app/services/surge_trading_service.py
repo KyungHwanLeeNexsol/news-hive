@@ -18,6 +18,7 @@ from app.models.fund_signal import FundSignal
 from app.models.stock import Stock
 from app.models.surge_portfolio import SurgePortfolio, SurgeTrade
 from app.services.naver_finance import fetch_current_price as _fetch_current_price_async
+from app.services.naver_finance import fetch_current_price_with_change as _fetch_price_with_change_async
 from app.services.naver_finance import fetch_stock_price_history as _fetch_price_history_async
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,9 @@ logger = logging.getLogger(__name__)
 KST = ZoneInfo("Asia/Seoul")
 MARKET_OPEN = time(9, 0)
 MARKET_CLOSE = time(15, 30)
+BUY_CUTOFF = time(11, 0)        # 신규 진입 마감: 테마주 1차 파동 이후 추격 매수 차단
+INTRADAY_CRASH_LIMIT = -3.0     # 전일비 -3% 이하: 테마 thesis 붕괴, 매수 제외
+INTRADAY_OVERHEAT_LIMIT = 15.0  # 전일비 +15% 초과: 당일 이미 과열, 상단 매수 제외
 
 
 def _get_current_price_sync(stock_code: str) -> Optional[int]:
@@ -39,6 +43,24 @@ def _get_current_price_sync(stock_code: str) -> Optional[int]:
     except RuntimeError:
         # 이미 이벤트 루프가 실행 중인 경우 (비정상 컨텍스트)
         return None
+
+
+def _get_price_with_change_sync(stock_code: str) -> tuple[Optional[int], float]:
+    """현재가 + 전일비 등락률 반환. 조회 실패 시 (None, 0.0) 반환.
+
+    # @MX:NOTE: [AUTO] 인트라데이 필터(급락/과열 감지)에 사용; check_exit_conditions는 _get_current_price_sync 유지
+    # @MX:SPEC: SPEC-AI-014
+    테스트에서는 이 함수를 직접 패치하여 모킹 가능.
+    """
+    try:
+        result = asyncio.run(_fetch_price_with_change_async(stock_code))
+        if result:
+            return result["current_price"], result["change_rate"]
+        return None, 0.0
+    except RuntimeError:
+        return None, 0.0
+    except Exception:
+        return None, 0.0
 
 
 def _get_price_history_sync(stock_code: str) -> list:
@@ -69,6 +91,19 @@ def is_market_hours(now: Optional[datetime] = None) -> bool:
         return False
     current_time = now.time()
     return MARKET_OPEN <= current_time <= MARKET_CLOSE
+
+
+def is_buy_eligible_hours(now: Optional[datetime] = None) -> bool:
+    """급등예측 신규 매수 가능 시간: KST 평일 09:00~11:00.
+
+    테마주 급등 1차 파동은 09:00~10:30에 완성되므로 11:00 이후 신규 진입 차단.
+    종료 조건 체크(check_exit_conditions)는 MARKET_CLOSE(15:30)까지 계속 실행.
+    """
+    now = now or datetime.now(KST)
+    if now.weekday() >= 5:
+        return False
+    current_time = now.time()
+    return MARKET_OPEN <= current_time <= BUY_CUTOFF
 
 
 def get_or_create_portfolio(db: Session) -> SurgePortfolio:
@@ -255,8 +290,8 @@ def execute_buy_orders(
 
     Returns: {"executed": int, "skipped": int, "failed": int, "details": list}
     """
-    if not is_market_hours():
-        logger.debug("surge_execute_buys: 정규장 시간 외 — 스킵")
+    if not is_buy_eligible_hours():
+        logger.debug("surge_execute_buys: 매수 가능 시간 외 — 스킵")
         return {"executed": 0, "skipped": 0, "failed": 0, "details": [], "reason": "market_closed"}
 
     portfolio = get_or_create_portfolio(db)
@@ -305,8 +340,8 @@ def execute_buy_orders(
             details.append({"stock_code": stock_code, "action": "skipped", "reason": "insufficient_cash"})
             continue
 
-        # 현재가 조회
-        current_price = _get_current_price_sync(stock_code)
+        # 현재가 + 당일 등락률 조회
+        current_price, change_rate = _get_price_with_change_sync(stock_code)
         if current_price is None:
             logger.warning(
                 "surge_execute_buys: %s 현재가 조회 실패 — 스킵",
@@ -314,6 +349,28 @@ def execute_buy_orders(
             )
             failed += 1
             details.append({"stock_code": stock_code, "action": "failed", "reason": "price_fetch_failed"})
+            continue
+
+        # 당일 급락 중인 종목 제외 (테마 thesis 붕괴 방지)
+        if change_rate < INTRADAY_CRASH_LIMIT:
+            logger.info(
+                "surge_execute_buys: %s 당일 급락 스킵 (change_rate=%.2f%%)",
+                stock_code,
+                change_rate,
+            )
+            skipped += 1
+            details.append({"stock_code": stock_code, "action": "skipped", "reason": "intraday_crash"})
+            continue
+
+        # 당일 과열 급등 종목 제외 (상단 매수 방지)
+        if change_rate > INTRADAY_OVERHEAT_LIMIT:
+            logger.info(
+                "surge_execute_buys: %s 당일 과열 스킵 (change_rate=%.2f%%)",
+                stock_code,
+                change_rate,
+            )
+            skipped += 1
+            details.append({"stock_code": stock_code, "action": "skipped", "reason": "intraday_overheat"})
             continue
 
         # 수량 계산 (floor 처리)

@@ -149,6 +149,46 @@ class TestIsMarketHours:
 
 
 # ---------------------------------------------------------------------------
+# is_buy_eligible_hours() 테스트
+# ---------------------------------------------------------------------------
+
+class TestIsBuyEligibleHours:
+    """SPEC-AI-014: 신규 매수 가능 시간 09:00~11:00 KST 검증"""
+
+    def test_inside_window(self):
+        """09:30 — True (매수 가능 구간 내)."""
+        from app.services.surge_trading_service import is_buy_eligible_hours
+        from zoneinfo import ZoneInfo
+        KST = ZoneInfo("Asia/Seoul")
+        dt = datetime(2026, 5, 12, 9, 30, 0, tzinfo=KST)
+        assert is_buy_eligible_hours(dt) is True
+
+    def test_at_cutoff(self):
+        """정확히 11:00 — True (경계 포함)."""
+        from app.services.surge_trading_service import is_buy_eligible_hours
+        from zoneinfo import ZoneInfo
+        KST = ZoneInfo("Asia/Seoul")
+        dt = datetime(2026, 5, 12, 11, 0, 0, tzinfo=KST)
+        assert is_buy_eligible_hours(dt) is True
+
+    def test_after_cutoff(self):
+        """11:01 — False (마감 이후 추격 매수 차단)."""
+        from app.services.surge_trading_service import is_buy_eligible_hours
+        from zoneinfo import ZoneInfo
+        KST = ZoneInfo("Asia/Seoul")
+        dt = datetime(2026, 5, 12, 11, 1, 0, tzinfo=KST)
+        assert is_buy_eligible_hours(dt) is False
+
+    def test_weekend(self):
+        """토요일 10:00 — False."""
+        from app.services.surge_trading_service import is_buy_eligible_hours
+        from zoneinfo import ZoneInfo
+        KST = ZoneInfo("Asia/Seoul")
+        dt = datetime(2026, 5, 9, 10, 0, 0, tzinfo=KST)  # 토요일
+        assert is_buy_eligible_hours(dt) is False
+
+
+# ---------------------------------------------------------------------------
 # calculate_trading_days_elapsed() 테스트
 # ---------------------------------------------------------------------------
 
@@ -276,16 +316,16 @@ class TestGetOpenPosition:
 class TestExecuteBuyOrders:
     """AC-SURGE-TRADE-001~006 커버"""
 
-    @patch("app.services.surge_trading_service.is_market_hours", return_value=False)
+    @patch("app.services.surge_trading_service.is_buy_eligible_hours", return_value=False)
     def test_ac_002_market_closed_skip(self, mock_hours):
-        """AC-SURGE-TRADE-002: 정규장 외 — 스킵."""
+        """AC-SURGE-TRADE-002: 매수 가능 시간 외 — 스킵."""
         from app.services.surge_trading_service import execute_buy_orders
         db = _make_db()
         result = execute_buy_orders(db)
         assert result["executed"] == 0
         assert result.get("reason") == "market_closed"
 
-    @patch("app.services.surge_trading_service.is_market_hours", return_value=True)
+    @patch("app.services.surge_trading_service.is_buy_eligible_hours", return_value=True)
     @patch("app.services.surge_trading_service.get_today_signals", return_value=[])
     @patch("app.services.surge_trading_service.get_or_create_portfolio")
     def test_ac_003_probability_below_threshold_no_signals(
@@ -299,12 +339,12 @@ class TestExecuteBuyOrders:
         result = execute_buy_orders(db)
         assert result["executed"] == 0
 
-    @patch("app.services.surge_trading_service.is_market_hours", return_value=True)
+    @patch("app.services.surge_trading_service.is_buy_eligible_hours", return_value=True)
     @patch("app.services.surge_trading_service.get_or_create_portfolio")
     @patch("app.services.surge_trading_service.get_today_signals")
     @patch("app.services.surge_trading_service.count_today_entries", return_value=0)
     @patch("app.services.surge_trading_service.get_open_position", return_value=None)
-    @patch("app.services.surge_trading_service._get_current_price_sync", return_value=Decimal("75000"))
+    @patch("app.services.surge_trading_service._get_price_with_change_sync", return_value=(75000, 2.5))
     def test_ac_001_successful_buy(
         self,
         mock_price,
@@ -337,7 +377,7 @@ class TestExecuteBuyOrders:
         # current_cash 차감 확인 (975_000)
         assert portfolio.current_cash == Decimal("5000000") - Decimal("975000")
 
-    @patch("app.services.surge_trading_service.is_market_hours", return_value=True)
+    @patch("app.services.surge_trading_service.is_buy_eligible_hours", return_value=True)
     @patch("app.services.surge_trading_service.get_or_create_portfolio")
     @patch("app.services.surge_trading_service.get_today_signals")
     @patch("app.services.surge_trading_service.count_today_entries", return_value=0)
@@ -368,7 +408,7 @@ class TestExecuteBuyOrders:
         # FundSignal.paper_executed는 변경되지 않아야 함 (AC-SURGE-TRADE-031)
         assert signal.paper_executed is False
 
-    @patch("app.services.surge_trading_service.is_market_hours", return_value=True)
+    @patch("app.services.surge_trading_service.is_buy_eligible_hours", return_value=True)
     @patch("app.services.surge_trading_service.get_or_create_portfolio")
     @patch("app.services.surge_trading_service.get_today_signals")
     @patch("app.services.surge_trading_service.count_today_entries", return_value=5)  # 이미 5개
@@ -392,7 +432,7 @@ class TestExecuteBuyOrders:
         assert result["executed"] == 0
         assert result["skipped"] == 1
 
-    @patch("app.services.surge_trading_service.is_market_hours", return_value=True)
+    @patch("app.services.surge_trading_service.is_buy_eligible_hours", return_value=True)
     @patch("app.services.surge_trading_service.get_or_create_portfolio")
     @patch("app.services.surge_trading_service.get_today_signals")
     @patch("app.services.surge_trading_service.count_today_entries", return_value=0)
@@ -421,6 +461,64 @@ class TestExecuteBuyOrders:
         result = execute_buy_orders(db)
         assert result["executed"] == 0
         assert result["skipped"] == 1
+
+    @patch("app.services.surge_trading_service.is_buy_eligible_hours", return_value=True)
+    @patch("app.services.surge_trading_service.get_or_create_portfolio")
+    @patch("app.services.surge_trading_service.get_today_signals")
+    @patch("app.services.surge_trading_service.count_today_entries", return_value=0)
+    @patch("app.services.surge_trading_service.get_open_position", return_value=None)
+    @patch("app.services.surge_trading_service._get_price_with_change_sync", return_value=(75000, -4.0))
+    def test_intraday_crash_skip(
+        self,
+        mock_price,
+        mock_open_pos,
+        mock_count,
+        mock_signals,
+        mock_portfolio,
+        mock_hours,
+    ):
+        """SPEC-AI-014: 당일 -4% 급락 중인 종목 매수 제외."""
+        from app.services.surge_trading_service import execute_buy_orders
+
+        signal = _make_fund_signal(probability=0.75)
+        stock = _make_stock(stock_code="005930")
+        mock_signals.return_value = [(signal, stock, 0.75)]
+        mock_portfolio.return_value = _make_portfolio()
+
+        db = _make_db()
+        result = execute_buy_orders(db)
+        assert result["executed"] == 0
+        assert result["skipped"] == 1
+        assert result["details"][0]["reason"] == "intraday_crash"
+
+    @patch("app.services.surge_trading_service.is_buy_eligible_hours", return_value=True)
+    @patch("app.services.surge_trading_service.get_or_create_portfolio")
+    @patch("app.services.surge_trading_service.get_today_signals")
+    @patch("app.services.surge_trading_service.count_today_entries", return_value=0)
+    @patch("app.services.surge_trading_service.get_open_position", return_value=None)
+    @patch("app.services.surge_trading_service._get_price_with_change_sync", return_value=(75000, 16.0))
+    def test_intraday_overheat_skip(
+        self,
+        mock_price,
+        mock_open_pos,
+        mock_count,
+        mock_signals,
+        mock_portfolio,
+        mock_hours,
+    ):
+        """SPEC-AI-014: 당일 +16% 과열 급등 종목 매수 제외."""
+        from app.services.surge_trading_service import execute_buy_orders
+
+        signal = _make_fund_signal(probability=0.75)
+        stock = _make_stock(stock_code="005930")
+        mock_signals.return_value = [(signal, stock, 0.75)]
+        mock_portfolio.return_value = _make_portfolio()
+
+        db = _make_db()
+        result = execute_buy_orders(db)
+        assert result["executed"] == 0
+        assert result["skipped"] == 1
+        assert result["details"][0]["reason"] == "intraday_overheat"
 
 
 # ---------------------------------------------------------------------------
