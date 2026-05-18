@@ -28,10 +28,10 @@ surge_detection:
     disclosure_window_hours: 24
   ensemble:
     weights:
-      theme_cluster: 0.25
-      volume_news_combo: 0.30
-      disclosure_pattern: 0.25
-      legacy_detectors: 0.20
+      theme_cluster: 0.35
+      volume_news_combo: 0.35
+      disclosure_pattern: 0.20
+      legacy_detectors: 0.10
     min_score_for_signal: 0.20
   backtest:
     enabled: true

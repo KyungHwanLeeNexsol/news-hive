@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import statistics
@@ -165,12 +166,17 @@ def detect_theme_news_cluster(
         return []
 
     # 6. 종목별 SurgeCandidate 생성
+    # @MX:NOTE: [AUTO] 종목 수준 개인화: stock_article_score를 40%로 theme_base_score에 블렌딩
+    # @MX:SPEC: SPEC-AI-014 REQ-001/002/003
     results: list[SurgeCandidate] = []
     for stock in stocks:
         stock_sector_name = sector_id_to_name.get(stock.sector_id, "")
 
         # 가장 높은 테마 점수를 사용 (종목이 여러 테마에 포함될 수 있음)
         best_score = 0.0
+        best_theme_base = 0.0
+        best_sector_relevance = 0.0
+
         for theme, cnt in active_themes.items():
             theme_sectors = theme_to_sectors.get(theme, [])
             if not theme_sectors:
@@ -182,22 +188,112 @@ def detect_theme_news_cluster(
             else:
                 sector_relevance = 0.5
 
-            score = min(1.0, cnt / 10) * sector_relevance
-            if score > best_score:
-                best_score = score
+            theme_base = min(1.0, cnt / 10)
+            # 임시 점수로 가장 높은 테마 선택 (sector_relevance 반영 전 base로 비교)
+            temp_score = theme_base * sector_relevance
+            if temp_score > best_score:
+                best_score = temp_score
+                best_theme_base = theme_base
+                best_sector_relevance = sector_relevance
 
-        if best_score > 0:
-            results.append(
-                SurgeCandidate(
-                    stock_code=stock.stock_code,
-                    stock_name=stock.name,
-                    theme_cluster_score=best_score,
-                    active_detectors=["theme_cluster"],
-                )
+        if best_score <= 0:
+            continue
+
+        # REQ-AI014-001: 종목 전용 기사 카운트 계산
+        # 종목명 또는 종목코드가 제목/본문에 포함된 기사를 종목 전용 기사로 판별
+        stock_articles = [
+            a for a in window_news
+            if stock.name in (a.title or "") + " " + (a.content or "")
+            or stock.stock_code in (a.title or "") + " " + (a.content or "")
+        ]
+        stock_specific_count = len(stock_articles)
+        stock_article_score = min(1.0, stock_specific_count / 5)
+
+        # REQ-AI014-001: 종목 전용 기사 유무에 따른 블렌딩 공식 적용
+        if stock_specific_count >= 1:
+            # 종목 전용 기사 있음: 60%/40% 블렌딩
+            theme_cluster_score = (best_theme_base * 0.6) + (stock_article_score * 0.4)
+        else:
+            # 섹터 전용(종목 기사 없음): 0.5× 페널티
+            theme_cluster_score = best_theme_base * 0.5
+
+        # sector_relevance 곱하기 (기존과 동일)
+        theme_cluster_score *= best_sector_relevance
+
+        # REQ-AI014-002: 경량 거래량 보너스 (+0.10)
+        # 전일 대비 3% 초과 가격 변동 시 보너스 적용
+        price_bonus = 0.0
+        try:
+            price_data = _fetch_price_change_sync(stock.stock_code)
+            if price_data is not None:
+                change_rate = price_data.get("change_rate", 0.0) or 0.0
+                if abs(change_rate) > 3.0:
+                    price_bonus = 0.10
+        except Exception:
+            # 가격 조회 실패 시 보너스 없음, 예외 전파 금지
+            price_bonus = 0.0
+
+        theme_cluster_score += price_bonus
+
+        # REQ-AI014-003: 뉴스 감성 통합
+        # 종목 전용 기사가 있으면 평균 감성 점수로 배율 적용
+        sentiment_factor = 1.0
+        if stock_specific_count >= 1:
+            avg_sentiment = statistics.mean(
+                _positive_sentiment_score(a.sentiment) for a in stock_articles
             )
+            sentiment_factor = 0.8 + (0.4 * avg_sentiment)
+            theme_cluster_score *= sentiment_factor
+
+        theme_cluster_score = min(1.0, max(0.0, theme_cluster_score))
+
+        logger.debug(
+            "[테마클러스터] code=%s theme_base=%.2f stock_news=%.2f price_bonus=%.2f "
+            "sentiment=%.2f theme_cluster=%.2f",
+            stock.stock_code,
+            best_theme_base,
+            stock_article_score,
+            price_bonus,
+            sentiment_factor,
+            theme_cluster_score,
+        )
+
+        results.append(
+            SurgeCandidate(
+                stock_code=stock.stock_code,
+                stock_name=stock.name,
+                theme_cluster_score=theme_cluster_score,
+                active_detectors=["theme_cluster"],
+            )
+        )
 
     logger.info("[테마클러스터] 후보 %d개 탐지", len(results))
     return results
+
+
+def _fetch_price_change_sync(stock_code: str) -> dict | None:
+    """비동기 fetch_current_price_with_change를 동기 컨텍스트에서 실행하는 래퍼.
+
+    # @MX:NOTE: [AUTO] REQ-AI014-002 가격 변동 조회용 sync 어댑터
+    # @MX:SPEC: SPEC-AI-014
+    테스트에서는 _price_change_provider를 주입하여 모킹 가능.
+    """
+    global _price_change_provider
+    if _price_change_provider is not None:
+        return _price_change_provider(stock_code)
+
+    try:
+        from app.services.naver_finance import fetch_current_price_with_change
+        return asyncio.run(fetch_current_price_with_change(stock_code))
+    except RuntimeError:
+        # 이미 이벤트 루프가 실행 중인 경우
+        return None
+    except Exception:
+        return None
+
+
+# 테스트 주입용 프로바이더 — None이면 운영 경로 사용
+_price_change_provider: Callable[[str], dict | None] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -513,7 +609,11 @@ def detect_disclosure_surge_pattern(
 def compute_ensemble_score(candidate: SurgeCandidate, config: SurgeDetectionConfig) -> float:
     """앙상블 스코어를 계산한다 (AC-SURGE-004).
 
-    각 탐지기 점수에 설정 가중치를 곱해 합산한다.
+    각 탐지기 점수에 설정 가중치를 곱해 합산한 뒤,
+    활성 탐지기 수에 따른 컨센서스 배율을 적용한다.
+
+    # @MX:NOTE: [AUTO] 컨센서스 배율: 활성 탐지기 1/2/3+개 → 1.00/1.15/1.30
+    # @MX:SPEC: SPEC-AI-014 REQ-004
 
     Args:
         candidate: SurgeCandidate 객체
@@ -523,13 +623,43 @@ def compute_ensemble_score(candidate: SurgeCandidate, config: SurgeDetectionConf
         0.0~1.0 범위의 앙상블 점수
     """
     w = config.ensemble.weights
-    score = (
+    weighted_sum = (
         w.theme_cluster * candidate.theme_cluster_score
         + w.volume_news_combo * candidate.combo_score
         + w.disclosure_pattern * candidate.pattern_score
         + w.legacy_detectors * candidate.legacy_score
     )
-    return min(1.0, max(0.0, score))
+
+    # REQ-AI014-004: 활성 탐지기 수 기반 컨센서스 배율
+    # "활성 탐지기" = 해당 탐지기 점수 > 0 인 것
+    active_count = sum([
+        1 for score in [
+            candidate.theme_cluster_score,
+            candidate.combo_score,
+            candidate.pattern_score,
+            candidate.legacy_score,
+        ] if score > 0
+    ])
+
+    if active_count >= 3:
+        multiplier = 1.30
+    elif active_count == 2:
+        multiplier = 1.15
+    else:
+        multiplier = 1.00
+
+    final_score = min(1.0, weighted_sum * multiplier)
+
+    logger.debug(
+        "[앙상블] code=%s weighted_sum=%.4f consensus=%.2f final=%.4f (active_detectors=%d)",
+        candidate.stock_code,
+        weighted_sum,
+        multiplier,
+        final_score,
+        active_count,
+    )
+
+    return final_score
 
 
 # @MX:NOTE: [AUTO] SPEC-AI-012 앙상블 파이프라인 진입점 — fund_manager._gather_surge_candidates에서 호출

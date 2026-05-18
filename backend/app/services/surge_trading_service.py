@@ -18,6 +18,7 @@ from app.models.fund_signal import FundSignal
 from app.models.stock import Stock
 from app.models.surge_portfolio import SurgePortfolio, SurgeTrade
 from app.services.naver_finance import fetch_current_price as _fetch_current_price_async
+from app.services.naver_finance import fetch_stock_price_history as _fetch_price_history_async
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,21 @@ def _get_current_price_sync(stock_code: str) -> Optional[int]:
     except RuntimeError:
         # 이미 이벤트 루프가 실행 중인 경우 (비정상 컨텍스트)
         return None
+
+
+def _get_price_history_sync(stock_code: str) -> list:
+    """async fetch_stock_price_history를 sync 컨텍스트에서 실행하는 wrapper.
+
+    # @MX:NOTE: [AUTO] REQ-AI014-005 가격 모멘텀 사전 필터를 위한 가격 이력 조회 어댑터
+    # @MX:SPEC: SPEC-AI-014
+    테스트에서는 이 함수를 직접 패치하여 모킹 가능.
+    """
+    try:
+        return asyncio.run(_fetch_price_history_async(stock_code, pages=1))
+    except RuntimeError:
+        return []
+    except Exception:
+        return []
 
 
 def is_market_hours(now: Optional[datetime] = None) -> bool:
@@ -115,8 +131,9 @@ def get_today_signals(
         if probability is None or probability < float(min_probability):
             continue
 
-        # 단일 탐지기 필터: 하나만 발동 AND 확률 0.40 미만 → 저품질 신호 제외
-        if len(active_detectors) < 2 and probability < 0.40:
+        # 단일 탐지기 필터: 하나만 발동 AND 확률 0.30 미만 → 저품질 신호 제외
+        # REQ-AI014-004 컨센서스 보너스로 단일 탐지기 시그널도 0.30까지 허용 (기존 0.40에서 완화)
+        if len(active_detectors) < 2 and probability < 0.30:
             logger.info(
                 "surge signal 스킵(단일 탐지기): stock=%s 탐지기=%s probability=%.4f",
                 stock.stock_code,
@@ -124,6 +141,41 @@ def get_today_signals(
                 probability,
             )
             continue
+
+        # REQ-AI014-005: 가격 모멘텀 사전 필터
+        # @MX:NOTE: [AUTO] 가격 모멘텀 사전 필터: 5일 +15% 초과(과열) 및 1일 -5% 미만(폭락) 종목 제외
+        # @MX:SPEC: SPEC-AI-014 REQ-005
+        stock_code_val = stock.stock_code
+        try:
+            price_history = _get_price_history_sync(stock_code_val)
+            if price_history and len(price_history) >= 6:
+                # 가장 최근 기록이 마지막 인덱스
+                latest_price = float(price_history[-1].close)
+                price_5d_ago = float(price_history[-6].close) if len(price_history) >= 6 else None
+                price_1d_ago = float(price_history[-2].close) if len(price_history) >= 2 else None
+
+                if price_5d_ago and price_5d_ago > 0:
+                    change_5d = (latest_price - price_5d_ago) / price_5d_ago
+                    if change_5d > 0.15:
+                        logger.info(
+                            "surge signal 스킵(과열종목): stock=%s 5d_change=%.2f%%",
+                            stock_code_val,
+                            change_5d * 100,
+                        )
+                        continue
+
+                if price_1d_ago and price_1d_ago > 0:
+                    change_1d = (latest_price - price_1d_ago) / price_1d_ago
+                    if change_1d < -0.05:
+                        logger.info(
+                            "surge signal 스킵(낙폭과대): stock=%s 1d_change=%.2f%%",
+                            stock_code_val,
+                            change_1d * 100,
+                        )
+                        continue
+        except Exception:
+            # 가격 데이터 조회 실패 시 필터 적용하지 않음 (통과)
+            pass
 
         result.append((signal, stock, probability))
 

@@ -594,10 +594,11 @@ class TestEnsembleScore:
     """앙상블 스코어 테스트."""
 
     def test_characterize_below_threshold_no_signal(self, surge_config: SurgeDetectionConfig):
-        """앙상블 점수 < min_score_for_signal(0.55)이면 시그널 없음 (AC-SURGE-004 시나리오 1).
+        """앙상블 점수 < min_score_for_signal(0.20)이면 시그널 없음 (AC-SURGE-004 시나리오 1).
 
         theme=0.40, combo=0.0, pattern=0.0, legacy=0.0
-        → score = 0.25 * 0.40 = 0.10 < 0.55
+        → 새 가중치: score = 0.35 * 0.40 = 0.14 < 0.20 (REQ-006 가중치 적용)
+        → 활성 탐지기 1개 → multiplier=1.00 → final=0.14
         """
         candidate = SurgeCandidate(
             stock_code="000001",
@@ -608,16 +609,17 @@ class TestEnsembleScore:
             legacy_score=0.0,
         )
         score = compute_ensemble_score(candidate, surge_config)
-        # 0.25 * 0.40 = 0.10
-        assert abs(score - 0.10) < 0.001
+        # 새 가중치: 0.35 * 0.40 * 1.00(단일탐지기) = 0.14
+        assert abs(score - 0.14) < 0.001
         assert score < surge_config.ensemble.min_score_for_signal
 
     def test_characterize_above_threshold_generates_signal(self, surge_config: SurgeDetectionConfig):
-        """앙상블 점수 >= min_score_for_signal(0.55)이면 시그널 발생 (AC-SURGE-004 시나리오 2).
+        """앙상블 점수 >= min_score_for_signal(0.20)이면 시그널 발생 (AC-SURGE-004 시나리오 2).
 
         theme=0.8, combo=0.9, pattern=0.7, legacy=0.5
-        → score = 0.25*0.8 + 0.30*0.9 + 0.25*0.7 + 0.20*0.5
-                = 0.20 + 0.27 + 0.175 + 0.10 = 0.745 >= 0.55
+        → 새 가중치: 0.35*0.8 + 0.35*0.9 + 0.20*0.7 + 0.10*0.5
+                   = 0.280 + 0.315 + 0.140 + 0.050 = 0.785
+        → 활성 탐지기 4개 → multiplier=1.30 → 0.785*1.30=1.0205 → clamped=1.0
         """
         candidate = SurgeCandidate(
             stock_code="000002",
@@ -628,9 +630,9 @@ class TestEnsembleScore:
             legacy_score=0.5,
         )
         score = compute_ensemble_score(candidate, surge_config)
-        # 0.745
+        # 클램핑 → 1.0
         assert score >= surge_config.ensemble.min_score_for_signal
-        assert abs(score - 0.745) < 0.001
+        assert abs(score - 1.0) < 0.001
 
     def test_characterize_ensemble_respects_weight_sum(self, surge_config: SurgeDetectionConfig):
         """앙상블 점수는 가중치 합산(=1.0)에 따라 최대 1.0이다."""
