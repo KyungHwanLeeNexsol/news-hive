@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import math
 import statistics
@@ -285,11 +284,8 @@ def _fetch_price_change_sync(stock_code: str) -> dict | None:
         return _price_change_provider(stock_code)
 
     try:
-        from app.services.naver_finance import fetch_current_price_with_change
-        return asyncio.run(fetch_current_price_with_change(stock_code))
-    except RuntimeError:
-        # 이미 이벤트 루프가 실행 중인 경우
-        return None
+        from app.services.naver_finance import fetch_current_price_with_change_sync
+        return fetch_current_price_with_change_sync(stock_code)
     except Exception:
         return None
 

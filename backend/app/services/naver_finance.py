@@ -792,6 +792,35 @@ def fetch_stock_price_history_sync(stock_code: str, pages: int = 3) -> list[Pric
     return results
 
 
+def fetch_current_price_with_change_sync(stock_code: str) -> dict | None:
+    """특정 종목의 현재가 + 등락률을 동기적으로 반환 (Naver 모바일 API).
+
+    동기 컨텍스트(_fetch_price_change_sync)에서 현재가 조회가 필요할 때 사용.
+    asyncio.run() 없이 httpx.Client로 직접 호출하여 이벤트 루프 충돌을 방지한다.
+    """
+    mobile_url = f"https://m.stock.naver.com/api/stock/{stock_code}/integration"
+    try:
+        with httpx.Client(timeout=5, follow_redirects=True) as client:
+            resp = client.get(mobile_url, headers=HEADERS)
+            resp.raise_for_status()
+        data = resp.json()
+        stock_info = data.get("stockInfo", {})
+        price_str = stock_info.get("closePrice", "")
+        rate_str = stock_info.get("fluctuationsRatio", "0")
+        if price_str:
+            try:
+                rate = float(str(rate_str).replace(",", ""))
+            except (ValueError, TypeError):
+                rate = 0.0
+            return {
+                "current_price": _parse_comma_int(str(price_str)),
+                "change_rate": rate,
+            }
+    except Exception as e:
+        logger.debug("fetch_current_price_with_change_sync %s 실패: %s", stock_code, e)
+    return None
+
+
 MARKET_CAP_URL = "https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}"
 
 
