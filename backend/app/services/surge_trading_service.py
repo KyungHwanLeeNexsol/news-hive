@@ -309,6 +309,14 @@ def execute_buy_orders(
 
     today_count = count_today_entries(db)
     open_count = count_open_positions(db)
+    logger.info(
+        "surge_execute_buys 시작 — 시그널=%d, 오픈포지션=%d/%d, 오늘진입=%d/%d",
+        len(today_signals),
+        open_count,
+        max_open_positions,
+        today_count,
+        max_daily_entries,
+    )
     executed = 0
     skipped = 0
     failed = 0
@@ -331,10 +339,11 @@ def execute_buy_orders(
 
         # 동시 보유 한도 체크 (자본 보전: 항상 일부 현금 유지)
         if open_count + executed >= max_open_positions:
-            logger.info(
-                "surge_execute_buys: 동시 보유 한도(%d) 도달 — %s 스킵",
+            logger.warning(
+                "surge_execute_buys: 동시 보유 한도(%d) 도달 — %s 스킵 (현재 오픈=%d)",
                 max_open_positions,
                 stock_code,
+                open_count + executed,
             )
             skipped += 1
             details.append({"stock_code": stock_code, "action": "skipped", "reason": "max_open_positions"})
@@ -375,10 +384,11 @@ def execute_buy_orders(
 
         # 당일 급락 중인 종목 제외 (테마 thesis 붕괴 방지)
         if change_rate < INTRADAY_CRASH_LIMIT:
-            logger.info(
-                "surge_execute_buys: %s 당일 급락 스킵 (change_rate=%.2f%%)",
+            logger.warning(
+                "surge_execute_buys: %s 당일 급락 스킵 (change_rate=%.2f%%, 한계=%.1f%%)",
                 stock_code,
                 change_rate,
+                INTRADAY_CRASH_LIMIT,
             )
             skipped += 1
             details.append({"stock_code": stock_code, "action": "skipped", "reason": "intraday_crash"})
@@ -386,10 +396,11 @@ def execute_buy_orders(
 
         # 당일 과열 급등 종목 제외 (상단 매수 방지)
         if change_rate > INTRADAY_OVERHEAT_LIMIT:
-            logger.info(
-                "surge_execute_buys: %s 당일 과열 스킵 (change_rate=%.2f%%)",
+            logger.warning(
+                "surge_execute_buys: %s 당일 과열 스킵 (change_rate=%.2f%%, 한계=%.1f%%)",
                 stock_code,
                 change_rate,
+                INTRADAY_OVERHEAT_LIMIT,
             )
             skipped += 1
             details.append({"stock_code": stock_code, "action": "skipped", "reason": "intraday_overheat"})
