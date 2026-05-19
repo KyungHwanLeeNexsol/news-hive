@@ -1,7 +1,7 @@
 """SPEC-AI-012: 급등 징후 탐지 서비스.
 
-3가지 탐지기(테마 뉴스 클러스터링, 거래량 이상+뉴스 콤보, 공시 급등 패턴)와
-앙상블 스코어링을 제공한다.
+4가지 탐지기(테마 뉴스 클러스터링, 거래량 이상+뉴스 콤보, 공시 급등 패턴,
+즉각 공시 이벤트)와 앙상블 스코어링을 제공한다.
 """
 
 from __future__ import annotations
@@ -41,6 +41,8 @@ class SurgeCandidate:
     combo_score: float = 0.0
     pattern_score: float = 0.0
     legacy_score: float = 0.0
+    # P3: 자사주 소각/취득, 계약 수주, 합병 등 즉각 이벤트 공시 점수
+    immediate_disclosure_score: float = 0.0
     active_detectors: list[str] = field(default_factory=list)
 
 
@@ -607,6 +609,106 @@ def detect_disclosure_surge_pattern(
 
 
 # ---------------------------------------------------------------------------
+# 탐지기 4: 즉각 공시 이벤트 시그널 (P3 — 통계 없이 이벤트 발생 즉시)
+# ---------------------------------------------------------------------------
+
+# 즉각 급등 가능성이 높은 공시 이벤트 키워드 → 시그널 점수 매핑
+# report_name에 키워드 포함 시 해당 점수를 immediate_disclosure_score로 부여
+# @MX:NOTE: [AUTO] 키워드는 DART 공시 표준 명칭 기준. 추가 이벤트는 이 목록에 append
+_IMMEDIATE_EVENT_PATTERNS: list[tuple[str, float]] = [
+    # 자사주 소각: 유통 주식 수 감소 → 강한 주가 부양 효과
+    ("자기주식소각", 0.90),
+    ("자기주식 소각", 0.90),
+    ("보통주식소각", 0.88),
+    # 단일판매·공급계약 수주: 매출 급증 기대
+    ("단일판매·공급계약체결", 0.82),
+    ("단일판매,공급계약", 0.82),
+    ("수주계약체결", 0.78),
+    # 흡수합병·합병 결정: 피합병법인 기준 인수 프리미엄 기대
+    ("흡수합병결정", 0.82),
+    ("흡수합병", 0.80),
+    ("합병결정", 0.78),
+    # 자사주 취득 결정: 소각 전 단계 — 덜 강하지만 주주환원 신호
+    ("자기주식취득결정", 0.70),
+    ("자기주식 취득 결정", 0.70),
+]
+
+
+def detect_immediate_disclosure_signal(
+    db: Session,
+    config: SurgeDetectionConfig,
+) -> list[SurgeCandidate]:
+    """즉각 공시 이벤트(자사주 소각, 수주, 합병) 기반 급등 후보 탐지 (P3).
+
+    과거 통계 없이 공시 발생 즉시 시그널을 생성한다.
+    _IMMEDIATE_EVENT_PATTERNS에 정의된 키워드가 report_name에 포함된 공시를 조회해
+    해당 종목에 즉각 시그널 점수(immediate_disclosure_score)를 부여한다.
+
+    Args:
+        db: SQLAlchemy 동기 세션
+        config: SurgeDetectionConfig 설정
+
+    Returns:
+        SurgeCandidate 목록 (immediate_disclosure_score 채워짐)
+    """
+    cfg = config.disclosure_pattern
+    cutoff_dt = datetime.now(timezone.utc) - timedelta(hours=cfg.disclosure_window_hours)
+    cutoff_str = cutoff_dt.strftime("%Y%m%d")
+
+    # 최근 공시 조회 (stock_id 연결된 것만)
+    recent_disclosures = (
+        db.query(Disclosure)
+        .filter(
+            Disclosure.rcept_dt >= cutoff_str,
+            Disclosure.stock_id.isnot(None),
+        )
+        .all()
+    )
+
+    # 종목별 최고 시그널 점수 집계
+    stock_scores: dict[int, dict] = {}
+
+    for disc in recent_disclosures:
+        rname = disc.report_name or ""
+        best_score = 0.0
+        for keyword, score in _IMMEDIATE_EVENT_PATTERNS:
+            if keyword in rname:
+                best_score = max(best_score, score)
+        if best_score == 0.0:
+            continue
+
+        if disc.stock_id not in stock_scores or stock_scores[disc.stock_id]["score"] < best_score:
+            stock = db.query(Stock).filter(Stock.id == disc.stock_id).first()
+            if stock:
+                stock_scores[disc.stock_id] = {
+                    "score": best_score,
+                    "stock_code": stock.stock_code,
+                    "stock_name": stock.name,
+                    "report_name": rname,
+                }
+
+    results: list[SurgeCandidate] = []
+    for _, info in stock_scores.items():
+        results.append(
+            SurgeCandidate(
+                stock_code=info["stock_code"],
+                stock_name=info["stock_name"],
+                immediate_disclosure_score=info["score"],
+                active_detectors=["immediate_disclosure"],
+            )
+        )
+        logger.info(
+            "[즉각공시] %s '%s' → 시그널점수=%.3f",
+            info["stock_code"],
+            info["report_name"][:30],
+            info["score"],
+        )
+
+    logger.info("[즉각공시] 후보 %d개 탐지", len(results))
+    return results
+
+
+# ---------------------------------------------------------------------------
 # M5: 앙상블 스코어링
 # ---------------------------------------------------------------------------
 
@@ -627,10 +729,12 @@ def compute_ensemble_score(candidate: SurgeCandidate, config: SurgeDetectionConf
         0.0~1.0 범위의 앙상블 점수
     """
     w = config.ensemble.weights
+    # P3: immediate_disclosure_score와 pattern_score 중 높은 값을 공시 가중치에 적용
+    best_disclosure_score = max(candidate.pattern_score, candidate.immediate_disclosure_score)
     weighted_sum = (
         w.theme_cluster * candidate.theme_cluster_score
         + w.volume_news_combo * candidate.combo_score
-        + w.disclosure_pattern * candidate.pattern_score
+        + w.disclosure_pattern * best_disclosure_score
         + w.legacy_detectors * candidate.legacy_score
     )
 
@@ -640,7 +744,7 @@ def compute_ensemble_score(candidate: SurgeCandidate, config: SurgeDetectionConf
         1 for score in [
             candidate.theme_cluster_score,
             candidate.combo_score,
-            candidate.pattern_score,
+            best_disclosure_score,
             candidate.legacy_score,
         ] if score > 0
     ])
@@ -692,6 +796,8 @@ def gather_surge_candidates(
     theme_results = detect_theme_news_cluster(db, [], config)
     combo_results = detect_volume_surge_news_combo(db, config)
     pattern_results = detect_disclosure_surge_pattern(db, config)
+    # P3: 즉각 공시 이벤트 탐지기 (자사주 소각, 수주, 합병)
+    immediate_results = detect_immediate_disclosure_signal(db, config)
 
     # 종목 코드 기준 병합
     merged: dict[str, SurgeCandidate] = {}
@@ -717,6 +823,16 @@ def gather_surge_candidates(
         else:
             merged[candidate.stock_code] = candidate
 
+    # P3: 즉각 공시 이벤트 병합
+    for candidate in immediate_results:
+        if candidate.stock_code in merged:
+            existing = merged[candidate.stock_code]
+            existing.immediate_disclosure_score = candidate.immediate_disclosure_score
+            if "immediate_disclosure" not in existing.active_detectors:
+                existing.active_detectors.append("immediate_disclosure")
+        else:
+            merged[candidate.stock_code] = candidate
+
     # 레거시 탐지기 점수 계산
     # @MX:NOTE: legacy_score = min(1.0, 레거시 탐지기 발동 수 / 4)
     #           leading_signals 키로 몇 개의 선행 탐지기가 발동했는지 확인
@@ -737,11 +853,27 @@ def gather_surge_candidates(
 
     # 앙상블 점수 계산 및 임계값 필터링
     qualified: list[SurgeCandidate] = []
+    qualified_codes: set[str] = set()
+
     for candidate in merged.values():
         score = compute_ensemble_score(candidate, config)
         if score >= config.ensemble.min_score_for_signal:
-            # 점수를 저장하지 않고 반환 — 호출자가 compute_ensemble_score로 재계산
             qualified.append(candidate)
+            qualified_codes.add(candidate.stock_code)
+
+    # P3: 즉각 공시 이벤트 강도 >= 0.70 이면 앙상블 임계값 우회 포함
+    # 자사주 소각(0.90), 수주(0.82), 합병(0.82) 등은 다른 탐지기 없이도 즉각 시그널
+    _IMMEDIATE_BYPASS_THRESHOLD = 0.70
+    for candidate in merged.values():
+        if (candidate.stock_code not in qualified_codes
+                and candidate.immediate_disclosure_score >= _IMMEDIATE_BYPASS_THRESHOLD):
+            qualified.append(candidate)
+            qualified_codes.add(candidate.stock_code)
+            logger.info(
+                "[즉각공시] 앙상블 임계 우회: %s (immediate_score=%.3f)",
+                candidate.stock_code,
+                candidate.immediate_disclosure_score,
+            )
 
     # 앙상블 점수 내림차순 정렬
     qualified.sort(key=lambda c: compute_ensemble_score(c, config), reverse=True)
@@ -762,5 +894,6 @@ def surge_candidate_to_signal_metadata(
         "theme_cluster_score": round(candidate.theme_cluster_score, 4),
         "combo_score": round(candidate.combo_score, 4),
         "pattern_score": round(candidate.pattern_score, 4),
+        "immediate_disclosure_score": round(candidate.immediate_disclosure_score, 4),
         "legacy_score": round(candidate.legacy_score, 4),
     }
