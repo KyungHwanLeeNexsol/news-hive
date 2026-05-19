@@ -131,7 +131,8 @@ def _run_dart_crawl():
     db = SessionLocal()
     try:
         _cleanup_old_disclosures(db)
-        count = asyncio.run(fetch_dart_disclosures(db))
+        # days=7: 서비스 다운타임 후 최대 7일치 복구 가능 (기존 days=3은 공백 발생)
+        count = asyncio.run(fetch_dart_disclosures(db, days=7))
         logger.info(f"DART crawl completed: {count} new disclosures")
         # Re-link any previously unlinked disclosures
         backfill_disclosure_stock_ids(db)
