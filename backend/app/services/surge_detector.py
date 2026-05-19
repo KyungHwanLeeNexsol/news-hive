@@ -431,7 +431,8 @@ def _get_volume_history(stock_code: str, baseline_days: int) -> list[float]:
             # 캐시 미스: 동기 HTTP 요청으로 일봉 히스토리 즉시 조회 (TTL=1h 캐싱)
             cached = fetch_stock_price_history_sync(stock_code, pages=3)
         if cached:
-            records = cached[-baseline_days:]
+            # Naver sise_day는 최신순(newest-first) → 역순으로 변환 후 최근 N일 슬라이스
+            records = list(reversed(cached))[-baseline_days:]
             return [float(r.volume) for r in records]
     except Exception as e:
         logger.debug("[거래량콤보] %s 거래량 조회 실패: %s", stock_code, e)
