@@ -422,16 +422,19 @@ def _get_volume_history(stock_code: str, baseline_days: int) -> list[float]:
     if _volume_provider is not None:
         return _volume_provider(stock_code, baseline_days)
 
-    # 운영 환경: naver_finance 인메모리 캐시에서 동기 조회
+    # 운영 환경: naver_finance 캐시 조회 → 미스 시 동기 HTTP 폴백
     try:
-        from app.services.naver_finance import _price_cache
+        from app.services.naver_finance import _price_cache, fetch_stock_price_history_sync
 
         cached = _price_cache.data.get(stock_code)
+        if not cached:
+            # 캐시 미스: 동기 HTTP 요청으로 일봉 히스토리 즉시 조회 (TTL=1h 캐싱)
+            cached = fetch_stock_price_history_sync(stock_code, pages=3)
         if cached:
             records = cached[-baseline_days:]
             return [float(r.volume) for r in records]
     except Exception as e:
-        logger.debug("[거래량콤보] %s 거래량 캐시 조회 실패: %s", stock_code, e)
+        logger.debug("[거래량콤보] %s 거래량 조회 실패: %s", stock_code, e)
 
     return []
 

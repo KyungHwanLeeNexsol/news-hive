@@ -732,6 +732,66 @@ async def fetch_stock_price_history(stock_code: str, pages: int = 5) -> list[Pri
         return _price_cache.data.get(stock_code, [])
 
 
+def _parse_sise_day_html(content_bytes: bytes) -> list[PriceRecord]:
+    """Naver sise_day.naver HTML 바이트에서 일봉 레코드 파싱 (동기, 모듈 레벨)."""
+    content = content_bytes.decode("euc-kr", errors="replace")
+    soup = BeautifulSoup(content, "html.parser")
+    records: list[PriceRecord] = []
+    for row in soup.select("table.type2 tr"):
+        cols = row.select("td")
+        if len(cols) < 7:
+            continue
+        date_text = cols[0].get_text(strip=True)
+        if not date_text or "." not in date_text:
+            continue
+        close = _parse_int_safe(cols[1].get_text())
+        open_price = _parse_int_safe(cols[3].get_text())
+        high = _parse_int_safe(cols[4].get_text())
+        low = _parse_int_safe(cols[5].get_text())
+        volume = _parse_int_safe(cols[6].get_text())
+        if close > 0:
+            records.append(PriceRecord(
+                date=date_text,
+                close=close,
+                open=open_price,
+                high=high,
+                low=low,
+                volume=volume,
+            ))
+    return records
+
+
+def fetch_stock_price_history_sync(stock_code: str, pages: int = 3) -> list[PriceRecord]:
+    """Naver sise_day.naver에서 일봉 OHLCV를 동기적으로 가져온다.
+
+    동기 컨텍스트(급등 탐지기 _get_volume_history)에서 거래량 데이터가 필요할 때 사용.
+    캐시 히트 시 즉시 반환, 미스 시 httpx.Client 동기 요청 후 _price_cache에 저장.
+    pages=3 → 약 30 거래일(volume_baseline_days=20 충족).
+    """
+    now = time.time()
+    cached = _price_cache.data.get(stock_code)
+    if cached and (now - _price_cache.last_updated.get(stock_code, 0)) < PRICE_CACHE_TTL:
+        return cached
+
+    results: list[PriceRecord] = []
+    try:
+        with httpx.Client(timeout=10, follow_redirects=True) as client:
+            for page in range(1, pages + 1):
+                url = SISE_DAY_URL.format(code=stock_code, page=page)
+                resp = client.get(url, headers=HEADERS)
+                resp.raise_for_status()
+                results.extend(_parse_sise_day_html(resp.content))
+    except Exception as e:
+        logger.debug("fetch_stock_price_history_sync %s 실패: %s", stock_code, e)
+
+    if results:
+        _price_cache.data[stock_code] = results
+        _price_cache.last_updated[stock_code] = now
+        logger.debug("[가격캐시] %s %d개 일봉 동기 캐싱 완료", stock_code, len(results))
+
+    return results
+
+
 MARKET_CAP_URL = "https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}"
 
 
