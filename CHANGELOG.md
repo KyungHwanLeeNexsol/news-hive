@@ -4,6 +4,24 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Added — 급등 탐지 시스템 4탐지기 체계 완성: P0~P3 전면 개선 (2026-05-19)
+
+- **P0 — 거래량 탐지기 동기 폴백 복구** (`backend/app/services/naver_finance.py`, `surge_detector.py`): `fetch_stock_price_history_sync()` 신규 추가 — `httpx.Client` 기반 동기 HTTP 조회, TTL 1시간 캐시 write-through. `_get_volume_history()` 캐시 미스 시 자동 폴백 → `volume_news_combo` 탐지기(가중치 35%) 완전 정상화
+- **P1 — 테마 키워드 9→13개 확장** (`backend/app/surge_config/surge_detection.yaml`): 항공·5G·보안칩·K뷰티 신규 테마 추가 — 항공→항공사/항공화물, 5G→통신장비, 보안칩→통신장비/반도체, K뷰티→화장품 섹터 매핑
+- **P2 — 섹터-테마 매핑 확장** (`surge_detection.yaml`): AI(통신장비·전자장비와기기·전자제품), 로봇(전자제품), 반도체(전기장비·디스플레이장비및부품), 바이오(건강관리장비와용품·건강관리업체및서비스) 섹터 추가. DB 오분류 4종목 수정(티웨이홀딩스 건축자재→항공사, 티엠씨 조선→전기장비, 아이로보틱스 화학→기계, 가온그룹 전자제품→전자장비와기기)
+- **P3 — 즉각 공시 이벤트 탐지기** (`surge_detector.py`): `_IMMEDIATE_EVENT_PATTERNS` 12개 패턴(자사주 소각·단일판매계약체결·흡수합병결정 등) 기반 `detect_immediate_disclosure_signal()` 신규 추가. 점수 ≥ 0.70 종목은 앙상블 임계값 우회하여 즉시 후보 등재. `SurgeCandidate.immediate_disclosure_score` 필드 및 시그널 메타데이터 반영
+
+### Fixed — 급등 탐지기 버그 4건 수정 (2026-05-19)
+
+- **거래량 히스토리 순서 역전** (`backend/app/services/surge_detector.py`): Naver sise_day 응답은 최신순(newest-first) — `cached[-baseline_days:]`가 가장 오래된 데이터를 반환하던 버그 수정 → `list(reversed(cached))[-N:]`으로 최근 N일 정확히 슬라이스, `volumes[-1]`이 오늘 거래량을 가리키도록 보정
+- **DART 공시 패턴 실제 명칭 보정** (`surge_detector.py`): `·`(U+00B7 middle dot) 대신 DART 실제 사용 문자 `ㆍ`(U+318D 한국어 아래아) 적용 + `주식소각결정` 실제 report_name 추가 — 12개 패턴 전체 DB 매칭 정상화
+- **asyncio.run() 이벤트 루프 충돌** (`surge_detector.py`, `naver_finance.py`): FastAPI 이벤트 루프 내에서 `asyncio.run()` 호출 시 `RuntimeError` 묵인 → 가격 보너스(+0.10) 매 사이클 미적용 — `fetch_current_price_with_change_sync()`(`httpx.Client`) 신규 추가로 이벤트 루프 충돌 원천 제거
+- **DART 크롤 윈도우 days=3→7 상향** (`backend/app/services/scheduler.py`): 서비스 다운타임 3일 초과 시 공시 데이터 영구 공백 발생 문제 해결. 서버 수동 45일 백필(16,266건) → 총 65,606건(stock_id 연결) 복구
+
+### Fixed — 급등 모의투자 매수 스킵 로그 WARNING 상향 (2026-05-19)
+
+- **매수 스킵 사유 가시성 확보** (`backend/app/services/surge_trading_service.py`): `journalctl` WARNING 필터 환경에서 동시 보유 한도 도달·당일 급락·과열 스킵 사유가 완전히 누락 — INFO → WARNING 상향. `execute_buy_orders()` 시작 시 시그널 수·오픈 포지션·오늘 진입 건 요약 INFO 로그 신규 추가
+
 ### Changed — 급등 모의투자 초기자본 500만원 → 5천만원 상향 (2026-05-18)
 
 - **`get_or_create_portfolio()` 기본값 변경** (`backend/app/services/surge_trading_service.py`): `initial_capital` 5,000,000 → 50,000,000 — 신규 포지션 크기 `position_pct(20%) × 5천만원 = 1천만원/건`으로 실전 모의투자 규모 확대
