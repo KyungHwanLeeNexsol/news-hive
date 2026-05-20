@@ -63,8 +63,21 @@ class EnsembleConfig(BaseModel):
     """앙상블 스코어링 설정."""
 
     weights: EnsembleWeightsConfig
-    # @MX:NOTE: min_score_for_signal = 0.55 — fund_manager.py의 MIN_ACTION_CONFIDENCE와 동일
+    # @MX:NOTE: [AUTO] min_score_for_signal — SPEC-AI-016에서 0.20→0.45로 상향 (정밀도 강화)
+    # @MX:SPEC: SPEC-AI-016 REQ-001
     min_score_for_signal: float
+
+
+class PriceQueryConfig(BaseModel):
+    """가격 배치 조회 설정 (SPEC-AI-016 REQ-004).
+
+    # @MX:NOTE: [AUTO] 배치 가격 조회 파라미터 — Naver Finance 레이트 리미트 회피용
+    # @MX:SPEC: SPEC-AI-016
+    """
+
+    batch_size: int = 10
+    batch_delay_sec: float = 0.5
+    retry_count: int = 1
 
 
 class BacktestConfig(BaseModel):
@@ -84,6 +97,7 @@ class SurgeDetectionConfig(BaseModel):
     volume_news_combo: VolumeNewsComboConfig
     disclosure_pattern: DisclosurePatternConfig
     ensemble: EnsembleConfig
+    price_query: PriceQueryConfig = PriceQueryConfig()
     backtest: BacktestConfig
 
     # @MX:ANCHOR: [AUTO] 앙상블 가중치 합산 검증 — 4개 탐지기 가중치 합산 반드시 1.0

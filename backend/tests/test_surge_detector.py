@@ -202,7 +202,8 @@ class TestSurgeConfig:
     def test_characterize_config_loads_from_yaml(self, surge_config: SurgeDetectionConfig):
         """기본 YAML 설정 파일이 정상적으로 로드된다."""
         assert surge_config.theme_cluster.min_article_count == 2
-        assert surge_config.ensemble.min_score_for_signal == 0.20
+        # SPEC-AI-016: 임계값 0.20 → 0.45 상향 (정밀도 강화)
+        assert surge_config.ensemble.min_score_for_signal == 0.45
         assert len(surge_config.theme_cluster.keywords) > 0
 
     def test_characterize_ensemble_weights_sum_to_one(self, surge_config: SurgeDetectionConfig):
@@ -594,10 +595,10 @@ class TestEnsembleScore:
     """앙상블 스코어 테스트."""
 
     def test_characterize_below_threshold_no_signal(self, surge_config: SurgeDetectionConfig):
-        """앙상블 점수 < min_score_for_signal(0.20)이면 시그널 없음 (AC-SURGE-004 시나리오 1).
+        """앙상블 점수 < min_score_for_signal(0.45)이면 시그널 없음 (AC-SURGE-004 시나리오 1).
 
         theme=0.40, combo=0.0, pattern=0.0, legacy=0.0
-        → 새 가중치: score = 0.35 * 0.40 = 0.14 < 0.20 (REQ-006 가중치 적용)
+        → 새 가중치: score = 0.35 * 0.40 = 0.14 < 0.45 (SPEC-AI-016 임계값 상향)
         → 활성 탐지기 1개 → multiplier=1.00 → final=0.14
         """
         candidate = SurgeCandidate(
@@ -614,7 +615,7 @@ class TestEnsembleScore:
         assert score < surge_config.ensemble.min_score_for_signal
 
     def test_characterize_above_threshold_generates_signal(self, surge_config: SurgeDetectionConfig):
-        """앙상블 점수 >= min_score_for_signal(0.20)이면 시그널 발생 (AC-SURGE-004 시나리오 2).
+        """앙상블 점수 >= min_score_for_signal(0.45)이면 시그널 발생 (AC-SURGE-004 시나리오 2).
 
         theme=0.8, combo=0.9, pattern=0.7, legacy=0.5
         → 새 가중치: 0.35*0.8 + 0.35*0.9 + 0.20*0.7 + 0.10*0.5

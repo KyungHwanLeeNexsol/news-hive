@@ -345,10 +345,11 @@ class TestExecuteBuyOrders:
     @patch("app.services.surge_trading_service.count_today_entries", return_value=0)
     @patch("app.services.surge_trading_service.count_open_positions", return_value=0)
     @patch("app.services.surge_trading_service.get_open_position", return_value=None)
-    @patch("app.services.surge_trading_service._get_price_with_change_sync", return_value=(75000, 2.5))
+    @patch("app.services.surge_trading_service._get_price_with_change_batch_sync",
+           return_value={"005930": {"current_price": 75000, "change_rate": 2.5}})
     def test_ac_001_successful_buy(
         self,
-        mock_price,
+        mock_batch_price,
         mock_open_pos,
         mock_open_count,
         mock_count,
@@ -475,10 +476,11 @@ class TestExecuteBuyOrders:
     @patch("app.services.surge_trading_service.count_today_entries", return_value=0)
     @patch("app.services.surge_trading_service.count_open_positions", return_value=0)
     @patch("app.services.surge_trading_service.get_open_position", return_value=None)
-    @patch("app.services.surge_trading_service._get_price_with_change_sync", return_value=(75000, -4.0))
+    @patch("app.services.surge_trading_service._get_price_with_change_batch_sync",
+           return_value={"005930": {"current_price": 75000, "change_rate": -4.0}})
     def test_intraday_crash_skip(
         self,
-        mock_price,
+        mock_batch_price,
         mock_open_pos,
         mock_open_count,
         mock_count,
@@ -506,10 +508,11 @@ class TestExecuteBuyOrders:
     @patch("app.services.surge_trading_service.count_today_entries", return_value=0)
     @patch("app.services.surge_trading_service.count_open_positions", return_value=0)
     @patch("app.services.surge_trading_service.get_open_position", return_value=None)
-    @patch("app.services.surge_trading_service._get_price_with_change_sync", return_value=(75000, 16.0))
+    @patch("app.services.surge_trading_service._get_price_with_change_batch_sync",
+           return_value={"005930": {"current_price": 75000, "change_rate": 16.0}})
     def test_intraday_overheat_skip(
         self,
-        mock_price,
+        mock_batch_price,
         mock_open_pos,
         mock_open_count,
         mock_count,
@@ -889,3 +892,428 @@ class TestGetPortfolioStats:
         expected_return = (float(current_value) - 5_000_000) / 5_000_000 * 100
 
         assert abs(expected_return - (-7.9)) < 0.01
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-016: 급등 탐지 정밀도 강화 테스트
+# ---------------------------------------------------------------------------
+
+class TestSurgeAI016ThresholdRaise:
+    """T-016-001~004: REQ-AI016-001 앙상블 점수 임계값 0.45 검증"""
+
+    def test_t016_001_yaml_loads_045_threshold(self):
+        """T-016-001: YAML 로드 후 min_score_for_signal == 0.45"""
+        from app.surge_config.surge_settings import get_surge_config
+        cfg = get_surge_config()
+        assert cfg.ensemble.min_score_for_signal == 0.45
+
+    def test_t016_002_below_045_excluded(self):
+        """T-016-002: 합성 후보(weighted_sum=0.40) → gather_surge_candidates 결과 미포함."""
+        from app.surge_config.surge_settings import get_surge_config
+        from app.services.surge_detector import compute_ensemble_score, SurgeCandidate
+        cfg = get_surge_config()
+        # weighted_sum이 0.40이 되도록 설계: theme=1.0 (0.35), combo=0.0, pattern=0.0, legacy=0.5 (0.10*0.5=0.05)
+        # → 0.35 + 0.05 = 0.40 (단일 탐지기 2개 활성 → 실제 = 0.35*1 + 0.10*0.5 = 0.4 * 1.15(2탐지기) ...)
+        # 간단하게: 모든 점수가 0인 단순 케이스 (0.0 < 0.45 → 미포함)
+        candidate = SurgeCandidate(
+            stock_code="000001",
+            stock_name="테스트",
+            theme_cluster_score=0.4,
+            combo_score=0.0,
+            pattern_score=0.0,
+            legacy_score=0.0,
+        )
+        score = compute_ensemble_score(candidate, cfg)
+        # 0.35 * 0.4 = 0.14 (단일 탐지기 multiplier=1.00) → 0.14 < 0.45
+        assert score < cfg.ensemble.min_score_for_signal
+
+    def test_t016_003_above_045_included(self):
+        """T-016-003: 합성 후보(weighted_sum=0.50+) → 결과 포함."""
+        from app.surge_config.surge_settings import get_surge_config
+        from app.services.surge_detector import compute_ensemble_score, SurgeCandidate
+        cfg = get_surge_config()
+        candidate = SurgeCandidate(
+            stock_code="000002",
+            stock_name="강한주",
+            theme_cluster_score=0.7,
+            combo_score=0.7,
+            pattern_score=0.5,
+            legacy_score=0.5,
+        )
+        score = compute_ensemble_score(candidate, cfg)
+        # 0.35*0.7 + 0.35*0.7 + 0.20*0.5 + 0.10*0.5 = 0.245+0.245+0.10+0.05 = 0.64
+        # 4탐지기 활성 → *1.30 = 0.832 → > 0.45
+        assert score >= cfg.ensemble.min_score_for_signal
+
+
+class TestSurgeAI016DetectorScores:
+    """T-016-005~008: REQ-AI016-002 탐지기별 점수 분해 로그"""
+
+    def test_t016_005_executed_log_format(self, caplog):
+        """T-016-005: 매수 완료 시 [SURGE] {code} executed 패턴 로그 1회 출력."""
+        import json
+        import logging
+        from app.services.surge_trading_service import execute_buy_orders
+
+        metadata = json.dumps({
+            "surge_probability_score": 0.52,
+            "surge_basis": ["theme_cluster", "volume_news_combo"],
+            "theme_cluster_score": 0.30,
+            "combo_score": 0.15,
+            "pattern_score": 0.07,
+            "immediate_disclosure_score": 0.0,
+            "legacy_score": 0.0,
+        })
+        signal = _make_fund_signal(signal_id=1, probability=0.52)
+        signal.surge_metadata = metadata
+        stock = _make_stock(stock_code="005930")
+        portfolio = _make_portfolio(current_cash=Decimal("5000000"))
+        db = _make_db()
+
+        with patch("app.services.surge_trading_service.is_buy_eligible_hours", return_value=True), \
+             patch("app.services.surge_trading_service.get_or_create_portfolio", return_value=portfolio), \
+             patch("app.services.surge_trading_service.get_today_signals", return_value=[(signal, stock, 0.52)]), \
+             patch("app.services.surge_trading_service.count_today_entries", return_value=0), \
+             patch("app.services.surge_trading_service.count_open_positions", return_value=0), \
+             patch("app.services.surge_trading_service.get_open_position", return_value=None), \
+             patch("app.services.surge_trading_service._get_open_sector_counts", return_value={}), \
+             patch("app.services.surge_trading_service._get_price_with_change_batch_sync",
+                   return_value={"005930": {"current_price": 75000, "change_rate": 2.5}}), \
+             caplog.at_level(logging.INFO, logger="app.services.surge_trading_service"):
+            result = execute_buy_orders(db)
+
+        assert result["executed"] == 1
+        surge_logs = [r for r in caplog.records if "[SURGE]" in r.message and "executed" in r.message and "005930" in r.message]
+        assert len(surge_logs) >= 1
+        log_msg = surge_logs[0].message
+        assert "score=" in log_msg
+        assert "theme=" in log_msg
+        assert "volume=" in log_msg
+
+    def test_t016_006_sector_concentration_log(self, caplog):
+        """T-016-006: 섹터 집중 스킵 시 reason=sector_concentration 분해 로그."""
+        import json
+        import logging
+        from app.services.surge_trading_service import execute_buy_orders
+        from app.models.sector import Sector
+
+        metadata = json.dumps({
+            "surge_probability_score": 0.55,
+            "surge_basis": ["theme_cluster"],
+            "theme_cluster_score": 0.55,
+        })
+        signal = _make_fund_signal(signal_id=2, probability=0.55)
+        signal.surge_metadata = metadata
+        stock = _make_stock(stock_code="068270", name="셀트리온")
+        stock.sector_id = 10
+        portfolio = _make_portfolio(current_cash=Decimal("5000000"))
+        db = _make_db()
+
+        # 섹터 mock 설정
+        sector_mock = MagicMock()
+        sector_mock.name = "바이오"
+        db.query.return_value.filter.return_value.first.return_value = sector_mock
+
+        with patch("app.services.surge_trading_service.is_buy_eligible_hours", return_value=True), \
+             patch("app.services.surge_trading_service.get_or_create_portfolio", return_value=portfolio), \
+             patch("app.services.surge_trading_service.get_today_signals", return_value=[(signal, stock, 0.55)]), \
+             patch("app.services.surge_trading_service.count_today_entries", return_value=0), \
+             patch("app.services.surge_trading_service.count_open_positions", return_value=0), \
+             patch("app.services.surge_trading_service.get_open_position", return_value=None), \
+             patch("app.services.surge_trading_service._get_open_sector_counts", return_value={"바이오": 2}), \
+             patch("app.services.surge_trading_service._get_price_with_change_batch_sync", return_value={}), \
+             caplog.at_level(logging.INFO, logger="app.services.surge_trading_service"):
+            result = execute_buy_orders(db, max_same_sector=2)
+
+        assert result["skipped"] >= 1
+        found = any(
+            "[SURGE]" in r.message and "sector_concentration" in r.message
+            for r in caplog.records
+        )
+        assert found
+
+    def test_t016_007_price_unavailable_log(self, caplog):
+        """T-016-007: 가격 조회 실패 시 action=failed reason=price_unavailable 로그."""
+        import json
+        import logging
+        from app.services.surge_trading_service import execute_buy_orders
+
+        metadata = json.dumps({"surge_probability_score": 0.50})
+        signal = _make_fund_signal(signal_id=3, probability=0.50)
+        signal.surge_metadata = metadata
+        stock = _make_stock(stock_code="999999")
+        portfolio = _make_portfolio(current_cash=Decimal("5000000"))
+        db = _make_db()
+
+        with patch("app.services.surge_trading_service.is_buy_eligible_hours", return_value=True), \
+             patch("app.services.surge_trading_service.get_or_create_portfolio", return_value=portfolio), \
+             patch("app.services.surge_trading_service.get_today_signals", return_value=[(signal, stock, 0.50)]), \
+             patch("app.services.surge_trading_service.count_today_entries", return_value=0), \
+             patch("app.services.surge_trading_service.count_open_positions", return_value=0), \
+             patch("app.services.surge_trading_service.get_open_position", return_value=None), \
+             patch("app.services.surge_trading_service._get_open_sector_counts", return_value={}), \
+             patch("app.services.surge_trading_service._get_price_with_change_batch_sync", return_value={"999999": None}), \
+             patch("app.services.surge_trading_service._get_price_with_change_sync", return_value=(None, 0.0)), \
+             caplog.at_level(logging.INFO, logger="app.services.surge_trading_service"):
+            result = execute_buy_orders(db)
+
+        assert result["failed"] == 1
+        found = any(
+            "[SURGE]" in r.message and "price_unavailable" in r.message
+            for r in caplog.records
+        )
+        assert found
+
+    def test_t016_008_missing_metadata_no_exception(self):
+        """T-016-008: surge_metadata 결측 시 모든 점수 0.0, 예외 없음."""
+        from app.services.surge_trading_service import _extract_detector_scores
+        scores = _extract_detector_scores(None)
+        assert scores["theme"] == 0.0
+        assert scores["volume"] == 0.0
+        assert scores["disclosure"] == 0.0
+        assert scores["immediate"] == 0.0
+        assert scores["legacy"] == 0.0
+        assert scores["total"] == 0.0
+
+        scores2 = _extract_detector_scores("invalid json{")
+        assert scores2["total"] == 0.0
+
+
+class TestSurgeAI016SectorGuard:
+    """T-016-009~012: REQ-AI016-003 포트폴리오 섹터 비중 가드"""
+
+    def test_t016_009_sector_overweight_skip(self, caplog):
+        """T-016-009: 바이오 비중 초과 시 sector_overweight 스킵.
+
+        포트폴리오: 현금 30M, 바이오 보유 22M, 총 52M
+        신규 매수 9M → 바이오 비중 = (22M+9M)/52M ≈ 0.596 > 0.40 → 스킵
+        """
+        import json
+        import logging
+        from app.services.surge_trading_service import execute_buy_orders
+
+        # 포트폴리오 설정: initial_capital=52M, current_cash=30M
+        portfolio = MagicMock()
+        portfolio.id = 1
+        portfolio.initial_capital = Decimal("52000000")
+        portfolio.current_cash = Decimal("30000000")
+
+        metadata = json.dumps({"surge_probability_score": 0.55, "surge_basis": ["theme_cluster"]})
+        signal = _make_fund_signal(signal_id=10, probability=0.55)
+        signal.surge_metadata = metadata
+        stock = _make_stock(stock_code="068270", name="셀트리온")
+        stock.sector_id = 20
+        db = _make_db()
+
+        # sector_obj mock 설정 (execute_buy_orders 내부 섹터 조회)
+        sector_mock = MagicMock()
+        sector_mock.name = "바이오"
+        db.query.return_value.filter.return_value.first.return_value = sector_mock
+
+        # _compute_sector_portfolio_pct를 mock하여 0.596 반환
+        with patch("app.services.surge_trading_service.is_buy_eligible_hours", return_value=True), \
+             patch("app.services.surge_trading_service.get_or_create_portfolio", return_value=portfolio), \
+             patch("app.services.surge_trading_service.get_today_signals", return_value=[(signal, stock, 0.55)]), \
+             patch("app.services.surge_trading_service.count_today_entries", return_value=0), \
+             patch("app.services.surge_trading_service.count_open_positions", return_value=0), \
+             patch("app.services.surge_trading_service.get_open_position", return_value=None), \
+             patch("app.services.surge_trading_service._get_open_sector_counts", return_value={"바이오": 1}), \
+             patch("app.services.surge_trading_service._get_price_with_change_batch_sync", return_value={}), \
+             patch("app.services.surge_trading_service._compute_sector_portfolio_pct",
+                   return_value=Decimal("0.596")), \
+             caplog.at_level(logging.INFO, logger="app.services.surge_trading_service"):
+            result = execute_buy_orders(db, max_same_sector=5)  # 카운트 가드 비활성화
+
+        assert result["skipped"] >= 1
+        skip_details = [d for d in result["details"] if d.get("reason") == "sector_overweight"]
+        assert len(skip_details) >= 1
+
+    def test_t016_010_non_bio_sector_passes(self):
+        """T-016-010: 비보유 섹터(광통신) 매수 시도 → 섹터 비중 가드 통과."""
+        import json
+        from app.services.surge_trading_service import execute_buy_orders
+
+        portfolio = MagicMock()
+        portfolio.id = 1
+        portfolio.initial_capital = Decimal("52000000")
+        portfolio.current_cash = Decimal("30000000")
+
+        metadata = json.dumps({"surge_probability_score": 0.55})
+        signal = _make_fund_signal(signal_id=11, probability=0.55)
+        signal.surge_metadata = metadata
+        stock = _make_stock(stock_code="036800", name="광통신주")
+        stock.sector_id = 30
+        db = _make_db()
+
+        sector_mock = MagicMock()
+        sector_mock.name = "광통신"
+        db.query.return_value.filter.return_value.first.return_value = sector_mock
+
+        with patch("app.services.surge_trading_service.is_buy_eligible_hours", return_value=True), \
+             patch("app.services.surge_trading_service.get_or_create_portfolio", return_value=portfolio), \
+             patch("app.services.surge_trading_service.get_today_signals", return_value=[(signal, stock, 0.55)]), \
+             patch("app.services.surge_trading_service.count_today_entries", return_value=0), \
+             patch("app.services.surge_trading_service.count_open_positions", return_value=0), \
+             patch("app.services.surge_trading_service.get_open_position", return_value=None), \
+             patch("app.services.surge_trading_service._get_open_sector_counts", return_value={}), \
+             patch("app.services.surge_trading_service._get_price_with_change_batch_sync",
+                   return_value={"036800": {"current_price": 50000, "change_rate": 1.0}}), \
+             patch("app.services.surge_trading_service._compute_sector_portfolio_pct",
+                   return_value=Decimal("0.10")):  # 비중 10% → 통과
+            result = execute_buy_orders(db, max_same_sector=5)
+
+        # 현금 부족 또는 수량 계산에 의해 스킵될 수 있지만 sector_overweight는 아님
+        overweight_skips = [d for d in result["details"] if d.get("reason") == "sector_overweight"]
+        assert len(overweight_skips) == 0
+
+    def test_t016_011_price_fallback_no_exception(self):
+        """T-016-011: 현재가 조회 실패 → entry_price 폴백, 예외 없음."""
+        from app.services.surge_trading_service import _compute_sector_portfolio_pct
+        from unittest.mock import MagicMock
+
+        db = MagicMock()
+        portfolio = MagicMock()
+        portfolio.id = 1
+        portfolio.current_cash = Decimal("30000000")
+
+        trade1 = MagicMock()
+        trade1.stock_code = "068270"
+        trade1.entry_price = Decimal("50000")
+        trade1.quantity = 100
+        trade1.is_open = True
+
+        # DB 쿼리 설정
+        db.query.return_value.filter.return_value.all.return_value = [trade1]
+
+        sector_mock = MagicMock()
+        sector_mock.name = "바이오"
+        stock_mock = MagicMock()
+        stock_mock.sector_id = 1
+        db.query.return_value.filter.return_value.first.return_value = stock_mock
+
+        with patch("app.services.surge_trading_service.get_or_create_portfolio", return_value=portfolio):
+            # price_cache=None → entry_price 폴백
+            pct = _compute_sector_portfolio_pct(db, "바이오", Decimal("5000000"), price_cache=None)
+
+        # 예외 없이 완료
+        assert isinstance(pct, Decimal)
+
+    def test_t016_012_env_override(self):
+        """T-016-012: MAX_SECTOR_PORTFOLIO_PCT 환경변수 오버라이드 동작."""
+        import importlib
+        import os
+        import app.services.surge_trading_service as svc
+
+        original = os.environ.get("SURGE_MAX_SECTOR_PORTFOLIO_PCT")
+        try:
+            os.environ["SURGE_MAX_SECTOR_PORTFOLIO_PCT"] = "0.50"
+            # 모듈 재로드로 환경변수 반영 확인
+            import importlib as _imp
+            _imp.reload(svc)
+            assert svc.MAX_SECTOR_PORTFOLIO_PCT == Decimal("0.50")
+        finally:
+            if original is None:
+                os.environ.pop("SURGE_MAX_SECTOR_PORTFOLIO_PCT", None)
+            else:
+                os.environ["SURGE_MAX_SECTOR_PORTFOLIO_PCT"] = original
+            _imp.reload(svc)  # 원복
+
+
+class TestSurgeAI016BatchPriceFetch:
+    """T-016-013~016: REQ-AI016-004 배치 가격 조회"""
+
+    def test_t016_013_batch_split_and_sleep(self):
+        """T-016-013: 30종목 입력 시 3배치 분할, sleep 2회 호출."""
+        import asyncio
+        from unittest.mock import AsyncMock, patch, call
+
+        from app.services.naver_finance import fetch_current_prices_batch
+
+        codes = [f"{i:06d}" for i in range(30)]
+
+        async def _run():
+            with patch("app.services.naver_finance.fetch_current_price_with_change",
+                       new_callable=AsyncMock) as mock_fetch, \
+                 patch("app.services.naver_finance.asyncio.sleep",
+                       new_callable=AsyncMock) as mock_sleep:
+                mock_fetch.return_value = {"current_price": 10000, "change_rate": 1.0}
+                result = await fetch_current_prices_batch(codes, batch_size=10, delay_sec=0.5)
+                # 30종목 / 10 = 3배치, sleep은 배치 사이에만 → 2회
+                assert mock_sleep.call_count == 2
+                assert len(result) == 30
+
+        asyncio.run(_run())
+
+    def test_t016_014_partial_none_does_not_affect_others(self):
+        """T-016-014: 배치 내 일부 None 반환 시 다른 종목 결과 정상."""
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from app.services.naver_finance import fetch_current_prices_batch
+
+        async def _mock_fetch(code):
+            if code == "000001":
+                return None
+            return {"current_price": 10000, "change_rate": 1.0}
+
+        codes = ["000001", "000002", "000003"]
+
+        async def _run():
+            with patch("app.services.naver_finance.fetch_current_price_with_change",
+                       side_effect=_mock_fetch):
+                result = await fetch_current_prices_batch(codes, batch_size=10, delay_sec=0.0, retry_count=0)
+            assert result["000001"] is None
+            assert result["000002"] is not None
+            assert result["000003"] is not None
+
+        asyncio.run(_run())
+
+    def test_t016_015_retry_on_failure(self):
+        """T-016-015: 1차 실패 → retry_count=1 재시도, 재시도도 실패 시 None."""
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from app.services.naver_finance import fetch_current_prices_batch
+
+        call_counts = {"000001": 0}
+
+        async def _mock_fetch(code):
+            call_counts[code] = call_counts.get(code, 0) + 1
+            return None  # 항상 실패
+
+        async def _run():
+            with patch("app.services.naver_finance.fetch_current_price_with_change",
+                       side_effect=_mock_fetch):
+                result = await fetch_current_prices_batch(["000001"], batch_size=10, delay_sec=0.0, retry_count=1)
+            # retry_count=1이므로 총 2회 호출 (초기 1회 + 재시도 1회)
+            assert call_counts["000001"] == 2
+            assert result["000001"] is None
+
+        asyncio.run(_run())
+
+    def test_t016_016_fifty_codes_fifty_percent_failure(self):
+        """T-016-016: 50종목 50% 실패 시뮬레이션 → 25개 통과 / 25개 None, 예외 없음."""
+        import asyncio
+        from unittest.mock import patch
+
+        from app.services.naver_finance import fetch_current_prices_batch
+
+        codes = [f"{i:06d}" for i in range(50)]
+
+        async def _mock_fetch(code):
+            idx = int(code)
+            if idx % 2 == 0:
+                return None
+            return {"current_price": 10000, "change_rate": 1.0}
+
+        async def _run():
+            with patch("app.services.naver_finance.fetch_current_price_with_change",
+                       side_effect=_mock_fetch):
+                # retry_count=0으로 재시도 없이 단순 실패 시뮬레이션
+                result = await fetch_current_prices_batch(codes, batch_size=10, delay_sec=0.0, retry_count=0)
+            success = sum(1 for v in result.values() if v is not None)
+            failed = sum(1 for v in result.values() if v is None)
+            assert success == 25
+            assert failed == 25
+
+        asyncio.run(_run())

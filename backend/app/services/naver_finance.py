@@ -1333,3 +1333,54 @@ async def fetch_index_price_history(index_code: str = "KOSPI", pages: int = 2) -
         logger.debug(f"Index price history fetch failed for {index_code}: {e}")
 
     return results
+
+
+# @MX:ANCHOR: [AUTO] 배치 가격 조회 — 매수 사이클 진입점 (SPEC-AI-016)
+# @MX:REASON: [AUTO] execute_buy_orders에서 N개 종목 일괄 조회에 사용. 향후 매도/평가 사이클 확장 시 fan_in 증가 예상
+# @MX:SPEC: SPEC-AI-016 REQ-004
+async def fetch_current_prices_batch(
+    stock_codes: list[str],
+    batch_size: int = 10,
+    delay_sec: float = 0.5,
+    retry_count: int = 1,
+) -> dict[str, dict | None]:
+    """N개 종목의 현재가+등락률을 배치 단위로 조회 (Naver Finance 레이트 리미트 회피).
+
+    각 배치는 asyncio.gather()로 동시 조회, 배치 사이에 delay_sec 대기.
+    종목별 실패 시 retry_count 회 재시도 후 None 반환 (예외 전파 없음).
+
+    Args:
+        stock_codes: 조회할 종목 코드 목록
+        batch_size: 배치당 동시 조회 종목 수 (기본 10)
+        delay_sec: 배치 간 대기 시간(초) (기본 0.5)
+        retry_count: 종목별 실패 시 재시도 횟수 (기본 1)
+
+    Returns:
+        {stock_code: {"current_price": int, "change_rate": float} | None}
+    """
+    async def _fetch_one_with_retry(code: str) -> tuple[str, dict | None]:
+        """단일 종목 조회 + retry_count 재시도."""
+        for attempt in range(retry_count + 1):
+            try:
+                result = await fetch_current_price_with_change(code)
+                if result is not None:
+                    return code, result
+            except Exception as e:
+                logger.debug("배치 가격 조회 실패 %s (시도 %d/%d): %s", code, attempt + 1, retry_count + 1, e)
+        return code, None
+
+    results: dict[str, dict | None] = {}
+
+    # 배치 분할 처리
+    for batch_start in range(0, len(stock_codes), batch_size):
+        batch = stock_codes[batch_start: batch_start + batch_size]
+        # 배치 내 동시 조회
+        batch_results = await asyncio.gather(*[_fetch_one_with_retry(code) for code in batch])
+        for code, data in batch_results:
+            results[code] = data
+
+        # 마지막 배치가 아닌 경우 레이트 리미트 회피 대기
+        if batch_start + batch_size < len(stock_codes):
+            await asyncio.sleep(delay_sec)
+
+    return results

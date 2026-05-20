@@ -19,6 +19,7 @@ from app.models.stock import Stock
 from app.models.surge_portfolio import SurgePortfolio, SurgeTrade
 from app.services.naver_finance import fetch_current_price as _fetch_current_price_async
 from app.services.naver_finance import fetch_current_price_with_change as _fetch_price_with_change_async
+from app.services.naver_finance import fetch_current_prices_batch as _fetch_prices_batch_async
 from app.services.naver_finance import fetch_stock_price_history as _fetch_price_history_async
 
 logger = logging.getLogger(__name__)
@@ -253,6 +254,47 @@ def _parse_surge_metadata(surge_metadata: Optional[str]) -> tuple[Optional[float
         return None, []
 
 
+def _extract_detector_scores(surge_metadata: Optional[str]) -> dict[str, float]:
+    """surge_metadata에서 탐지기별 점수 분해 반환 (SPEC-AI-016 REQ-002).
+
+    # @MX:NOTE: [AUTO] SPEC-AI-016 탐지기별 분해 로그 — surge_metadata JSON에서 6개 점수 파싱
+    # @MX:SPEC: SPEC-AI-016 REQ-002
+    파싱 실패 또는 결측 시 모든 값 0.0으로 반환 (예외 전파 없음).
+
+    Returns:
+        {
+            "theme": float,
+            "volume": float,
+            "disclosure": float,
+            "immediate": float,
+            "legacy": float,
+            "total": float,
+        }
+    """
+    default = {
+        "theme": 0.0,
+        "volume": 0.0,
+        "disclosure": 0.0,
+        "immediate": 0.0,
+        "legacy": 0.0,
+        "total": 0.0,
+    }
+    if not surge_metadata:
+        return default
+    try:
+        data = json.loads(surge_metadata)
+        return {
+            "theme": float(data.get("theme_cluster_score", 0.0) or 0.0),
+            "volume": float(data.get("combo_score", 0.0) or 0.0),
+            "disclosure": float(data.get("pattern_score", 0.0) or 0.0),
+            "immediate": float(data.get("immediate_disclosure_score", 0.0) or 0.0),
+            "legacy": float(data.get("legacy_score", 0.0) or 0.0),
+            "total": float(data.get("surge_probability_score", 0.0) or 0.0),
+        }
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return default
+
+
 def get_open_position(db: Session, stock_code: str) -> Optional[SurgeTrade]:
     """해당 종목의 오픈 포지션 조회 (중복 진입 차단용).
 
@@ -331,6 +373,103 @@ def _get_open_sector_counts(db: Session) -> dict[str, int]:
     return sector_counts
 
 
+def _get_price_with_change_batch_sync(
+    stock_codes: list[str],
+    batch_size: int = 10,
+    delay_sec: float = 0.5,
+    retry_count: int = 1,
+) -> dict[str, dict | None]:
+    """배치 가격 조회 (sync wrapper for fetch_current_prices_batch).
+
+    # @MX:NOTE: [AUTO] REQ-AI016-004 배치 가격 조회 sync 어댑터 — execute_buy_orders에서 사용
+    # @MX:SPEC: SPEC-AI-016 REQ-004
+    RuntimeError(이미 실행 중인 이벤트 루프) 발생 시 빈 dict 반환.
+    """
+    try:
+        return asyncio.run(
+            _fetch_prices_batch_async(stock_codes, batch_size=batch_size, delay_sec=delay_sec, retry_count=retry_count)
+        )
+    except RuntimeError:
+        return {}
+
+
+def _compute_sector_portfolio_pct(
+    db: Session,
+    sector_name: str,
+    proposed_buy_amount: Decimal,
+    price_cache: Optional[dict] = None,
+) -> Decimal:
+    """섹터 포트폴리오 비중 계산 (SPEC-AI-016 REQ-003).
+
+    # @MX:NOTE: [AUTO] 섹터 비중 가드 핵심 계산. 폴백: 현재가 조회 실패 시 entry_price 사용
+    # @MX:SPEC: SPEC-AI-016 REQ-003
+    계산식:
+        sector_value = Σ(해당 섹터 오픈 포지션) × 현재가(실패시 entry_price 폴백)
+        total_value = portfolio.current_cash + Σ(전체 오픈 포지션 평가액)
+        sector_portfolio_pct = (sector_value + proposed_buy_amount) / total_value
+
+    Args:
+        db: DB 세션
+        sector_name: 검사할 섹터 이름
+        proposed_buy_amount: 예상 매수 금액
+        price_cache: 사전 조회된 가격 캐시 {stock_code: {"current_price": int, ...} | None}
+
+    Returns:
+        제안 매수 포함 섹터 비중 (0.0~1.0+)
+    """
+    from app.models.sector import Sector
+    portfolio = get_or_create_portfolio(db)
+    open_trades = db.query(SurgeTrade).filter(SurgeTrade.is_open.is_(True)).all()
+
+    if not open_trades:
+        # 포지션 없으면 비중 = proposed_buy_amount / (cash + proposed)
+        total = portfolio.current_cash + proposed_buy_amount
+        if total <= 0:
+            return Decimal("0")
+        return proposed_buy_amount / total
+
+    # 전체 오픈 포지션 평가액 및 섹터별 평가액 계산
+    total_positions_value = Decimal("0")
+    sector_positions_value = Decimal("0")
+
+    for trade in open_trades:
+        # 현재가 조회 (캐시 우선)
+        current_price: Optional[int] = None
+        if price_cache is not None:
+            cached = price_cache.get(trade.stock_code)
+            if cached is not None:
+                current_price = cached.get("current_price")
+
+        if current_price is None:
+            # 캐시 미스: 진입가 폴백
+            trade_value = trade.entry_price * trade.quantity
+        else:
+            trade_value = Decimal(str(current_price)) * trade.quantity
+
+        total_positions_value += trade_value
+
+        # 해당 섹터 여부 확인
+        stock_obj = db.query(Stock).filter(Stock.stock_code == trade.stock_code).first()
+        if stock_obj and stock_obj.sector_id:
+            sector_obj = db.query(Sector).filter(Sector.id == stock_obj.sector_id).first()
+            if sector_obj and sector_obj.name == sector_name:
+                sector_positions_value += trade_value
+
+    total_value = portfolio.current_cash + total_positions_value
+    if total_value <= 0:
+        return Decimal("0")
+
+    return (sector_positions_value + proposed_buy_amount) / total_value
+
+
+import os as _os
+
+# 섹터 포트폴리오 비중 최대값 (환경변수로 오버라이드 가능)
+# @MX:NOTE: [AUTO] MAX_SECTOR_PORTFOLIO_PCT — 환경변수 SURGE_MAX_SECTOR_PORTFOLIO_PCT로 오버라이드 가능
+_MAX_SECTOR_PCT_ENV = _os.environ.get("SURGE_MAX_SECTOR_PORTFOLIO_PCT")
+MAX_SECTOR_PORTFOLIO_PCT = Decimal(_MAX_SECTOR_PCT_ENV) if _MAX_SECTOR_PCT_ENV else Decimal("0.40")
+
+
 def execute_buy_orders(
     db: Session,
     max_daily_entries: int = 5,
@@ -369,6 +508,26 @@ def execute_buy_orders(
         today_count,
         max_daily_entries,
     )
+
+    # REQ-AI016-004: 전체 후보 가격 일괄 사전 조회 (배치 + 지연)
+    all_stock_codes = [stock.stock_code for _, stock, _ in today_signals]
+    price_cache: dict[str, dict | None] = {}
+    if all_stock_codes:
+        from app.surge_config.surge_settings import get_surge_config as _get_surge_config
+        _cfg = _get_surge_config()
+        _pq = _cfg.price_query
+        price_cache = _get_price_with_change_batch_sync(
+            all_stock_codes,
+            batch_size=_pq.batch_size,
+            delay_sec=_pq.batch_delay_sec,
+            retry_count=_pq.retry_count,
+        )
+        logger.info(
+            "surge_execute_buys 가격 사전 조회 완료 — 총 %d종목, 성공 %d종목",
+            len(all_stock_codes),
+            sum(1 for v in price_cache.values() if v is not None),
+        )
+
     executed = 0
     skipped = 0
     failed = 0
@@ -378,12 +537,15 @@ def execute_buy_orders(
         stock_code = stock.stock_code
         stock_name = stock.name
 
+        # REQ-AI016-002: 탐지기별 점수 추출 (매 평가 시작 시점에 파싱)
+        # @MX:NOTE: [AUTO] SPEC-AI-016 탐지기별 분해 로그 — 매 평가 종목마다 점수 파싱
+        det = _extract_detector_scores(signal.surge_metadata)
+
         # 일일 최대 진입 한도 체크
         if today_count + executed >= max_daily_entries:
             logger.info(
-                "surge_execute_buys: 일일 최대 진입 한도(%d) 도달 — %s 스킵",
-                max_daily_entries,
-                stock_code,
+                "[SURGE] %s skipped score=%.3f | theme=%.3f volume=%.3f disclosure=%.3f immediate=%.3f legacy=%.3f | reason=daily_limit",
+                stock_code, det["total"], det["theme"], det["volume"], det["disclosure"], det["immediate"], det["legacy"],
             )
             skipped += 1
             details.append({"stock_code": stock_code, "action": "skipped", "reason": "daily_limit"})
@@ -391,11 +553,9 @@ def execute_buy_orders(
 
         # 동시 보유 한도 체크 (자본 보전: 항상 일부 현금 유지)
         if open_count + executed >= max_open_positions:
-            logger.warning(
-                "surge_execute_buys: 동시 보유 한도(%d) 도달 — %s 스킵 (현재 오픈=%d)",
-                max_open_positions,
-                stock_code,
-                open_count + executed,
+            logger.info(
+                "[SURGE] %s skipped score=%.3f | theme=%.3f volume=%.3f disclosure=%.3f immediate=%.3f legacy=%.3f | reason=max_open_positions",
+                stock_code, det["total"], det["theme"], det["volume"], det["disclosure"], det["immediate"], det["legacy"],
             )
             skipped += 1
             details.append({"stock_code": stock_code, "action": "skipped", "reason": "max_open_positions"})
@@ -403,13 +563,17 @@ def execute_buy_orders(
 
         # 동일 종목 오픈 포지션 중복 체크
         if get_open_position(db, stock_code):
-            logger.debug("surge_execute_buys: %s 이미 오픈 포지션 존재 — 스킵", stock_code)
+            logger.info(
+                "[SURGE] %s skipped score=%.3f | theme=%.3f volume=%.3f disclosure=%.3f immediate=%.3f legacy=%.3f | reason=duplicate_position",
+                stock_code, det["total"], det["theme"], det["volume"], det["disclosure"], det["immediate"], det["legacy"],
+            )
             skipped += 1
             details.append({"stock_code": stock_code, "action": "skipped", "reason": "duplicate_position"})
             continue
 
         # 섹터 집중 필터: 동일 섹터 최대 max_same_sector개
         stock_obj = db.query(Stock).filter(Stock.stock_code == stock_code).first()
+        sector_name: Optional[str] = None
         if stock_obj:
             from app.models.sector import Sector
             sector_obj = db.query(Sector).filter(Sector.id == stock_obj.sector_id).first()
@@ -418,48 +582,71 @@ def execute_buy_orders(
                 current_sector_count = sector_counts.get(sector_name, 0)
                 if current_sector_count >= max_same_sector:
                     logger.info(
-                        "surge_execute_buys: %s 섹터 집중 스킵 (%s 섹터 %d/%d)",
-                        stock_code, sector_name, current_sector_count, max_same_sector,
+                        "[SURGE] %s skipped score=%.3f | theme=%.3f volume=%.3f disclosure=%.3f immediate=%.3f legacy=%.3f | reason=sector_concentration",
+                        stock_code, det["total"], det["theme"], det["volume"], det["disclosure"], det["immediate"], det["legacy"],
                     )
                     skipped += 1
                     details.append({"stock_code": stock_code, "action": "skipped", "reason": "sector_concentration"})
                     continue
-                # 이번 매수 후 섹터 카운터 증가 (루프 내 중복 방지)
-                sector_counts[sector_name] = current_sector_count + 1
 
         # 투자금액 계산
         investment_amount = portfolio.initial_capital * position_pct
 
+        # REQ-AI016-003: 섹터 포트폴리오 비중 가드
+        if sector_name is not None:
+            sector_pct = _compute_sector_portfolio_pct(
+                db, sector_name, investment_amount, price_cache=price_cache
+            )
+            if sector_pct > MAX_SECTOR_PORTFOLIO_PCT:
+                logger.info(
+                    "[SURGE] %s skipped reason=sector_overweight sector_pct=%.2f limit=%.2f",
+                    stock_code, float(sector_pct), float(MAX_SECTOR_PORTFOLIO_PCT),
+                )
+                logger.info(
+                    "[SURGE] %s skipped score=%.3f | theme=%.3f volume=%.3f disclosure=%.3f immediate=%.3f legacy=%.3f | reason=sector_overweight",
+                    stock_code, det["total"], det["theme"], det["volume"], det["disclosure"], det["immediate"], det["legacy"],
+                )
+                skipped += 1
+                details.append({"stock_code": stock_code, "action": "skipped", "reason": "sector_overweight"})
+                continue
+
+        # 섹터 카운터 증가 (루프 내 중복 방지) — 섹터 가드 통과 후 증가
+        if sector_name is not None:
+            sector_counts[sector_name] = sector_counts.get(sector_name, 0) + 1
+
         # 현금 부족 체크
         if portfolio.current_cash < investment_amount:
-            logger.warning(
-                "surge_execute_buys: %s 현금 부족 (보유 %s, 필요 %s) — 스킵",
-                stock_code,
-                portfolio.current_cash,
-                investment_amount,
+            logger.info(
+                "[SURGE] %s skipped score=%.3f | theme=%.3f volume=%.3f disclosure=%.3f immediate=%.3f legacy=%.3f | reason=insufficient_cash",
+                stock_code, det["total"], det["theme"], det["volume"], det["disclosure"], det["immediate"], det["legacy"],
             )
             skipped += 1
             details.append({"stock_code": stock_code, "action": "skipped", "reason": "insufficient_cash"})
             continue
 
-        # 현재가 + 당일 등락률 조회
-        current_price, change_rate = _get_price_with_change_sync(stock_code)
+        # REQ-AI016-004: 가격 캐시에서 조회, 미존재/None 시 1회 재시도
+        cached_price_data = price_cache.get(stock_code)
+        if cached_price_data is not None:
+            current_price = cached_price_data.get("current_price")
+            change_rate = float(cached_price_data.get("change_rate", 0.0))
+        else:
+            # 캐시 미스: 1회 재시도 (REQ-004 retry_count)
+            current_price, change_rate = _get_price_with_change_sync(stock_code)
+
         if current_price is None:
-            logger.warning(
-                "surge_execute_buys: %s 현재가 조회 실패 — 스킵",
-                stock_code,
+            logger.info(
+                "[SURGE] %s failed score=%.3f | theme=%.3f volume=%.3f disclosure=%.3f immediate=%.3f legacy=%.3f | reason=price_unavailable",
+                stock_code, det["total"], det["theme"], det["volume"], det["disclosure"], det["immediate"], det["legacy"],
             )
             failed += 1
-            details.append({"stock_code": stock_code, "action": "failed", "reason": "price_fetch_failed"})
+            details.append({"stock_code": stock_code, "action": "failed", "reason": "price_unavailable"})
             continue
 
         # 당일 급락 중인 종목 제외 (테마 thesis 붕괴 방지)
         if change_rate < INTRADAY_CRASH_LIMIT:
-            logger.warning(
-                "surge_execute_buys: %s 당일 급락 스킵 (change_rate=%.2f%%, 한계=%.1f%%)",
-                stock_code,
-                change_rate,
-                INTRADAY_CRASH_LIMIT,
+            logger.info(
+                "[SURGE] %s skipped score=%.3f | theme=%.3f volume=%.3f disclosure=%.3f immediate=%.3f legacy=%.3f | reason=intraday_crash",
+                stock_code, det["total"], det["theme"], det["volume"], det["disclosure"], det["immediate"], det["legacy"],
             )
             skipped += 1
             details.append({"stock_code": stock_code, "action": "skipped", "reason": "intraday_crash"})
@@ -467,11 +654,9 @@ def execute_buy_orders(
 
         # 당일 과열 급등 종목 제외 (상단 매수 방지)
         if change_rate > INTRADAY_OVERHEAT_LIMIT:
-            logger.warning(
-                "surge_execute_buys: %s 당일 과열 스킵 (change_rate=%.2f%%, 한계=%.1f%%)",
-                stock_code,
-                change_rate,
-                INTRADAY_OVERHEAT_LIMIT,
+            logger.info(
+                "[SURGE] %s skipped score=%.3f | theme=%.3f volume=%.3f disclosure=%.3f immediate=%.3f legacy=%.3f | reason=intraday_overheat",
+                stock_code, det["total"], det["theme"], det["volume"], det["disclosure"], det["immediate"], det["legacy"],
             )
             skipped += 1
             details.append({"stock_code": stock_code, "action": "skipped", "reason": "intraday_overheat"})
@@ -480,11 +665,9 @@ def execute_buy_orders(
         # 수량 계산 (floor 처리)
         quantity = floor(float(investment_amount) / float(current_price))
         if quantity <= 0:
-            logger.warning(
-                "surge_execute_buys: %s 수량 0 (투자금 %s, 현재가 %s) — 스킵",
-                stock_code,
-                investment_amount,
-                current_price,
+            logger.info(
+                "[SURGE] %s skipped score=%.3f | theme=%.3f volume=%.3f disclosure=%.3f immediate=%.3f legacy=%.3f | reason=quantity_zero",
+                stock_code, det["total"], det["theme"], det["volume"], det["disclosure"], det["immediate"], det["legacy"],
             )
             skipped += 1
             details.append({"stock_code": stock_code, "action": "skipped", "reason": "quantity_zero"})
@@ -511,6 +694,11 @@ def execute_buy_orders(
             db.refresh(portfolio)
             executed += 1
             _, trade_detectors = _parse_surge_metadata(signal.surge_metadata)
+            # REQ-AI016-002: 매수 완료 분해 로그
+            logger.info(
+                "[SURGE] %s executed score=%.3f | theme=%.3f volume=%.3f disclosure=%.3f immediate=%.3f legacy=%.3f | reason=ok",
+                stock_code, det["total"], det["theme"], det["volume"], det["disclosure"], det["immediate"], det["legacy"],
+            )
             logger.info(
                 "surge_execute_buys: %s(%s) 매수 완료 — 수량=%d, 단가=%s, 금액=%s, 확률=%.2f, 탐지기=%s",
                 stock_name,
@@ -534,6 +722,10 @@ def execute_buy_orders(
         except Exception as e:
             db.rollback()
             logger.error("surge_execute_buys: %s 매수 트랜잭션 실패 — %s", stock_code, e)
+            logger.info(
+                "[SURGE] %s failed score=%.3f | theme=%.3f volume=%.3f disclosure=%.3f immediate=%.3f legacy=%.3f | reason=%s",
+                stock_code, det["total"], det["theme"], det["volume"], det["disclosure"], det["immediate"], det["legacy"], str(e),
+            )
             failed += 1
             details.append({"stock_code": stock_code, "action": "failed", "reason": str(e)})
 

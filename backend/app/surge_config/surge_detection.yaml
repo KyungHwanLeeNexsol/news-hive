@@ -36,7 +36,11 @@ surge_detection:
       volume_news_combo: 0.35
       disclosure_pattern: 0.20
       legacy_detectors: 0.10
-    min_score_for_signal: 0.20
+    min_score_for_signal: 0.45
+  price_query:
+    batch_size: 10
+    batch_delay_sec: 0.5
+    retry_count: 1
   backtest:
     enabled: true
     evaluation_horizon_days: 5
