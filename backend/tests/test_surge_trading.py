@@ -358,8 +358,9 @@ class TestExecuteBuyOrders:
     ):
         """AC-SURGE-TRADE-001: 정규장 중 유효 시그널 매수 성공.
 
-        1_000_000 / 75_000 = 13.33 → floor = 13
-        actual_amount = 13 * 75_000 = 975_000
+        position_pct=0.18: 5_000_000 * 0.18 = 900_000
+        900_000 / 75_000 = 12.0 → floor = 12
+        actual_amount = 12 * 75_000 = 900_000
         """
         from app.services.surge_trading_service import execute_buy_orders
 
@@ -376,8 +377,8 @@ class TestExecuteBuyOrders:
         # commit이 호출되어야 함
         db.commit.assert_called()
         assert result["executed"] == 1
-        # current_cash 차감 확인 (975_000)
-        assert portfolio.current_cash == Decimal("5000000") - Decimal("975000")
+        # current_cash 차감 확인 (900_000, position_pct=0.18 기준)
+        assert portfolio.current_cash == Decimal("5000000") - Decimal("900000")
 
     @patch("app.services.surge_trading_service.is_buy_eligible_hours", return_value=True)
     @patch("app.services.surge_trading_service.get_or_create_portfolio")
@@ -534,7 +535,7 @@ class TestExecuteBuyOrders:
     @patch("app.services.surge_trading_service.get_or_create_portfolio")
     @patch("app.services.surge_trading_service.get_today_signals")
     @patch("app.services.surge_trading_service.count_today_entries", return_value=0)
-    @patch("app.services.surge_trading_service.count_open_positions", return_value=3)
+    @patch("app.services.surge_trading_service.count_open_positions", return_value=5)
     def test_ac_007_max_open_positions_reached(
         self,
         mock_open_count,
@@ -543,7 +544,7 @@ class TestExecuteBuyOrders:
         mock_portfolio,
         mock_hours,
     ):
-        """AC-SURGE-TRADE-007: 동시 보유 한도(3) 도달 시 신규 매수 차단."""
+        """AC-SURGE-TRADE-007: 동시 보유 한도(5) 도달 시 신규 매수 차단."""
         from app.services.surge_trading_service import execute_buy_orders
 
         signal = _make_fund_signal(probability=0.75)
@@ -552,7 +553,7 @@ class TestExecuteBuyOrders:
         mock_portfolio.return_value = _make_portfolio()
 
         db = _make_db()
-        result = execute_buy_orders(db)
+        result = execute_buy_orders(db, max_open_positions=5)
         assert result["executed"] == 0
         assert result["skipped"] == 1
         assert result["details"][0]["reason"] == "max_open_positions"

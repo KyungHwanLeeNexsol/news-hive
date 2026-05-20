@@ -93,17 +93,24 @@ def is_market_hours(now: Optional[datetime] = None) -> bool:
     return MARKET_OPEN <= current_time <= MARKET_CLOSE
 
 
-def is_buy_eligible_hours(now: Optional[datetime] = None) -> bool:
+def is_buy_eligible_hours(now: Optional[datetime] = None, db: Optional[Session] = None) -> bool:
     """급등예측 신규 매수 가능 시간: KST 평일 09:00~11:00.
 
     테마주 급등 1차 파동은 09:00~10:30에 완성되므로 11:00 이후 신규 진입 차단.
+    손절 복구: db가 제공되고 당일 손절이 발생한 경우 11:00~15:30 구간에서도 재진입 허용.
     종료 조건 체크(check_exit_conditions)는 MARKET_CLOSE(15:30)까지 계속 실행.
     """
     now = now or datetime.now(KST)
     if now.weekday() >= 5:
         return False
     current_time = now.time()
-    return MARKET_OPEN <= current_time <= BUY_CUTOFF
+    if MARKET_OPEN <= current_time <= BUY_CUTOFF:
+        return True
+    # 손절 복구: 당일 손절 발생 시 장 마감까지 재진입 허용
+    if BUY_CUTOFF < current_time <= MARKET_CLOSE and db is not None:
+        if _has_stop_loss_today(db):
+            return True
+    return False
 
 
 def get_or_create_portfolio(db: Session) -> SurgePortfolio:
@@ -262,14 +269,39 @@ def get_open_position(db: Session, stock_code: str) -> Optional[SurgeTrade]:
     )
 
 
-def count_today_entries(db: Session) -> int:
-    """오늘(KST 기준) 진입한 포지션 수 (열린 포지션 + 당일 청산 포지션 모두 포함)."""
+def count_today_entries(db: Session, exclude_stop_loss: bool = False) -> int:
+    """오늘(KST 기준) 진입한 포지션 수 (열린 포지션 + 당일 청산 포지션 모두 포함).
+
+    exclude_stop_loss=True이면 당일 손절로 종료된 포지션은 카운트에서 제외하여
+    손절 후 재진입 기회를 허용한다.
+    """
+    today_kst = datetime.now(KST).date()
+    query = db.query(SurgeTrade).filter(SurgeTrade.entry_date == today_kst)
+    if exclude_stop_loss:
+        from sqlalchemy import or_
+        query = query.filter(
+            or_(
+                SurgeTrade.is_open.is_(True),
+                SurgeTrade.exit_reason != "stop_loss",
+            )
+        )
+    return query.count()
+
+
+def _has_stop_loss_today(db: Session) -> bool:
+    """오늘(KST) 손절(stop_loss)로 종료된 포지션이 있으면 True 반환.
+
+    손절 후 재진입 허용 여부 판단에 사용. is_buy_eligible_hours에서 참조.
+    """
     today_kst = datetime.now(KST).date()
     return (
         db.query(SurgeTrade)
-        .filter(SurgeTrade.entry_date == today_kst)
-        .count()
-    )
+        .filter(
+            SurgeTrade.exit_date == today_kst,
+            SurgeTrade.exit_reason == "stop_loss",
+        )
+        .first()
+    ) is not None
 
 
 def count_open_positions(db: Session) -> int:
@@ -281,12 +313,31 @@ def count_open_positions(db: Session) -> int:
     )
 
 
+def _get_open_sector_counts(db: Session) -> dict[str, int]:
+    """현재 오픈 포지션의 섹터별 보유 수 반환.
+
+    동일 섹터 집중 방지 필터(max_same_sector)에 사용.
+    SurgeTrade(is_open=True) → Stock(stock_code) → Sector(sector_id) 순으로 조인.
+    """
+    from app.models.sector import Sector
+    open_trades = db.query(SurgeTrade).filter(SurgeTrade.is_open.is_(True)).all()
+    sector_counts: dict[str, int] = {}
+    for trade in open_trades:
+        stock = db.query(Stock).filter(Stock.stock_code == trade.stock_code).first()
+        if stock and stock.sector_id:
+            sector = db.query(Sector).filter(Sector.id == stock.sector_id).first()
+            if sector:
+                sector_counts[sector.name] = sector_counts.get(sector.name, 0) + 1
+    return sector_counts
+
+
 def execute_buy_orders(
     db: Session,
     max_daily_entries: int = 5,
-    max_open_positions: int = 3,
-    position_pct: Decimal = Decimal("0.20"),
+    max_open_positions: int = 5,
+    position_pct: Decimal = Decimal("0.18"),
     min_probability: Decimal = Decimal("0.20"),
+    max_same_sector: int = 2,
 ) -> dict:
     # @MX:ANCHOR: [AUTO] 매수 실행 메인 함수 — 시그널 필터링부터 트랜잭션까지 전체 흐름 담당
     # @MX:REASON: [AUTO] 라우터(POST /surge/execute), 스케줄러(surge_execute_buys) 등 3개 이상 컴포넌트에서 참조
@@ -300,15 +351,16 @@ def execute_buy_orders(
 
     Returns: {"executed": int, "skipped": int, "failed": int, "details": list}
     """
-    if not is_buy_eligible_hours():
+    if not is_buy_eligible_hours(db=db):
         logger.debug("surge_execute_buys: 매수 가능 시간 외 — 스킵")
         return {"executed": 0, "skipped": 0, "failed": 0, "details": [], "reason": "market_closed"}
 
     portfolio = get_or_create_portfolio(db)
     today_signals = get_today_signals(db, min_probability=min_probability)
 
-    today_count = count_today_entries(db)
+    today_count = count_today_entries(db, exclude_stop_loss=True)
     open_count = count_open_positions(db)
+    sector_counts = _get_open_sector_counts(db)
     logger.info(
         "surge_execute_buys 시작 — 시그널=%d, 오픈포지션=%d/%d, 오늘진입=%d/%d",
         len(today_signals),
@@ -355,6 +407,25 @@ def execute_buy_orders(
             skipped += 1
             details.append({"stock_code": stock_code, "action": "skipped", "reason": "duplicate_position"})
             continue
+
+        # 섹터 집중 필터: 동일 섹터 최대 max_same_sector개
+        stock_obj = db.query(Stock).filter(Stock.stock_code == stock_code).first()
+        if stock_obj:
+            from app.models.sector import Sector
+            sector_obj = db.query(Sector).filter(Sector.id == stock_obj.sector_id).first()
+            if sector_obj:
+                sector_name = sector_obj.name
+                current_sector_count = sector_counts.get(sector_name, 0)
+                if current_sector_count >= max_same_sector:
+                    logger.info(
+                        "surge_execute_buys: %s 섹터 집중 스킵 (%s 섹터 %d/%d)",
+                        stock_code, sector_name, current_sector_count, max_same_sector,
+                    )
+                    skipped += 1
+                    details.append({"stock_code": stock_code, "action": "skipped", "reason": "sector_concentration"})
+                    continue
+                # 이번 매수 후 섹터 카운터 증가 (루프 내 중복 방지)
+                sector_counts[sector_name] = current_sector_count + 1
 
         # 투자금액 계산
         investment_amount = portfolio.initial_capital * position_pct
