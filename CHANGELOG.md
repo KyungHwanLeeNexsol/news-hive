@@ -4,6 +4,14 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Changed — SPEC-AI-016 급등 탐지 정밀도 강화 (2026-05-20)
+
+- **앙상블 임계값 상향** (`backend/app/surge_config/surge_detection.yaml` REQ-001): `ensemble.min_score_for_signal` 0.20 → 0.45 — 일별 오탐 80+건 → 목표 10~25건, 정밀도 ~5% → 목표 ≥25%. 즉각 공시 이벤트 우회(≥0.70) 경로는 그대로 유지
+- **탐지기별 점수 분해 INFO 로그** (`backend/app/services/surge_trading_service.py` REQ-002): `execute_buy_orders` 전 케이스(매수 완료/스킵/실패)에 `[SURGE] {code} {action} score=X.XXX | theme=X.XXX volume=X.XXX disclosure=X.XXX immediate=X.XXX legacy=X.XXX | reason=…` 형식 INFO 로그 추가 — `journalctl` 만으로 탐지기 기여도 즉시 진단 가능
+- **포트폴리오 섹터 비중 가드** (`surge_trading_service.py` REQ-003): `_compute_sector_portfolio_pct()` 신규 — 매수 직전 단일 섹터 비중이 `MAX_SECTOR_PORTFOLIO_PCT=0.40` 초과 시 `sector_overweight`로 스킵. 환경변수 `SURGE_MAX_SECTOR_PORTFOLIO_PCT`로 오버라이드 가능. 기존 카운트 기반 `max_same_sector` 필터와 AND 결합
+- **배치 가격 조회 + 레이트 리밋 회피** (`backend/app/services/naver_finance.py` REQ-004): `fetch_current_prices_batch(stock_codes, batch_size=10, delay_sec=0.5, retry_count=1)` 신규 — 80+종목 일괄 검증 시 가격 조회 성공률 ~50% → 목표 ≥90%. `execute_buy_orders` 시작 시 전체 후보 1회 일괄 조회 후 캐시 활용
+- **테스트** (`backend/tests/test_surge_trading.py`): T-016-001~T-016-016 신규 15개 포함 — 1073 passed + 3 xpassed
+
 ### Added — 급등 탐지 시스템 4탐지기 체계 완성: P0~P3 전면 개선 (2026-05-19)
 
 - **P0 — 거래량 탐지기 동기 폴백 복구** (`backend/app/services/naver_finance.py`, `surge_detector.py`): `fetch_stock_price_history_sync()` 신규 추가 — `httpx.Client` 기반 동기 HTTP 조회, TTL 1시간 캐시 write-through. `_get_volume_history()` 캐시 미스 시 자동 폴백 → `volume_news_combo` 탐지기(가중치 35%) 완전 정상화
