@@ -245,7 +245,17 @@ def _fetch_kospi_indicators(db: Session) -> tuple[float, float]:
     # KOSPI 20일 MA 위치: benchmark에서 종가 로드
     from app.services import benchmark
 
-    closes = asyncio.run(benchmark._load_kospi_closes(pages=3))
+    # asyncio.run()은 이미 실행 중인 이벤트 루프에서 호출하면 RuntimeError 발생.
+    # generate_daily_briefing 같은 async 컨텍스트에서 호출될 때 새 스레드로 분리.
+    try:
+        asyncio.get_running_loop()
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
+            closes = _ex.submit(
+                lambda: asyncio.run(benchmark._load_kospi_closes(pages=3))
+            ).result(timeout=30)
+    except RuntimeError:
+        closes = asyncio.run(benchmark._load_kospi_closes(pages=3))
     if not closes:
         raise ValueError("KOSPI 종가 데이터 없음")
 
