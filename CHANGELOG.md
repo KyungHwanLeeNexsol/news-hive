@@ -4,6 +4,13 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Enhanced — 급등 탐지 정밀도 3가지 개선: P1 신호 지속/P2 섹터 모멘텀/P3 대형주 공시 가중치 (2026-05-21)
+
+- **P1 신호 지속** (`backend/app/services/fund_manager.py`): 최근 48시간 내 탐지된 신호 중 confidence ≥ 0.28인 고신뢰도 신호를 오늘 탐지 후보에 포함시키되, 5% 감쇠(0.95 승수) 적용 — 감쇠 후 최소 임계값 0.265 유지. 동일 종목이 연달아 재탐지되지 않을 경우에도 고신뢰도 신호가 손실되는 문제 해결
+- **P2 섹터 모멘텀 부스트** (`backend/app/services/surge_detector.py`): Naver Finance 섹터 데이터로 섹터 평균 변동률(rate) 조회 — 반도체/전자 등 섹터 rate > 2.5%일 때 해당 섹터 종목의 `theme_cluster_score`을 `min(0.12, rate/100)`만큼 부스트. 섹터 전체 상승장 포착으로 종목군 급등 예측 성능 향상
+- **P3 대형주 공시 가중치** (`backend/app/services/surge_detector.py`): `detect_immediate_disclosure_signal()` 내 시가총액 필터 추가 — 시가총액 ≥ 5조원(50,000억원) 종목의 공시 점수에 1.2배 가중치 적용, 최대 1.0으로 상한선 설정. 대형사 자사주 소각, 계약 체결 등 공시의 시장영향도가 중형주보다 크다는 근거로 반영
+- **테스트** (`backend/tests/test_surge_detector.py`): P3 관련 신규 테스트 4건 추가 — 1077 passed + 3 xpassed
+
 ### Fixed — 시장 레짐 asyncio.run() 이벤트 루프 충돌 수정 (2026-05-21)
 
 - **이벤트 루프 충돌 근본 원인** (`backend/app/services/market_regime_service.py`): `_fetch_kospi_indicators()` 내 `asyncio.run(benchmark._load_kospi_closes(pages=3))` 호출이 `generate_daily_briefing()` 비동기 컨텍스트(APScheduler가 `asyncio.run(generate_daily_briefing(db))` 실행)에서 `RuntimeError: This event loop is already running` 유발 — 5일간 매일 08:42~08:52 KST에 반복 발생. SIDEWAYS 기본값 폴백으로 브리핑은 정상 생성됐지만 시장 레짐 정확도 손실
