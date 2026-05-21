@@ -474,7 +474,7 @@ def execute_buy_orders(
     db: Session,
     max_daily_entries: int = 5,
     max_open_positions: int = 7,
-    position_pct: Decimal = Decimal("0.18"),
+    position_pct: Decimal = Decimal("0.14"),
     min_probability: Decimal = Decimal("0.20"),
     max_same_sector: int = 2,
 ) -> dict:
