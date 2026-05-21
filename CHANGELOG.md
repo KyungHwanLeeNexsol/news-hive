@@ -4,6 +4,16 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fixed — 시장 레짐 asyncio.run() 이벤트 루프 충돌 수정 (2026-05-21)
+
+- **이벤트 루프 충돌 근본 원인** (`backend/app/services/market_regime_service.py`): `_fetch_kospi_indicators()` 내 `asyncio.run(benchmark._load_kospi_closes(pages=3))` 호출이 `generate_daily_briefing()` 비동기 컨텍스트(APScheduler가 `asyncio.run(generate_daily_briefing(db))` 실행)에서 `RuntimeError: This event loop is already running` 유발 — 5일간 매일 08:42~08:52 KST에 반복 발생. SIDEWAYS 기본값 폴백으로 브리핑은 정상 생성됐지만 시장 레짐 정확도 손실
+- **수정 방법**: `asyncio.get_running_loop()` 감지 후 분리 실행 로직 추가 — `try` 분기에서 현재 루프 자동 감지, `except RuntimeError` 분기에서 `concurrent.futures.ThreadPoolExecutor`에서 동기 실행 재시도 (3줄 try/except 패턴)
+
+### Changed — 급등 모의투자 포지션 한도 및 비중 조정 (2026-05-21)
+
+- **포지션 한도 상향** (`backend/app/services/surge_trading_service.py`): `execute_buy_orders()` 기본값 `max_open_positions` 5 → 7 상향 — 적극적 포지션 활용
+- **포지션 비중 하향** (`backend/app/services/surge_trading_service.py`): `execute_buy_orders()` 기본값 `position_pct` 0.18 → 0.14 조정 — 근거: 7포지션 × 18% = 126% (자본 초과)로 5포지션 이후 `insufficient_cash` 차단 발생. 14%로 낮춰 7포지션 × 14% = 98%로 전체 활용 가능
+
 ### Changed — SPEC-AI-016 급등 탐지 정밀도 강화 (2026-05-20)
 
 - **앙상블 임계값 상향** (`backend/app/surge_config/surge_detection.yaml` REQ-001): `ensemble.min_score_for_signal` 0.20 → 0.45 — 일별 오탐 80+건 → 목표 10~25건, 정밀도 ~5% → 목표 ≥25%. 즉각 공시 이벤트 우회(≥0.70) 경로는 그대로 유지
