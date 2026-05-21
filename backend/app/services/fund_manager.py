@@ -1257,6 +1257,61 @@ async def _gather_surge_candidates(
     if not candidates:
         return []
 
+    # P2: 섹터 모멘텀 boost — 급등 섹터 종목의 theme_cluster_score 상향
+    # @MX:NOTE: [AUTO] 섹터 모멘텀 — 당일 급등 섹터(change_rate>2.5%) 종목 theme_cluster 최대 +0.12 부스트
+    try:
+        from app.services.naver_finance import fetch_sector_performances
+        sector_perfs = await fetch_sector_performances(force=True)
+
+        # 급등 섹터: 등락률 2.5% 초과
+        hot_sector_keywords: dict[str, float] = {}
+        for sector_name, perf in sector_perfs.items():
+            if perf.change_rate > 2.5:
+                hot_sector_keywords[sector_name] = perf.change_rate
+
+        if hot_sector_keywords:
+            logger.info(
+                "[섹터모멘텀] 급등 섹터 %d개 감지: %s",
+                len(hot_sector_keywords),
+                {k: f"{v:.1f}%" for k, v in hot_sector_keywords.items()},
+            )
+            for candidate in candidates:
+                stock_obj = db.query(Stock).filter(Stock.stock_code == candidate.stock_code).first()
+                if not stock_obj:
+                    continue
+                sector_obj = db.query(Sector).filter(Sector.id == stock_obj.sector_id).first()
+                if not sector_obj:
+                    continue
+
+                boost = 0.0
+                our_sector = sector_obj.name
+                for naver_sector_name, change_rate in hot_sector_keywords.items():
+                    naver_lower = naver_sector_name.lower()
+                    # 반도체/전자 계열
+                    if (any(kw in naver_lower for kw in ["반도체", "전기", "전자", "it", "소프트웨어", "통신"])
+                            and any(kw in our_sector for kw in ["반도체", "전자", "IT", "소프트웨어", "통신", "디스플레이"])):
+                        boost = max(boost, min(0.12, change_rate / 100))
+                    # 기계/방위/로봇 계열
+                    elif (any(kw in naver_lower for kw in ["기계", "방위", "로봇"])
+                            and any(kw in our_sector for kw in ["기계", "우주항공", "IT서비스"])):
+                        boost = max(boost, min(0.08, change_rate / 100))
+                    # 바이오/제약 계열
+                    elif (any(kw in naver_lower for kw in ["바이오", "의약", "제약"])
+                            and any(kw in our_sector for kw in ["제약", "생물공학", "생명과학", "건강"])):
+                        boost = max(boost, min(0.08, change_rate / 100))
+
+                if boost > 0:
+                    old_score = candidate.theme_cluster_score
+                    candidate.theme_cluster_score = min(1.0, candidate.theme_cluster_score + boost)
+                    if "sector_momentum" not in candidate.active_detectors:
+                        candidate.active_detectors.append("sector_momentum")
+                    logger.info(
+                        "[섹터모멘텀] %s theme_cluster %.3f→%.3f (boost=%.3f)",
+                        candidate.stock_code, old_score, candidate.theme_cluster_score, boost,
+                    )
+    except Exception as e:
+        logger.warning("[섹터모멘텀] 섹터 성과 조회 실패: %s", e)
+
     results: list[dict] = []
     # @MX:NOTE: 5영업일 중복 방지 — SPEC-AI-012 AC-SURGE-005 명시 기준
     five_days_ago = datetime.now(timezone.utc) - timedelta(days=5)
@@ -1336,7 +1391,94 @@ async def _gather_surge_candidates(
             ],
         })
 
-    logger.info("[급등탐지] 최종 %d개 후보 반환", len(results))
+    # P1: Signal carry-over — 전일(48h 이내) 탐지 종목을 5% decay 후 오늘 후보로 재포함
+    # @MX:WARN: [AUTO] carry-over 루프 내 개별 DB flush — 실패 시 rollback 후 continue
+    # @MX:REASON: 루프 내 flush 실패가 다른 carry-over 건에 전파되지 않도록 개별 처리
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    prev_window_start = today_start - timedelta(hours=48)
+    already_today_codes = {r["stock_code"] for r in results}
+
+    prev_signals = (
+        db.query(FundSignal)
+        .filter(
+            FundSignal.signal_type == "surge_candidate",
+            FundSignal.created_at >= prev_window_start,
+            FundSignal.created_at < today_start,
+            FundSignal.confidence >= 0.28,
+        )
+        .all()
+    )
+
+    for prev in prev_signals:
+        stock = db.query(Stock).filter(Stock.id == prev.stock_id).first()
+        if not stock or stock.stock_code in already_today_codes:
+            continue
+
+        # 이미 오늘 같은 종목 signal 있으면 skip
+        already_today = db.query(FundSignal).filter(
+            FundSignal.stock_id == prev.stock_id,
+            FundSignal.signal_type == "surge_candidate",
+            FundSignal.created_at >= today_start,
+        ).first()
+        if already_today:
+            continue
+
+        original_conf = prev.confidence
+        decayed_score = round(original_conf * 0.95, 4)
+        if decayed_score < 0.265:
+            continue
+
+        # surge_metadata에 carry-over 정보 추가
+        prev_meta: dict = {}
+        if prev.surge_metadata:
+            try:
+                prev_meta = (
+                    json.loads(prev.surge_metadata)
+                    if isinstance(prev.surge_metadata, str)
+                    else prev.surge_metadata
+                )
+            except Exception:
+                prev_meta = {}
+        prev_meta.update({
+            "carry_over": True,
+            "original_score": original_conf,
+            "decay_applied": 0.05,
+            "original_date": prev.created_at.date().isoformat(),
+        })
+
+        prev.confidence = decayed_score
+        prev.surge_metadata = json.dumps(prev_meta, ensure_ascii=False)
+        prev.created_at = datetime.now(timezone.utc)
+        prev.reasoning = (
+            f"[급등탐지 Carry-Over] 전일 점수 {original_conf:.3f}에서 5% decay 적용 → {decayed_score:.3f}"
+        )
+
+        try:
+            db.flush()
+            logger.info("[carry-over] %s 시그널 갱신 (%.3f→%.3f)", stock.stock_code, original_conf, decayed_score)
+        except Exception as e:
+            db.rollback()
+            logger.warning("[carry-over] %s 시그널 갱신 실패: %s", stock.stock_code, e)
+            continue
+
+        already_today_codes.add(stock.stock_code)
+        results.append({
+            "name": stock.name,
+            "stock_code": stock.stock_code,
+            "label": "급등_징후_carry",
+            "surge_score": decayed_score,
+            "active_detectors": ["carry_over"],
+            "leading_signals": [
+                {
+                    "type": "surge_candidate",
+                    "strength": "moderate",
+                    "detail": f"Carry-over: {decayed_score:.3f} (전일 {original_conf:.3f}에서 decay)",
+                }
+            ],
+        })
+        logger.info("[carry-over] %s 브리핑 후보 추가", stock.stock_code)
+
+    logger.info("[급등탐지] 최종 %d개 후보 반환 (carry-over 포함)", len(results))
     return results
 
 

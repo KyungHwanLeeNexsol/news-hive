@@ -782,3 +782,126 @@ class TestSurgeCandidateDeduplication:
             FundSignal.signal_type == "surge_candidate"
         ).count()
         assert final_count == 2, f"신규 시그널이 생성되지 않았습니다 (expected 2, got {final_count})"
+
+
+# ---------------------------------------------------------------------------
+# P3: 대형주 공시 가중치 (Large Cap Multiplier)
+# ---------------------------------------------------------------------------
+
+class TestImmediateDisclosureLargeCapMultiplier:
+    """P3 대형주 공시 가중치 테스트.
+
+    detect_immediate_disclosure_signal이 시총 50,000억원 이상 대형주에
+    1.2배 배율을 적용하는지 검증한다.
+    """
+
+    def _make_disclosure(self, db: Session, stock: Stock, report_name: str, suffix: str = "001") -> Disclosure:
+        """테스트용 공시 생성."""
+        from datetime import datetime, timezone
+        disc = Disclosure(
+            stock_id=stock.id,
+            stock_code=stock.stock_code,
+            corp_code=f"C{stock.stock_code}",
+            corp_name=stock.name,
+            rcept_no=f"RCPT{stock.stock_code}{suffix}",
+            rcept_dt=datetime.now(timezone.utc).strftime("%Y%m%d"),
+            report_name=report_name,
+            url=f"https://dart.fss.or.kr/test/{stock.stock_code}",
+        )
+        db.add(disc)
+        db.flush()
+        return disc
+
+    def test_large_cap_multiplier_applied(
+        self,
+        db: Session,
+        surge_config: SurgeDetectionConfig,
+        sector_semiconductor: Sector,
+        make_stock,
+    ):
+        """시총 50,000억원 이상 대형주는 공시 점수에 1.2배 배율이 적용된다."""
+        from app.services.surge_detector import detect_immediate_disclosure_signal
+
+        # 대형주: market_cap = 80,000억원 (5조원 초과)
+        large_stock = make_stock("LG전자", "066570", sector_semiconductor, market_cap=80_000)
+        self._make_disclosure(db, large_stock, "보통주식소각결정")
+
+        candidates = detect_immediate_disclosure_signal(db, surge_config)
+
+        lg_candidate = next((c for c in candidates if c.stock_code == "066570"), None)
+        assert lg_candidate is not None, "대형주 후보가 탐지되지 않았습니다"
+
+        # 보통주식소각결정 기본점수 0.88 × 1.2 = 1.056 → min(1.0, ...) = 1.0
+        assert lg_candidate.immediate_disclosure_score == 1.0, (
+            f"대형주 배율 미적용: expected 1.0, got {lg_candidate.immediate_disclosure_score}"
+        )
+
+    def test_small_cap_no_multiplier(
+        self,
+        db: Session,
+        surge_config: SurgeDetectionConfig,
+        sector_semiconductor: Sector,
+        make_stock,
+    ):
+        """시총 50,000억원 미만 소형주는 배율 없이 기본 점수를 사용한다."""
+        from app.services.surge_detector import detect_immediate_disclosure_signal
+
+        # 소형주: market_cap = 500억원
+        small_stock = make_stock("소형반도체", "099999", sector_semiconductor, market_cap=500)
+        self._make_disclosure(db, small_stock, "보통주식소각결정")
+
+        candidates = detect_immediate_disclosure_signal(db, surge_config)
+
+        small_candidate = next((c for c in candidates if c.stock_code == "099999"), None)
+        assert small_candidate is not None, "소형주 후보가 탐지되지 않았습니다"
+
+        # "보통주식소각결정"은 "주식소각결정"(0.90) 패턴도 매칭 → max = 0.90
+        # 소형주에는 대형주 배율(1.2×) 미적용
+        assert abs(small_candidate.immediate_disclosure_score - 0.90) < 0.001, (
+            f"소형주에 배율이 잘못 적용됨: expected 0.90, got {small_candidate.immediate_disclosure_score}"
+        )
+
+    def test_large_cap_score_capped_at_1(
+        self,
+        db: Session,
+        surge_config: SurgeDetectionConfig,
+        sector_semiconductor: Sector,
+        make_stock,
+    ):
+        """대형주 배율 적용 후 점수는 1.0을 초과하지 않는다."""
+        from app.services.surge_detector import detect_immediate_disclosure_signal
+
+        # 대형주: 이미 높은 점수 종목 (0.88 × 1.2 = 1.056 → 1.0으로 cap)
+        large_stock = make_stock("대형주캡테스트", "098765", sector_semiconductor, market_cap=100_000)
+        self._make_disclosure(db, large_stock, "보통주식소각결정")
+
+        candidates = detect_immediate_disclosure_signal(db, surge_config)
+
+        candidate = next((c for c in candidates if c.stock_code == "098765"), None)
+        assert candidate is not None
+        assert candidate.immediate_disclosure_score <= 1.0, "점수가 1.0을 초과했습니다"
+
+    def test_boundary_large_cap_exactly_at_threshold(
+        self,
+        db: Session,
+        surge_config: SurgeDetectionConfig,
+        sector_semiconductor: Sector,
+        make_stock,
+    ):
+        """시총 정확히 50,000억원인 종목은 대형주로 취급한다 (경계값 포함)."""
+        from app.services.surge_detector import detect_immediate_disclosure_signal
+
+        # 경계값: market_cap = 50,000억원
+        boundary_stock = make_stock("경계대형주", "055555", sector_semiconductor, market_cap=50_000)
+        self._make_disclosure(db, boundary_stock, "수주계약체결")
+
+        candidates = detect_immediate_disclosure_signal(db, surge_config)
+
+        candidate = next((c for c in candidates if c.stock_code == "055555"), None)
+        assert candidate is not None
+
+        # 수주계약체결 기본점수 0.78 × 1.2 = 0.936
+        expected = min(1.0, 0.78 * 1.2)
+        assert abs(candidate.immediate_disclosure_score - expected) < 0.001, (
+            f"경계 대형주 배율 오류: expected {expected:.3f}, got {candidate.immediate_disclosure_score:.3f}"
+        )

@@ -685,6 +685,22 @@ def detect_immediate_disclosure_signal(
                     "report_name": rname,
                 }
 
+    # P3: 대형주 공시 가중치 — 시총 상위 종목 1.2배 배율
+    # @MX:NOTE: [AUTO] market_cap 단위는 억원 — 5조=50,000억원 기준으로 대형주 판별
+    # KOSPI 시총 상위 ~50개 종목이 대략 50,000억원 이상
+    _LARGE_CAP_THRESHOLD_EOKWON = 50_000  # 50,000억원 = 5조원
+    _LARGE_CAP_MULTIPLIER = 1.2
+
+    for stock_id, info in stock_scores.items():
+        stock = db.query(Stock).filter(Stock.stock_code == info["stock_code"]).first()
+        if stock and stock.market_cap and stock.market_cap >= _LARGE_CAP_THRESHOLD_EOKWON:
+            old_score = info["score"]
+            info["score"] = min(1.0, info["score"] * _LARGE_CAP_MULTIPLIER)
+            logger.info(
+                "[즉각공시] %s 대형주 배율 적용 %.3f→%.3f",
+                info["stock_code"], old_score, info["score"],
+            )
+
     results: list[SurgeCandidate] = []
     for _, info in stock_scores.items():
         results.append(
