@@ -100,6 +100,8 @@ def detect_theme_news_cluster(
     window_news = (
         db.query(NewsArticle)
         .filter(NewsArticle.published_at >= cutoff_naive)
+        .order_by(NewsArticle.published_at.desc())
+        .limit(1000)
         .all()
     )
 
@@ -328,32 +330,27 @@ def detect_volume_surge_news_combo(
     # news_stock_relations를 통해 뉴스와 연결된 종목 조회
     from app.models.news_relation import NewsStockRelation
 
-    recent_positive_news = (
-        db.query(NewsArticle)
+    # N+1 해소: 단일 JOIN 쿼리로 뉴스→관계→종목 일괄 조회
+    news_stock_rows = (
+        db.query(
+            NewsArticle.sentiment,
+            Stock.stock_code,
+        )
+        .join(NewsStockRelation, NewsStockRelation.news_id == NewsArticle.id)
+        .join(Stock, Stock.id == NewsStockRelation.stock_id)
         .filter(
-            # naive cutoff 사용: SQLite 호환 (PostgreSQL에서도 정상 동작)
             NewsArticle.collected_at >= news_cutoff_naive,
             NewsArticle.sentiment.in_(["positive", "strong_positive", "mixed"]),
         )
         .all()
     )
 
-    for article in recent_positive_news:
-        score = _positive_sentiment_score(article.sentiment)
+    for sentiment, stock_code in news_stock_rows:
+        score = _positive_sentiment_score(sentiment)
         if score < cfg.min_news_sentiment:
             continue
-        # 해당 뉴스와 연결된 종목 조회
-        relations = (
-            db.query(NewsStockRelation)
-            .filter(NewsStockRelation.news_id == article.id)
-            .all()
-        )
-        for rel in relations:
-            if rel.stock_id:
-                stock = db.query(Stock).filter(Stock.id == rel.stock_id).first()
-                if stock:
-                    existing = positive_news_stocks.get(stock.stock_code, 0.0)
-                    positive_news_stocks[stock.stock_code] = max(existing, score)
+        existing = positive_news_stocks.get(stock_code, 0.0)
+        positive_news_stocks[stock_code] = max(existing, score)
 
     if not positive_news_stocks:
         logger.debug("[거래량콤보] 긍정 뉴스 관련 종목 없음")
@@ -365,6 +362,17 @@ def detect_volume_surge_news_combo(
     # 여기서는 FundSignal 이력에서 volume 대용 데이터를 사용하거나 종목별 처리 스킵
     # 테스트 환경에서는 _volume_provider 주입으로 대체 가능
     results: list[SurgeCandidate] = []
+
+    # 종목명 일괄 조회 (N+1 방지)
+    if positive_news_stocks:
+        stock_name_rows = (
+            db.query(Stock.stock_code, Stock.name)
+            .filter(Stock.stock_code.in_(list(positive_news_stocks.keys())))
+            .all()
+        )
+        stock_names: dict[str, str] = {r.stock_code: r.name for r in stock_name_rows}
+    else:
+        stock_names: dict[str, str] = {}
 
     for stock_code, sentiment_score in positive_news_stocks.items():
         volumes = _get_volume_history(stock_code, cfg.volume_baseline_days)
@@ -390,8 +398,7 @@ def detect_volume_surge_news_combo(
         # 두 조건 모두 충족
         combo_score = _sigmoid((z_score - cfg.volume_zscore_threshold) / 1.0) * max(0.0, min(1.0, sentiment_score))
 
-        stock = db.query(Stock).filter(Stock.stock_code == stock_code).first()
-        stock_name = stock.name if stock else stock_code
+        stock_name = stock_names.get(stock_code, stock_code)
 
         results.append(
             SurgeCandidate(

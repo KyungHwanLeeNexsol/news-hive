@@ -636,10 +636,24 @@ class PriceRecord:
     volume: int = 0
 
 
+PRICE_CACHE_MAX_SIZE = 500
+
 @dataclass
 class _PriceHistoryCache:
     data: dict[str, list[PriceRecord]] = field(default_factory=dict)
     last_updated: dict[str, float] = field(default_factory=dict)
+
+    def evict_expired(self, ttl: float, max_size: int) -> None:
+        now = time.time()
+        expired = [k for k, t in self.last_updated.items() if (now - t) > ttl]
+        for k in expired:
+            self.data.pop(k, None)
+            self.last_updated.pop(k, None)
+        if len(self.data) > max_size:
+            oldest = sorted(self.last_updated, key=lambda k: self.last_updated[k])
+            for k in oldest[: len(self.data) - max_size]:
+                self.data.pop(k, None)
+                self.last_updated.pop(k, None)
 
 
 _price_cache = _PriceHistoryCache()
@@ -714,6 +728,7 @@ async def fetch_stock_price_history(stock_code: str, pages: int = 5) -> list[Pri
                     continue
 
         if results:
+            _price_cache.evict_expired(PRICE_CACHE_TTL, PRICE_CACHE_MAX_SIZE)
             _price_cache.data[stock_code] = results
             _price_cache.last_updated[stock_code] = now
             # Redis write-through (TTL=3600초)
