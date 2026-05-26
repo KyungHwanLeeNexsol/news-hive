@@ -64,7 +64,11 @@ jobs:
           cache-dependency-glob: "backend/requirements.txt"
 
       - name: Install dependencies
-        run: uv pip install --system -r backend/requirements.txt
+        run: |
+          cd backend
+          uv venv .venv --python 3.12
+          uv pip install -r requirements.txt
+          echo "$(pwd)/.venv/bin" >> $GITHUB_PATH
 
       - name: Run tests (parallel)
         run: |
