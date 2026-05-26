@@ -804,9 +804,9 @@ def execute_sell(
 
 def check_exit_conditions(
     db: Session,
-    stop_loss_pct: Decimal = Decimal("-0.08"),
-    take_profit_pct: Decimal = Decimal("0.15"),
-    max_holding_days: int = 5,
+    stop_loss_pct: Decimal = Decimal("-0.05"),
+    take_profit_pct: Decimal = Decimal("0.09"),
+    max_holding_days: int = 3,
 ) -> dict:
     # @MX:ANCHOR: [AUTO] 종료 조건 체크 메인 함수 — 손절/익절/만기 모든 종료 로직 담당
     # @MX:REASON: [AUTO] 라우터, 스케줄러(surge_check_exits) 등 3개 이상 컴포넌트에서 참조
