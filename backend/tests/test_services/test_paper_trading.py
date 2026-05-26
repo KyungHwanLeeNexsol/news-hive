@@ -13,7 +13,6 @@ from app.services.paper_trading import (
     execute_signal_trade,
     check_exit_conditions,
     get_portfolio_stats,
-    DEFAULT_TARGET_PCT,
     DEFAULT_STOP_LOSS_PCT,
     MAX_OPEN_POSITIONS,
     MAX_DAILY_TRADES,

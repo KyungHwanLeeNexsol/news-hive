@@ -3,7 +3,6 @@
 import datetime
 from unittest.mock import patch
 
-import pytest
 
 from app.models.market_regime import MarketRegime, MarketRegimeEnum
 

@@ -6,6 +6,7 @@ FundSignal(signal_type="surge_candidate") 시그널 기반 자동 매매 로직.
 import asyncio
 import json
 import logging
+import os as _os
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from math import floor
@@ -461,8 +462,6 @@ def _compute_sector_portfolio_pct(
 
     return (sector_positions_value + proposed_buy_amount) / total_value
 
-
-import os as _os
 
 # 섹터 포트폴리오 비중 최대값 (환경변수로 오버라이드 가능)
 # @MX:NOTE: [AUTO] MAX_SECTOR_PORTFOLIO_PCT — 환경변수 SURGE_MAX_SECTOR_PORTFOLIO_PCT로 오버라이드 가능

@@ -4,13 +4,8 @@
 이 테스트들은 T-007, T-008 수정 이후에도 반드시 PASS해야 한다.
 """
 
-import datetime
-from unittest.mock import MagicMock, patch
 
-import pytest
 
-from app.models.fund_signal import FundSignal
-from app.models.virtual_portfolio import VirtualPortfolio, VirtualTrade
 from app.services.paper_trading import (
     DEFAULT_STOP_LOSS_PCT,
     DEFAULT_TARGET_PCT,

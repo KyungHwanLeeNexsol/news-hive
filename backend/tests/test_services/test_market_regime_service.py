@@ -5,14 +5,13 @@ classify_market_regime(), get_regime_params(), get_or_create_today_regime() í•¨ì
 """
 
 import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy.exc import IntegrityError
 
 from app.models.market_regime import MarketRegime, MarketRegimeEnum
 from app.services.market_regime_service import (
-    REGIME_PARAMS_MAP,
     RegimeParams,
     classify_market_regime,
     get_or_create_today_regime,

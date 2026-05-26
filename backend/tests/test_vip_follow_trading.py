@@ -3,8 +3,7 @@
 SPEC-VIP-001 AC-VIP-008: 5개 이상 단위 테스트
 - 분할 매수, 전량 매도, 50% 익절, 가용 현금 부족 케이스 검증
 """
-import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -160,7 +159,7 @@ async def test_process_accumulate_disclosure_creates_trade():
     ):
         from app.services.vip_follow_trading import process_new_vip_disclosure
 
-        result = await process_new_vip_disclosure(db, disclosure)
+        await process_new_vip_disclosure(db, disclosure)
 
     # VIPTrade가 생성되었는지 확인
     assert db.add.called, "VIPTrade가 DB에 추가되어야 한다"
@@ -356,8 +355,8 @@ async def test_full_exit_on_vip_below5():
     stock = _make_stock(code="000001")
 
     # 오픈된 1차, 2차 포지션 2건
-    trade1 = _make_trade(trade_id=1, split_sequence=1, quantity=50)
-    trade2 = _make_trade(trade_id=2, split_sequence=2, quantity=50)
+    _make_trade(trade_id=1, split_sequence=1, quantity=50)
+    _make_trade(trade_id=2, split_sequence=2, quantity=50)
 
     close_calls = []
 
@@ -373,7 +372,7 @@ async def test_full_exit_on_vip_below5():
     ):
         from app.services.vip_follow_trading import process_new_vip_disclosure
 
-        result = await process_new_vip_disclosure(db, disclosure)
+        await process_new_vip_disclosure(db, disclosure)
 
     # 청산이 실행되어야 함
     assert len(close_calls) == 1, "close_positions_for_stock이 1회 호출되어야 한다"
@@ -578,7 +577,7 @@ async def test_characterize_exit_vip_closed_positions_reduce():
         "app.services.vip_follow_trading._execute_vip_sell",
         side_effect=mock_sell,
     ):
-        result = await _exit_vip_closed_positions(db, portfolio)
+        await _exit_vip_closed_positions(db, portfolio)
 
     assert len(sell_calls) == 1, "1개 포지션이 청산되어야 한다"
     assert sell_calls[0]["reason"] == "vip_rebalance_exit", "청산 사유가 vip_rebalance_exit여야 한다"
@@ -590,7 +589,6 @@ async def test_characterize_exit_vip_closed_positions_reduce():
 
 def test_characterize_get_vip_target_weights_normalization():
     """AC-002: stake_pct [7,5,6,6] → 정규화 합계 1.0 ±0.001, 각 비중 올바름."""
-    from app.services.vip_follow_trading import _get_vip_target_weights
 
     # 4개 종목 셋업
     stock_ids = [1, 2, 3, 4]
@@ -598,7 +596,7 @@ def test_characterize_get_vip_target_weights_normalization():
 
     trades = []
     for sid in stock_ids:
-        t = _make_trade(stock_id := sid)
+        t = _make_trade(_stock_id := sid)
         t.stock_id = sid
         t.is_open = True
         t.portfolio_id = 1
@@ -622,7 +620,6 @@ def test_characterize_get_vip_target_weights_normalization():
             q.filter.return_value.all.return_value = trades
         elif "VIPDisclosure" in name:
             # order_by().first() 체인 처리
-            captured_sid = [None]
 
             class FilterProxy:
                 def filter(self, *a, **kw):
@@ -714,7 +711,7 @@ def test_characterize_get_vip_target_weights_via_mock_db():
 @pytest.mark.asyncio
 async def test_characterize_rebalance_skips_small_deviation():
     """AC-003: 비중 편차가 REBALANCE_THRESHOLD(3%) 이하이면 트리밍/매수 없음."""
-    from app.services.vip_follow_trading import _rebalance_to_vip_weights, REBALANCE_THRESHOLD
+    from app.services.vip_follow_trading import _rebalance_to_vip_weights
 
     portfolio = _make_portfolio(cash=10_000_000)
 
@@ -768,7 +765,7 @@ async def test_characterize_rebalance_skips_small_deviation():
         "app.services.vip_follow_trading._get_vip_target_weights",
         return_value={1: 0.515, 2: 0.485},  # 편차 1.5% < 3%
     ):
-        result = await _rebalance_to_vip_weights(db, portfolio)
+        await _rebalance_to_vip_weights(db, portfolio)
 
     assert len(sell_calls) == 0, "편차 < THRESHOLD이면 트리밍 매도 없어야 한다"
 
@@ -851,7 +848,7 @@ async def test_characterize_check_second_buy_rebalance_enables_second_buy():
     trade_closeable.portfolio_id = 1
 
     stock1 = _make_stock(stock_id=1, code="000001", name="매수대상")
-    stock2 = _make_stock(stock_id=2, code="000002", name="청산대상")
+    _make_stock(stock_id=2, code="000002", name="청산대상")
     disc1 = _make_disclosure(stake_pct=5.5, disclosure_type="accumulate")
     disc1.stock_id = 1
     disc_reduce = _make_disclosure(
@@ -879,7 +876,6 @@ async def test_characterize_check_second_buy_rebalance_enables_second_buy():
         # 현금 복구 시뮬레이션
         portfolio.current_cash += qty * price
 
-    second_exists_call = [0]
 
     def query_side_effect(model):
         q = MagicMock()
@@ -943,7 +939,6 @@ def test_characterize_get_vip_target_weights_all_none_stake():
         t.portfolio_id = 1
         trades.append(t)
 
-    call_idx = [0]
 
     def query_side_effect(model):
         q = MagicMock()

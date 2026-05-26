@@ -4,7 +4,6 @@
 이 테스트들은 T-010, T-011 수정 이후에도 반드시 PASS해야 한다.
 """
 
-import pytest
 
 from app.services.fund_manager import MIN_ACTION_CONFIDENCE
 

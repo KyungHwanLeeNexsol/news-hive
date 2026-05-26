@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.models.fund_signal import FundSignal
 from app.models.sector import Sector
 from app.models.stock import Stock
-from app.services.surge_backtest import SurgeBacktestResult, compute_surge_backtest
+from app.services.surge_backtest import compute_surge_backtest
 
 
 # ---------------------------------------------------------------------------

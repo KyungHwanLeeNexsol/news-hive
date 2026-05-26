@@ -10,7 +10,6 @@ AC-SURGE-007: 설정 검증
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -31,8 +30,6 @@ from app.services.surge_detector import (
     detect_theme_news_cluster,
     detect_volume_surge_news_combo,
     gather_surge_candidates,
-    _surge_rate_cache,
-    _cache_loaded_at,
 )
 
 
@@ -271,7 +268,7 @@ class TestThemeNewsCluster:
     ):
         """반도체 테마 기사가 3개 이상이면 반도체 섹터 종목을 후보로 반환한다 (AC-SURGE-001 시나리오 1)."""
         # 시가총액 1000억(min_market_cap_krw=100,000,000,000원 = 1000억원 단위) 이상 종목 생성
-        stock = make_stock("삼성전자", "005930", sector_semiconductor, market_cap=2000)
+        make_stock("삼성전자", "005930", sector_semiconductor, market_cap=2000)
 
         # 반도체 테마 기사 3개 생성
         news_list = [make_news(f"반도체 수요 급증 {i}", hours_ago=1.0) for i in range(3)]
@@ -686,7 +683,6 @@ class TestSurgeCandidateDeduplication:
     ):
         """5영업일 이내 동일 종목 surge_candidate 시그널이 있으면 UPDATE한다 (AC-SURGE-005)."""
         from datetime import timezone as tz
-        from unittest.mock import patch
 
         from app.services.fund_manager import _gather_surge_candidates
         from app.services.surge_detector import SurgeCandidate
@@ -746,7 +742,6 @@ class TestSurgeCandidateDeduplication:
     ):
         """5영업일 초과 된 시그널은 중복으로 취급하지 않고 신규 INSERT한다 (AC-SURGE-005)."""
         from datetime import timezone as tz
-        from unittest.mock import patch
 
         from app.services.fund_manager import _gather_surge_candidates
         from app.services.surge_detector import SurgeCandidate

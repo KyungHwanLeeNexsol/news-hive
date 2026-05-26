@@ -4,7 +4,6 @@ SPEC-KS200-001
 """
 from dataclasses import dataclass
 
-import pytest
 
 from app.services.ks200_signal import (
     DISP_LOWER,
@@ -111,7 +110,6 @@ class TestStochasticsSlow:
         """
         # 고가=200, 저가=100, 종가=190 → %K_raw = (190-100)/(200-100)*100 = 90%
         # STO2 슬로잉 후에도 %K_slow >> 20
-        closes_oldest_first = [190] * 27
         records = [
             FakePriceRecord(
                 date=f"2026-01-{i+1:02d}",
@@ -293,7 +291,7 @@ class TestCheckSignal:
 
     def test_stochastics_parameters(self):
         """파라미터 상수값이 SPEC 요구사항과 일치해야 한다."""
-        from app.services.ks200_signal import STO1, STO2, STO3, PERIOD3
+        from app.services.ks200_signal import STO3
 
         assert STO1 == 12
         assert STO2 == 5

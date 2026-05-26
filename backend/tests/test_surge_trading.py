@@ -3,7 +3,7 @@
 DDD 특성화 테스트 + SPEC 인수 조건 테스트.
 모든 외부 의존성(DB, 가격 API)은 mock 처리.
 """
-from datetime import date, datetime, time
+from datetime import date, datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -359,9 +359,9 @@ class TestExecuteBuyOrders:
     ):
         """AC-SURGE-TRADE-001: 정규장 중 유효 시그널 매수 성공.
 
-        position_pct=0.18: 5_000_000 * 0.18 = 900_000
-        900_000 / 75_000 = 12.0 → floor = 12
-        actual_amount = 12 * 75_000 = 900_000
+        position_pct=0.14: 5_000_000 * 0.14 = 700_000
+        700_000 / 75_000 = 9.333 → floor = 9
+        actual_amount = 9 * 75_000 = 675_000
         """
         from app.services.surge_trading_service import execute_buy_orders
 
@@ -378,8 +378,8 @@ class TestExecuteBuyOrders:
         # commit이 호출되어야 함
         db.commit.assert_called()
         assert result["executed"] == 1
-        # current_cash 차감 확인 (900_000, position_pct=0.18 기준)
-        assert portfolio.current_cash == Decimal("5000000") - Decimal("900000")
+        # current_cash 차감 확인 (675_000, position_pct=0.14 기준)
+        assert portfolio.current_cash == Decimal("5000000") - Decimal("675000")
 
     @patch("app.services.surge_trading_service.is_buy_eligible_hours", return_value=True)
     @patch("app.services.surge_trading_service.get_or_create_portfolio")
@@ -687,7 +687,7 @@ class TestExecuteSell:
         db = _make_db()
         db.query.return_value.filter.return_value.first.return_value = portfolio
 
-        result = execute_sell(db, trade, Decimal("91000"), "stop_loss")
+        execute_sell(db, trade, Decimal("91000"), "stop_loss")
 
         assert trade.is_open is False
         assert trade.exit_price == Decimal("91000")
@@ -858,7 +858,6 @@ class TestGetPortfolioStats:
     @patch("app.services.surge_trading_service._get_current_price_sync")
     def test_characterize_portfolio_stats_calculation(self, mock_price):
         """포트폴리오 통계 계산 정확도 확인."""
-        from app.services.surge_trading_service import get_portfolio_stats
 
         mock_price.return_value = Decimal("85000")
 
@@ -995,7 +994,6 @@ class TestSurgeAI016DetectorScores:
         import json
         import logging
         from app.services.surge_trading_service import execute_buy_orders
-        from app.models.sector import Sector
 
         metadata = json.dumps({
             "surge_probability_score": 0.55,
@@ -1200,7 +1198,6 @@ class TestSurgeAI016SectorGuard:
 
     def test_t016_012_env_override(self):
         """T-016-012: MAX_SECTOR_PORTFOLIO_PCT 환경변수 오버라이드 동작."""
-        import importlib
         import os
         import app.services.surge_trading_service as svc
 
@@ -1225,7 +1222,7 @@ class TestSurgeAI016BatchPriceFetch:
     def test_t016_013_batch_split_and_sleep(self):
         """T-016-013: 30종목 입력 시 3배치 분할, sleep 2회 호출."""
         import asyncio
-        from unittest.mock import AsyncMock, patch, call
+        from unittest.mock import AsyncMock, patch
 
         from app.services.naver_finance import fetch_current_prices_batch
 
@@ -1247,7 +1244,7 @@ class TestSurgeAI016BatchPriceFetch:
     def test_t016_014_partial_none_does_not_affect_others(self):
         """T-016-014: 배치 내 일부 None 반환 시 다른 종목 결과 정상."""
         import asyncio
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import patch
 
         from app.services.naver_finance import fetch_current_prices_batch
 
@@ -1271,7 +1268,7 @@ class TestSurgeAI016BatchPriceFetch:
     def test_t016_015_retry_on_failure(self):
         """T-016-015: 1차 실패 → retry_count=1 재시도, 재시도도 실패 시 None."""
         import asyncio
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import patch
 
         from app.services.naver_finance import fetch_current_prices_batch
 

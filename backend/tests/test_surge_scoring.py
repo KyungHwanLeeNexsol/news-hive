@@ -7,8 +7,6 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
-from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -123,10 +121,10 @@ class TestStockArticleScore:
         """T-001: 종목 전용 기사 수 0→3→5→10개 증가 시 테마 클러스터 점수가 단조 증가한다."""
         import app.services.surge_detector as det_module
 
-        stock = make_stock("삼성전자", "005930", sector_semiconductor, market_cap=2000)
+        make_stock("삼성전자", "005930", sector_semiconductor, market_cap=2000)
 
         # 반도체 테마 기사 5개 (theme_base_score = 0.5)
-        theme_articles = [make_news(f"반도체 수요 증가 {i}", hours_ago=1.0) for i in range(5)]
+        [make_news(f"반도체 수요 증가 {i}", hours_ago=1.0) for i in range(5)]
 
         scores = []
         for num_stock_articles in [0, 3, 5, 10]:
@@ -172,7 +170,6 @@ class TestStockArticleFormula:
         price_bonus: float = 0.0,
     ) -> float:
         """SPEC-AI-014 REQ-001/002/003 공식을 직접 계산한다."""
-        import statistics as stats_lib
 
         stock_article_score = min(1.0, stock_specific_count / 5)
 
@@ -229,7 +226,7 @@ class TestSectorOnlyMultiplier:
 
         # 종목 기사 없음: theme_base * 0.5 * sector_relevance
         expected = theme_base * 0.5 * sector_relevance
-        stock_article_score = min(1.0, 0 / 5)  # = 0.0
+        min(1.0, 0 / 5)  # = 0.0
         actual = theme_base * 0.5 * sector_relevance
 
         assert abs(actual - expected) < 0.001
@@ -265,7 +262,7 @@ class TestPriceChangeBonus:
         """T-003a: 가격 변동 +3.5% → +0.10 보너스 적용."""
         import app.services.surge_detector as det_module
 
-        stock = make_stock("테스트반도체", "111111", sector_semiconductor, market_cap=2000)
+        make_stock("테스트반도체", "111111", sector_semiconductor, market_cap=2000)
         for i in range(5):
             make_news(f"반도체 테마 기사 {i}", hours_ago=1.0)
 
@@ -303,12 +300,11 @@ class TestPriceChangeBonus:
         """T-003b: 가격 변동 +2.5% → 보너스 없음 (|2.5| <= 3.0)."""
         import app.services.surge_detector as det_module
 
-        stock = make_stock("테스트칩", "222222", sector_semiconductor, market_cap=2000)
+        make_stock("테스트칩", "222222", sector_semiconductor, market_cap=2000)
         for i in range(5):
             make_news(f"반도체 관련 {i}", hours_ago=1.0)
 
         # 2.5% 변동 (임계 3.0% 미달)
-        score_25 = None
         original = det_module._price_change_provider
         try:
             det_module._price_change_provider = lambda code: {"change_rate": 2.5}
@@ -345,7 +341,7 @@ class TestPriceChangeBonus:
         # -3.5%: abs(-3.5) = 3.5 > 3.0 → 보너스 적용됨 (양수/음수 모두 적용)
         import app.services.surge_detector as det_module
 
-        stock = make_stock("테스트낙주", "333333", sector_semiconductor, market_cap=2000)
+        make_stock("테스트낙주", "333333", sector_semiconductor, market_cap=2000)
         for i in range(5):
             make_news(f"반도체 뉴스 {i}", hours_ago=1.0)
 
@@ -389,7 +385,7 @@ class TestPriceApiFallback:
         """T-004: 가격 조회 API가 예외를 던져도 보너스 없이 float 반환, 예외 전파 없음."""
         import app.services.surge_detector as det_module
 
-        stock = make_stock("예외테스트주", "444444", sector_semiconductor, market_cap=2000)
+        make_stock("예외테스트주", "444444", sector_semiconductor, market_cap=2000)
         for i in range(5):
             make_news(f"반도체 기사 {i}", hours_ago=1.0)
 
@@ -459,7 +455,7 @@ class TestSentimentFactor:
         import app.services.surge_detector as det_module
 
         # 강한 긍정 감성 기사를 가진 종목 — 종목명이 포함된 기사
-        stock = make_stock("감성테스트전자", "555555", sector_semiconductor, market_cap=2000)
+        make_stock("감성테스트전자", "555555", sector_semiconductor, market_cap=2000)
         for i in range(5):
             make_news(f"반도체 테마 {i}", hours_ago=1.0)
         # 종목명 포함 기사 (strong_positive)
@@ -615,7 +611,6 @@ class TestPriceMomentumFilter:
 
     def _make_signal_with_stock(self, db: Session, stock_code: str, probability: float = 0.5):
         """get_today_signals 테스트를 위한 FundSignal + Stock 픽스처."""
-        from datetime import timezone
         from zoneinfo import ZoneInfo
 
         KST = ZoneInfo("Asia/Seoul")
