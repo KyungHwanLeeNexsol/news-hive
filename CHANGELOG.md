@@ -4,6 +4,34 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fixed — 날짜 계산 UTC → KST 기준 통일 (2026-05-26)
+
+- **브리핑/레짐/보유일 날짜 불일치 수정** (`backend/app/services/market_regime_service.py`, `fund_manager.py`, `surge_trading_service.py`): `date.today()`가 UTC 기준을 반환하여 08:30 KST(=23:30 UTC) 실행 시 전날 날짜가 저장되는 버그 수정
+  - `market_regime_service`: `ZoneInfo("Asia/Seoul")` 추가, `get_or_create_today_regime` / `get_recent_regimes` / `_fetch_kospi_indicators` 내 `date.today()` → `datetime.now(_KST).date()` 3곳 교체
+  - `fund_manager`: `generate_daily_briefing` 내 `briefing_date = date.today()` → `datetime.now(_KST).date()`
+  - `surge_trading_service`: `calculate_trading_days_elapsed` 기본값 KST 기준으로 수정
+  - 결과: 한국 거래일 기준 날짜 저장으로 브리핑·레짐·매수 시그널 필터 정확도 개선
+
+### Fixed — SectorMomentum 폴백 로직 추가 + 시그널 확률 하한 0.30 상향 (2026-05-26)
+
+- **SectorMomentum 당일 데이터 폴백** (`backend/app/services/market_regime_service.py`): 장 중(09:00~11:00 KST) 시장 레짐 조회 시 SectorMomentum 당일 데이터가 항상 없어 SIDEWAYS 기본값 반환 — 최근 3거래일 이내 최신 데이터(`timedelta(days=4)`)로 폴백하여 실제 시장 국면 파라미터 적용. 월요일·공휴일 대응 포함
+- **매수 시그널 확률 하한 상향** (`backend/app/services/surge_trading_service.py`): `get_today_signals()` / `execute_buy_orders()` `min_probability` 0.20 → 0.30 — 실제 매수 실행 7건 모두 0.31+ 이상이었고 0.25~0.30 구간 717건이 노이즈로 판명. 기존 단일탐지기 런타임 필터(0.30)와 일치
+
+### Changed — 급등 모의투자 청산 조건 파라미터 조정 — R:R 비율 개선 (2026-05-26)
+
+- **손절/익절/보유기간 재조정** (`backend/app/services/surge_trading_service.py`): 6건 청산 분석(손절 평균 -8.29% vs 수익 평균 +3.02%, R:R 0.36)에서 구조적 손실 구조 확인
+  - `stop_loss_pct`: -8% → **-5%** — 손절 손실 규모 약 40% 감소
+  - `take_profit_pct`: +15% → **+9%** — 테마주 특성상 실현 가능한 익절 수준으로 하향 (기존 +15%는 한 번도 실현되지 않음)
+  - `max_holding_days`: 5 → **3**거래일 — 급등 파동 1~3일 완성 특성 반영
+
+### Fixed — OOM 원인 메모리 버그 3건 수정 (2026-05-22)
+
+- **서비스 OOM kill 재발 방지** (`backend/app/services/naver_finance.py`, `surge_detector.py`): 2026-05-22 00:27 KST OOM kill → 서비스 재시작 → daily_briefing 실패 → 급등 매수 0건 원인 메모리 누수 3건 패치
+  - `naver_finance._PriceHistoryCache`: `evict_expired()` 추가 — 최대 500건·TTL 1시간 초과 항목 자동 정리
+  - `surge_detector.detect_theme_news_cluster`: `.limit(1000)` 적용 — 최대 쿼리 결과 7,284건 → 1,000건 제한
+  - `surge_detector.detect_volume_surge_news_combo`: N+1 쿼리(뉴스×관계×종목 3중 루프) → 단일 JOIN + `stock_name` 일괄 조회로 교체
+  - 수정 후 VmPeak 2,148MB → 기동 직후 169MB 확인
+
 ### Enhanced — 급등 탐지 정밀도 3가지 개선: P1 신호 지속/P2 섹터 모멘텀/P3 대형주 공시 가중치 (2026-05-21)
 
 - **P1 신호 지속** (`backend/app/services/fund_manager.py`): 최근 48시간 내 탐지된 신호 중 confidence ≥ 0.28인 고신뢰도 신호를 오늘 탐지 후보에 포함시키되, 5% 감쇠(0.95 승수) 적용 — 감쇠 후 최소 임계값 0.265 유지. 동일 종목이 연달아 재탐지되지 않을 경우에도 고신뢰도 신호가 손실되는 문제 해결
