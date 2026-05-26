@@ -770,10 +770,11 @@ def compute_ensemble_score(candidate: SurgeCandidate, config: SurgeDetectionConf
         ] if score > 0
     ])
 
+    # SPEC-AI-017 REQ-002: 컨센서스 배율을 config에서 읽어 적용 (기존 1.15/1.30 → 1.30/1.55)
     if active_count >= 3:
-        multiplier = 1.30
+        multiplier = config.ensemble.consensus_multiplier_three_plus
     elif active_count == 2:
-        multiplier = 1.15
+        multiplier = config.ensemble.consensus_multiplier_two
     else:
         multiplier = 1.00
 
@@ -798,6 +799,7 @@ def gather_surge_candidates(
     recent_news: list,
     config: SurgeDetectionConfig,
     legacy_candidates: list[dict],
+    market_regime: str = "NEUTRAL",
 ) -> list[SurgeCandidate]:
     """모든 탐지기를 실행하고 앙상블 점수로 후보를 선정한다 (AC-SURGE-004).
 
@@ -876,9 +878,18 @@ def gather_surge_candidates(
     qualified: list[SurgeCandidate] = []
     qualified_codes: set[str] = set()
 
+    # SPEC-AI-017 REQ-001: 레짐별 임계값 적용 (없으면 min_score_for_signal 사용)
+    effective_threshold = config.ensemble.regime_thresholds.get(
+        market_regime, config.ensemble.min_score_for_signal
+    )
+    logger.info(
+        "[앙상블] 레짐=%s 유효임계=%.2f (기본=%.2f)",
+        market_regime, effective_threshold, config.ensemble.min_score_for_signal,
+    )
+
     for candidate in merged.values():
         score = compute_ensemble_score(candidate, config)
-        if score >= config.ensemble.min_score_for_signal:
+        if score >= effective_threshold:
             qualified.append(candidate)
             qualified_codes.add(candidate.stock_code)
 
@@ -896,10 +907,30 @@ def gather_surge_candidates(
                 candidate.immediate_disclosure_score,
             )
 
+    # SPEC-AI-017 REQ-003: 강한 단일 신호 우회 (theme/combo >= bypass 임계값)
+    # 즉각 공시 bypass(0.70)와 대칭 — 강한 테마/거래량 신호 구제
+    _bypass = config.ensemble.strong_single_bypass_threshold
+    for candidate in merged.values():
+        if candidate.stock_code not in qualified_codes and (
+            candidate.theme_cluster_score >= _bypass
+            or candidate.combo_score >= _bypass
+        ):
+            qualified.append(candidate)
+            qualified_codes.add(candidate.stock_code)
+            logger.info(
+                "[강한단일신호] 앙상블 임계 우회: %s (theme=%.3f, combo=%.3f)",
+                candidate.stock_code,
+                candidate.theme_cluster_score,
+                candidate.combo_score,
+            )
+
     # 앙상블 점수 내림차순 정렬
     qualified.sort(key=lambda c: compute_ensemble_score(c, config), reverse=True)
 
-    logger.info("[앙상블] 최종 급등 후보 %d개 (임계=%.2f)", len(qualified), config.ensemble.min_score_for_signal)
+    logger.info(
+        "[앙상블] 최종 급등 후보 %d개 (레짐=%s, 유효임계=%.2f)",
+        len(qualified), market_regime, effective_threshold,
+    )
     return qualified
 
 

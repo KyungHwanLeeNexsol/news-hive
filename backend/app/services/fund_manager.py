@@ -1246,12 +1246,22 @@ async def _gather_surge_candidates(
         logger.warning("[급등탐지] 설정 로드 실패: %s", e)
         return []
 
+    # SPEC-AI-017 REQ-001: 오늘 시장 레짐을 조회해 앙상블 임계값 차등 적용
+    market_regime_str = "NEUTRAL"
+    try:
+        from app.services.market_regime_service import get_or_create_today_regime
+        _regime_record = get_or_create_today_regime(db)
+        market_regime_str = _regime_record.regime.name  # "BULL" / "BEAR" / "SIDEWAYS"
+    except Exception as _e:
+        logger.warning("[급등탐지] 레짐 조회 실패, NEUTRAL 적용: %s", _e)
+
     try:
         candidates = gather_surge_candidates(
             db=db,
             recent_news=recent_news,
             config=surge_config,
             legacy_candidates=leading_candidates,
+            market_regime=market_regime_str,
         )
     except Exception as e:
         logger.warning("[급등탐지] 탐지기 실행 실패: %s", e)

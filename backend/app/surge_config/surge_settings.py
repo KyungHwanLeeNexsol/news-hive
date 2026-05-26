@@ -66,6 +66,13 @@ class EnsembleConfig(BaseModel):
     # @MX:NOTE: [AUTO] min_score_for_signal — SPEC-AI-016에서 0.20→0.45로 상향 (정밀도 강화)
     # @MX:SPEC: SPEC-AI-016 REQ-001
     min_score_for_signal: float
+    # @MX:NOTE: [AUTO] SPEC-AI-017 REQ-001: 레짐별 임계값 — 없으면 min_score_for_signal 사용
+    regime_thresholds: dict[str, float] = {}
+    # @MX:NOTE: [AUTO] SPEC-AI-017 REQ-002: 컨센서스 배율 — 복수 탐지기 발동 시 점수 증폭
+    consensus_multiplier_two: float = 1.30
+    consensus_multiplier_three_plus: float = 1.55
+    # @MX:NOTE: [AUTO] SPEC-AI-017 REQ-003: 강한 단일 신호 우회 임계값 (즉각 공시 bypass와 대칭)
+    strong_single_bypass_threshold: float = 0.72
 
 
 class PriceQueryConfig(BaseModel):

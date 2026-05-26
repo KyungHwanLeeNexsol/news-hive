@@ -502,7 +502,7 @@ class TestConsensusMultiplier:
         assert abs(score - expected) < 0.001
 
     def test_t006_two_detectors_multiplier_115(self, surge_config: SurgeDetectionConfig):
-        """T-006b: 활성 탐지기 2개 → 배율 1.15."""
+        """T-006b: 활성 탐지기 2개 → 배율 1.30 (SPEC-AI-017 REQ-002: 1.15→1.30 상향)."""
         candidate = SurgeCandidate(
             stock_code="T006B",
             stock_name="이중탐지기",
@@ -514,11 +514,11 @@ class TestConsensusMultiplier:
         score = compute_ensemble_score(candidate, surge_config)
         w = surge_config.ensemble.weights
         weighted_sum = w.theme_cluster * 0.5 + w.volume_news_combo * 0.5
-        expected = min(1.0, weighted_sum * 1.15)
+        expected = min(1.0, weighted_sum * surge_config.ensemble.consensus_multiplier_two)
         assert abs(score - expected) < 0.001
 
     def test_t006_three_detectors_multiplier_130(self, surge_config: SurgeDetectionConfig):
-        """T-006c: 활성 탐지기 3개 → 배율 1.30."""
+        """T-006c: 활성 탐지기 3개 → 배율 1.55 (SPEC-AI-017 REQ-002: 1.30→1.55 상향)."""
         candidate = SurgeCandidate(
             stock_code="T006C",
             stock_name="삼중탐지기",
@@ -534,11 +534,11 @@ class TestConsensusMultiplier:
             + w.volume_news_combo * 0.5
             + w.disclosure_pattern * 0.5
         )
-        expected = min(1.0, weighted_sum * 1.30)
+        expected = min(1.0, weighted_sum * surge_config.ensemble.consensus_multiplier_three_plus)
         assert abs(score - expected) < 0.001
 
     def test_t006_four_detectors_multiplier_130(self, surge_config: SurgeDetectionConfig):
-        """T-006d: 활성 탐지기 4개(3+ 케이스) → 배율 1.30."""
+        """T-006d: 활성 탐지기 4개(3+ 케이스) → 배율 1.55 (SPEC-AI-017 REQ-002)."""
         candidate = SurgeCandidate(
             stock_code="T006D",
             stock_name="사중탐지기",
@@ -555,7 +555,7 @@ class TestConsensusMultiplier:
             + w.disclosure_pattern * 0.5
             + w.legacy_detectors * 0.5
         )
-        expected = min(1.0, weighted_sum * 1.30)
+        expected = min(1.0, weighted_sum * surge_config.ensemble.consensus_multiplier_three_plus)
         assert abs(score - expected) < 0.001
 
 
