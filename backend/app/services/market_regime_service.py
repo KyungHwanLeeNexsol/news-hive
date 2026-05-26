@@ -13,6 +13,7 @@ import datetime
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -24,6 +25,8 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
+
+_KST = ZoneInfo("Asia/Seoul")
 
 
 @dataclass
@@ -138,7 +141,7 @@ def get_or_create_today_regime(db: Session) -> MarketRegime:
     Returns:
         MarketRegime 인스턴스 (id=None인 경우 인메모리 기본값)
     """
-    today = datetime.date.today()
+    today = datetime.datetime.now(_KST).date()
 
     # 이미 오늘 레짐이 존재하는지 확인
     existing = (
@@ -204,7 +207,7 @@ def get_recent_regimes(db: Session, days: int = 7) -> list[MarketRegime]:
     Returns:
         MarketRegime 리스트 (날짜 역순)
     """
-    cutoff = datetime.date.today() - datetime.timedelta(days=days)
+    cutoff = datetime.datetime.now(_KST).date() - datetime.timedelta(days=days)
     return (
         db.query(MarketRegime)
         .filter(MarketRegime.date >= cutoff)
@@ -228,7 +231,7 @@ def _fetch_kospi_indicators(db: Session) -> tuple[float, float]:
     Raises:
         ValueError: 데이터를 구할 수 없는 경우
     """
-    today = datetime.date.today()
+    today = datetime.datetime.now(_KST).date()
 
     # KOSPI 5일 수익률: SectorMomentum 전체 평균
     from app.models.sector_momentum import SectorMomentum

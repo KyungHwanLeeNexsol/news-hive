@@ -746,7 +746,7 @@ def calculate_trading_days_elapsed(
     entry_date 이후 today까지의 거래일(평일) 수를 반환.
     today <= entry_date 이면 0 반환.
     """
-    today = today or date.today()
+    today = today or datetime.now(KST).date()
     if today <= entry_date:
         return 0
     days = 0

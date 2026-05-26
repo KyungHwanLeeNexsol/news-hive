@@ -8,8 +8,9 @@ import asyncio
 import json
 import logging
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from statistics import mean, median
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session, selectinload
 
@@ -34,6 +35,8 @@ from app.services.surge_detector import (
 )
 
 logger = logging.getLogger(__name__)
+
+_KST = ZoneInfo("Asia/Seoul")
 
 # @MX:NOTE: confidence 임계값 단일 소스 — 프롬프트 지시/코드 가드/거래 실행 3개 레이어가 이 상수를 참조
 # @MX:SPEC: SPEC-AI-007 (REQ-AI-007-001)
@@ -2830,7 +2833,7 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
     최근 뉴스, 섹터 동향, 매크로 리스크를 종합하여
     펀드매니저 스타일의 시장 브리핑을 AI가 작성한다.
     """
-    today = date.today()
+    today = datetime.now(_KST).date()
 
     # Check if today's briefing already exists
     existing = db.query(DailyBriefing).filter(DailyBriefing.briefing_date == today).first()
