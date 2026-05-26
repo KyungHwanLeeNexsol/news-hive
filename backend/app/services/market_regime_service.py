@@ -239,7 +239,25 @@ def _fetch_kospi_indicators(db: Session) -> tuple[float, float]:
         .scalar()
     )
     if avg_row is None:
-        raise ValueError(f"SectorMomentum 데이터 없음 (date={today})")
+        # 당일 데이터는 장 마감 후(16:30 KST) 수집됨 — 장 중/새벽에는 항상 없음.
+        # 최근 3거래일 이내 가장 최신 데이터로 폴백하여 실제 국면 파라미터 적용.
+        fallback = (
+            db.query(func.avg(SectorMomentum.avg_return_5d), SectorMomentum.date)
+            .filter(SectorMomentum.date >= today - datetime.timedelta(days=4))
+            .filter(SectorMomentum.date < today)
+            .group_by(SectorMomentum.date)
+            .order_by(SectorMomentum.date.desc())
+            .first()
+        )
+        if fallback and fallback[0] is not None:
+            avg_row = fallback[0]
+            logger.info(
+                "SectorMomentum 폴백: %s 데이터 없음 → %s 데이터 사용",
+                today,
+                fallback[1],
+            )
+        else:
+            raise ValueError(f"SectorMomentum 데이터 없음 (date={today})")
     kospi_5d_return = float(avg_row)
 
     # KOSPI 20일 MA 위치: benchmark에서 종가 로드
