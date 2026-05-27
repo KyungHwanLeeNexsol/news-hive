@@ -68,11 +68,84 @@ class SurgeCandidate:
     # P3: 자사주 소각/취득, 계약 수주, 합병 등 즉각 이벤트 공시 점수
     immediate_disclosure_score: float = 0.0
     active_detectors: list[str] = field(default_factory=list)
+    # @MX:NOTE: SPEC-AI-020: per/pbr data-only observability; 필터링에 사용하지 않음
+    # SPEC-AI-020: data-only observability; no filtering applied
+    per: float | None = None
+    pbr: float | None = None
 
 
 def _sigmoid(x: float) -> float:
     """시그모이드 함수."""
     return 1.0 / (1.0 + math.exp(-x))
+
+
+def _extract_valuation(
+    stock_code: str,
+    market_data: dict | None = None,
+) -> tuple[float | None, float | None]:
+    """시장 데이터 캐시에서 PER, PBR을 추출한다 (observability 전용).
+
+    # @MX:NOTE: SPEC-AI-020: 데이터 수집 전용 헬퍼 — 필터링 로직 없음
+    # 외부 API 신규 호출 없이 이미 조회된 market_data 딕셔너리에서 piggy-back 추출.
+    # 값이 없거나 0/음수이면 None 반환 (의미없는 값 제외).
+
+    Args:
+        stock_code: 종목 코드 (로그용)
+        market_data: 이미 조회된 시장 데이터 딕셔너리.
+                     per, pbr 키 또는 eps/bps + price 키를 포함할 수 있음.
+
+    Returns:
+        (per, pbr) 튜플. 값이 없거나 의미없으면 None.
+    """
+    if not market_data:
+        return None, None
+
+    per: float | None = None
+    pbr: float | None = None
+
+    # 직접 per/pbr 키가 있으면 우선 사용
+    raw_per = market_data.get("per")
+    raw_pbr = market_data.get("pbr")
+
+    if raw_per is not None:
+        try:
+            v = float(raw_per)
+            per = v if v > 0 else None
+        except (TypeError, ValueError):
+            pass
+
+    if raw_pbr is not None:
+        try:
+            v = float(raw_pbr)
+            pbr = v if v > 0 else None
+        except (TypeError, ValueError):
+            pass
+
+    # per/pbr이 없으면 eps/bps + price로 계산 시도 (piggy-back)
+    if per is None or pbr is None:
+        price = market_data.get("current_price") or market_data.get("price")
+        eps = market_data.get("eps")
+        bps = market_data.get("bps")
+
+        if per is None and price and eps:
+            try:
+                p = float(price)
+                e = float(eps)
+                if e > 0 and p > 0:
+                    per = round(p / e, 2)
+            except (TypeError, ValueError):
+                pass
+
+        if pbr is None and price and bps:
+            try:
+                p = float(price)
+                b = float(bps)
+                if b > 0 and p > 0:
+                    pbr = round(p / b, 2)
+            except (TypeError, ValueError):
+                pass
+
+    return per, pbr
 
 
 def _positive_sentiment_score(sentiment: str | None) -> float:
@@ -288,12 +361,22 @@ def detect_theme_news_cluster(
             theme_cluster_score,
         )
 
+        # @MX:NOTE: SPEC-AI-020: piggy-back per/pbr 수집 (observability) — 필터링 없음
+        _price_data_for_val = None
+        try:
+            _price_data_for_val = _fetch_price_change_sync(stock.stock_code)
+        except Exception:
+            pass
+        _per, _pbr = _extract_valuation(stock.stock_code, _price_data_for_val)
+
         results.append(
             SurgeCandidate(
                 stock_code=stock.stock_code,
                 stock_name=stock.name,
                 theme_cluster_score=theme_cluster_score,
                 active_detectors=["theme_cluster"],
+                per=_per,
+                pbr=_pbr,
             )
         )
 
@@ -441,12 +524,22 @@ def detect_volume_surge_news_combo(
 
         stock_name = stock_names.get(stock_code, stock_code)
 
+        # @MX:NOTE: SPEC-AI-020: piggy-back per/pbr 수집 (observability) — 필터링 없음
+        _vol_price_data = None
+        try:
+            _vol_price_data = _fetch_price_change_sync(stock_code)
+        except Exception:
+            pass
+        _per, _pbr = _extract_valuation(stock_code, _vol_price_data)
+
         results.append(
             SurgeCandidate(
                 stock_code=stock_code,
                 stock_name=stock_name,
                 combo_score=combo_score,
                 active_detectors=["volume_news_combo"],
+                per=_per,
+                pbr=_pbr,
             )
         )
         logger.info("[거래량콤보] %s z-score=%.2f, combo_score=%.3f", stock_code, z_score, combo_score)
@@ -638,12 +731,22 @@ def detect_disclosure_surge_pattern(
 
     results: list[SurgeCandidate] = []
     for _, info in stock_scores.items():
+        # @MX:NOTE: SPEC-AI-020: piggy-back per/pbr 수집 (observability) — 필터링 없음
+        _disc_price_data = None
+        try:
+            _disc_price_data = _fetch_price_change_sync(info["stock_code"])
+        except Exception:
+            pass
+        _per, _pbr = _extract_valuation(info["stock_code"], _disc_price_data)
+
         results.append(
             SurgeCandidate(
                 stock_code=info["stock_code"],
                 stock_name=info["stock_name"],
                 pattern_score=info["score"],
                 active_detectors=["disclosure_pattern"],
+                per=_per,
+                pbr=_pbr,
             )
         )
         logger.info("[공시패턴] %s 패턴점수=%.3f", info["stock_code"], info["score"])
