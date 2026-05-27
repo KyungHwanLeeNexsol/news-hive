@@ -2859,10 +2859,12 @@ async def run_surge_signal_generation(db: Session) -> int:
 
     try:
         candidates = await _gather_surge_candidates(db, recent_news, [])
+        db.commit()
         count = len(candidates) if candidates else 0
         logger.info("[급등시그널] 15:20 독립 생성 완료: %d개 후보", count)
         return count
     except Exception as e:
+        db.rollback()
         logger.error("[급등시그널] 독립 생성 실패: %s", e)
         return 0
 
