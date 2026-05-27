@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.surge_config.surge_settings import SurgeDetectionConfig
@@ -23,6 +24,30 @@ from app.models.sector import Sector
 from app.models.stock import Stock
 
 logger = logging.getLogger(__name__)
+
+# 종목명 별칭 매핑: DB 공식명 → 뉴스에서 자주 쓰는 약칭 목록
+# 한글 풀네임과 영문/혼용 약칭 모두 매칭하기 위해 사용
+_STOCK_NAME_ALIASES: dict[str, list[str]] = {
+    "삼성에스디에스": ["삼성SDS"],
+    "에스케이텔레콤": ["SKT", "SK텔레콤"],
+    "에스케이하이닉스": ["SK하이닉스"],
+    "에스케이이노베이션": ["SK이노베이션"],
+    "엘지에너지솔루션": ["LG에너지솔루션"],
+    "엘지전자": ["LG전자"],
+    "엘지화학": ["LG화학"],
+    "엘지디스플레이": ["LG디스플레이"],
+    "현대모비스": ["MOBIS"],
+    "카카오뱅크": ["카카오 뱅크"],
+    "카카오페이": ["카카오 페이"],
+}
+
+
+def _get_name_variants(name: str) -> list[str]:
+    """종목명의 모든 변형(공식명 + 별칭)을 반환한다."""
+    variants = [name]
+    variants.extend(_STOCK_NAME_ALIASES.get(name, []))
+    return variants
+
 
 # @MX:WARN: [AUTO] 모듈 수준 전역 가변 상태 — 급등률 캐시
 # @MX:REASON: Redis 없는 베어메탈 환경에서 DB 반복 쿼리 방지. TTL 만료 시 자동 갱신. 스레드 안전성은 GIL에 의존.
@@ -159,7 +184,8 @@ def detect_theme_news_cluster(
         db.query(Stock)
         .filter(
             Stock.sector_id.in_(sector_ids),
-            Stock.market_cap >= min_market_cap_eok,
+            # market_cap이 NULL인 종목(미업데이트)도 포함 — NULL 제외 시 신규 상장/소형주 누락
+            or_(Stock.market_cap >= min_market_cap_eok, Stock.market_cap.is_(None)),
         )
         .all()
     )
@@ -203,10 +229,11 @@ def detect_theme_news_cluster(
             continue
 
         # REQ-AI014-001: 종목 전용 기사 카운트 계산
-        # 종목명 또는 종목코드가 제목/본문에 포함된 기사를 종목 전용 기사로 판별
+        # 종목명(별칭 포함) 또는 종목코드가 제목/본문에 포함된 기사를 종목 전용 기사로 판별
+        _name_variants = _get_name_variants(stock.name)
         stock_articles = [
             a for a in window_news
-            if stock.name in (a.title or "") + " " + (a.content or "")
+            if any(v in (a.title or "") + " " + (a.content or "") for v in _name_variants)
             or stock.stock_code in (a.title or "") + " " + (a.content or "")
         ]
         stock_specific_count = len(stock_articles)
