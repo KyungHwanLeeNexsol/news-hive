@@ -3390,15 +3390,6 @@ async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> D
         today, cot_result["complete"],
     )
 
-    # 브리핑 추천 종목 → 투자 시그널 생성
-    # NOTE: asyncio.run() 컨텍스트(스케줄러)에서 create_task()는 이벤트 루프가 닫히면 실행되지 않음
-    # 따라서 await으로 직접 호출하여 시그널이 실제로 생성되도록 수정
-    stock_picks_data = parsed.get("stock_picks")
-    # REQ-023: CoT 불완전 분석 정보를 시그널 생성에 전달
-    cot_validation = parsed.get("_cot_validation")
-    if stock_picks_data:
-        await _generate_signals_from_picks(db, stock_picks_data, cot_validation)
-
     return briefing
 
 
