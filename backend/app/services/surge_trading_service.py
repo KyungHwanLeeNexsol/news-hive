@@ -240,6 +240,8 @@ def get_today_signals(
 
         result.append((signal, stock, probability))
 
+    # 확률 높은 순으로 정렬 — max_daily_entries 한도 내에서 최고 품질 종목 우선 매수
+    result.sort(key=lambda x: x[2], reverse=True)
     return result
 
 
