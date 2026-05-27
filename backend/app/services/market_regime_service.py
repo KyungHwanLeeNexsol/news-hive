@@ -74,33 +74,43 @@ REGIME_PARAMS_MAP: dict[MarketRegimeEnum, RegimeParams] = {
 def classify_market_regime(
     kospi_5d_return: float,
     kospi_20d_ma_position: float,
+    positive_sector_ratio: float = 0.5,
     vol_level: Optional[float] = None,
 ) -> tuple[MarketRegimeEnum, float]:
     """KOSPI 지표를 기반으로 시장 레짐과 신뢰도를 분류한다.
 
-    분류 기준 (SPEC-AI-015):
-    - BULL:     kospi_5d_return >= +1.5% AND kospi_20d_ma_position > 0%
-    - BEAR:     kospi_5d_return <= -1.5% OR  kospi_20d_ma_position < -2%
+    분류 기준 (SPEC-AI-015 + SPEC-AI-018):
+    - BULL:     kospi_5d_return >= +1.5% AND kospi_20d_ma_position > 0% AND positive_sector_ratio >= 0.6
+    - BEAR:     kospi_5d_return <= -1.5% OR  kospi_20d_ma_position < -2% OR positive_sector_ratio <= 0.3
     - SIDEWAYS: 나머지 모든 경우
 
     Args:
         kospi_5d_return: KOSPI 5일 수익률 (%)
         kospi_20d_ma_position: KOSPI 20일 MA 대비 현재가 위치 (%)
+        positive_sector_ratio: 상승 섹터 비율 (0.0~1.0), REQ-018-001 (기본 0.5)
         vol_level: 변동성 지수 (선택적, 현재 미사용)
 
     Returns:
         (regime, confidence_score) 튜플
     """
     # @MX:WARN: [AUTO] 분류 순서 중요 — BULL 조건을 BEAR보다 먼저 검사해야 함
-    # @MX:REASON: 5d_ret >= 1.5% AND ma_pos > 0% 이면 BULL, <= -1.5% OR ma_pos < -2% 이면 BEAR
-    if kospi_5d_return >= 1.5 and kospi_20d_ma_position > 0.0:
+    # @MX:REASON: REQ-018-001: BULL에 positive_sector_ratio >= 0.6 추가; BEAR에 <= 0.3 OR 조건 추가
+    if (
+        kospi_5d_return >= 1.5
+        and kospi_20d_ma_position > 0.0
+        and positive_sector_ratio >= 0.6
+    ):
         regime = MarketRegimeEnum.BULL
         # BULL confidence: 5d_ret/3.0 * 0.5 + ma_pos/5.0 * 0.5
         confidence = min(
             1.0,
             (kospi_5d_return / 3.0) * 0.5 + (max(0.0, kospi_20d_ma_position) / 5.0) * 0.5,
         )
-    elif kospi_5d_return <= -1.5 or kospi_20d_ma_position < -2.0:
+    elif (
+        kospi_5d_return <= -1.5
+        or kospi_20d_ma_position < -2.0
+        or positive_sector_ratio <= 0.3
+    ):
         regime = MarketRegimeEnum.BEAR
         # BEAR confidence: abs(5d_ret)/3.0 * 0.5 + abs(min(0, ma_pos))/5.0 * 0.5
         confidence = min(
@@ -110,7 +120,19 @@ def classify_market_regime(
         )
     else:
         regime = MarketRegimeEnum.SIDEWAYS
-        confidence = 0.6
+        # REQ-018-003: 하드코딩 0.6 → 거리 기반 동적 공식
+        # BULL 임계까지 거리
+        d_bull = (
+            max(0.0, 1.5 - kospi_5d_return) / 1.5 * 0.5
+            + max(0.0, -kospi_20d_ma_position) / 2.0 * 0.5
+        )
+        # BEAR 임계까지 거리
+        d_bear = (
+            max(0.0, kospi_5d_return - (-1.5)) / 1.5 * 0.5
+            + max(0.0, kospi_20d_ma_position - (-2.0)) / 2.0 * 0.5
+        )
+        # 중간에 깊을수록 높은 신뢰도 (최대 0.9 캡)
+        confidence = min(0.9, 0.5 + min(d_bull, d_bear) * 0.4)
 
     return regime, confidence
 
@@ -154,7 +176,7 @@ def get_or_create_today_regime(db: Session) -> MarketRegime:
 
     # KOSPI 데이터 수집
     try:
-        kospi_5d_return, kospi_20d_ma_position = _fetch_kospi_indicators(db)
+        kospi_5d_return, kospi_20d_ma_position, positive_sector_ratio = _fetch_kospi_indicators(db)
     except Exception as e:
         logger.warning(
             "KOSPI 지표 수집 실패 — SIDEWAYS 기본값으로 대체: %s", e
@@ -162,23 +184,32 @@ def get_or_create_today_regime(db: Session) -> MarketRegime:
         return _make_default_regime(today)
 
     # 레짐 분류
-    regime, confidence = classify_market_regime(kospi_5d_return, kospi_20d_ma_position)
+    classified_regime, confidence = classify_market_regime(
+        kospi_5d_return, kospi_20d_ma_position, positive_sector_ratio
+    )
+
+    # REQ-018-002: 히스테리시스 — 직전 2일 기준 플립 억제
+    final_regime, raw_regime_value = _apply_hysteresis(
+        db, classified_regime, confidence
+    )
 
     # DB INSERT
     new_regime = MarketRegime(
         date=today,
-        regime=regime,
+        regime=final_regime,
         kospi_5d_return=kospi_5d_return,
         kospi_20d_ma_position=kospi_20d_ma_position,
         confidence_score=confidence,
+        raw_regime=raw_regime_value,
     )
     db.add(new_regime)
     try:
         db.commit()
         db.refresh(new_regime)
         logger.info(
-            "시장 레짐 분류 완료: %s (신뢰도=%.2f, 5d_ret=%.2f%%, ma_pos=%.2f%%)",
-            regime.value, confidence, kospi_5d_return, kospi_20d_ma_position,
+            "시장 레짐 분류 완료: %s (신뢰도=%.2f, 5d_ret=%.2f%%, ma_pos=%.2f%%, raw=%s)",
+            final_regime.value, confidence, kospi_5d_return, kospi_20d_ma_position,
+            raw_regime_value,
         )
         return new_regime
     except IntegrityError:
@@ -216,17 +247,18 @@ def get_recent_regimes(db: Session, days: int = 7) -> list[MarketRegime]:
     )
 
 
-def _fetch_kospi_indicators(db: Session) -> tuple[float, float]:
-    """KOSPI 5일 수익률과 20일 MA 위치를 계산하여 반환한다.
+def _fetch_kospi_indicators(db: Session) -> tuple[float, float, float]:
+    """KOSPI 5일 수익률, 20일 MA 위치, 섹터 폭 비율을 계산하여 반환한다.
 
     kospi_5d_return: SectorMomentum.avg_return_5d 전체 평균 (오늘 날짜)
     kospi_20d_ma_position: benchmark._load_kospi_closes()로 계산
+    positive_sector_ratio: avg_return_5d > 0 섹터 수 / 전체 섹터 수 (REQ-018-001)
 
     Args:
         db: SQLAlchemy sync Session
 
     Returns:
-        (kospi_5d_return, kospi_20d_ma_position) 튜플 (단위: %)
+        (kospi_5d_return, kospi_20d_ma_position, positive_sector_ratio) 3-튜플 (단위: %)
 
     Raises:
         ValueError: 데이터를 구할 수 없는 경우
@@ -241,6 +273,9 @@ def _fetch_kospi_indicators(db: Session) -> tuple[float, float]:
         .filter(SectorMomentum.date == today)
         .scalar()
     )
+    # 섹터 폭 계산에 사용할 날짜 (avg_row와 동일 날짜 기준)
+    sector_date = today
+
     if avg_row is None:
         # 당일 데이터는 장 마감 후(16:30 KST) 수집됨 — 장 중/새벽에는 항상 없음.
         # 최근 3거래일 이내 가장 최신 데이터로 폴백하여 실제 국면 파라미터 적용.
@@ -254,6 +289,7 @@ def _fetch_kospi_indicators(db: Session) -> tuple[float, float]:
         )
         if fallback and fallback[0] is not None:
             avg_row = fallback[0]
+            sector_date = fallback[1]
             logger.info(
                 "SectorMomentum 폴백: %s 데이터 없음 → %s 데이터 사용",
                 today,
@@ -262,6 +298,24 @@ def _fetch_kospi_indicators(db: Session) -> tuple[float, float]:
         else:
             raise ValueError(f"SectorMomentum 데이터 없음 (date={today})")
     kospi_5d_return = float(avg_row)
+
+    # REQ-018-001: 섹터 폭(breadth) 계산 — 상승 섹터 수 / 전체 섹터 수
+    total_sectors = (
+        db.query(func.count(SectorMomentum.id))
+        .filter(SectorMomentum.date == sector_date)
+        .scalar()
+    ) or 0
+    positive_sectors = (
+        db.query(func.count(SectorMomentum.id))
+        .filter(SectorMomentum.date == sector_date)
+        .filter(SectorMomentum.avg_return_5d > 0)
+        .scalar()
+    ) or 0
+    positive_sector_ratio = (
+        float(positive_sectors) / float(total_sectors)
+        if total_sectors > 0
+        else 0.5  # 데이터 없으면 중립(0.5) 기본값
+    )
 
     # KOSPI 20일 MA 위치: benchmark에서 종가 로드
     from app.services import benchmark
@@ -296,7 +350,52 @@ def _fetch_kospi_indicators(db: Session) -> tuple[float, float]:
         raise ValueError("20일 MA 계산 오류: 0 이하")
 
     kospi_20d_ma_position = (current_close - ma_20) / ma_20 * 100.0
-    return kospi_5d_return, kospi_20d_ma_position
+    return kospi_5d_return, kospi_20d_ma_position, positive_sector_ratio
+
+
+def _apply_hysteresis(
+    db: Session,
+    classified_regime: MarketRegimeEnum,
+    confidence: float,
+) -> tuple[MarketRegimeEnum, str | None]:
+    """REQ-018-002: 히스테리시스 규칙으로 최종 레짐을 결정한다.
+
+    플립 규칙:
+    - BEAR 전환은 항상 즉시 적용 (비대칭 자본 보호 규칙)
+    - 신뢰도 >= 0.75이면 즉시 플립 허용
+    - 직전 2일이 모두 새 레짐과 동일하면 플립 허용
+    - 그 외: 직전 안정 레짐 유지, raw_regime에 분류값 기록
+
+    Returns:
+        (최종_레짐, raw_regime_값_or_None)
+    """
+    # BEAR 전환은 항상 즉시 적용 (자본 보호 우선)
+    if classified_regime == MarketRegimeEnum.BEAR:
+        return classified_regime, None
+
+    # 직전 레코드 조회
+    recent = get_recent_regimes(db, days=3)
+
+    # 이력 없으면 그대로 적용
+    if len(recent) < 2:
+        return classified_regime, None
+
+    # 신뢰도 >= 0.75이면 즉시 플립
+    if confidence >= 0.75:
+        return classified_regime, None
+
+    # 직전 2일이 모두 classified_regime과 동일하면 플립 허용
+    prev_two = recent[:2]
+    if all(r.regime == classified_regime for r in prev_two):
+        return classified_regime, None
+
+    # 히스테리시스 억제: 직전 안정 레짐 유지
+    stable_regime = recent[0].regime
+    logger.info(
+        "히스테리시스 억제: 분류=%s → 유지=%s (신뢰도=%.2f)",
+        classified_regime.value, stable_regime.value, confidence,
+    )
+    return stable_regime, classified_regime.value
 
 
 def _make_default_regime(today: datetime.date) -> MarketRegime:
@@ -311,4 +410,5 @@ def _make_default_regime(today: datetime.date) -> MarketRegime:
         kospi_5d_return=0.0,
         kospi_20d_ma_position=0.0,
         confidence_score=0.5,
+        raw_regime=None,
     )

@@ -28,8 +28,9 @@ class TestClassifyMarketRegime:
     """레짐 분류 경계값 테스트."""
 
     def test_bull_exact_boundary(self):
-        """5d_ret=1.5%, ma_pos=0.1% → BULL."""
-        regime, confidence = classify_market_regime(1.5, 0.1)
+        """5d_ret=1.5%, ma_pos=0.1%, sector_ratio=0.6 → BULL."""
+        # SPEC-AI-018 REQ-001: positive_sector_ratio >= 0.6 추가 조건
+        regime, confidence = classify_market_regime(1.5, 0.1, positive_sector_ratio=0.6)
         assert regime == MarketRegimeEnum.BULL
         assert 0.0 < confidence <= 1.0
 
@@ -73,9 +74,10 @@ class TestClassifyMarketRegime:
 
     def test_sideways_neutral(self):
         """5d_ret=0.3%, ma_pos=0.5% → SIDEWAYS."""
+        # SPEC-AI-018 REQ-003: 신뢰도가 동적 계산되므로 고정값 0.6이 아닌 범위로 검증
         regime, confidence = classify_market_regime(0.3, 0.5)
         assert regime == MarketRegimeEnum.SIDEWAYS
-        assert confidence == 0.6
+        assert 0.5 <= confidence <= 0.9
 
     def test_confidence_capped_at_1(self):
         """매우 강한 BULL 시그널에서 confidence <= 1.0."""
@@ -90,7 +92,8 @@ class TestClassifyMarketRegime:
     def test_bull_confidence_formula(self):
         """BULL confidence = min(1.0, ret/3*0.5 + ma_pos/5*0.5)."""
         ret, ma_pos = 3.0, 5.0
-        _, confidence = classify_market_regime(ret, ma_pos)
+        # SPEC-AI-018 REQ-001: positive_sector_ratio >= 0.6 필요
+        _, confidence = classify_market_regime(ret, ma_pos, positive_sector_ratio=0.8)
         expected = min(1.0, (3.0 / 3.0) * 0.5 + (5.0 / 5.0) * 0.5)
         assert abs(confidence - expected) < 1e-9
 
@@ -156,7 +159,12 @@ class TestGetOrCreateTodayRegime:
         with (
             patch(
                 "app.services.market_regime_service._fetch_kospi_indicators",
-                return_value=(2.0, 1.5),
+                # SPEC-AI-018 REQ-001: 3-튜플 반환 (kospi_5d_return, ma_pos, sector_ratio)
+                return_value=(2.0, 1.5, 0.7),
+            ),
+            patch(
+                "app.services.market_regime_service.get_recent_regimes",
+                return_value=[],
             ),
         ):
             result = get_or_create_today_regime(db)
@@ -206,7 +214,7 @@ class TestGetOrCreateTodayRegime:
         with (
             patch(
                 "app.services.market_regime_service._fetch_kospi_indicators",
-                return_value=(-2.0, -3.0),
+                return_value=(-2.0, -3.0, 0.2),
             ),
             patch.object(db, "commit", side_effect=IntegrityError("unique", None, None)),
             patch.object(db, "rollback"),
@@ -390,10 +398,12 @@ class TestFetchKospiIndicators:
             "app.services.market_regime_service.asyncio.run",
             return_value=closes,
         ):
-            ret_5d, ma_position = _fetch_kospi_indicators(db)
+            # SPEC-AI-018 REQ-001: 3-튜플 반환 (kospi_5d_return, ma_pos, sector_ratio)
+            ret_5d, ma_position, sector_ratio = _fetch_kospi_indicators(db)
 
         assert ret_5d == 2.0  # avg_return_5d
         assert isinstance(ma_position, float)
+        assert 0.0 <= sector_ratio <= 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -432,7 +442,7 @@ class TestGetOrCreateIntegrityError:
         with (
             patch(
                 "app.services.market_regime_service._fetch_kospi_indicators",
-                return_value=(-2.0, -3.0),
+                return_value=(-2.0, -3.0, 0.2),
             ),
             patch.object(db, "commit", side_effect=mock_commit),
         ):

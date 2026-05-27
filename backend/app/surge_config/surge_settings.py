@@ -19,6 +19,14 @@ logger = logging.getLogger(__name__)
 _CONFIG_PATH = Path(__file__).parent / "surge_detection.yaml"
 
 
+class RegimeDetectorParams(BaseModel):
+    """REQ-018-004: 레짐별 탐지기 파라미터 오버라이드."""
+
+    volume_zscore_threshold: float = 2.5
+    news_window_hours: int = 24
+    min_news_sentiment: float = 0.3
+
+
 class ThemeClusterConfig(BaseModel):
     """테마 뉴스 클러스터링 설정."""
 
@@ -106,6 +114,8 @@ class SurgeDetectionConfig(BaseModel):
     ensemble: EnsembleConfig
     price_query: PriceQueryConfig = PriceQueryConfig()
     backtest: BacktestConfig
+    # REQ-018-004: 레짐별 탐지기 파라미터 (BULL/BEAR별 오버라이드)
+    regime_detector_params: dict[str, RegimeDetectorParams] = {}
 
     # @MX:ANCHOR: [AUTO] 앙상블 가중치 합산 검증 — 4개 탐지기 가중치 합산 반드시 1.0
     # @MX:REASON: 가중치 합산 != 1.0 이면 앙상블 스코어 범위가 0~1을 벗어나 시그널 임계값 판정이 왜곡됨

@@ -8,7 +8,7 @@ KOSPI 5일 수익률과 20일 이동평균 위치를 기반으로 레짐을 분�
 import datetime
 import enum
 
-from sqlalchemy import Date, DateTime, Enum, Float, Index, Integer, func
+from sqlalchemy import Date, DateTime, Enum, Float, Index, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -40,6 +40,8 @@ class MarketRegime(Base):
     volatility_index: Mapped[float | None] = mapped_column(Float, nullable=True)
     # 분류 신뢰도 (0.0 ~ 1.0)
     confidence_score: Mapped[float] = mapped_column(Float, nullable=False)
+    # REQ-018-002: 히스테리시스 억제 전 원본 분류 레짐 (억제 없으면 None)
+    raw_regime: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

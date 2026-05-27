@@ -50,6 +50,16 @@ surge_detection:
     # 강한 단일 신호 우회 임계값 (SPEC-AI-017 REQ-003)
     # theme_cluster 또는 combo_score >= 이 값이면 앙상블 임계 우회 (disclosure bypass와 대칭)
     strong_single_bypass_threshold: 0.72
+  # REQ-018-004: 레짐별 탐지기 파라미터 — BULL/BEAR 국면별 탐지 민감도 차등 적용
+  regime_detector_params:
+    BULL:
+      volume_zscore_threshold: 2.0
+      news_window_hours: 72
+      min_news_sentiment: 0.20
+    BEAR:
+      volume_zscore_threshold: 3.0
+      news_window_hours: 12
+      min_news_sentiment: 0.50
   price_query:
     batch_size: 10
     batch_delay_sec: 0.5

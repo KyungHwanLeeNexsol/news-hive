@@ -330,6 +330,7 @@ _price_change_provider: Callable[[str], dict | None] | None = None
 def detect_volume_surge_news_combo(
     db: Session,
     config: SurgeDetectionConfig,
+    market_regime: str = "SIDEWAYS",
 ) -> list[SurgeCandidate]:
     """거래량 z-score 이상 + 긍정 뉴스 콤보로 급등 후보를 탐지한다 (AC-SURGE-002).
 
@@ -342,11 +343,24 @@ def detect_volume_surge_news_combo(
     Args:
         db: SQLAlchemy 동기 세션
         config: SurgeDetectionConfig 설정
+        market_regime: 현재 시장 레짐 (REQ-018-004, 기본 'SIDEWAYS')
 
     Returns:
         SurgeCandidate 목록 (combo_score 채워짐)
     """
+    # REQ-018-004: 레짐별 파라미터 오버라이드
+    # @MX:NOTE: [AUTO] SIDEWAYS/미등록 레짐은 volume_news_combo 기본값 사용
     cfg = config.volume_news_combo
+    regime_params = config.regime_detector_params.get(market_regime)
+    if regime_params is not None:
+        # Pydantic 모델이므로 직접 필드 접근 (copy + 오버라이드)
+        from app.surge_config.surge_settings import VolumeNewsComboConfig
+        cfg = VolumeNewsComboConfig(
+            volume_zscore_threshold=regime_params.volume_zscore_threshold,
+            volume_baseline_days=cfg.volume_baseline_days,
+            news_window_hours=regime_params.news_window_hours,
+            min_news_sentiment=regime_params.min_news_sentiment,
+        )
     # @MX:NOTE: 운영환경(PostgreSQL)은 timezone-aware, 테스트(SQLite)는 naive — 양쪽 호환
     news_cutoff = datetime.now(timezone.utc) - timedelta(hours=cfg.news_window_hours)
     news_cutoff_naive = news_cutoff.replace(tzinfo=None)
@@ -844,7 +858,7 @@ def gather_surge_candidates(
     """
     # 각 탐지기 실행
     theme_results = detect_theme_news_cluster(db, [], config)
-    combo_results = detect_volume_surge_news_combo(db, config)
+    combo_results = detect_volume_surge_news_combo(db, config, market_regime=market_regime)
     pattern_results = detect_disclosure_surge_pattern(db, config)
     # P3: 즉각 공시 이벤트 탐지기 (자사주 소각, 수주, 합병)
     immediate_results = detect_immediate_disclosure_signal(db, config)
