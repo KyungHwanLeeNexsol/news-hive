@@ -130,18 +130,34 @@ def get_or_create_portfolio(db: Session) -> SurgePortfolio:
     return portfolio
 
 
+def _get_prev_business_day(ref: date) -> date:
+    """직전 영업일 반환. 토/일이면 금요일로 후퇴한다."""
+    prev = ref - timedelta(days=1)
+    while prev.weekday() >= 5:  # 5=토, 6=일
+        prev -= timedelta(days=1)
+    return prev
+
+
 def get_today_signals(
     db: Session,
     min_probability: Decimal = Decimal("0.30"),
 ) -> list:
-    """오늘(KST) 생성된 surge_candidate 시그널 중 확률 임계값 이상 반환.
+    """오늘 또는 직전 영업일 15:00 이후 생성된 surge_candidate 시그널 중 확률 임계값 이상 반환.
 
     FundSignal에는 stock_code 컬럼이 없으므로 Stock 테이블과 조인.
     surge_metadata JSON에서 surge_probability_score를 파싱하여 필터링.
     단일 탐지기만 발동(확률 < 0.40)한 저품질 신호는 매수 대상에서 제외.
+
+    날짜 기준: 직전 영업일 15:00 KST 이후 생성된 시그널 포함.
+    전일 15:20 스케줄러가 생성한 시그널을 익일 09:00 매수에 사용할 수 있도록
+    단순 "당일" 필터에서 확장한다. 주말 처리: 월요일은 금요일 15:00 이후 포함.
     """
     now_kst = datetime.now(KST)
     today_kst = now_kst.date()
+
+    # 직전 영업일 15:00 KST를 시그널 유효 기간 시작점으로 산정
+    prev_bday = _get_prev_business_day(today_kst)
+    signal_cutoff = datetime.combine(prev_bday, time(15, 0)).replace(tzinfo=KST)
 
     # surge_candidate 시그널 전체 조회 후 Python 레벨에서 날짜/확률 필터링
     # (created_at timezone 변환을 DB 레벨에서 하지 않아 안정성 확보)
@@ -165,7 +181,8 @@ def get_today_signals(
                 # naive datetime — UTC로 가정
                 from datetime import timezone
                 signal_date_kst = signal_date.replace(tzinfo=timezone.utc).astimezone(KST)
-            if signal_date_kst.date() != today_kst:
+            # 직전 영업일 15:00 이전 시그널은 제외
+            if signal_date_kst < signal_cutoff:
                 continue
         else:
             continue

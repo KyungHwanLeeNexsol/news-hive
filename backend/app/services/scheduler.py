@@ -482,6 +482,33 @@ def _run_relation_inference():
 # SPEC-AI-013: 급등예측 모의투자 포트폴리오 스케줄 작업
 # ---------------------------------------------------------------------------
 
+def _run_surge_signal_generate():
+    """급등예측 시그널 독립 생성 (평일 15:20 KST, 장 마감 10분 전).
+
+    generate_daily_briefing() 전체를 돌리지 않고 _gather_surge_candidates()만
+    실행한다. 전일 장 데이터(거래량·테마·공시)가 확정된 시점에 익일 후보를 탐지한다.
+    익일 surge_execute_buys(09:00)는 이 시그널을 읽어 매수를 실행한다.
+
+    SPEC-AI-013 REQ-SURGE-TRADE-055
+    """
+    if not _is_kr_market_open():
+        logger.debug("주말 — 급등시그널 생성 스킵")
+        return
+
+    _start = _time.monotonic()
+    from app.services.fund_manager import run_surge_signal_generation
+
+    db = SessionLocal()
+    try:
+        count = asyncio.run(run_surge_signal_generation(db))
+        logger.info("급등시그널 15:20 생성 완료: %d개", count)
+    except Exception as e:
+        logger.error("급등시그널 생성 잡 실패: %s", e)
+    finally:
+        _record_job_duration("surge_signal_generate", _time.monotonic() - _start)
+        db.close()
+
+
 def _run_surge_execute_buys():
     """급등예측 시그널 기반 매수 실행 (평일 09:00~15:30 KST, 30분 간격).
 
@@ -1344,6 +1371,21 @@ def start_scheduler():
         replace_existing=True,
     )
 
+    # SPEC-AI-013: 급등예측 시그널 전일 생성 (평일 15:20 KST, 장 마감 10분 전)
+    # 익일 급등 후보를 오늘 장 데이터 기반으로 사전 탐지.
+    # surge_execute_buys(09:00)가 이 시그널을 읽어 익일 시가 매수를 수행한다.
+    scheduler.add_job(
+        _run_surge_signal_generate,
+        "cron",
+        day_of_week="mon-fri",
+        hour=15,
+        minute=20,
+        timezone="Asia/Seoul",
+        id="surge_signal_generate",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
     # SPEC-AI-013: 급등예측 모의투자 포트폴리오 작업
     # 매수 실행: 평일 09:00~15:30 KST, 30분 간격
     scheduler.add_job(
@@ -1407,7 +1449,7 @@ def start_scheduler():
         f"DART every {settings.DART_CRAWL_INTERVAL_MINUTES} min, "
         f"market cap every {settings.MARKET_CAP_UPDATE_HOURS}h, "
         f"commodity price every 10 min, commodity news every 30 min, "
-        f"briefing at 08:30 KST, signal verify at 18:00 KST, "
+        f"briefing at 08:30 KST, surge_signal_generate at 15:20 KST, signal verify at 18:00 KST, "
         f"impact backfill at 18:30 KST, impact cleanup at 03:00 KST, "
         f"relation inference every Sunday 04:00 KST, "
         f"fast verify every 1h, paper exit check every 1h, "

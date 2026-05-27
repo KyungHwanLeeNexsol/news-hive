@@ -2837,6 +2837,36 @@ async def analyze_stock(
     return signal
 
 
+async def run_surge_signal_generation(db: Session) -> int:
+    """브리핑 없이 급등 시그널만 생성한다 (평일 15:20 스케줄러 전용).
+
+    generate_daily_briefing() 전체를 실행하지 않고 _gather_surge_candidates()만
+    독립 실행한다. 전일 장 데이터가 확정된 15:20에 호출되어 익일 급등 후보를 탐지한다.
+
+    Returns:
+        생성/업데이트된 시그널 수
+    """
+    from datetime import timezone as _tz
+
+    cutoff = datetime.now(_tz.utc) - timedelta(hours=24)
+    recent_news = (
+        db.query(NewsArticle)
+        .filter(NewsArticle.collected_at >= cutoff)
+        .order_by(NewsArticle.published_at.desc())
+        .limit(50)
+        .all()
+    )
+
+    try:
+        candidates = await _gather_surge_candidates(db, recent_news, [])
+        count = len(candidates) if candidates else 0
+        logger.info("[급등시그널] 15:20 독립 생성 완료: %d개 후보", count)
+        return count
+    except Exception as e:
+        logger.error("[급등시그널] 독립 생성 실패: %s", e)
+        return 0
+
+
 async def generate_daily_briefing(db: Session, *, regenerate: bool = False) -> DailyBriefing | None:
     """데일리 마켓 브리핑 생성.
 

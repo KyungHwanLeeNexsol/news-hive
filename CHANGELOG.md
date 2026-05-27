@@ -4,6 +4,14 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Changed — 급등 시그널 생성 타이밍 전일 15:20 KST로 이동 (2026-05-27)
+
+- **시그널 생성 타이밍 현실화** (`backend/app/services/fund_manager.py`, `scheduler.py`, `surge_trading_service.py`): 기존 08:30 당일 생성 방식은 실제 투자자 조건(전날 종목 선정)과 불일치 — 전일 15:20 KST(장 마감 10분 전) 독립 생성으로 전환
+  - `fund_manager`: `run_surge_signal_generation()` 독립 함수 추가 — 브리핑 없이 급등 시그널만 생성하는 스케줄러 전용 진입점
+  - `scheduler`: `_run_surge_signal_generate()` 잡 추가 — 평일 15:20 KST 크론, `surge_signal_generate` ID, `max_instances=1` / `coalesce=True`
+  - `surge_trading_service`: `_get_prev_business_day()` 헬퍼 추가, `get_today_signals()` 날짜 필터를 `직전 영업일 15:00 KST` 이후로 확장 — 월요일은 금요일 15:00+ 시그널 수신
+  - 결과: 동시호가 전(09:00 이전) 매수 불가 제약을 감안하면서 실제 투자자 조건(장 마감 전 종목 선정)과 일치하는 파이프라인 구성
+
 ### Fixed — 날짜 계산 UTC → KST 기준 통일 (2026-05-26)
 
 - **브리핑/레짐/보유일 날짜 불일치 수정** (`backend/app/services/market_regime_service.py`, `fund_manager.py`, `surge_trading_service.py`): `date.today()`가 UTC 기준을 반환하여 08:30 KST(=23:30 UTC) 실행 시 전날 날짜가 저장되는 버그 수정
