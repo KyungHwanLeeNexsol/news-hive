@@ -4,6 +4,20 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Changed — SPEC-AI-019 급등 시그널 밸류에이션 필터 적용 범위 확장 (2026-05-27)
+
+SPEC-AI-018 Phase 3에서 도입한 밸류에이션 부적격 필터(PER>500 또는 PBR>30)를 모든 급등 시그널 생성 경로에 일관되게 적용합니다. 기존에는 08:30 데일리 브리핑 경로(Path A)에만 필터가 적용되었으나, 전일 15:20 KST 독립 잡 경로(Path B)에서는 우회되는 결함이 있었습니다. 본 SPEC은 PER/PBR 수집을 탐지기 단계로 이전하고 단일 지점 필터를 `surge_detector`에 배치하여 두 경로의 행위를 동등하게 통일합니다.
+
+- **SurgeCandidate 모델 확장** (REQ-AI019-001): `per`, `pbr` 필드 추가 (기본값 None)
+- **탐지기 단계 데이터 수집** (REQ-AI019-002): 3개 탐지기가 기존 시장 데이터 조회 경로에 piggy-back하여 per/pbr 수집 (추가 API 호출 0건)
+- **단일 지점 필터 배치** (REQ-AI019-003/004/005): `surge_detector.detect_surge_candidates()` 내부에 @MX:ANCHOR 필터 블록 배치, 경계값 strict greater-than 준수, None/0 통과 규칙 유지
+- **중복 필터 제거** (REQ-AI019-006): `fund_manager.py:1707-1724` 중복 필터 코드 제거, Single Source of Truth 확립
+- **경로 동등성 보장** (REQ-AI019-007): Path A와 Path B가 동일한 입력에 대해 동일한 필터 결과 적용
+- **신규 테스트 32건** (REQ-AI019-009): test_surge_ai019_path_b.py (17건, Path B 검증) + test_surge_ai019_characterization.py (15건, 호환성) 추가
+- **회귀 검증**: SPEC-AI-018 36건 모두 통과, 전체 테스트 1112 PASSED
+
+**영향**: 매 영업일 15:20 KST 잡이 생성하는 시그널에서 PER>500 또는 PBR>30 종목 자동 제외, 09:00 KST 모의 매수의 안전성 향상.
+
 ### Changed — SPEC-AI-018 급등 예측 신호 품질 개선 4단계 구현 (2026-05-27)
 
 앙상블 점수 체계를 전면 재조정하여 과거 급등 포착 종목 재진입·과대평가 종목·상관된 탐지기로 인한 허위 컨센서스 문제를 해결했습니다.
