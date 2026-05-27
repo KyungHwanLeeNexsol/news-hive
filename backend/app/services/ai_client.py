@@ -6,6 +6,7 @@ Gemini API 키를 순환하며 호출한다. 전부 rate limit 소진 시 None�
 
 import asyncio
 import logging
+import threading
 import time
 
 from app.config import settings
@@ -18,6 +19,19 @@ _ai_semaphore = asyncio.Semaphore(3)
 
 # 키별 rate limit 쿨다운: {key_idx: monotonic_time_available_after}
 _key_rate_limited_until: dict[int, float] = {}
+
+# 무료 키 라운드로빈 카운터 — 특정 키에 부하 집중 방지
+_free_key_rr_idx: int = 0
+_free_key_rr_lock = threading.Lock()
+
+
+def _next_free_start(n_free_keys: int) -> int:
+    """무료 키 시작 인덱스를 라운드로빈으로 반환한다."""
+    global _free_key_rr_idx
+    with _free_key_rr_lock:
+        idx = _free_key_rr_idx
+        _free_key_rr_idx = (idx + 1) % n_free_keys
+    return idx
 
 
 def _get_gemini_keys() -> list[str]:
@@ -51,8 +65,8 @@ async def _call_gemini(prompt: str, api_key: str, model: str | None = None) -> s
     return await asyncio.to_thread(_sync_call)
 
 
-# @MX:ANCHOR: [AUTO] 모든 AI 호출의 진입점 — 유료 키(0번) 우선, 나머지는 fallback
-# @MX:REASON: Key 0(유료)를 항상 먼저 시도하고 rate limit 시에만 무료 키로 순차 fallback; free_only=True 시 유료 키 완전 제외
+# @MX:ANCHOR: [AUTO] 모든 AI 호출의 진입점 — 유료 키(0번) 우선, 무료 키는 라운드로빈 fallback
+# @MX:REASON: Key 0(유료)를 항상 먼저 시도; 무료 키(1~3)는 라운드로빈으로 순환해 부하 분산; free_only=True 시 유료 키 완전 제외
 async def ask_ai_with_model(prompt: str, max_retries: int = 3, model: str | None = None, free_only: bool = False) -> tuple[str | None, str]:
     """AI에 프롬프트를 전송하고 (응답 텍스트, 사용된 모델명) 튜플을 반환한다.
 
@@ -74,14 +88,22 @@ async def ask_ai_with_model(prompt: str, max_retries: int = 3, model: str | None
     n_keys = len(keys)
 
     if free_only:
-        # 무료 키(Key 2~4, index 1+)만 사용 — 유료 키(index 0) 완전 제외
-        key_indices = list(range(1, n_keys))
-        if not key_indices:
+        # 무료 키(Key 2~4, index 1+)만 사용 — 유료 키(index 0) 완전 제외, 라운드로빈 순환
+        free_indices = list(range(1, n_keys))
+        if not free_indices:
             logger.warning("무료 Gemini 키가 설정되지 않음 (GEMINI_API_KEY_2~4)")
             return None, "unknown"
+        start = _next_free_start(len(free_indices))
+        key_indices = free_indices[start:] + free_indices[:start]
     else:
-        # 유료 키(index 0)를 항상 먼저 시도
-        key_indices = list(range(n_keys))
+        # 유료 키(index 0)를 항상 먼저 시도, 무료 키는 라운드로빈 fallback
+        free_indices = list(range(1, n_keys))
+        if free_indices:
+            start = _next_free_start(len(free_indices))
+            rotated_free = free_indices[start:] + free_indices[:start]
+        else:
+            rotated_free = []
+        key_indices = [0] + rotated_free
 
     gemini_errors = []
 
