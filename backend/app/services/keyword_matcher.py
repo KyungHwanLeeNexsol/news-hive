@@ -184,9 +184,9 @@ def _batch_evaluate(
     )
 
     try:
-        from app.services.ai_client import ask_ai_lite
+        from app.services.ai_client import ask_ai_free_lite
 
-        response = asyncio.run(ask_ai_lite(prompt))
+        response = asyncio.run(ask_ai_free_lite(prompt))
         if not response:
             return
 
