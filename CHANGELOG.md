@@ -4,6 +4,15 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fixed — 급등 시그널 DB 롤백 및 매수 우선순위 정렬 버그 2건 수정 (2026-05-27)
+
+- **`run_surge_signal_generation()` db.commit() 누락** (`backend/app/services/fund_manager.py`): `_gather_surge_candidates()`는 내부에서 `db.flush()`만 호출하므로 호출부에서 commit이 없으면 스케줄러 finally 블록의 `db.close()` 시점에 트랜잭션이 롤백되어 시그널이 DB에 저장되지 않는 버그 수정
+  - `try` 블록에 `db.commit()` 추가, `except` 블록에 `db.rollback()` 추가
+  - 검증: 수동 실행 결과 125개 surge_candidate 정상 저장 확인 (수정 전: 0건)
+- **`get_today_signals()` 확률 내림차순 정렬 누락** (`backend/app/services/surge_trading_service.py`): 필터를 통과한 종목이 DB 삽입 순서(임의 순서)로 반환되어 `execute_buy_orders()`의 `max_daily_entries=5` 한도가 확률이 낮은 종목을 먼저 선택하는 문제 수정
+  - `return result` 직전 `result.sort(key=lambda x: x[2], reverse=True)` 추가
+  - 결과: 매수 5건이 항상 당일 최고 확률 상위 5종목으로 선택됨 보장
+
 ### Changed — 급등 시그널 생성 타이밍 전일 15:20 KST로 이동 (2026-05-27)
 
 - **시그널 생성 타이밍 현실화** (`backend/app/services/fund_manager.py`, `scheduler.py`, `surge_trading_service.py`): 기존 08:30 당일 생성 방식은 실제 투자자 조건(전날 종목 선정)과 불일치 — 전일 15:20 KST(장 마감 10분 전) 독립 생성으로 전환
