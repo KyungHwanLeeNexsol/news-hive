@@ -165,8 +165,8 @@ async def crawl_krx_short_selling(
     )
 
     # DB 종목코드 → stock_id 매핑
-    stocks = db.query(Stock.id, Stock.code).all()
-    code_to_id: dict[str, int] = {s.code: s.id for s in stocks}
+    stocks = db.query(Stock.id, Stock.stock_code).all()
+    code_to_id: dict[str, int] = {s.stock_code: s.id for s in stocks}
     if not code_to_id:
         logger.warning("stocks 테이블이 비어있어 공매도 잔고를 저장할 수 없습니다.")
         return 0
