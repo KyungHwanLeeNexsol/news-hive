@@ -4,6 +4,28 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Changed — SPEC-AI-018 급등 예측 신호 품질 개선 4단계 구현 (2026-05-27)
+
+앙상블 점수 체계를 전면 재조정하여 과거 급등 포착 종목 재진입·과대평가 종목·상관된 탐지기로 인한 허위 컨센서스 문제를 해결했습니다.
+
+- **Phase 1 — 설정 합리화** (`backend/app/surge_config/surge_detection.yaml`, `surge_settings.py`):
+  - `theme_cluster` 가중치 0.35 → 0.28 (뉴스 편향 완화), `legacy_detectors` 0.10 → 0.17 (기술적 탐지기 복원)
+  - `min_news_sentiment` 임계값 0.30 → 0.50 (감성 필터 강화)
+  - `strong_single_bypass_threshold` 0.72 → 0.85 (단일 탐지기 우회 조건 강화)
+  - `immediate_disclosure_bypass_threshold` 0.70 → 0.85로 상향 및 하드코딩 제거 — `EnsembleConfig` 필드로 설정화
+- **Phase 2 — 최근 급등 페널티** (`backend/app/services/surge_detector.py`):
+  - `_recent_surge_penalty()` 함수 신규 추가 — `price_5d_trend > 20%`이면 점수 0.6×, `> 12%`이면 0.8× 적용
+  - 앙상블·즉시공시우회·단일강도우회 3개 경로 모두에 적용하여 이미 급등한 종목 재진입 방지
+  - 예시: 디앤디파마텍(5일 수익률 ~30%) → 점수 0.6× → 임계값 이하 자동 제외
+- **Phase 3 — 과대평가 필터** (`backend/app/surge_config/surge_settings.py`, `fund_manager.py`):
+  - `ValuationDisqualifiersConfig` 신규 추가 — `max_per: 500`, `max_pbr: 30`, `skip_if_missing: true`
+  - `_gather_leading_candidates()`에서 per > 500 또는 pbr > 30 종목 진입 차단; 지표 미발표 종목은 필터 면제
+- **Phase 4 — 컨센서스 독립성 개선** (`backend/app/services/surge_detector.py`):
+  - `compute_ensemble_score()` 내 활성 탐지기 수 집계 방식을 개별→그룹 기반으로 교체
+  - `detector_groups = {"news": [theme_cluster, combo], "disclosure": [disclosure], "technical": [legacy]}`
+  - theme_cluster+combo 동시 활성화 시 기존 2개(1.30×)→1그룹(1.00×)으로 계산 — 상관된 탐지기의 허위 컨센서스 제거
+- **테스트** (`backend/tests/test_surge_ai018.py`): 36개 신규 테스트 — 특성 테스트 5개 + 구현 검증 31개 (4개 Phase 전체 커버)
+
 ### Fixed — 급등 시그널 DB 롤백 및 매수 우선순위 정렬 버그 2건 수정 (2026-05-27)
 
 - **`run_surge_signal_generation()` db.commit() 누락** (`backend/app/services/fund_manager.py`): `_gather_surge_candidates()`는 내부에서 `db.flush()`만 호출하므로 호출부에서 commit이 없으면 스케줄러 finally 블록의 `db.close()` 시점에 트랜잭션이 롤백되어 시그널이 DB에 저장되지 않는 버그 수정
