@@ -68,6 +68,10 @@ class SurgeCandidate:
     # P3: 자사주 소각/취득, 계약 수주, 합병 등 즉각 이벤트 공시 점수
     immediate_disclosure_score: float = 0.0
     active_detectors: list[str] = field(default_factory=list)
+    # @MX:NOTE: [AUTO] SPEC-AI-019 REQ-001: per/pbr 데이터 컨텍스트 — 탐지기 단계에서 수집하여 밸류에이션 필터에 사용
+    # @MX:SPEC: SPEC-AI-019
+    per: float | None = None
+    pbr: float | None = None
 
 
 def _sigmoid(x: float) -> float:
@@ -288,12 +292,18 @@ def detect_theme_news_cluster(
             theme_cluster_score,
         )
 
+        # @MX:NOTE: [AUTO] SPEC-AI-019 REQ-002: 탐지기 단계에서 per/pbr piggy-back 수집
+        # @MX:SPEC: SPEC-AI-019
+        _per, _pbr = _extract_valuation(stock.stock_code)
+
         results.append(
             SurgeCandidate(
                 stock_code=stock.stock_code,
                 stock_name=stock.name,
                 theme_cluster_score=theme_cluster_score,
                 active_detectors=["theme_cluster"],
+                per=_per,
+                pbr=_pbr,
             )
         )
 
@@ -321,6 +331,71 @@ def _fetch_price_change_sync(stock_code: str) -> dict | None:
 
 # 테스트 주입용 프로바이더 — None이면 운영 경로 사용
 _price_change_provider: Callable[[str], dict | None] | None = None
+
+
+# @MX:NOTE: [AUTO] SPEC-AI-019 REQ-002: per/pbr piggy-back 수집용 어댑터 헬퍼
+# @MX:SPEC: SPEC-AI-019
+def _extract_valuation(stock_code: str, market_data: dict | None = None) -> tuple[float | None, float | None]:
+    """종목의 PER/PBR 값을 추출한다 (SPEC-AI-019 REQ-AI019-002).
+
+    우선순위:
+    1. market_data dict에 직접 per/pbr 키가 있으면 사용 (테스트 주입 지원)
+    2. KIS API 인메모리 캐시(_price_cache)에서 동기 읽기 (추가 API 호출 없음)
+    3. 데이터 없으면 (None, None) 반환
+
+    None/0/음수는 결측치로 취급하여 None을 반환한다 (REQ-AI019-005).
+
+    Args:
+        stock_code: 종목 코드
+        market_data: 탐지기가 이미 보유한 시장 데이터 dict (없으면 None)
+
+    Returns:
+        (per, pbr) 튜플. 결측치는 None.
+    """
+    # 1단계: market_data dict에서 직접 추출 (다양한 키 변형 지원)
+    if market_data is not None:
+        per_val = (
+            market_data.get("per")
+            or market_data.get("pe_ratio")
+            or market_data.get("PER")
+            or market_data.get("price_earnings")
+        )
+        pbr_val = (
+            market_data.get("pbr")
+            or market_data.get("price_to_book")
+            or market_data.get("PBR")
+            or market_data.get("pb_ratio")
+        )
+        per_result: float | None = None
+        pbr_result: float | None = None
+        if per_val is not None:
+            try:
+                f = float(per_val)
+                per_result = f if f > 0 else None
+            except (ValueError, TypeError):
+                per_result = None
+        if pbr_val is not None:
+            try:
+                f = float(pbr_val)
+                pbr_result = f if f > 0 else None
+            except (ValueError, TypeError):
+                pbr_result = None
+        # market_data가 per/pbr 키를 명시적으로 포함하고 있으면 반환
+        if "per" in market_data or "pe_ratio" in market_data or "PER" in market_data:
+            return per_result, pbr_result
+
+    # 2단계: KIS API 인메모리 캐시 동기 읽기 (추가 HTTP 호출 없음)
+    try:
+        from app.services.kis_api import _price_cache
+        cached = _price_cache.data.get(stock_code)
+        if cached is not None:
+            per_c = cached.per if cached.per and cached.per > 0 else None
+            pbr_c = cached.pbr if cached.pbr and cached.pbr > 0 else None
+            return per_c, pbr_c
+    except Exception:
+        pass
+
+    return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -441,12 +516,18 @@ def detect_volume_surge_news_combo(
 
         stock_name = stock_names.get(stock_code, stock_code)
 
+        # @MX:NOTE: [AUTO] SPEC-AI-019 REQ-002: 탐지기 단계에서 per/pbr piggy-back 수집
+        # @MX:SPEC: SPEC-AI-019
+        _per, _pbr = _extract_valuation(stock_code)
+
         results.append(
             SurgeCandidate(
                 stock_code=stock_code,
                 stock_name=stock_name,
                 combo_score=combo_score,
                 active_detectors=["volume_news_combo"],
+                per=_per,
+                pbr=_pbr,
             )
         )
         logger.info("[거래량콤보] %s z-score=%.2f, combo_score=%.3f", stock_code, z_score, combo_score)
@@ -638,12 +719,18 @@ def detect_disclosure_surge_pattern(
 
     results: list[SurgeCandidate] = []
     for _, info in stock_scores.items():
+        # @MX:NOTE: [AUTO] SPEC-AI-019 REQ-002: 탐지기 단계에서 per/pbr piggy-back 수집
+        # @MX:SPEC: SPEC-AI-019
+        _per, _pbr = _extract_valuation(info["stock_code"])
+
         results.append(
             SurgeCandidate(
                 stock_code=info["stock_code"],
                 stock_name=info["stock_name"],
                 pattern_score=info["score"],
                 active_detectors=["disclosure_pattern"],
+                per=_per,
+                pbr=_pbr,
             )
         )
         logger.info("[공시패턴] %s 패턴점수=%.3f", info["stock_code"], info["score"])
@@ -943,6 +1030,29 @@ def gather_surge_candidates(
             candidate.legacy_score = legacy_score_map[code]
             if "legacy" not in candidate.active_detectors:
                 candidate.active_detectors.append("legacy")
+
+    # @MX:ANCHOR: [AUTO] SPEC-AI-019 REQ-AI019-003,004,005 — 밸류에이션 부적격 필터 단일 지점
+    # @MX:REASON: 모든 급등 시그널 생성 경로(Path A/B)가 이 함수를 통과하므로 단일 지점 필터가
+    #             모든 경로에 자동 적용된다. fund_manager._gather_leading_candidates의 중복 필터는
+    #             SPEC-AI-019 REQ-AI019-006으로 제거되었다.
+    # @MX:SPEC: SPEC-AI-019
+    try:
+        vd = config.valuation_disqualifiers
+        _excluded: list[tuple[str, float | None, float | None]] = []
+        for code in list(merged.keys()):
+            cand = merged[code]
+            per_v = cand.per
+            pbr_v = cand.pbr
+            if (
+                (per_v is not None and per_v > 0 and per_v > vd.max_per)
+                or (pbr_v is not None and pbr_v > 0 and pbr_v > vd.max_pbr)
+            ):
+                _excluded.append((code, per_v, pbr_v))
+                del merged[code]
+        if _excluded:
+            logger.info("[밸류필터] %d개 종목 제외: %s", len(_excluded), _excluded[:5])
+    except Exception as _vd_err:
+        logger.debug("[밸류필터] 설정 로드 실패, 필터 건너뜀: %s", _vd_err)
 
     # 앙상블 점수 계산 및 임계값 필터링
     qualified: list[SurgeCandidate] = []

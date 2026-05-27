@@ -1704,25 +1704,8 @@ async def _gather_leading_candidates(
             if "leading_signals" not in candidate:
                 candidate["leading_signals"] = entry["signals"]
 
-            # SPEC-AI-018 REQ-007: 밸류에이션 부적격 필터
-            # per > 500 또는 pbr > 30인 극단 고평가 종목 제외 (REQ-AI018-008: 데이터 누락은 통과)
-            try:
-                from app.surge_config.surge_settings import get_surge_config as _get_surge_config
-                _vd = _get_surge_config().valuation_disqualifiers
-                _per = candidate.get("per")
-                _pbr = candidate.get("pbr")
-                if (
-                    (_per is not None and _per > 0 and _per > _vd.max_per)
-                    or (_pbr is not None and _pbr > 0 and _pbr > _vd.max_pbr)
-                ):
-                    logger.debug(
-                        "[밸류필터] 제외: %s (per=%s, pbr=%s)",
-                        code, _per, _pbr,
-                    )
-                    continue
-            except Exception as _vd_err:
-                logger.debug("[밸류필터] 설정 로드 실패, 필터 건너뜀: %s", _vd_err)
-
+            # SPEC-AI-019 REQ-AI019-006: 밸류에이션 필터가 surge_detector.gather_surge_candidates로 이전됨
+            # 이 경로(Path A)에서는 _gather_surge_candidates 호출 시 필터가 자동 적용된다.
             candidates.append(candidate)
 
         except Exception as e:
