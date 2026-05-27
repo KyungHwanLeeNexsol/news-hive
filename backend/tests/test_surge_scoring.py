@@ -498,7 +498,11 @@ class TestConsensusMultiplier:
         assert abs(score - expected) < 0.001
 
     def test_t006_two_detectors_multiplier_115(self, surge_config: SurgeDetectionConfig):
-        """T-006b: 활성 탐지기 2개 → 배율 1.30 (SPEC-AI-017 REQ-002: 1.15→1.30 상향)."""
+        """T-006b: SPEC-AI-018 REQ-009: theme+combo → 동일 news 그룹 → 배율 1.00.
+
+        기존 동작(탐지기 2개 → 1.30x)이 SPEC-AI-018에서 그룹 기반으로 변경됨.
+        theme+combo는 모두 news 그룹 → active_groups=1 → multiplier=1.00.
+        """
         candidate = SurgeCandidate(
             stock_code="T006B",
             stock_name="이중탐지기",
@@ -509,12 +513,17 @@ class TestConsensusMultiplier:
         )
         score = compute_ensemble_score(candidate, surge_config)
         w = surge_config.ensemble.weights
+        # news 그룹만 활성 → 1.00x
         weighted_sum = w.theme_cluster * 0.5 + w.volume_news_combo * 0.5
-        expected = min(1.0, weighted_sum * surge_config.ensemble.consensus_multiplier_two)
+        expected = min(1.0, weighted_sum * 1.00)
         assert abs(score - expected) < 0.001
 
     def test_t006_three_detectors_multiplier_130(self, surge_config: SurgeDetectionConfig):
-        """T-006c: 활성 탐지기 3개 → 배율 1.55 (SPEC-AI-017 REQ-002: 1.30→1.55 상향)."""
+        """T-006c: SPEC-AI-018 REQ-009: theme+combo+pattern → news+disclosure 그룹 → 배율 1.30.
+
+        기존 동작(탐지기 3개 → 1.55x)이 SPEC-AI-018에서 그룹 기반으로 변경됨.
+        news 그룹(theme+combo) + disclosure 그룹(pattern) = active_groups=2 → multiplier=1.30.
+        """
         candidate = SurgeCandidate(
             stock_code="T006C",
             stock_name="삼중탐지기",
@@ -530,7 +539,8 @@ class TestConsensusMultiplier:
             + w.volume_news_combo * 0.5
             + w.disclosure_pattern * 0.5
         )
-        expected = min(1.0, weighted_sum * surge_config.ensemble.consensus_multiplier_three_plus)
+        # news(theme+combo) + disclosure → 2개 그룹 → 1.30x
+        expected = min(1.0, weighted_sum * surge_config.ensemble.consensus_multiplier_two)
         assert abs(score - expected) < 0.001
 
     def test_t006_four_detectors_multiplier_130(self, surge_config: SurgeDetectionConfig):
@@ -743,12 +753,15 @@ class TestYamlWeightSum:
         )
 
     def test_t011_new_weights_values(self, surge_config: SurgeDetectionConfig):
-        """T-011: REQ-006에 따른 새 가중치 값 검증 (theme=0.35, combo=0.35, disclosure=0.20, legacy=0.10)."""
+        """T-011: SPEC-AI-018 REQ-004 가중치 값 검증 (theme=0.28, combo=0.35, disclosure=0.20, legacy=0.17).
+
+        SPEC-AI-018 REQ-004: theme_cluster 0.35→0.28 (과발화 억제), legacy_detectors 0.10→0.17 (기술적 신호 보완)
+        """
         w = surge_config.ensemble.weights
-        assert abs(w.theme_cluster - 0.35) < 0.001, f"theme_cluster 가중치 오류: {w.theme_cluster}"
+        assert abs(w.theme_cluster - 0.28) < 0.001, f"theme_cluster 가중치 오류: {w.theme_cluster}"
         assert abs(w.volume_news_combo - 0.35) < 0.001, f"volume_news_combo 가중치 오류: {w.volume_news_combo}"
         assert abs(w.disclosure_pattern - 0.20) < 0.001, f"disclosure_pattern 가중치 오류: {w.disclosure_pattern}"
-        assert abs(w.legacy_detectors - 0.10) < 0.001, f"legacy_detectors 가중치 오류: {w.legacy_detectors}"
+        assert abs(w.legacy_detectors - 0.17) < 0.001, f"legacy_detectors 가중치 오류: {w.legacy_detectors}"
 
 
 # ---------------------------------------------------------------------------

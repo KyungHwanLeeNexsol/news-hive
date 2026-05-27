@@ -22,7 +22,7 @@ surge_detection:
     volume_zscore_threshold: 2.5
     volume_baseline_days: 20
     news_window_hours: 24
-    min_news_sentiment: 0.3
+    min_news_sentiment: 0.5
   disclosure_pattern:
     historical_surge_threshold_pct: 10.0
     historical_lookback_days: 5
@@ -32,10 +32,11 @@ surge_detection:
     disclosure_window_hours: 24
   ensemble:
     weights:
-      theme_cluster: 0.35
+      # SPEC-AI-018 REQ-004: theme_cluster 0.35→0.28 (과발화 억제), legacy_detectors 0.10→0.17 (기술적 신호 보완)
+      theme_cluster: 0.28
       volume_news_combo: 0.35
       disclosure_pattern: 0.20
-      legacy_detectors: 0.10
+      legacy_detectors: 0.17
     min_score_for_signal: 0.45
     # 레짐별 앙상블 임계값 (SPEC-AI-017 REQ-001): 시장 레짐에 따라 차등 적용
     # BULL 장에서는 진입 문턱 낮춰 더 많은 시그널 허용 (0.38), SIDEWAYS/BEAR는 높임
@@ -47,9 +48,17 @@ surge_detection:
     # 기존 1.15/1.30 → 1.30/1.55로 상향해 복합 신호 보상 강화
     consensus_multiplier_two: 1.30
     consensus_multiplier_three_plus: 1.55
-    # 강한 단일 신호 우회 임계값 (SPEC-AI-017 REQ-003)
-    # theme_cluster 또는 combo_score >= 이 값이면 앙상블 임계 우회 (disclosure bypass와 대칭)
-    strong_single_bypass_threshold: 0.72
+    # SPEC-AI-018 REQ-002: 강한 단일 신호 우회 임계값 0.72→0.85 (단일 신호 남용 방지)
+    # theme_cluster 또는 combo_score >= 이 값이면 앙상블 임계 우회
+    strong_single_bypass_threshold: 0.85
+    # SPEC-AI-018 REQ-001: 즉각 공시 우회 임계값 (하드코딩 0.70에서 설정값으로 이전)
+    # immediate_disclosure_score >= 이 값이면 앙상블 임계값 우회 허용
+    immediate_disclosure_bypass_threshold: 0.85
+    # SPEC-AI-018 REQ-007: 밸류에이션 부적격 필터 임계값
+  valuation_disqualifiers:
+    max_per: 500
+    max_pbr: 30
+    skip_if_missing: true
   # REQ-018-004: 레짐별 탐지기 파라미터 — BULL/BEAR 국면별 탐지 민감도 차등 적용
   regime_detector_params:
     BULL:

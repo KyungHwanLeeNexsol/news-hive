@@ -595,8 +595,8 @@ class TestEnsembleScore:
         """앙상블 점수 < min_score_for_signal(0.45)이면 시그널 없음 (AC-SURGE-004 시나리오 1).
 
         theme=0.40, combo=0.0, pattern=0.0, legacy=0.0
-        → 새 가중치: score = 0.35 * 0.40 = 0.14 < 0.45 (SPEC-AI-016 임계값 상향)
-        → 활성 탐지기 1개 → multiplier=1.00 → final=0.14
+        → SPEC-AI-018 REQ-004 가중치: score = 0.28 * 0.40 = 0.112 < 0.45
+        → news 그룹 1개 활성 → multiplier=1.00 → final=0.112
         """
         candidate = SurgeCandidate(
             stock_code="000001",
@@ -607,8 +607,8 @@ class TestEnsembleScore:
             legacy_score=0.0,
         )
         score = compute_ensemble_score(candidate, surge_config)
-        # 새 가중치: 0.35 * 0.40 * 1.00(단일탐지기) = 0.14
-        assert abs(score - 0.14) < 0.001
+        # SPEC-AI-018 REQ-004 가중치: 0.28 * 0.40 * 1.00(단일그룹) = 0.112
+        assert abs(score - 0.112) < 0.001
         assert score < surge_config.ensemble.min_score_for_signal
 
     def test_characterize_above_threshold_generates_signal(self, surge_config: SurgeDetectionConfig):

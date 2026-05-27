@@ -80,7 +80,11 @@ class EnsembleConfig(BaseModel):
     consensus_multiplier_two: float = 1.30
     consensus_multiplier_three_plus: float = 1.55
     # @MX:NOTE: [AUTO] SPEC-AI-017 REQ-003: 강한 단일 신호 우회 임계값 (즉각 공시 bypass와 대칭)
-    strong_single_bypass_threshold: float = 0.72
+    # @MX:NOTE: [AUTO] SPEC-AI-018 REQ-002: 0.72→0.85로 상향 (단일 신호 남용 방지)
+    strong_single_bypass_threshold: float = 0.85
+    # @MX:NOTE: [AUTO] SPEC-AI-018 REQ-001: 즉각 공시 우회 임계값 — 하드코딩(0.70)에서 설정값으로 이전
+    # @MX:SPEC: SPEC-AI-018
+    immediate_disclosure_bypass_threshold: float = 0.85
 
 
 class PriceQueryConfig(BaseModel):
@@ -102,6 +106,17 @@ class BacktestConfig(BaseModel):
     evaluation_horizon_days: int
 
 
+class ValuationDisqualifiersConfig(BaseModel):
+    """밸류에이션 부적격 필터 설정 (SPEC-AI-018 REQ-006~008)."""
+
+    # @MX:NOTE: [AUTO] per > max_per 또는 pbr > max_pbr 시 후보 제외
+    # @MX:SPEC: SPEC-AI-018
+    max_per: float = 500.0
+    max_pbr: float = 30.0
+    # REQ-AI018-008: per/pbr 데이터 누락 시 부적격 처리 안 함
+    skip_if_missing: bool = True
+
+
 class SurgeDetectionConfig(BaseModel):
     """급등 징후 탐지 전체 설정.
 
@@ -116,6 +131,8 @@ class SurgeDetectionConfig(BaseModel):
     backtest: BacktestConfig
     # REQ-018-004: 레짐별 탐지기 파라미터 (BULL/BEAR별 오버라이드)
     regime_detector_params: dict[str, RegimeDetectorParams] = {}
+    # SPEC-AI-018 REQ-006: 밸류에이션 부적격 필터 설정
+    valuation_disqualifiers: ValuationDisqualifiersConfig = ValuationDisqualifiersConfig()
 
     # @MX:ANCHOR: [AUTO] 앙상블 가중치 합산 검증 — 4개 탐지기 가중치 합산 반드시 1.0
     # @MX:REASON: 가중치 합산 != 1.0 이면 앙상블 스코어 범위가 0~1을 벗어나 시그널 임계값 판정이 왜곡됨

@@ -778,10 +778,12 @@ def compute_ensemble_score(candidate: SurgeCandidate, config: SurgeDetectionConf
     """앙상블 스코어를 계산한다 (AC-SURGE-004).
 
     각 탐지기 점수에 설정 가중치를 곱해 합산한 뒤,
-    활성 탐지기 수에 따른 컨센서스 배율을 적용한다.
+    활성 그룹 수에 따른 컨센서스 배율을 적용한다.
 
-    # @MX:NOTE: [AUTO] 컨센서스 배율: 활성 탐지기 1/2/3+개 → 1.00/1.15/1.30
-    # @MX:SPEC: SPEC-AI-014 REQ-004
+    # @MX:NOTE: [AUTO] 컨센서스 배율: 활성 그룹 1/2/3개 → 1.00/1.30/1.55
+    # @MX:NOTE: [AUTO] SPEC-AI-018 REQ-009: news(theme+combo)/disclosure/technical 3개 그룹으로 묶어
+    #           동일 이벤트 중복 보상 방지 (기존 탐지기 개별 카운트 → 그룹 단위 카운트)
+    # @MX:SPEC: SPEC-AI-014 REQ-004, SPEC-AI-018 REQ-009
 
     Args:
         candidate: SurgeCandidate 객체
@@ -800,21 +802,23 @@ def compute_ensemble_score(candidate: SurgeCandidate, config: SurgeDetectionConf
         + w.legacy_detectors * candidate.legacy_score
     )
 
-    # REQ-AI014-004: 활성 탐지기 수 기반 컨센서스 배율
-    # "활성 탐지기" = 해당 탐지기 점수 > 0 인 것
-    active_count = sum([
-        1 for score in [
-            candidate.theme_cluster_score,
-            candidate.combo_score,
-            best_disclosure_score,
-            candidate.legacy_score,
-        ] if score > 0
-    ])
+    # SPEC-AI-018 REQ-009: 탐지기 그룹 단위 컨센서스 배율 (동일 이벤트 중복 보상 방지)
+    # news 그룹(theme+combo)은 모두 뉴스 이벤트에 반응 → 동일 그룹으로 묶음
+    # disclosure 그룹: best_disclosure_score (공시 이벤트)
+    # technical 그룹: legacy_score (선행 기술적 신호)
+    detector_groups = {
+        "news": [candidate.theme_cluster_score, candidate.combo_score],
+        "disclosure": [best_disclosure_score],
+        "technical": [candidate.legacy_score],
+    }
+    active_groups = sum(
+        1 for scores in detector_groups.values() if any(s > 0 for s in scores)
+    )
 
-    # SPEC-AI-017 REQ-002: 컨센서스 배율을 config에서 읽어 적용 (기존 1.15/1.30 → 1.30/1.55)
-    if active_count >= 3:
+    # SPEC-AI-017 REQ-002: 컨센서스 배율을 config에서 읽어 적용
+    if active_groups >= 3:
         multiplier = config.ensemble.consensus_multiplier_three_plus
-    elif active_count == 2:
+    elif active_groups == 2:
         multiplier = config.ensemble.consensus_multiplier_two
     else:
         multiplier = 1.00
@@ -822,15 +826,37 @@ def compute_ensemble_score(candidate: SurgeCandidate, config: SurgeDetectionConf
     final_score = min(1.0, weighted_sum * multiplier)
 
     logger.debug(
-        "[앙상블] code=%s weighted_sum=%.4f consensus=%.2f final=%.4f (active_detectors=%d)",
+        "[앙상블] code=%s weighted_sum=%.4f consensus=%.2f final=%.4f (active_groups=%d)",
         candidate.stock_code,
         weighted_sum,
         multiplier,
         final_score,
-        active_count,
+        active_groups,
     )
 
     return final_score
+
+
+def _recent_surge_penalty(score: float, price_5d_trend: float | None) -> float:
+    """5일 수익률 기반 최근 급등 페널티를 적용한다 (REQ-AI018-005).
+
+    Args:
+        score: 적용 전 앙상블 점수
+        price_5d_trend: 최근 5일 수익률(%). None이면 페널티 없음.
+
+    Returns:
+        페널티 적용 후 점수
+
+    # @MX:NOTE: [AUTO] SPEC-AI-018 REQ-005: 최근 급등 페널티 — 이미 급등한 종목 재선정 방지
+    # @MX:SPEC: SPEC-AI-018
+    """
+    if price_5d_trend is None:
+        return score
+    if price_5d_trend > 20.0:
+        return score * 0.6
+    if price_5d_trend > 12.0:
+        return score * 0.8
+    return score
 
 
 # @MX:NOTE: [AUTO] SPEC-AI-012 앙상블 파이프라인 진입점 — fund_manager._gather_surge_candidates에서 호출
@@ -901,6 +927,8 @@ def gather_surge_candidates(
     # @MX:NOTE: legacy_score = min(1.0, 레거시 탐지기 발동 수 / 4)
     #           leading_signals 키로 몇 개의 선행 탐지기가 발동했는지 확인
     legacy_score_map: dict[str, float] = {}
+    # SPEC-AI-018 REQ-005: price_5d_trend 조회용 룩업 딕셔너리 (종목코드 → legacy dict)
+    legacy_lookup: dict[str, dict] = {}
     for lc in legacy_candidates:
         code = lc.get("code") or lc.get("stock_code")
         if not code:
@@ -908,6 +936,7 @@ def gather_surge_candidates(
         signals = lc.get("leading_signals", [])
         num_triggered = len(signals) if signals else 1  # 후보로 있으면 최소 1개
         legacy_score_map[code] = min(1.0, num_triggered / 4)
+        legacy_lookup[code] = lc
 
     for code, candidate in merged.items():
         if code in legacy_score_map:
@@ -930,32 +959,53 @@ def gather_surge_candidates(
 
     for candidate in merged.values():
         score = compute_ensemble_score(candidate, config)
+        # SPEC-AI-018 REQ-005: 최근 급등 페널티 적용 (앙상블 경로)
+        p5d = legacy_lookup.get(candidate.stock_code, {}).get("price_5d_trend")
+        score = _recent_surge_penalty(score, p5d)
         if score >= effective_threshold:
             qualified.append(candidate)
             qualified_codes.add(candidate.stock_code)
 
-    # P3: 즉각 공시 이벤트 강도 >= 0.70 이면 앙상블 임계값 우회 포함
+    # P3: 즉각 공시 이벤트 강도 >= config 임계값이면 앙상블 임계값 우회 포함
+    # SPEC-AI-018 REQ-001: 하드코딩(0.70) → config.ensemble.immediate_disclosure_bypass_threshold (0.85)
     # 자사주 소각(0.90), 수주(0.82), 합병(0.82) 등은 다른 탐지기 없이도 즉각 시그널
-    _IMMEDIATE_BYPASS_THRESHOLD = 0.70
+    _immediate_bypass_threshold = config.ensemble.immediate_disclosure_bypass_threshold
     for candidate in merged.values():
         if (candidate.stock_code not in qualified_codes
-                and candidate.immediate_disclosure_score >= _IMMEDIATE_BYPASS_THRESHOLD):
+                and candidate.immediate_disclosure_score >= _immediate_bypass_threshold):
+            # SPEC-AI-018 REQ-005: 즉각 공시 우회 경로에도 급등 페널티 적용
+            _bypass_score = candidate.immediate_disclosure_score
+            p5d = legacy_lookup.get(candidate.stock_code, {}).get("price_5d_trend")
+            _bypass_score = _recent_surge_penalty(_bypass_score, p5d)
+            if _bypass_score <= 0:
+                continue
             qualified.append(candidate)
             qualified_codes.add(candidate.stock_code)
             logger.info(
-                "[즉각공시] 앙상블 임계 우회: %s (immediate_score=%.3f)",
+                "[즉각공시] 앙상블 임계 우회: %s (immediate_score=%.3f, 페널티후=%.3f)",
                 candidate.stock_code,
                 candidate.immediate_disclosure_score,
+                _bypass_score,
             )
 
     # SPEC-AI-017 REQ-003: 강한 단일 신호 우회 (theme/combo >= bypass 임계값)
-    # 즉각 공시 bypass(0.70)와 대칭 — 강한 테마/거래량 신호 구제
+    # 즉각 공시 bypass(0.85)와 대칭 — 강한 테마/거래량 신호 구제
     _bypass = config.ensemble.strong_single_bypass_threshold
     for candidate in merged.values():
         if candidate.stock_code not in qualified_codes and (
             candidate.theme_cluster_score >= _bypass
             or candidate.combo_score >= _bypass
         ):
+            # SPEC-AI-018 REQ-005: 강한 단일 신호 우회 경로에도 급등 페널티 적용
+            _single_score = max(candidate.theme_cluster_score, candidate.combo_score)
+            p5d = legacy_lookup.get(candidate.stock_code, {}).get("price_5d_trend")
+            _single_score = _recent_surge_penalty(_single_score, p5d)
+            if _single_score < _bypass:
+                logger.info(
+                    "[강한단일신호] 급등 페널티로 우회 차단: %s (페널티후=%.3f < %.3f)",
+                    candidate.stock_code, _single_score, _bypass,
+                )
+                continue
             qualified.append(candidate)
             qualified_codes.add(candidate.stock_code)
             logger.info(
