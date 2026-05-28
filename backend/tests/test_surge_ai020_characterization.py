@@ -18,7 +18,7 @@ import dataclasses
 import pytest
 
 from app.services.surge_detector import SurgeCandidate
-from app.surge_config.surge_settings import get_surge_config, _config_singleton
+from app.surge_config.surge_settings import get_surge_config
 import app.surge_config.surge_settings as _settings_module
 
 

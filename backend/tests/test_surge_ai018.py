@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.surge_config.surge_settings import get_surge_config, _config_singleton
+from app.surge_config.surge_settings import get_surge_config
 import app.surge_config.surge_settings as _settings_module
 
 
@@ -161,7 +161,6 @@ class TestPhase1ConfigChanges:
 
     def test_immediate_bypass_threshold_from_config_not_hardcoded(self):
         """surge_detector에서 _IMMEDIATE_BYPASS_THRESHOLD 하드코딩이 제거됐는지 확인 (REQ-AI018-001)."""
-        import ast
         import pathlib
 
         src = pathlib.Path("app/services/surge_detector.py").read_text(encoding="utf-8")

@@ -7,7 +7,6 @@ PER/PBR 극단값 종목이 시그널 풀에 포함되는지 확인한다.
 
 from __future__ import annotations
 
-import dataclasses
 import unittest.mock as mock
 
 import pytest
@@ -16,9 +15,8 @@ from app.services.surge_detector import (
     SurgeCandidate,
     _extract_valuation,
     compute_ensemble_score,
-    gather_surge_candidates,
 )
-from app.surge_config.surge_settings import get_surge_config, _config_singleton
+from app.surge_config.surge_settings import get_surge_config
 import app.surge_config.surge_settings as _settings_module
 import app.services.surge_detector as _surge_module
 
@@ -55,7 +53,6 @@ def _make_candidate(
 
 def _make_gather_mock(candidates: list[SurgeCandidate]):
     """gather_surge_candidates를 지정된 후보 목록을 반환하도록 모킹한다."""
-    config = get_surge_config()
 
     def _mock_gather(db, recent_news, config_arg, legacy_candidates, market_regime="NEUTRAL"):
         # 앙상블 스코어 계산 후 임계값 통과 후보만 반환 (실제 함수와 동일한 규칙)
