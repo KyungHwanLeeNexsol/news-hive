@@ -68,6 +68,8 @@ class SurgeCandidate:
     # P3: 자사주 소각/취득, 계약 수주, 합병 등 즉각 이벤트 공시 점수
     immediate_disclosure_score: float = 0.0
     active_detectors: list[str] = field(default_factory=list)
+    # SPEC-AI-018 REQ-005 fix: 최근 급등 페널티용 5일 수익률 (legacy_lookup 의존 제거)
+    price_5d_trend: float | None = None
     # @MX:NOTE: SPEC-AI-020: per/pbr data-only observability; 필터링에 사용하지 않음
     # SPEC-AI-020: data-only observability; no filtering applied
     per: float | None = None
@@ -1047,6 +1049,25 @@ def gather_surge_candidates(
             if "legacy" not in candidate.active_detectors:
                 candidate.active_detectors.append("legacy")
 
+    # SPEC-AI-018 REQ-005 fix: price_5d_trend를 candidate에 직접 채움
+    # legacy_candidates=[]인 run_surge_signal_generation 경로에서도 페널티가 작동하도록
+    # fetch_stock_price_history_sync는 volume combo 탐지기가 이미 호출해 캐시됨 → 추가 비용 없음
+    from app.services.naver_finance import fetch_stock_price_history_sync as _fetch_ph
+    for code, candidate in merged.items():
+        if code in legacy_lookup:
+            candidate.price_5d_trend = legacy_lookup[code].get("price_5d_trend")
+        else:
+            try:
+                _hist = _fetch_ph(code, pages=1)
+                if len(_hist) >= 5 and _hist[4].close_price > 0:
+                    candidate.price_5d_trend = round(
+                        (_hist[0].close_price - _hist[4].close_price)
+                        / _hist[4].close_price * 100,
+                        2,
+                    )
+            except Exception:
+                pass
+
     # 앙상블 점수 계산 및 임계값 필터링
     qualified: list[SurgeCandidate] = []
     qualified_codes: set[str] = set()
@@ -1063,8 +1084,7 @@ def gather_surge_candidates(
     for candidate in merged.values():
         score = compute_ensemble_score(candidate, config)
         # SPEC-AI-018 REQ-005: 최근 급등 페널티 적용 (앙상블 경로)
-        p5d = legacy_lookup.get(candidate.stock_code, {}).get("price_5d_trend")
-        score = _recent_surge_penalty(score, p5d)
+        score = _recent_surge_penalty(score, candidate.price_5d_trend)
         if score >= effective_threshold:
             qualified.append(candidate)
             qualified_codes.add(candidate.stock_code)
@@ -1078,8 +1098,7 @@ def gather_surge_candidates(
                 and candidate.immediate_disclosure_score >= _immediate_bypass_threshold):
             # SPEC-AI-018 REQ-005: 즉각 공시 우회 경로에도 급등 페널티 적용
             _bypass_score = candidate.immediate_disclosure_score
-            p5d = legacy_lookup.get(candidate.stock_code, {}).get("price_5d_trend")
-            _bypass_score = _recent_surge_penalty(_bypass_score, p5d)
+            _bypass_score = _recent_surge_penalty(_bypass_score, candidate.price_5d_trend)
             if _bypass_score <= 0:
                 continue
             qualified.append(candidate)
@@ -1101,8 +1120,7 @@ def gather_surge_candidates(
         ):
             # SPEC-AI-018 REQ-005: 강한 단일 신호 우회 경로에도 급등 페널티 적용
             _single_score = max(candidate.theme_cluster_score, candidate.combo_score)
-            p5d = legacy_lookup.get(candidate.stock_code, {}).get("price_5d_trend")
-            _single_score = _recent_surge_penalty(_single_score, p5d)
+            _single_score = _recent_surge_penalty(_single_score, candidate.price_5d_trend)
             if _single_score < _bypass:
                 logger.info(
                     "[강한단일신호] 급등 페널티로 우회 차단: %s (페널티후=%.3f < %.3f)",
