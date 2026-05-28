@@ -4,6 +4,20 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fixed — 가격 히스토리 인덱스 역방향 버그 및 중소형주 현재가 조회 fallback 추가 (2026-05-28)
+
+한양이엔지(045100)처럼 모바일 API `stockInfo`가 비어있는 중소형주가 `price_unavailable`로 매수 Skip되던 문제와, Naver API의 내림차순(최신→과거) 반환 특성을 잘못 가정한 인덱스 버그 2건을 수정했습니다. 두 버그가 독립적으로 발생하여 어제 1위 시그널 종목이 미매수된 원인이었습니다.
+
+- **`get_today_signals()` 가격 인덱스 역방향 버그 수정** (`backend/app/services/surge_trading_service.py`):
+  - Naver Finance API는 최신→과거 순(내림차순)으로 가격 이력 반환 — 기존 코드는 "가장 최근 기록이 마지막 인덱스"로 잘못 가정
+  - `prices[-1](가장 오래된가)` → `prices[0](최신가)`, `prices[-6]` → `prices[5]`, `prices[-2]` → `prices[1]`로 수정
+  - 영향: 5일/1일 가격 변화율이 반전 계산되어 낙폭과대 필터(-5% 이상 하락) 오작동 해소
+  - 예시: 한양이엔지 1일 변화율 +10.34%(잘못) → -7.78%(정확) → 낙폭과대 필터 정상 적용
+- **`fetch_current_price_with_change()` 중소형주 fallback 추가** (`backend/app/services/naver_finance.py`):
+  - 코스피·코스닥 상위 50종목 외 중소형주는 모바일 API `stockInfo.closePrice`가 비어있어 `None` 반환 → `execute_buy_orders()`의 `price_unavailable` 처리로 매수 Skip
+  - 모바일 API 실패 시 `fetch_stock_price_history(code, pages=1)` 호출, `(history[0].close - history[1].close) / history[1].close × 100`으로 전일比 계산
+  - 검증: `fetch_current_price_with_change('045100')` → `None` 에서 `{'current_price': 31400, 'change_rate': -7.78}`로 정상 반환
+
 ### Changed — SPEC-AI-020 급등 시그널 PER/PBR 밸류에이션 필터 제거 (2026-05-28)
 
 모멘텀(24~72시간)과 가치(12개월 회계 기반) 팩터는 시간축이 달라 결합 시 alpha 희석. 한국 급등주 산업 특성(코스닥 적자기업·바이오 성장주)상 PER/PBR 필터는 정상 종목까지 산업 편향으로 차단 — 운영 96 시그널 시뮬레이션에서 제외 11종목 중 7개가 정상 바이오 성장주(알테오젠·펩트론 등). 학술 근거: Asness, Moskowitz & Pedersen (2013) "Value and Momentum Everywhere" 에서 가치와 모멘텀 팩터 음의 상관 보고.
