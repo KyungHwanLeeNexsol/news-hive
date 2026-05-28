@@ -1173,6 +1173,21 @@ async def fetch_current_price_with_change(stock_code: str) -> dict | None:
     except Exception as e:
         logger.debug("fetch_current_price_with_change fallback 실패 (%s): %s", stock_code, e)
 
+    # 가격 히스토리 fallback: stockInfo 없는 중소형주 대응 (Naver 내림차순: prices[0]=최신)
+    try:
+        history = await fetch_stock_price_history(stock_code, pages=1)
+        if history and len(history) >= 2:
+            latest = float(history[0].close)
+            prev = float(history[1].close)
+            if prev > 0:
+                change_rate = round((latest - prev) / prev * 100, 2)
+                return {
+                    "current_price": int(latest),
+                    "change_rate": change_rate,
+                }
+    except Exception as e:
+        logger.debug("fetch_current_price_with_change history fallback 실패 (%s): %s", stock_code, e)
+
     return None
 
 

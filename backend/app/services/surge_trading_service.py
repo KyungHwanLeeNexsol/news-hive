@@ -210,10 +210,10 @@ def get_today_signals(
         try:
             price_history = _get_price_history_sync(stock_code_val)
             if price_history and len(price_history) >= 6:
-                # 가장 최근 기록이 마지막 인덱스
-                latest_price = float(price_history[-1].close)
-                price_5d_ago = float(price_history[-6].close) if len(price_history) >= 6 else None
-                price_1d_ago = float(price_history[-2].close) if len(price_history) >= 2 else None
+                # Naver API는 내림차순(최신→과거) 반환: prices[0]이 최신가
+                latest_price = float(price_history[0].close)
+                price_5d_ago = float(price_history[5].close)
+                price_1d_ago = float(price_history[1].close) if len(price_history) >= 2 else None
 
                 if price_5d_ago and price_5d_ago > 0:
                     change_5d = (latest_price - price_5d_ago) / price_5d_ago
