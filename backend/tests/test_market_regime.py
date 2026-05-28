@@ -411,7 +411,6 @@ class TestFetchKospiIndicators3Tuple:
     def test_returns_three_tuple(self, mock_fetch):
         """_fetch_kospi_indicators가 3-튜플을 반환하는지 확인."""
         mock_fetch.return_value = (1.5, 0.5, 0.65)
-        from app.services.market_regime_service import _fetch_kospi_indicators
         result = mock_fetch(MagicMock())
         assert len(result) == 3
 
@@ -439,13 +438,12 @@ class TestRegimeDetectorParamsModel:
     def test_surge_detection_config_has_regime_detector_params(self):
         """SurgeDetectionConfig에 regime_detector_params 필드가 있어야 한다."""
         from app.surge_config.surge_settings import SurgeDetectionConfig
-        import inspect
         fields = SurgeDetectionConfig.model_fields
         assert "regime_detector_params" in fields
 
     def test_surge_detection_config_regime_detector_params_default_empty(self):
         """regime_detector_params 기본값은 빈 dict이어야 한다."""
-        from app.surge_config.surge_settings import SurgeDetectionConfig, get_surge_config
+        from app.surge_config.surge_settings import get_surge_config
         config = get_surge_config()
         assert isinstance(config.regime_detector_params, dict)
 
@@ -496,9 +494,6 @@ class TestDetectVolumeNewsComboRegimeParam:
         """BULL 레짐에서 volume_zscore_threshold=2.0으로 오버라이드된다."""
         import inspect
         from app.services.surge_detector import detect_volume_surge_news_combo
-        from app.surge_config.surge_settings import (
-            SurgeDetectionConfig, get_surge_config,
-        )
         # 함수 시그니처에 market_regime 있는지 확인
         sig = inspect.signature(detect_volume_surge_news_combo)
         assert "market_regime" in sig.parameters

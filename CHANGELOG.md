@@ -4,6 +4,28 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Changed — SPEC-AI-020 급등 시그널 PER/PBR 밸류에이션 필터 제거 (2026-05-28)
+
+모멘텀(24~72시간)과 가치(12개월 회계 기반) 팩터는 시간축이 달라 결합 시 alpha 희석. 한국 급등주 산업 특성(코스닥 적자기업·바이오 성장주)상 PER/PBR 필터는 정상 종목까지 산업 편향으로 차단 — 운영 96 시그널 시뮬레이션에서 제외 11종목 중 7개가 정상 바이오 성장주(알테오젠·펩트론 등). 학술 근거: Asness, Moskowitz & Pedersen (2013) "Value and Momentum Everywhere" 에서 가치와 모멘텀 팩터 음의 상관 보고.
+
+- **SPEC-AI-018 REQ-006~008 (Phase 3 valuation_disqualifiers) deprecated**
+  - `fund_manager.py:1707-1724`의 필터 블록 제거 (SPEC-AI-018 phase 3 구현 무효화)
+  - `ValuationDisqualifiersConfig` Pydantic 모델은 schema 유지, deprecated 표시
+  - `surge_detection.yaml` `valuation_disqualifiers` 섹션은 주석(# deprecated)으로 표시
+- **SurgeCandidate per/pbr 필드 + observability 수집 추가**
+  - `SurgeCandidate.per`, `SurgeCandidate.pbr` 필드 신규 추가 (data-only, 필터링 없음)
+  - `_extract_valuation()` 헬퍼 신규 추가 — 기존 탐지기 쿼리 결과에서 piggy-back 수집
+  - 3개 탐지기(`detect_theme_news_cluster`, `detect_volume_surge_news_combo`, `detect_disclosure_surge_pattern`)에서 per/pbr 스냅샷 자동 수집
+- **테스트 구조 변경 (REQ-AI020-007~009)**
+  - `test_surge_ai018.py` Phase 3 클래스 4개 retire (`@pytest.mark.skip`, schema 검증은 characterization test로 이관)
+  - `test_surge_ai020_no_filter.py` 신규 17개 케이스 — SPEC-AI-018 Phase 3 필터 로직이 제거되었을 때도 정상 동작 검증
+  - `test_surge_ai020_characterization.py` 신규 7개 케이스 — 바이오/성장주 정상 포용 특성화 테스트
+- **영향 범위**
+  - 매 영업일 시그널 풀에서 정상 성장주 11종목 회복(시뮬레이션 기준)
+  - 09:00 KST `surge_execute_buys`가 더 다양한 종목 검토 대상 포함
+  - 모멘텀 시그널의 산업 다양성 회복(성장주·바이오 편향 제거)
+- **참고**: SPEC-AI-019(필터 적용 범위 확장)는 PR close without merge로 superseded; 본 SPEC이 SPEC-AI-018 Phase 3 필터를 완전 무효화
+
 ### Changed — SPEC-AI-018 급등 예측 신호 품질 개선 4단계 구현 (2026-05-27)
 
 앙상블 점수 체계를 전면 재조정하여 과거 급등 포착 종목 재진입·과대평가 종목·상관된 탐지기로 인한 허위 컨센서스 문제를 해결했습니다.

@@ -107,13 +107,18 @@ class BacktestConfig(BaseModel):
 
 
 class ValuationDisqualifiersConfig(BaseModel):
-    """밸류에이션 부적격 필터 설정 (SPEC-AI-018 REQ-006~008)."""
+    """DEPRECATED by SPEC-AI-020. 스키마는 향후 observability/A-B-testing 용도로 보존.
+    필터링 로직은 적용되지 않음 (REQ-AI020-005).
 
-    # @MX:NOTE: [AUTO] per > max_per 또는 pbr > max_pbr 시 후보 제외
-    # @MX:SPEC: SPEC-AI-018
+    Schema preserved for future use; filter removed by SPEC-AI-020
+    (모멘텀-가치 시간축 불일치 교정 — SPEC-AI-018 REQ-006~008 superseded).
+    """
+
+    # @MX:NOTE: SPEC-AI-020: deprecated by SPEC-AI-020 — schema preserved, no longer applied
+    # @MX:SPEC: SPEC-AI-020
     max_per: float = 500.0
     max_pbr: float = 30.0
-    # REQ-AI018-008: per/pbr 데이터 누락 시 부적격 처리 안 함
+    # 스키마 보존: 값이 설정되어 있어도 필터링에 사용하지 않음
     skip_if_missing: bool = True
 
 

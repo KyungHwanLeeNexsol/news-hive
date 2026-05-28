@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.surge_config.surge_settings import get_surge_config, _config_singleton
+from app.surge_config.surge_settings import get_surge_config
 import app.surge_config.surge_settings as _settings_module
 
 
@@ -161,7 +161,6 @@ class TestPhase1ConfigChanges:
 
     def test_immediate_bypass_threshold_from_config_not_hardcoded(self):
         """surge_detector에서 _IMMEDIATE_BYPASS_THRESHOLD 하드코딩이 제거됐는지 확인 (REQ-AI018-001)."""
-        import ast
         import pathlib
 
         src = pathlib.Path("app/services/surge_detector.py").read_text(encoding="utf-8")
@@ -259,10 +258,22 @@ class TestPhase2RecentSurgePenalty:
 
 # ===========================================================================
 # IMPROVE 검증: Phase 3 — 밸류에이션 부적격 필터
+# RETIRED by SPEC-AI-020 REQ-AI020-008:
+# 이 클래스의 테스트들은 SPEC-AI-018 Phase 3 필터 적용 행위를 검증하나,
+# SPEC-AI-020이 해당 필터를 전면 제거함에 따라 retire 처리.
+# 필터 스키마(config schema) 보존 여부는 test_surge_ai020_characterization.py의
+# TestCharacterizeAI018Phase3CurrentBehavior에서 계속 검증됨.
 # ===========================================================================
 
+@pytest.mark.skip(reason="SPEC-AI-020 REQ-AI020-008: 밸류에이션 필터 제거로 retire. "
+                          "스키마 보존은 test_surge_ai020_characterization.py에서 검증.")
 class TestPhase3ValuationDisqualifier:
-    """Phase 3: 밸류에이션 부적격 필터 검증 (REQ-AI018-006~008)."""
+    """Phase 3: 밸류에이션 부적격 필터 검증 (REQ-AI018-006~008).
+
+    RETIRED: SPEC-AI-020이 해당 필터를 제거함 (REQ-AI020-001, REQ-AI020-008).
+    ValuationDisqualifiersConfig 스키마 자체는 REQ-AI020-005에 의해 보존되지만
+    필터 행위(per>500 제외, pbr>30 제외)는 더 이상 동작하지 않음.
+    """
 
     def test_valuation_disqualifier_config_exists(self):
         """valuation_disqualifiers 설정 필드 존재 (REQ-AI018-006)."""
