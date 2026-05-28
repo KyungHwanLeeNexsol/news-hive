@@ -490,7 +490,7 @@ MAX_SECTOR_PORTFOLIO_PCT = Decimal(_MAX_SECTOR_PCT_ENV) if _MAX_SECTOR_PCT_ENV e
 
 def execute_buy_orders(
     db: Session,
-    max_daily_entries: int = 5,
+    max_daily_entries: int = 6,
     max_open_positions: int = 7,
     position_pct: Decimal = Decimal("0.14"),
     min_probability: Decimal = Decimal("0.30"),

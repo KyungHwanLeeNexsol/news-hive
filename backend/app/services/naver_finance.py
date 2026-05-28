@@ -1096,6 +1096,40 @@ async def fetch_naver_stock_list(
         return cached, 0
 
 
+async def fetch_top_movers_codes(market: str = "KOSDAQ", limit: int = 30) -> list[str]:
+    """상승률 상위 종목 코드 목록 반환 (네이버 금융 sise_rise 스크래핑).
+
+    Args:
+        market: "KOSPI" 또는 "KOSDAQ"
+        limit: 반환할 최대 종목 수 (기본 30)
+
+    Returns:
+        종목코드 문자열 리스트 (예: ["005930", "000660", ...])
+    """
+    market_type = "0" if market.upper() == "KOSPI" else "1"
+    url = f"https://finance.naver.com/sise/sise_rise.naver?sosok={market_type}"
+    codes: list[str] = []
+
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            resp = await client.get(url, headers=HEADERS)
+            resp.raise_for_status()
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+        # 각 행의 종목 링크: /item/main.naver?code=XXXXXX
+        for a_tag in soup.select("td.name a[href*='code=']"):
+            href = a_tag.get("href", "")
+            code_match = re.search(r"code=(\d{6})", href)
+            if code_match:
+                codes.append(code_match.group(1))
+            if len(codes) >= limit:
+                break
+    except Exception as e:
+        logger.error("상승률 상위 종목 조회 실패 (%s): %s", market, e)
+
+    return codes
+
+
 async def fetch_current_price(stock_code: str) -> int | None:
     """특정 종목의 현재가 반환 (SPEC-AI-004).
 

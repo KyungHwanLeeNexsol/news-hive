@@ -482,6 +482,28 @@ def _run_relation_inference():
 # SPEC-AI-013: 급등예측 모의투자 포트폴리오 스케줄 작업
 # ---------------------------------------------------------------------------
 
+def _run_auto_register_stocks():
+    """상승률 상위 종목 중 DB 미등록 종목 자동 등록 (평일 15:10 KST).
+
+    급등 시그널 생성(15:20) 10분 전에 실행하여 당일 급등 후보 종목 누락을 방지한다.
+    """
+    if not _is_kr_market_open():
+        return
+
+    _start = _time.monotonic()
+    from app.services.stock_registry_service import register_unknown_stocks
+
+    db = SessionLocal()
+    try:
+        count = asyncio.run(register_unknown_stocks(db))
+        logger.info("신규 종목 자동 등록 완료: %d개", count)
+    except Exception as e:
+        logger.error("신규 종목 자동 등록 실패: %s", e)
+    finally:
+        _record_job_duration("auto_register_stocks", _time.monotonic() - _start)
+        db.close()
+
+
 def _run_surge_signal_generate():
     """급등예측 시그널 독립 생성 (평일 15:20 KST, 장 마감 10분 전).
 
@@ -1371,6 +1393,19 @@ def start_scheduler():
         replace_existing=True,
     )
 
+    # SPEC-AI-018 개선: 신규 종목 자동 등록 (평일 15:10 KST — 급등 시그널 생성 10분 전)
+    scheduler.add_job(
+        _run_auto_register_stocks,
+        "cron",
+        day_of_week="mon-fri",
+        hour=15,
+        minute=10,
+        timezone="Asia/Seoul",
+        id="auto_register_stocks",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
     # SPEC-AI-013: 급등예측 시그널 전일 생성 (평일 15:20 KST, 장 마감 10분 전)
     # 익일 급등 후보를 오늘 장 데이터 기반으로 사전 탐지.
     # surge_execute_buys(09:00)가 이 시그널을 읽어 익일 시가 매수를 수행한다.
