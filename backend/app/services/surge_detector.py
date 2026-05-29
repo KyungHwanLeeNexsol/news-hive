@@ -1575,3 +1575,393 @@ def detect_near_limit_up_carries(
         return []
 
     return signals
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-024: 임원 자사주 직접 매수 공시 강화 탐지기
+# ---------------------------------------------------------------------------
+
+# @MX:ANCHOR: [AUTO] detect_insider_purchase_signals — fund_manager._run_coverage_expansion()에서 호출
+# @MX:REASON: 커버리지 확장 파이프라인(fan_in >= 3)에 추가된 공시 기반 탐지기. 예외 격리 필수.
+def detect_insider_purchase_signals(
+    db: Session,
+    config: "InsiderPurchaseConfig",  # noqa: F821
+) -> list[FundSignal]:
+    """SPEC-AI-024: 임원 자사주 매수 공시 종목에 surge_candidate 시그널 발행.
+
+    rcept_dt >= 오늘-lookback_days 인 공시 중 임원 취득 관련 공시를 탐지하여
+    아직 오늘 시그널이 없는 종목에 surge_candidate 시그널을 생성한다.
+    처분/매도/양도 키워드가 포함된 공시는 제외한다.
+
+    Args:
+        db: SQLAlchemy 세션
+        config: InsiderPurchaseConfig
+
+    Returns:
+        생성된 FundSignal 목록
+    """
+    import json as _json
+    from zoneinfo import ZoneInfo
+
+    if not config.enabled:
+        return []
+
+    KST = ZoneInfo("Asia/Seoul")
+    signals: list[FundSignal] = []
+
+    try:
+        today_kst_start = datetime.now(KST).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        today_utc_start = today_kst_start.astimezone(timezone.utc)
+        cutoff_dt = datetime.now(KST) - timedelta(days=config.lookback_days)
+        cutoff_str = cutoff_dt.strftime("%Y%m%d")
+
+        # 오늘 이미 시그널 있는 stock_id 집합
+        existing_ids: set[int] = set(
+            row[0]
+            for row in (
+                db.query(FundSignal.stock_id)
+                .filter(FundSignal.created_at >= today_utc_start)
+                .distinct()
+                .all()
+            )
+        )
+
+        # 음성 키워드 (매도 계열)
+        _NEGATIVE_KEYWORDS = ["처분", "매도", "양도"]
+        # 양성 키워드 (취득 계열): OR 조건
+        _POSITIVE_KEYWORDS = ["%임원%취득%", "%임원%매수%"]
+
+        from sqlalchemy import or_
+        candidates = (
+            db.query(Disclosure)
+            .filter(
+                Disclosure.rcept_dt >= cutoff_str,
+                Disclosure.stock_id.isnot(None),
+                or_(
+                    *[Disclosure.report_name.ilike(kw) for kw in _POSITIVE_KEYWORDS]
+                ),
+            )
+            .all()
+        )
+
+        emitted: set[int] = set()
+        for disc in candidates:
+            if disc.stock_id is None:
+                continue
+            if disc.stock_id in existing_ids:
+                continue
+            if disc.stock_id in emitted:
+                continue
+
+            # 음성 키워드 차단
+            rname = disc.report_name or ""
+            if any(neg in rname for neg in _NEGATIVE_KEYWORDS):
+                continue
+
+            metadata = {
+                "surge_basis": ["insider_purchase"],
+                "report_name": rname,
+                "surge_probability_score": config.base_confidence,
+            }
+            signal = FundSignal(
+                stock_id=disc.stock_id,
+                signal="buy",
+                signal_type="surge_candidate",
+                confidence=config.base_confidence,
+                reasoning=f"임원 자사주 매수 공시 — {rname}",
+                surge_metadata=_json.dumps(metadata, ensure_ascii=False),
+                paper_executed=True,
+            )
+            db.add(signal)
+            signals.append(signal)
+            emitted.add(disc.stock_id)
+
+        if signals:
+            db.commit()
+            logger.info("[insider_purchase] 시그널 %d건 생성", len(signals))
+
+    except Exception as e:
+        logger.error("[insider_purchase] 예외 발생: %s", e, exc_info=True)
+        return []
+
+    return signals
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-025: 테마 그룹 강세 carry-forward
+# ---------------------------------------------------------------------------
+
+# @MX:ANCHOR: [AUTO] detect_theme_group_carry_forward — fund_manager._run_coverage_expansion()에서 호출
+# @MX:REASON: 커버리지 확장 파이프라인(fan_in >= 3)에 추가된 테마 그룹 강세 탐지기. 예외 격리 필수.
+def detect_theme_group_carry_forward(
+    db: Session,
+    config: "ThemeGroupCarryConfig",  # noqa: F821
+) -> list[FundSignal]:
+    """SPEC-AI-025: 앵커 종목 강세 시 테마 그룹 멤버에 surge_candidate 시그널 발행.
+
+    ThemeGroup별 anchor_stock의 오늘 등락률이 anchor_surge_min_pct 이상이면
+    그룹 내 미시그널 종목에 confidence = round(change_rate / 30.0 * 0.4, 4) 시그널을 생성한다.
+    그룹당 최대 max_signals_per_group 건, 크로스 그룹 중복 제거.
+
+    Args:
+        db: SQLAlchemy 세션
+        config: ThemeGroupCarryConfig
+
+    Returns:
+        생성된 FundSignal 목록
+    """
+    import json as _json
+    from zoneinfo import ZoneInfo
+
+    if not config.enabled:
+        return []
+
+    KST = ZoneInfo("Asia/Seoul")
+    signals: list[FundSignal] = []
+
+    try:
+        from app.models.theme_group import ThemeGroup, StockThemeGroup
+
+        today_kst_start = datetime.now(KST).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        today_utc_start = today_kst_start.astimezone(timezone.utc)
+
+        # 오늘 이미 시그널 있는 stock_id 집합
+        existing_ids: set[int] = set(
+            row[0]
+            for row in (
+                db.query(FundSignal.stock_id)
+                .filter(FundSignal.created_at >= today_utc_start)
+                .distinct()
+                .all()
+            )
+        )
+
+        # anchor_stock_id가 있는 그룹만 조회
+        groups = (
+            db.query(ThemeGroup)
+            .filter(ThemeGroup.anchor_stock_id.isnot(None))
+            .all()
+        )
+
+        emitted_codes: set[int] = set()
+
+        for group in groups:
+            if group.anchor_stock_id is None:
+                continue
+
+            # 앵커 종목 등락률 조회
+            anchor_stock = db.query(Stock).filter(Stock.id == group.anchor_stock_id).first()
+            if anchor_stock is None:
+                continue
+
+            price_data = _fetch_price_change_sync(anchor_stock.stock_code)
+            if price_data is None:
+                continue
+
+            change_rate: float = price_data.get("change_rate", 0.0)
+            if change_rate < config.anchor_surge_min_pct:
+                continue
+
+            # 그룹 멤버 조회
+            member_rows = (
+                db.query(StockThemeGroup)
+                .filter(StockThemeGroup.theme_group_id == group.id)
+                .all()
+            )
+
+            group_count = 0
+            for stg in member_rows:
+                if group_count >= config.max_signals_per_group:
+                    break
+
+                sid = stg.stock_id
+                if sid == group.anchor_stock_id:
+                    continue
+                if sid in existing_ids:
+                    continue
+                if sid in emitted_codes:
+                    continue
+
+                confidence = round(change_rate / 30.0 * 0.4, 4)
+                metadata = {
+                    "surge_basis": ["theme_group_carry"],
+                    "anchor_stock_id": group.anchor_stock_id,
+                    "anchor_change_rate": round(change_rate, 2),
+                    "theme_group": group.name,
+                    "surge_probability_score": confidence,
+                }
+                signal = FundSignal(
+                    stock_id=sid,
+                    signal="buy",
+                    signal_type="surge_candidate",
+                    confidence=confidence,
+                    reasoning=(
+                        f"테마 그룹 강세 carry-forward — {group.name} 앵커 {change_rate:.2f}% 상승"
+                    ),
+                    surge_metadata=_json.dumps(metadata, ensure_ascii=False),
+                    paper_executed=True,
+                )
+                db.add(signal)
+                signals.append(signal)
+                emitted_codes.add(sid)
+                group_count += 1
+
+        if signals:
+            db.commit()
+            logger.info("[theme_group_carry] 시그널 %d건 생성", len(signals))
+
+    except Exception as e:
+        logger.error("[theme_group_carry] 예외 발생: %s", e, exc_info=True)
+        return []
+
+    return signals
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-026: 포럼 언급 급증 탐지기
+# ---------------------------------------------------------------------------
+
+# @MX:ANCHOR: [AUTO] detect_forum_mention_surge — fund_manager._run_coverage_expansion()에서 호출
+# @MX:REASON: 커버리지 확장 파이프라인(fan_in >= 3)에 추가된 포럼 언급 급증 탐지기. 예외 격리 필수.
+def detect_forum_mention_surge(
+    db: Session,
+    config: "ForumMentionConfig",  # noqa: F821
+) -> list[FundSignal]:
+    """SPEC-AI-026: 종목토론방 언급 급증 종목에 surge_candidate 시그널 발행.
+
+    최근 mention_window_hours 내 게시글 수(recent_count)가
+    baseline_days 기간 일평균의 mention_multiplier배 이상이고
+    min_absolute_mentions 이상인 종목을 탐지한다.
+    baseline=0인 신규 종목은 스킵한다.
+
+    Args:
+        db: SQLAlchemy 세션
+        config: ForumMentionConfig
+
+    Returns:
+        생성된 FundSignal 목록
+    """
+    import json as _json
+    from sqlalchemy import func as sqlfunc
+    from zoneinfo import ZoneInfo
+
+    if not config.enabled:
+        return []
+
+    KST = ZoneInfo("Asia/Seoul")
+    signals: list[FundSignal] = []
+
+    try:
+        from app.models.stock_forum import StockForumPost
+
+        now = datetime.now(timezone.utc)
+        today_kst_start = datetime.now(KST).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ).astimezone(timezone.utc)
+
+        # 오늘 이미 시그널 있는 stock_id 집합
+        existing_ids: set[int] = set(
+            row[0]
+            for row in (
+                db.query(FundSignal.stock_id)
+                .filter(FundSignal.created_at >= today_kst_start)
+                .distinct()
+                .all()
+            )
+        )
+
+        recent_cutoff = now - timedelta(hours=config.mention_window_hours)
+        baseline_end = now - timedelta(days=1)
+        baseline_start = now - timedelta(days=1 + config.baseline_days)
+
+        # 최근 window 내 종목별 게시글 수 (SQL 집계)
+        recent_rows = (
+            db.query(
+                StockForumPost.stock_id,
+                sqlfunc.count(StockForumPost.id).label("recent_count"),
+            )
+            .filter(
+                StockForumPost.stock_id.isnot(None),
+                StockForumPost.post_date >= recent_cutoff,
+            )
+            .group_by(StockForumPost.stock_id)
+            .all()
+        )
+
+        # baseline 기간 종목별 총 게시글 수 (SQL 집계)
+        baseline_rows = (
+            db.query(
+                StockForumPost.stock_id,
+                sqlfunc.count(StockForumPost.id).label("baseline_total"),
+            )
+            .filter(
+                StockForumPost.stock_id.isnot(None),
+                StockForumPost.post_date >= baseline_start,
+                StockForumPost.post_date < baseline_end,
+            )
+            .group_by(StockForumPost.stock_id)
+            .all()
+        )
+
+        # stock_id → baseline_avg 매핑
+        baseline_map: dict[int, float] = {
+            row.stock_id: row.baseline_total / config.baseline_days
+            for row in baseline_rows
+        }
+
+        for row in recent_rows:
+            stock_id = row.stock_id
+            recent_count = row.recent_count
+
+            if stock_id is None:
+                continue
+            if stock_id in existing_ids:
+                continue
+            if recent_count < config.min_absolute_mentions:
+                continue
+
+            baseline_avg = baseline_map.get(stock_id, 0.0)
+            if baseline_avg == 0.0:
+                # 신규 종목 — 기준선 없음, 스킵
+                continue
+            if recent_count < baseline_avg * config.mention_multiplier:
+                continue
+
+            confidence = round(
+                min(recent_count / baseline_avg / 20.0, config.max_confidence), 4
+            )
+            metadata = {
+                "surge_basis": ["forum_mention_surge"],
+                "recent_count": recent_count,
+                "baseline_avg": round(baseline_avg, 2),
+                "ratio": round(recent_count / baseline_avg, 2),
+                "surge_probability_score": confidence,
+            }
+            signal = FundSignal(
+                stock_id=stock_id,
+                signal="buy",
+                signal_type="surge_candidate",
+                confidence=confidence,
+                reasoning=(
+                    f"포럼 언급 급증 — 최근 {recent_count}건 (기준선 {baseline_avg:.1f}건/일의 "
+                    f"{recent_count / baseline_avg:.1f}배)"
+                ),
+                surge_metadata=_json.dumps(metadata, ensure_ascii=False),
+                paper_executed=True,
+            )
+            db.add(signal)
+            signals.append(signal)
+
+        if signals:
+            db.commit()
+            logger.info("[forum_mention_surge] 시그널 %d건 생성", len(signals))
+
+    except Exception as e:
+        logger.error("[forum_mention_surge] 예외 발생: %s", e, exc_info=True)
+        return []
+
+    return signals

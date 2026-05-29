@@ -197,6 +197,33 @@ class NearLimitUpConfig(BaseModel):
     max_signals_per_day: int = 10
 
 
+class InsiderPurchaseConfig(BaseModel):
+    """SPEC-AI-024: 임원 자사주 직접 매수 공시 기반 시그널 설정."""
+
+    enabled: bool = True
+    base_confidence: float = 0.45
+    lookback_days: int = 1
+
+
+class ThemeGroupCarryConfig(BaseModel):
+    """SPEC-AI-025: 테마 그룹 강세 carry-forward 설정."""
+
+    enabled: bool = True
+    anchor_surge_min_pct: float = 5.0
+    max_signals_per_group: int = 5
+
+
+class ForumMentionConfig(BaseModel):
+    """SPEC-AI-026: 포럼 언급 급증 탐지 설정."""
+
+    enabled: bool = True
+    mention_multiplier: float = 5.0
+    min_absolute_mentions: int = 10
+    baseline_days: int = 7
+    mention_window_hours: int = 24
+    max_confidence: float = 0.35
+
+
 class CoverageDashboardConfig(BaseModel):
     """SPEC-AI-022 REQ-004: 커버리지 대시보드 API 설정."""
 

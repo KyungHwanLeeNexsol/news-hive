@@ -3716,3 +3716,33 @@ def _run_coverage_expansion(db: Session, surge_results: list[dict]) -> None:
         logger.info("[near_limit_up] 완료 — %d건", len(nlu_signals))
     except Exception as e:
         logger.error("[near_limit_up] 예외 발생: %s", e, exc_info=True)
+
+    # 4. 임원 자사주 매수 공시 (SPEC-AI-024)
+    try:
+        from app.services.surge_detector import detect_insider_purchase_signals
+        from app.surge_config.surge_settings import InsiderPurchaseConfig
+        insider_cfg = InsiderPurchaseConfig()
+        insider_signals = detect_insider_purchase_signals(db, insider_cfg)
+        logger.info("[insider_purchase] 완료 — %d건", len(insider_signals))
+    except Exception as e:
+        logger.error("[insider_purchase] 예외 발생: %s", e, exc_info=True)
+
+    # 5. 테마 그룹 강세 carry-forward (SPEC-AI-025)
+    try:
+        from app.services.surge_detector import detect_theme_group_carry_forward
+        from app.surge_config.surge_settings import ThemeGroupCarryConfig
+        theme_carry_cfg = ThemeGroupCarryConfig()
+        theme_carry_signals = detect_theme_group_carry_forward(db, theme_carry_cfg)
+        logger.info("[theme_group_carry] 완료 — %d건", len(theme_carry_signals))
+    except Exception as e:
+        logger.error("[theme_group_carry] 예외 발생: %s", e, exc_info=True)
+
+    # 6. 포럼 언급 급증 탐지 (SPEC-AI-026)
+    try:
+        from app.services.surge_detector import detect_forum_mention_surge
+        from app.surge_config.surge_settings import ForumMentionConfig
+        forum_cfg = ForumMentionConfig()
+        forum_signals = detect_forum_mention_surge(db, forum_cfg)
+        logger.info("[forum_mention_surge] 완료 — %d건", len(forum_signals))
+    except Exception as e:
+        logger.error("[forum_mention_surge] 예외 발생: %s", e, exc_info=True)
