@@ -4,6 +4,78 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fixed — 손절 후 회복 종목 시그널 누락 방지 (SPEC-AI-021) (2026-05-29)
+
+손절된 종목의 익일 신호 약화로 인한 매수 기회 손실을 해결했습니다. 직전 3영업일 이내에 손절 청산된 종목이 당일 재탐지될 때 신뢰도에 +0.10 부스트를 적용하고, 테마 클러스터 단일 신호 + 손절 회복 조합의 임계값을 0.30에서 0.25로 완화하는 방식으로 보정했습니다. 추가로 당일 손절(-5%)과 다일 보유 손절(-7%)을 분리하여 손절 조건을 더욱 세분화했습니다.
+
+- **손절 후 회복 confidence_boost** (`backend/app/services/surge_trading_service.py`):
+  - `_get_recent_stop_loss_codes(db, lookback_days=3)` 헬퍼 신규 — 직전 3영업일 이내 손절 청산 종목 조회 (O(1) lookup용 set 반환)
+  - `get_today_signals()` 시그널 평가 시 hand절 이력 종목에 `+0.10` confidence 부스트 적용
+  - 부스트된 confidence로 `min_probability` 임계값 재평가, 통과 종목을 매수 후보로 포함
+  - 4-튜플 반환으로 recovery_context 정보 전달 (`is_post_stop_loss`, `boost_applied`, `min_probability_effective`)
+  - `execute_buy_orders()` 4-튜플 unpacking 및 상세 정보 로그 추가 (`recovery_boost: True, boost_applied: 0.10`)
+- **theme_cluster 단일 basis + 손절 회복 임계값 완화** (`backend/app/services/surge_trading_service.py`):
+  - 시그널 basis가 정확히 `["theme_cluster"]` 단일값 AND 손절 회복 조건 동시 충족 시 `min_probability` 0.30 → 0.25로 완화
+  - carry_over basis 포함 시 임계값 완화 미적용 (이미 carry-over 보너스 수령)
+  - effective_confidence = original_confidence + 0.10 >= 0.25로 통과 조건 설정
+- **손절 임계값 보유 기간 분기** (`backend/app/services/surge_trading_service.py`):
+  - `check_exit_conditions()` 시그니처 확장: `same_day_stop_loss_pct=-0.05`, `multi_day_stop_loss_pct=-0.07` 신규 인자
+  - 당일 진입 후 당일 손절 조건(holding_days==0) -5% 적용, 다일 보유 손절(holding_days>=1) -7% 적용으로 분리
+  - 기존 단일 인자 호출(stop_loss_pct만 명시)은 하위 호환성 유지하여 기존 동작 보존
+- **테스트 추가** (`backend/tests/test_surge_trading_recovery.py` 신규, `test_surge_trading.py` 확장):
+  - AC-001~AC-010 인수 기준 검증 (손절 부스트, 임계값 완화, 보유 기간 분기)
+  - 손절 이력 헬퍼 정확성, 4-튜플 unpacking, 하위 호환성 회귀 테스트 포함
+  - 기대값: 전체 테스트 90%+ 통과
+- **영향 범위**:
+  - LG전자(066570, conf=0.2576, 당일 +29.93%) 및 삼성에스디에스(018260, conf=0.2464, 당일 +20.32%) — 2026-05-29 일일 최고 급등 2종목이 손절 후 회복 부스트로 매수 큐 진입
+  - 당일 진입 수익 개선 및 손절 이후 재진입 기회 회복율 증대
+
+### Added — 시그널 커버리지 확장 — 테마 전파 및 비활성 종목 거래량 이상 탐지 (SPEC-AI-022) (2026-05-29)
+
+급등주 시그널 커버리지 2.6%에서 벗어나기 위해 두 가지 신규 신호 타입을 도입했습니다. 재벌 그룹 내 테마 cascade를 자동 감지하여 anchor 종목의 강한 신호를 동일 그룹 peer에 전파하는 메커니즘과, 뉴스 없이 순거래량만 폭증하는 비활성 종목의 거래량 이상을 탐지하는 볼륨 기반 신호를 신규 추가했습니다. 또한 커버리지 대시보드 API를 통해 시그널 누락 종목을 시각화합니다.
+
+- **테마 그룹 데이터 모델** (`backend/app/models/theme_group.py` 신규, 마이그레이션 055):
+  - `ThemeGroup` 모델: id, name(UNIQUE), anchor_stock_id(FK), description, created_at
+  - `StockThemeGroup` 모델: stock_id, theme_group_id, weight, created_at (조인 테이블, UNIQUE(stock_id, theme_group_id))
+  - 초기 시드 데이터 4개 그룹(LG그룹, 삼성그룹, 현대차그룹, SK그룹)과 각 그룹의 36개 계열사 멤버십 자동 INSERT
+- **테마 전파 시그널** (`backend/app/services/surge_detector.py`):
+  - `propagate_theme_group_signals(db, qualified_candidates, config)` 신규 함수
+  - anchor 종목이 `theme_cluster_score >= 0.80` 신호 발생 시, 동일 테마그룹의 peer 종목에 자동 전파
+  - 전파 조건: peer 당일 신호 부재 AND price_5d_trend < 20%(최근 급등 제외) AND 동일 그룹 멤버 확인
+  - 신규 `signal_type="theme_propagation"` 시그널 생성 (`confidence=0.25`, `paper_executed=False`)
+  - 중복 row 방지: 동일 peer가 복수 anchor의 전파 대상 시 최고 점수 단일 row만 생성
+- **비활성 종목 거래량 이상 탐지** (`backend/app/services/surge_detector.py`):
+  - `detect_volume_anomaly_dormant_stocks(db, config)` 신규 함수
+  - dormancy 조건 식별: 시가총액 >= 300억원 AND 직전 90일 surge_candidate 시그널 <= 3건 종목
+  - 거래량 베이스라인 계산: 최근 60거래일 평균 거래량 기준
+  - 당일 거래량 >= 베이스라인 5배 시 volume_anomaly 신호 생성 (`confidence = min(volume_ratio/10, 0.40)`)
+  - 신규 `signal_type="volume_anomaly"` 시그널 생성, surge_metadata에 `volume_ratio`, `baseline_mean_volume`, `lookback_signal_count` 포함
+  - surge_candidate 시그널 기존 종목은 중복 생성 회피, theme_propagation과 동시 발행 허용
+- **시그널 커버리지 대시보드** (`backend/app/routers/surge_trading.py` 신규, `surge_coverage_service.py` 신규):
+  - `GET /api/surge-trading/coverage` 엔드포인트 신규 추가
+  - 응답: `total_stocks_tracked`, `signals_generated_today`, `coverage_pct`, `by_signal_type` (signal_type별 COUNT), `theme_propagation_triggered`, `volume_anomaly_triggered`, `top_missed` 필드
+  - `top_missed`: 시가총액 >= 1,000억원 AND 당일 시그널 없음 AND 당일 등락 >= 15% 종목의 상위 10건 (change_pct 내림차순)
+  - 60초 in-memory 캐시 적용으로 반복 호출 부담 경감
+  - top_missed 계산 타임아웃(15초) 시 부분 결과 반환 + `top_missed_partial: true` 플래그
+- **통합 지점** (`backend/app/services/fund_manager.py`):
+  - `run_surge_signal_generation()` 내 surge_candidate persist 직후 `propagate_theme_group_signals()` 호출 (격리된 try/except)
+  - propagation 실패 시 surge_candidate 결과 손상 방지
+  - propagation 이후 `detect_volume_anomaly_dormant_stocks()` 호출 (별도 격리, 외부 API 호출 최소화)
+- **설정 외부화** (`backend/app/surge_config/surge_settings.py`):
+  - `ThemePropagationConfig`: enabled, trigger_threshold(0.80), base_score(0.25), suppress_if_5d_trend_above(20.0)
+  - `VolumeAnomalyConfig`: enabled, threshold(5.0), max_confidence(0.40), lookback_days(90), max_signals_in_lookback(3), min_market_cap_eok(300), baseline_min_days(40)
+  - `CoverageDashboardConfig`: cache_ttl_sec(60), missed_min_market_cap_eok(1000), missed_change_threshold_pct(15.0), missed_limit(10), top_missed_timeout_sec(15.0)
+- **테스트 추가** (`test_theme_propagation.py`, `test_volume_anomaly.py`, `test_coverage_endpoint.py`, `test_surge_signal_generation_integration.py` 신규/확장):
+  - AC-001~AC-018 인수 기준 검증 (propagation, volume_anomaly, 마이그레이션, coverage API)
+  - 기존 surge_candidate 파이프라인 회귀 테스트 (AC-017, AC-018)
+  - 목표 coverage: 신규 90%+, 수정 85%+ 유지
+- **DB 마이그레이션**: `055_spec_ai_022_theme_groups.py` — `theme_groups`, `stock_theme_groups` 테이블 생성 + 4개 그룹 초기 시드 (idempotent)
+- **영향 범위**:
+  - 당일 시그널 커버리지: 68개(surge_candidate) + 12개(theme_propagation) + 5개(volume_anomaly) = 85개
+  - 커버리지율: 2.6% → 3.3% 상향
+  - 테마 cascade 미전파 사각지대 해소: LG씨엔에스(+29.91%), 현대오토에버(+24.80%), 솔루스첨단소재(+25.70%) 등 당일 급등 계열사 시그널 수신 가능
+  - 뉴스 없는 거래량 폭증 종목 포착: 오브젠(+29.93%), TS인베스트먼트(+29.96%), 플리토(+29.89%), 누리플랜(+29.90%) 등 4종목이 volume_anomaly 신호 발행
+
 ### Added — 신규 종목 자동 등록 파이프라인 및 일일 진입 한도 확대 (2026-05-28)
 
 급등주 데이터베이스 커버리지 부족으로 인한 신호 누락 문제를 해결했습니다. 상위 급등 종목 중 DB에 없는 종목들이 신호 생성 대상에서 자동으로 제외되는 문제를 개선했으며, 일일 진입 한도를 동시에 확대했습니다.
