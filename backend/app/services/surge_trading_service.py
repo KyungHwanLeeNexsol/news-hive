@@ -159,6 +159,11 @@ def get_today_signals(
     prev_bday = _get_prev_business_day(today_kst)
     signal_cutoff = datetime.combine(prev_bday, time(15, 0)).replace(tzinfo=KST)
 
+    # REQ-AI021-001: 최근 3일 이내 손절 종목 코드 집합 사전 조회
+    # @MX:NOTE: [AUTO] SPEC-AI-021 — 손절 후 회복 종목에 +0.10 부스트 적용을 위한 사전 조회
+    # @MX:SPEC: SPEC-AI-021
+    recent_stop_loss_codes = _get_recent_stop_loss_codes(db, lookback_days=3)
+
     # surge_candidate 시그널 전체 조회 후 Python 레벨에서 날짜/확률 필터링
     # (created_at timezone 변환을 DB 레벨에서 하지 않아 안정성 확보)
     signals_with_stocks = (
@@ -189,15 +194,47 @@ def get_today_signals(
 
         # surge_metadata에서 확률 및 탐지기 목록 파싱
         probability, active_detectors = _parse_surge_metadata(signal.surge_metadata)
-        if probability is None or probability < float(min_probability):
+        if probability is None:
             continue
 
-        # 단일 탐지기 필터: 하나만 발동 AND 확률 0.30 미만 → 저품질 신호 제외
+        # REQ-AI021-001/002: 손절 후 회복 종목 부스트 및 임계값 완화
+        # @MX:NOTE: [AUTO] SPEC-AI-021 — 손절 이력 시 +0.10 부스트, theme_cluster-only시 임계값 0.25로 완화
+        stock_code_val = stock.stock_code
+        is_post_stop_loss = stock_code_val in recent_stop_loss_codes
+        boost_applied = 0.10 if is_post_stop_loss else 0.0
+        boost_reason: Optional[str] = "3일 이내 stop_loss 이력" if is_post_stop_loss else None
+
+        # REQ-AI021-002: theme_cluster-only + 손절 이력 → 임계값 0.25로 완화
+        is_theme_cluster_only = (
+            len(active_detectors) == 1
+            and active_detectors == ["theme_cluster"]
+        )
+        if is_post_stop_loss and is_theme_cluster_only:
+            effective_min_probability = 0.25
+        else:
+            effective_min_probability = float(min_probability)
+
+        # 유효 확률(원본 + 부스트)로 임계값 비교 — DB 저장값은 변경하지 않음
+        effective_probability = probability + boost_applied
+        if effective_probability < effective_min_probability:
+            if is_post_stop_loss:
+                logger.info(
+                    "surge signal 스킵(부스트 후 임계값 미달): stock=%s probability=%.4f boost=%.2f effective=%.4f threshold=%.2f",
+                    stock_code_val,
+                    probability,
+                    boost_applied,
+                    effective_probability,
+                    effective_min_probability,
+                )
+            continue
+
+        # 단일 탐지기 필터: 하나만 발동 AND 유효확률 0.30 미만 → 저품질 신호 제외
+        # (부스트 적용 후에도 0.30 미달인 경우, theme_cluster-only + 손절 이력 예외는 위에서 처리됨)
         # REQ-AI014-004 컨센서스 보너스로 단일 탐지기 시그널도 0.30까지 허용 (기존 0.40에서 완화)
-        if len(active_detectors) < 2 and probability < 0.30:
+        if len(active_detectors) < 2 and effective_probability < 0.30 and not (is_post_stop_loss and is_theme_cluster_only):
             logger.info(
                 "surge signal 스킵(단일 탐지기): stock=%s 탐지기=%s probability=%.4f",
-                stock.stock_code,
+                stock_code_val,
                 active_detectors,
                 probability,
             )
@@ -206,7 +243,6 @@ def get_today_signals(
         # REQ-AI014-005: 가격 모멘텀 사전 필터
         # @MX:NOTE: [AUTO] 가격 모멘텀 사전 필터: 5일 +15% 초과(과열) 및 1일 -5% 미만(폭락) 종목 제외
         # @MX:SPEC: SPEC-AI-014 REQ-005
-        stock_code_val = stock.stock_code
         try:
             price_history = _get_price_history_sync(stock_code_val)
             if price_history and len(price_history) >= 6:
@@ -238,7 +274,15 @@ def get_today_signals(
             # 가격 데이터 조회 실패 시 필터 적용하지 않음 (통과)
             pass
 
-        result.append((signal, stock, probability))
+        # REQ-AI021-004: 4-tuple 반환 (signal, stock, probability, boost_info)
+        # boost_info: 원본 DB 저장값 변경 없이 부스트 메타데이터 전달
+        boost_info: dict = {
+            "is_post_stop_loss": is_post_stop_loss,
+            "boost_applied": boost_applied,
+            "min_probability_effective": effective_min_probability,
+            "boost_reason": boost_reason,
+        }
+        result.append((signal, stock, probability, boost_info))
 
     # 확률 높은 순으로 정렬 — max_daily_entries 한도 내에서 최고 품질 종목 우선 매수
     result.sort(key=lambda x: x[2], reverse=True)
@@ -364,6 +408,28 @@ def _has_stop_loss_today(db: Session) -> bool:
         )
         .first()
     ) is not None
+
+
+def _get_recent_stop_loss_codes(db: Session, lookback_days: int = 3) -> set[str]:
+    """최근 lookback_days 달력일 이내에 stop_loss로 청산된 종목 코드 집합 반환.
+
+    # @MX:NOTE: [AUTO] SPEC-AI-021 REQ-001 — 손절 후 회복 종목 부스트 대상 판별에 사용
+    # @MX:SPEC: SPEC-AI-021
+    take_profit/max_holding_period 등 다른 사유로 청산된 종목은 포함하지 않음.
+    lookback_days는 달력일(영업일 아님) 기준이므로 주말도 포함하여 계산.
+    """
+    today_kst = datetime.now(KST).date()
+    cutoff_date = today_kst - timedelta(days=lookback_days)
+    trades = (
+        db.query(SurgeTrade)
+        .filter(
+            SurgeTrade.exit_reason == "stop_loss",
+            SurgeTrade.exit_date > cutoff_date,
+            SurgeTrade.exit_date <= today_kst,
+        )
+        .all()
+    )
+    return {t.stock_code for t in trades}
 
 
 def count_open_positions(db: Session) -> int:
@@ -528,7 +594,8 @@ def execute_buy_orders(
     )
 
     # REQ-AI016-004: 전체 후보 가격 일괄 사전 조회 (배치 + 지연)
-    all_stock_codes = [stock.stock_code for _, stock, _ in today_signals]
+    # REQ-AI021-004: get_today_signals()가 4-tuple 반환 — (signal, stock, probability, boost_info)
+    all_stock_codes = [stock.stock_code for _, stock, _, _boost in today_signals]
     price_cache: dict[str, dict | None] = {}
     if all_stock_codes:
         from app.surge_config.surge_settings import get_surge_config as _get_surge_config
@@ -551,7 +618,7 @@ def execute_buy_orders(
     failed = 0
     details = []
 
-    for signal, stock, probability in today_signals:
+    for signal, stock, probability, boost_info in today_signals:
         stock_code = stock.stock_code
         stock_name = stock.name
 
@@ -727,6 +794,7 @@ def execute_buy_orders(
                 probability,
                 trade_detectors,
             )
+            # REQ-AI021-004: recovery 필드 포함 (boost_info에서 전파)
             details.append({
                 "stock_code": stock_code,
                 "stock_name": stock_name,
@@ -736,6 +804,8 @@ def execute_buy_orders(
                 "amount": float(actual_amount),
                 "probability": probability,
                 "detectors": trade_detectors,
+                "is_post_stop_loss": boost_info.get("is_post_stop_loss", False),
+                "boost_applied": boost_info.get("boost_applied", 0.0),
             })
         except Exception as e:
             db.rollback()
@@ -825,6 +895,8 @@ def check_exit_conditions(
     stop_loss_pct: Decimal = Decimal("-0.05"),
     take_profit_pct: Decimal = Decimal("0.09"),
     max_holding_days: int = 3,
+    same_day_stop_loss_pct: Optional[Decimal] = None,
+    multi_day_stop_loss_pct: Optional[Decimal] = None,
 ) -> dict:
     # @MX:ANCHOR: [AUTO] 종료 조건 체크 메인 함수 — 손절/익절/만기 모든 종료 로직 담당
     # @MX:REASON: [AUTO] 라우터, 스케줄러(surge_check_exits) 등 3개 이상 컴포넌트에서 참조
@@ -836,8 +908,18 @@ def check_exit_conditions(
     4. 손절/익절/만기 조건 체크 → 매도 실행
     5. 결과 요약 반환
 
+    REQ-AI021-003: 보유기간별 손절 임계값 차등 적용.
+    - same_day_stop_loss_pct: 당일(holding_days=0) 손절 임계값 (기본 -5%)
+    - multi_day_stop_loss_pct: 멀티데이(holding_days>=1) 손절 임계값 (기본 -7%)
+    - 두 파라미터 미제공 시 stop_loss_pct로 fallback (backward compatible)
+
     Returns: {"closed": int, "still_open": int, "errors": int, "details": list}
     """
+    # REQ-AI021-003: 보유기간별 손절 임계값 설정
+    # @MX:NOTE: [AUTO] SPEC-AI-021 — 당일 -5%, 멀티데이 -7% 차등 손절로 과도한 손절 방지
+    # @MX:SPEC: SPEC-AI-021
+    _same_day_stop = same_day_stop_loss_pct if same_day_stop_loss_pct is not None else Decimal("-0.05")
+    _multi_day_stop = multi_day_stop_loss_pct if multi_day_stop_loss_pct is not None else Decimal("-0.07")
     if not is_market_hours():
         logger.debug("surge_check_exits: 정규장 시간 외 — 스킵")
         return {"closed": 0, "still_open": 0, "errors": 0, "details": [], "reason": "market_closed"}
@@ -876,14 +958,27 @@ def check_exit_conditions(
 
         exit_reason = None
 
+        # REQ-AI021-003: 보유기간별 손절 임계값 차등 적용
+        holding_days = calculate_trading_days_elapsed(trade.entry_date, today)
+        if holding_days == 0:
+            # 당일 진입: -5% 손절 (단기 테마주 급락 시 빠른 손절)
+            active_stop_loss = _same_day_stop
+        else:
+            # 멀티데이 보유: -7% 손절 (일시적 조정에 의한 과도한 손절 방지)
+            active_stop_loss = _multi_day_stop
+
+        # backward compatible: stop_loss_pct 파라미터가 명시적으로 기본값과 다른 경우 우선 적용
+        if stop_loss_pct != Decimal("-0.05"):
+            active_stop_loss = stop_loss_pct
+
         # 손절 조건
-        if Decimal(str(pnl_pct)) <= stop_loss_pct:
+        if Decimal(str(pnl_pct)) <= active_stop_loss:
             exit_reason = "stop_loss"
         # 익절 조건
         elif Decimal(str(pnl_pct)) >= take_profit_pct:
             exit_reason = "take_profit"
         # 최대 보유 기간 초과
-        elif calculate_trading_days_elapsed(trade.entry_date, today) >= max_holding_days:
+        elif holding_days >= max_holding_days:
             exit_reason = "max_holding_period"
 
         if exit_reason:

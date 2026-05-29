@@ -367,7 +367,8 @@ class TestExecuteBuyOrders:
 
         signal = _make_fund_signal(signal_id=1, probability=0.75)
         stock = _make_stock(stock_code="005930")
-        mock_signals.return_value = [(signal, stock, 0.75)]
+        _no_boost = {"is_post_stop_loss": False, "boost_applied": 0.0, "min_probability_effective": 0.30, "boost_reason": None}
+        mock_signals.return_value = [(signal, stock, 0.75, _no_boost)]
 
         portfolio = _make_portfolio(current_cash=Decimal("5000000"))
         mock_portfolio.return_value = portfolio
@@ -401,7 +402,8 @@ class TestExecuteBuyOrders:
 
         signal = _make_fund_signal()
         stock = _make_stock(stock_code="005930")
-        mock_signals.return_value = [(signal, stock, 0.75)]
+        _no_boost = {"is_post_stop_loss": False, "boost_applied": 0.0, "min_probability_effective": 0.30, "boost_reason": None}
+        mock_signals.return_value = [(signal, stock, 0.75, _no_boost)]
 
         # 이미 오픈 포지션 존재
         mock_open_pos.return_value = _make_trade(stock_code="005930", is_open=True)
@@ -418,8 +420,10 @@ class TestExecuteBuyOrders:
     @patch("app.services.surge_trading_service.get_or_create_portfolio")
     @patch("app.services.surge_trading_service.get_today_signals")
     @patch("app.services.surge_trading_service.count_today_entries", return_value=5)  # 이미 5개
+    @patch("app.services.surge_trading_service.count_open_positions", return_value=0)
     def test_ac_005_daily_limit_reached(
         self,
+        mock_open_count,
         mock_count,
         mock_signals,
         mock_portfolio,
@@ -430,7 +434,8 @@ class TestExecuteBuyOrders:
 
         signal = _make_fund_signal()
         stock = _make_stock()
-        mock_signals.return_value = [(signal, stock, 0.75)]
+        _no_boost = {"is_post_stop_loss": False, "boost_applied": 0.0, "min_probability_effective": 0.30, "boost_reason": None}
+        mock_signals.return_value = [(signal, stock, 0.75, _no_boost)]
         mock_portfolio.return_value = _make_portfolio()
 
         db = _make_db()
@@ -458,7 +463,8 @@ class TestExecuteBuyOrders:
 
         signal = _make_fund_signal()
         stock = _make_stock()
-        mock_signals.return_value = [(signal, stock, 0.75)]
+        _no_boost = {"is_post_stop_loss": False, "boost_applied": 0.0, "min_probability_effective": 0.30, "boost_reason": None}
+        mock_signals.return_value = [(signal, stock, 0.75, _no_boost)]
 
         # 현금 부족 (500_000 < 1_000_000)
         mock_portfolio.return_value = _make_portfolio(
@@ -493,7 +499,8 @@ class TestExecuteBuyOrders:
 
         signal = _make_fund_signal(probability=0.75)
         stock = _make_stock(stock_code="005930")
-        mock_signals.return_value = [(signal, stock, 0.75)]
+        _no_boost = {"is_post_stop_loss": False, "boost_applied": 0.0, "min_probability_effective": 0.30, "boost_reason": None}
+        mock_signals.return_value = [(signal, stock, 0.75, _no_boost)]
         mock_portfolio.return_value = _make_portfolio()
 
         db = _make_db()
@@ -525,7 +532,8 @@ class TestExecuteBuyOrders:
 
         signal = _make_fund_signal(probability=0.75)
         stock = _make_stock(stock_code="005930")
-        mock_signals.return_value = [(signal, stock, 0.75)]
+        _no_boost = {"is_post_stop_loss": False, "boost_applied": 0.0, "min_probability_effective": 0.30, "boost_reason": None}
+        mock_signals.return_value = [(signal, stock, 0.75, _no_boost)]
         mock_portfolio.return_value = _make_portfolio()
 
         db = _make_db()
@@ -552,7 +560,8 @@ class TestExecuteBuyOrders:
 
         signal = _make_fund_signal(probability=0.75)
         stock = _make_stock(stock_code="005930")
-        mock_signals.return_value = [(signal, stock, 0.75)]
+        _no_boost = {"is_post_stop_loss": False, "boost_applied": 0.0, "min_probability_effective": 0.30, "boost_reason": None}
+        mock_signals.return_value = [(signal, stock, 0.75, _no_boost)]
         mock_portfolio.return_value = _make_portfolio()
 
         db = _make_db()
@@ -971,7 +980,7 @@ class TestSurgeAI016DetectorScores:
 
         with patch("app.services.surge_trading_service.is_buy_eligible_hours", return_value=True), \
              patch("app.services.surge_trading_service.get_or_create_portfolio", return_value=portfolio), \
-             patch("app.services.surge_trading_service.get_today_signals", return_value=[(signal, stock, 0.52)]), \
+             patch("app.services.surge_trading_service.get_today_signals", return_value=[(signal, stock, 0.52, {"is_post_stop_loss": False, "boost_applied": 0.0, "min_probability_effective": 0.30, "boost_reason": None})]), \
              patch("app.services.surge_trading_service.count_today_entries", return_value=0), \
              patch("app.services.surge_trading_service.count_open_positions", return_value=0), \
              patch("app.services.surge_trading_service.get_open_position", return_value=None), \
@@ -1014,7 +1023,7 @@ class TestSurgeAI016DetectorScores:
 
         with patch("app.services.surge_trading_service.is_buy_eligible_hours", return_value=True), \
              patch("app.services.surge_trading_service.get_or_create_portfolio", return_value=portfolio), \
-             patch("app.services.surge_trading_service.get_today_signals", return_value=[(signal, stock, 0.55)]), \
+             patch("app.services.surge_trading_service.get_today_signals", return_value=[(signal, stock, 0.55, {"is_post_stop_loss": False, "boost_applied": 0.0, "min_probability_effective": 0.30, "boost_reason": None})]), \
              patch("app.services.surge_trading_service.count_today_entries", return_value=0), \
              patch("app.services.surge_trading_service.count_open_positions", return_value=0), \
              patch("app.services.surge_trading_service.get_open_position", return_value=None), \
@@ -1045,7 +1054,7 @@ class TestSurgeAI016DetectorScores:
 
         with patch("app.services.surge_trading_service.is_buy_eligible_hours", return_value=True), \
              patch("app.services.surge_trading_service.get_or_create_portfolio", return_value=portfolio), \
-             patch("app.services.surge_trading_service.get_today_signals", return_value=[(signal, stock, 0.50)]), \
+             patch("app.services.surge_trading_service.get_today_signals", return_value=[(signal, stock, 0.50, {"is_post_stop_loss": False, "boost_applied": 0.0, "min_probability_effective": 0.30, "boost_reason": None})]), \
              patch("app.services.surge_trading_service.count_today_entries", return_value=0), \
              patch("app.services.surge_trading_service.count_open_positions", return_value=0), \
              patch("app.services.surge_trading_service.get_open_position", return_value=None), \
@@ -1111,7 +1120,7 @@ class TestSurgeAI016SectorGuard:
         # _compute_sector_portfolio_pct를 mock하여 0.596 반환
         with patch("app.services.surge_trading_service.is_buy_eligible_hours", return_value=True), \
              patch("app.services.surge_trading_service.get_or_create_portfolio", return_value=portfolio), \
-             patch("app.services.surge_trading_service.get_today_signals", return_value=[(signal, stock, 0.55)]), \
+             patch("app.services.surge_trading_service.get_today_signals", return_value=[(signal, stock, 0.55, {"is_post_stop_loss": False, "boost_applied": 0.0, "min_probability_effective": 0.30, "boost_reason": None})]), \
              patch("app.services.surge_trading_service.count_today_entries", return_value=0), \
              patch("app.services.surge_trading_service.count_open_positions", return_value=0), \
              patch("app.services.surge_trading_service.get_open_position", return_value=None), \
@@ -1149,7 +1158,7 @@ class TestSurgeAI016SectorGuard:
 
         with patch("app.services.surge_trading_service.is_buy_eligible_hours", return_value=True), \
              patch("app.services.surge_trading_service.get_or_create_portfolio", return_value=portfolio), \
-             patch("app.services.surge_trading_service.get_today_signals", return_value=[(signal, stock, 0.55)]), \
+             patch("app.services.surge_trading_service.get_today_signals", return_value=[(signal, stock, 0.55, {"is_post_stop_loss": False, "boost_applied": 0.0, "min_probability_effective": 0.30, "boost_reason": None})]), \
              patch("app.services.surge_trading_service.count_today_entries", return_value=0), \
              patch("app.services.surge_trading_service.count_open_positions", return_value=0), \
              patch("app.services.surge_trading_service.get_open_position", return_value=None), \
