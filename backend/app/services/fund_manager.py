@@ -2861,6 +2861,10 @@ async def run_surge_signal_generation(db: Session) -> int:
 
     try:
         candidates = await _gather_surge_candidates(db, recent_news, [])
+
+        # SPEC-AI-022: surge_candidate 저장 완료 후 커버리지 확장 시그널 생성
+        _run_coverage_expansion(db, candidates)
+
         db.commit()
         count = len(candidates) if candidates else 0
         logger.info("[급등시그널] 15:20 독립 생성 완료: %d개 후보", count)
@@ -3641,3 +3645,64 @@ async def analyze_portfolio(db: Session, stock_ids: list[int]) -> PortfolioRepor
     db.refresh(report)
     logger.info(f"Portfolio report generated for {len(stock_ids)} stocks")
     return report
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-022: 커버리지 확장 시그널 생성 헬퍼
+# ---------------------------------------------------------------------------
+
+def _run_coverage_expansion(db: Session, surge_results: list[dict]) -> None:
+    """surge_candidate 저장 완료 후 테마 전파 및 거래량 이상 탐지를 실행한다.
+
+    surge_candidate 파이프라인에 절대 영향을 주지 않도록 전체가 try/except로 감싸여 있음.
+    두 탐지기 모두 실패해도 기존 결과는 보존된다.
+
+    Args:
+        db: SQLAlchemy 세션
+        surge_results: _gather_surge_candidates 반환값 (surge_candidate dict 목록)
+    """
+    try:
+        from app.surge_config.surge_settings import (
+            ThemePropagationConfig,
+            VolumeAnomalyConfig,
+        )
+        from app.services.surge_detector import (
+            SurgeCandidate,
+            propagate_theme_group_signals,
+            detect_volume_anomaly_dormant_stocks,
+        )
+
+        # 1. 테마 전파: surge_results에서 SurgeCandidate 복원
+        qualified: list[SurgeCandidate] = []
+        for r in surge_results:
+            # surge_metadata JSON에서 theme_cluster_score 복원 시도
+            import json
+            metadata = {}
+            if r.get("leading_signals"):
+                pass  # leading_signals에는 score 미포함
+            # surge_results dict에는 surge_score가 있음
+            candidate = SurgeCandidate(
+                stock_code=r.get("stock_code", ""),
+                stock_name=r.get("name", ""),
+                theme_cluster_score=r.get("surge_score", 0.0),
+                active_detectors=r.get("active_detectors", []),
+            )
+            qualified.append(candidate)
+
+        theme_config = ThemePropagationConfig()
+        theme_count = propagate_theme_group_signals(db, qualified, theme_config)
+        logger.info("[커버리지확장] 테마 전파 시그널 %d개 생성", theme_count)
+
+    except Exception as e:
+        logger.warning("[커버리지확장] 테마 전파 실패 (surge_candidate 결과 보존됨): %s", e)
+
+    try:
+        from app.surge_config.surge_settings import VolumeAnomalyConfig
+        from app.services.surge_detector import detect_volume_anomaly_dormant_stocks
+
+        vol_config = VolumeAnomalyConfig()
+        vol_count = detect_volume_anomaly_dormant_stocks(db, vol_config)
+        logger.info("[커버리지확장] 거래량 이상 시그널 %d개 생성", vol_count)
+
+    except Exception as e:
+        logger.warning("[커버리지확장] 거래량 이상 탐지 실패 (surge_candidate 결과 보존됨): %s", e)

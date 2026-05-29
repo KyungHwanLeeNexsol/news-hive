@@ -1161,3 +1161,301 @@ def surge_candidate_to_signal_metadata(
         "immediate_disclosure_score": round(candidate.immediate_disclosure_score, 4),
         "legacy_score": round(candidate.legacy_score, 4),
     }
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-022: 테마 전파 시그널
+# ---------------------------------------------------------------------------
+
+def _get_peer_price_5d_trend(db: Session, stock_code: str) -> float | None:
+    """피어 종목의 최근 5일 수익률을 조회한다.
+
+    Naver Finance 히스토리에서 최신 2개 가격으로 5일 수익률 근사값 계산.
+    조회 실패 시 None 반환 (호출부에서 안전하게 처리).
+    """
+    try:
+        from app.services.naver_finance import fetch_stock_price_history_sync
+        records = fetch_stock_price_history_sync(stock_code, pages=1)
+        if records and len(records) >= 2:
+            # Naver 데이터는 최신순 정렬: index 0=최신, index -1=가장 오래된
+            latest = records[0].close
+            oldest = records[-1].close
+            if oldest > 0:
+                return round((latest - oldest) / oldest * 100, 2)
+    except Exception as e:
+        logger.debug("[테마전파] %s 5일 수익률 조회 실패: %s", stock_code, e)
+    return None
+
+
+# @MX:ANCHOR: [AUTO] propagate_theme_group_signals — 테마 전파 시그널 생성 진입점
+# @MX:REASON: fund_manager._gather_surge_candidates 완료 후 호출. 테마 그룹 관계 쿼리 + FundSignal 생성 복합 로직
+# @MX:SPEC: SPEC-AI-022 REQ-001
+def propagate_theme_group_signals(
+    db: Session,
+    qualified_candidates: list[SurgeCandidate],
+    config: "ThemePropagationConfig",  # noqa: F821
+) -> int:
+    """SPEC-AI-022 REQ-001: 앵커 종목의 테마 클러스터 점수를 그룹 내 피어 종목으로 전파.
+
+    - 앵커 theme_cluster_score >= config.anchor_score_threshold 조건 충족 시 전파
+    - 피어 중 오늘 이미 시그널 있거나 price_5d_trend >= threshold 이면 스킵
+    - 동일 피어에 복수 앵커가 전파 시 최고 점수 앵커의 시그널만 생성
+
+    Args:
+        db: SQLAlchemy 세션
+        qualified_candidates: surge_candidate 자격 후보 목록
+        config: ThemePropagationConfig
+
+    Returns:
+        생성된 theme_propagation 시그널 수
+    """
+    from app.models.fund_signal import FundSignal
+    from app.models.stock import Stock
+    from app.models.theme_group import ThemeGroup, StockThemeGroup
+
+    # 앵커 후보 필터링: theme_cluster_score >= 임계값
+    anchors = [
+        c for c in qualified_candidates
+        if c.theme_cluster_score >= config.anchor_score_threshold
+    ]
+    if not anchors:
+        return 0
+
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # 오늘 이미 시그널이 있는 stock_id 집합 사전 수집 (쿼리 최소화)
+    today_signal_stock_ids: set[int] = set()
+    today_signals = (
+        db.query(FundSignal.stock_id)
+        .filter(FundSignal.created_at >= today_start)
+        .distinct()
+        .all()
+    )
+    for row in today_signals:
+        today_signal_stock_ids.add(row[0])
+
+    # 피어별 최고 앵커 점수 집계: {peer_stock_id: (max_score, anchor_stock_code)}
+    peer_best: dict[int, tuple[float, str]] = {}
+
+    for anchor in anchors:
+        anchor_stock = db.query(Stock).filter(Stock.stock_code == anchor.stock_code).first()
+        if not anchor_stock:
+            continue
+
+        # 앵커가 속한 테마 그룹 조회
+        groups = (
+            db.query(ThemeGroup)
+            .join(StockThemeGroup, StockThemeGroup.theme_group_id == ThemeGroup.id)
+            .filter(StockThemeGroup.stock_id == anchor_stock.id)
+            .all()
+        )
+
+        for group in groups:
+            # 그룹 내 피어 종목 조회 (앵커 자신 제외)
+            peers = (
+                db.query(Stock)
+                .join(StockThemeGroup, StockThemeGroup.stock_id == Stock.id)
+                .filter(
+                    StockThemeGroup.theme_group_id == group.id,
+                    Stock.id != anchor_stock.id,
+                )
+                .all()
+            )
+
+            for peer in peers:
+                # 오늘 이미 시그널 있으면 스킵
+                if peer.id in today_signal_stock_ids:
+                    continue
+
+                # 피어 5일 수익률 확인
+                trend = _get_peer_price_5d_trend(db, peer.stock_code)
+                if trend is not None and trend >= config.peer_price_trend_threshold:
+                    logger.debug(
+                        "[테마전파] %s 5일 수익률 %.1f%% (임계값 %.1f%%) 초과, 스킵",
+                        peer.stock_code, trend, config.peer_price_trend_threshold,
+                    )
+                    continue
+
+                # 복수 앵커 전파 시 최고 점수 보존
+                current_best = peer_best.get(peer.id)
+                if current_best is None or anchor.theme_cluster_score > current_best[0]:
+                    peer_best[peer.id] = (anchor.theme_cluster_score, anchor.stock_code)
+
+    # 피어별 theme_propagation 시그널 생성
+    created_count = 0
+    for peer_stock_id, (best_score, source_code) in peer_best.items():
+        try:
+            signal = FundSignal(
+                stock_id=peer_stock_id,
+                signal="buy",
+                confidence=config.propagation_confidence,
+                reasoning=(
+                    f"[SPEC-AI-022 테마전파] 앵커 {source_code} "
+                    f"theme_cluster_score={best_score:.3f} 전파"
+                ),
+                signal_type="theme_propagation",
+                paper_executed=False,
+                surge_metadata=None,
+            )
+            db.add(signal)
+            db.flush()
+            created_count += 1
+            logger.info(
+                "[테마전파] %d → theme_propagation 시그널 생성 (앵커=%s, score=%.3f)",
+                peer_stock_id, source_code, best_score,
+            )
+        except Exception as e:
+            db.rollback()
+            logger.warning("[테마전파] %d 시그널 저장 실패: %s", peer_stock_id, e)
+
+    return created_count
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-022: 비활성 종목 거래량 이상 탐지
+# ---------------------------------------------------------------------------
+
+# @MX:ANCHOR: [AUTO] detect_volume_anomaly_dormant_stocks — 비활성 종목 거래량 이상 탐지 진입점
+# @MX:REASON: fund_manager에서 surge_candidate 저장 완료 후 호출. 전체 stocks 테이블 스캔 + Naver API 호출 포함
+# @MX:SPEC: SPEC-AI-022 REQ-002
+def detect_volume_anomaly_dormant_stocks(
+    db: Session,
+    config: "VolumeAnomalyConfig",  # noqa: F821
+) -> int:
+    """SPEC-AI-022 REQ-002: 비활성 종목의 거래량 이상(spike)을 탐지하여 volume_anomaly 시그널 생성.
+
+    비활성 기준: 최근 90일 내 surge_candidate 시그널 < 3개.
+    거래량 비율: 오늘 거래량 / 최근 60일 평균 거래량 >= 5.0 이면 시그널 생성.
+    전체 함수가 try/except로 감싸여 있어 내부 예외가 surge_candidate 결과에 영향을 주지 않음.
+
+    Args:
+        db: SQLAlchemy 세션
+        config: VolumeAnomalyConfig
+
+    Returns:
+        생성된 volume_anomaly 시그널 수
+    """
+    try:
+        return _detect_volume_anomaly_internal(db, config)
+    except Exception as e:
+        logger.error("[거래량이상] detect_volume_anomaly_dormant_stocks 전체 예외: %s", e)
+        return 0
+
+
+def _detect_volume_anomaly_internal(
+    db: Session,
+    config: "VolumeAnomalyConfig",  # noqa: F821
+) -> int:
+    """거래량 이상 탐지 내부 구현."""
+    from app.models.fund_signal import FundSignal
+    from app.models.stock import Stock
+    from app.services.naver_finance import fetch_stock_price_history_sync
+
+    lookback_start = datetime.now(timezone.utc) - timedelta(days=config.dormant_lookback_days)
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # 최소 시가총액 이상인 전체 종목 조회
+    all_stocks = (
+        db.query(Stock)
+        .filter(Stock.market_cap >= config.min_market_cap)
+        .all()
+    )
+
+    # 오늘 surge_candidate 이미 있는 stock_id 집합
+    today_surge_ids: set[int] = set()
+    today_surges = (
+        db.query(FundSignal.stock_id)
+        .filter(
+            FundSignal.signal_type == "surge_candidate",
+            FundSignal.created_at >= today_start,
+        )
+        .distinct()
+        .all()
+    )
+    for row in today_surges:
+        today_surge_ids.add(row[0])
+
+    # 비활성 종목별 surge_candidate 시그널 수 집계
+    from sqlalchemy import func as sqlfunc
+    signal_counts: dict[int, int] = {}
+    rows = (
+        db.query(FundSignal.stock_id, sqlfunc.count(FundSignal.id))
+        .filter(
+            FundSignal.signal_type == "surge_candidate",
+            FundSignal.created_at >= lookback_start,
+        )
+        .group_by(FundSignal.stock_id)
+        .all()
+    )
+    for stock_id, cnt in rows:
+        signal_counts[stock_id] = cnt
+
+    created_count = 0
+
+    for stock in all_stocks:
+        # 비활성 조건: 90일 내 surge_candidate 시그널 수 < threshold
+        if signal_counts.get(stock.id, 0) >= config.dormant_signal_count_threshold:
+            continue
+
+        # 오늘 이미 surge_candidate 있으면 스킵 (중복 방지)
+        if stock.id in today_surge_ids:
+            continue
+
+        # 가격 히스토리 조회 (약 60 거래일)
+        try:
+            records = fetch_stock_price_history_sync(stock.stock_code, pages=config.history_pages)
+        except Exception as e:
+            logger.debug("[거래량이상] %s 히스토리 조회 실패: %s", stock.stock_code, e)
+            continue
+
+        if not records or len(records) < config.min_history_days:
+            logger.debug(
+                "[거래량이상] %s 히스토리 부족 (%d일 < %d일 최소)",
+                stock.stock_code, len(records) if records else 0, config.min_history_days,
+            )
+            continue
+
+        # Naver 데이터: 최신순 정렬 (records[0] = 오늘/최신)
+        today_volume = records[0].volume
+        history_volumes = [r.volume for r in records[1:]]  # 오늘 제외한 과거 데이터
+
+        if not history_volumes:
+            continue
+
+        avg_volume = statistics.mean(history_volumes)
+        if avg_volume <= 0:
+            continue
+
+        volume_ratio = today_volume / avg_volume
+
+        if volume_ratio < config.volume_ratio_threshold:
+            continue
+
+        # confidence = min(ratio / denominator, max_confidence)
+        confidence = min(volume_ratio / config.confidence_denominator, config.max_confidence)
+
+        try:
+            signal = FundSignal(
+                stock_id=stock.id,
+                signal="buy",
+                confidence=confidence,
+                reasoning=(
+                    f"[SPEC-AI-022 거래량이상] 비활성 종목 거래량 급증 "
+                    f"volume_ratio={volume_ratio:.2f}x (avg={avg_volume:.0f}→today={today_volume})"
+                ),
+                signal_type="volume_anomaly",
+                paper_executed=False,
+                surge_metadata=None,
+            )
+            db.add(signal)
+            db.flush()
+            created_count += 1
+            logger.info(
+                "[거래량이상] %s volume_anomaly 시그널 생성 (ratio=%.2f, confidence=%.3f)",
+                stock.stock_code, volume_ratio, confidence,
+            )
+        except Exception as e:
+            db.rollback()
+            logger.warning("[거래량이상] %s 시그널 저장 실패: %s", stock.stock_code, e)
+
+    return created_count

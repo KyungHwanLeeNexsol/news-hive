@@ -153,6 +153,51 @@ class SurgeDetectionConfig(BaseModel):
         return self
 
 
+class ThemePropagationConfig(BaseModel):
+    """SPEC-AI-022 REQ-001: 테마 전파 시그널 설정."""
+
+    # 앵커 종목의 theme_cluster_score 최소값 (이 이상이면 전파 트리거)
+    anchor_score_threshold: float = 0.80
+    # 피어 종목의 최근 5일 수익률 임계값 (이 이상이면 이미 급등, 전파 제외)
+    peer_price_trend_threshold: float = 20.0
+    # 전파 시그널 confidence 고정값
+    propagation_confidence: float = 0.25
+
+
+class VolumeAnomalyConfig(BaseModel):
+    """SPEC-AI-022 REQ-002: 비활성 종목 거래량 이상 탐지 설정."""
+
+    # 비활성 기준: 최근 lookback_days 내 surge_candidate 시그널 수
+    dormant_signal_count_threshold: int = 3
+    dormant_lookback_days: int = 90
+    # 최소 시가총액 (억원) — 이 이하 종목은 제외
+    min_market_cap: int = 300
+    # volume_ratio 임계값 (오늘 거래량 / 최근 60일 평균)
+    volume_ratio_threshold: float = 5.0
+    # 최소 히스토리 일수
+    min_history_days: int = 40
+    # confidence = min(ratio / confidence_denominator, max_confidence)
+    confidence_denominator: float = 10.0
+    max_confidence: float = 0.40
+    # 가격 히스토리 조회 페이지 수 (1 page ≈ 10거래일)
+    history_pages: int = 6
+
+
+class CoverageDashboardConfig(BaseModel):
+    """SPEC-AI-022 REQ-004: 커버리지 대시보드 API 설정."""
+
+    # 응답 캐시 TTL (초)
+    cache_ttl_seconds: int = 60
+    # top_missed 조회 시총 최소값 (억원)
+    top_missed_min_market_cap: int = 1000
+    # top_missed 등락률 최소값 (%)
+    top_missed_min_change_pct: float = 15.0
+    # top_missed 최대 항목 수
+    top_missed_limit: int = 20
+    # top_missed 조회 타임아웃 (초)
+    top_missed_timeout_seconds: float = 15.0
+
+
 def _load_config_from_yaml(path: Path) -> SurgeDetectionConfig:
     """YAML 파일에서 SurgeDetectionConfig를 로드한다."""
     with open(path, encoding="utf-8") as f:

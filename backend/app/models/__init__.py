@@ -29,6 +29,7 @@ from app.models.following import (
 )
 from app.models.securities_report import SecuritiesReport
 from app.models.market_regime import MarketRegime, MarketRegimeEnum
+from app.models.theme_group import ThemeGroup, StockThemeGroup
 
 __all__ = [
     "Sector", "Stock", "NewsArticle", "NewsStockRelation",
@@ -44,4 +45,5 @@ __all__ = [
     "StockFollowing", "StockKeyword", "KeywordNotification",
     "SecuritiesReport",
     "MarketRegime", "MarketRegimeEnum",
+    "ThemeGroup", "StockThemeGroup",
 ]

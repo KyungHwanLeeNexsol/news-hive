@@ -85,6 +85,26 @@ def get_performance(
         raise HTTPException(status_code=500, detail="성과 시계열 조회 실패")
 
 
+# SPEC-AI-022: 커버리지 대시보드 엔드포인트 (인증 불필요)
+@router.get("/coverage")
+def get_coverage_dashboard(db: Session = Depends(get_db)):
+    """시그널 커버리지 대시보드 조회.
+
+    오늘 생성된 시그널 수, 커버리지 비율, signal_type별 집계,
+    미커버 상위 종목(시총 >= 1000억, 등락률 >= 15%)을 반환한다.
+    60초 인메모리 캐시 적용.
+    """
+    try:
+        from app.services.surge_coverage_service import compute_coverage_dashboard
+        from app.schemas.surge_trading_coverage import CoverageDashboardResponse
+
+        data = compute_coverage_dashboard(db)
+        return CoverageDashboardResponse.model_validate(data)
+    except Exception as e:
+        logger.error("커버리지 대시보드 조회 실패: %s", e)
+        raise HTTPException(status_code=500, detail="커버리지 대시보드 조회 실패")
+
+
 @router.post("/execute")
 def trigger_execute(
     request: Request,

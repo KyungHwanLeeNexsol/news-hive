@@ -22,3 +22,9 @@ class Stock(Base):
 
     sector = relationship("Sector", back_populates="stocks")
     news_relations = relationship("NewsStockRelation", back_populates="stock")
+    # SPEC-AI-022: 테마 그룹 관계 (theme_propagation 시그널 생성 시 사용)
+    theme_groups = relationship(
+        "ThemeGroup",
+        secondary="stock_theme_groups",
+        back_populates="stocks",
+    )
