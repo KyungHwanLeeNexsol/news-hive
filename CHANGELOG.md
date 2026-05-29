@@ -4,6 +4,22 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Added — SPEC-AI-024/025/026 급등 시그널 커버리지 추가 확장 (2026-05-29)
+
+세 가지 새로운 급등 탐지기를 `_run_coverage_expansion()`에 추가했습니다:
+
+- **SPEC-AI-024 임원 자사주 직접 매수 공시 강화** (`detect_insider_purchase_signals`):
+  - DART 공시 중 임원이 자사주를 직접 매수하는 공시 탐지 (키워드: 임원+취득/매수)
+  - confidence=0.45, surge_basis=["insider_purchase"]
+  
+- **SPEC-AI-025 테마 그룹 강세 carry-forward** (`detect_theme_group_carry_forward`):
+  - LG/삼성/현대차/SK 그룹 앵커 종목이 +5% 이상 마감 시 그룹 내 다른 종목에 익일 시그널
+  - confidence = anchor_change_rate/30*0.4, surge_basis=["theme_group_carry"]
+  
+- **SPEC-AI-026 포럼 언급 급증 탐지** (`detect_forum_mention_surge`):
+  - 종목 토론방 언급량 24시간 내 7일 평균 대비 5배 이상 급증 시 시그널
+  - confidence = min(ratio/20, 0.35), surge_basis=["forum_mention_surge"]
+
 ### Fixed — 손절 후 회복 종목 시그널 누락 방지 (SPEC-AI-021) (2026-05-29)
 
 손절된 종목의 익일 신호 약화로 인한 매수 기회 손실을 해결했습니다. 직전 3영업일 이내에 손절 청산된 종목이 당일 재탐지될 때 신뢰도에 +0.10 부스트를 적용하고, 테마 클러스터 단일 신호 + 손절 회복 조합의 임계값을 0.30에서 0.25로 완화하는 방식으로 보정했습니다. 추가로 당일 손절(-5%)과 다일 보유 손절(-7%)을 분리하여 손절 조건을 더욱 세분화했습니다.
