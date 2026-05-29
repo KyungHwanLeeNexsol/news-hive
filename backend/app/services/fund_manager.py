@@ -3706,3 +3706,13 @@ def _run_coverage_expansion(db: Session, surge_results: list[dict]) -> None:
 
     except Exception as e:
         logger.warning("[커버리지확장] 거래량 이상 탐지 실패 (surge_candidate 결과 보존됨): %s", e)
+
+    # 3. 상한가 근접 carry-forward
+    try:
+        from app.services.surge_detector import detect_near_limit_up_carries
+        from app.surge_config.surge_settings import NearLimitUpConfig
+        nlu_cfg = NearLimitUpConfig()
+        nlu_signals = detect_near_limit_up_carries(db, nlu_cfg)
+        logger.info("[near_limit_up] 완료 — %d건", len(nlu_signals))
+    except Exception as e:
+        logger.error("[near_limit_up] 예외 발생: %s", e, exc_info=True)

@@ -183,6 +183,20 @@ class VolumeAnomalyConfig(BaseModel):
     history_pages: int = 6
 
 
+class NearLimitUpConfig(BaseModel):
+    """SPEC-AI-023: 상한가 근접 종목 익일 carry-forward 설정."""
+
+    enabled: bool = True
+    # 상한가 근접 기준 최소 등락률 (%)
+    near_limit_up_min_pct: float = 25.0
+    # 상한가 기준 최대 등락률 (%) — 상한가 도달 시 제외
+    near_limit_up_max_pct: float = 29.99
+    # 시총 상위 N 종목만 평가
+    max_stocks_to_check: int = 500
+    # 하루 최대 발행 시그널 수
+    max_signals_per_day: int = 10
+
+
 class CoverageDashboardConfig(BaseModel):
     """SPEC-AI-022 REQ-004: 커버리지 대시보드 API 설정."""
 
