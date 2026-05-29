@@ -1459,3 +1459,119 @@ def _detect_volume_anomaly_internal(
             logger.warning("[거래량이상] %s 시그널 저장 실패: %s", stock.stock_code, e)
 
     return created_count
+
+
+# ---------------------------------------------------------------------------
+# 탐지기 5: 상한가 근접 종목 익일 carry-forward (SPEC-AI-023)
+# ---------------------------------------------------------------------------
+
+# @MX:ANCHOR: [AUTO] detect_near_limit_up_carries — 상한가 근접 carry-forward 진입점
+# @MX:REASON: fund_manager._run_coverage_expansion에서 호출. 전체 stocks 시총 상위 스캔 + 가격 API 호출 포함
+# @MX:SPEC: SPEC-AI-023
+def detect_near_limit_up_carries(
+    db: Session,
+    config: "NearLimitUpConfig",  # noqa: F821
+) -> list[FundSignal]:
+    """SPEC-AI-023: 어제 상한가 근접 종목에 익일 surge_candidate 시그널 발행.
+
+    전일 near_limit_up_min_pct 이상 near_limit_up_max_pct 이하 등락률 종목 탐지.
+    paper_executed=True 로 생성하여 익일 매수 큐에 자동 포함.
+    내부 예외는 suppress하여 상위 파이프라인에 영향을 주지 않는다.
+
+    Args:
+        db: SQLAlchemy 세션
+        config: NearLimitUpConfig
+
+    Returns:
+        생성된 FundSignal 목록
+    """
+    import json as _json
+    from zoneinfo import ZoneInfo
+
+    if not config.enabled:
+        return []
+
+    KST = ZoneInfo("Asia/Seoul")
+    signals: list[FundSignal] = []
+
+    try:
+        today_kst_start = datetime.now(KST).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        # SQLite에서도 동작하도록 UTC 변환
+        today_utc_start = today_kst_start.astimezone(timezone.utc)
+
+        # 오늘 이미 시그널 있는 stock_id 집합 (signal_type 불문)
+        existing_ids: set[int] = set(
+            row[0]
+            for row in (
+                db.query(FundSignal.stock_id)
+                .filter(FundSignal.created_at >= today_utc_start)
+                .distinct()
+                .all()
+            )
+        )
+
+        # 시총 상위 N 종목 (None 제외)
+        candidates = (
+            db.query(Stock)
+            .filter(Stock.market_cap.isnot(None))
+            .order_by(Stock.market_cap.desc())
+            .limit(config.max_stocks_to_check)
+            .all()
+        )
+
+        for stock in candidates:
+            if len(signals) >= config.max_signals_per_day:
+                break
+
+            if stock.id in existing_ids:
+                continue
+
+            price_data = _fetch_price_change_sync(stock.stock_code)
+            if price_data is None:
+                continue
+
+            change_rate: float = price_data.get("change_rate", 0.0)
+
+            if not (
+                config.near_limit_up_min_pct
+                <= change_rate
+                <= config.near_limit_up_max_pct
+            ):
+                continue
+
+            confidence = round(change_rate / 30.0 * 0.5, 4)
+            reasoning = (
+                f"상한가 근접 종목 — 전일 {change_rate:.2f}% 상승, 미체결 모멘텀 이월"
+            )
+            metadata = {
+                "surge_basis": ["near_limit_up_carry"],
+                "yesterday_change_pct": round(change_rate, 2),
+                "surge_probability_score": confidence,
+            }
+
+            signal = FundSignal(
+                stock_id=stock.id,
+                signal="buy",
+                signal_type="surge_candidate",
+                confidence=confidence,
+                reasoning=reasoning,
+                surge_metadata=_json.dumps(metadata, ensure_ascii=False),
+                paper_executed=True,
+            )
+            db.add(signal)
+            signals.append(signal)
+
+        if signals:
+            db.commit()
+            logger.info(
+                "[near_limit_up] 상한가 근접 carry-forward 시그널 %d건 생성",
+                len(signals),
+            )
+
+    except Exception as e:
+        logger.error("[near_limit_up] 예외 발생: %s", e, exc_info=True)
+        return []
+
+    return signals
