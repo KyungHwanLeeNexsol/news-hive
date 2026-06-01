@@ -153,6 +153,11 @@ class TestGetRecentStopLossCodes:
 class TestGetTodaySignalsBoost:
     """AC-001~AC-005: get_today_signals() 손절 후 부스트 및 임계값 완화 검증."""
 
+    # 고정 "현재 시각": 2026-05-29 09:00 KST (금요일)
+    # → prev_bday = 2026-05-28 (목요일), signal_cutoff = 2026-05-28 15:00 KST
+    # → 시그널 created_at 2026-05-28 15:30 KST 가 cutoff보다 이후이므로 통과
+    _FIXED_NOW_KST = datetime(2026, 5, 29, 9, 0, 0, tzinfo=KST)
+
     def _make_kst_signal(self, probability, surge_basis=None):
         """KST 날짜 포함 시그널 mock."""
         if surge_basis is None:
@@ -166,7 +171,7 @@ class TestGetTodaySignalsBoost:
         s.stock_id = 1
         s.signal_type = "surge_candidate"
         s.surge_metadata = metadata
-        # created_at: 전일 15:30 (KST, UTC aware)
+        # created_at: 전일(2026-05-28) 15:30 KST — signal_cutoff(15:00)보다 이후
         s.created_at = datetime(2026, 5, 28, 15, 30, 0, tzinfo=KST)
         return s
 
@@ -185,7 +190,10 @@ class TestGetTodaySignalsBoost:
         db.query.return_value.join.return_value.filter.return_value.all.return_value = [(signal, stock)]
 
         with patch("app.services.surge_trading_service._get_recent_stop_loss_codes") as mock_stop_loss, \
-             patch("app.services.surge_trading_service._get_price_history_sync", return_value=[]):
+             patch("app.services.surge_trading_service._get_price_history_sync", return_value=[]), \
+             patch("app.services.surge_trading_service.datetime") as mock_dt:
+            mock_dt.now.return_value = self._FIXED_NOW_KST
+            mock_dt.combine = datetime.combine
             mock_stop_loss.return_value = {"066570"}  # 손절 이력 있음
 
             result = get_today_signals(db, min_probability=Decimal("0.30"))
@@ -229,7 +237,10 @@ class TestGetTodaySignalsBoost:
         db.query.return_value.join.return_value.filter.return_value.all.return_value = [(signal, stock)]
 
         with patch("app.services.surge_trading_service._get_recent_stop_loss_codes") as mock_stop_loss, \
-             patch("app.services.surge_trading_service._get_price_history_sync", return_value=[]):
+             patch("app.services.surge_trading_service._get_price_history_sync", return_value=[]), \
+             patch("app.services.surge_trading_service.datetime") as mock_dt:
+            mock_dt.now.return_value = self._FIXED_NOW_KST
+            mock_dt.combine = datetime.combine
             mock_stop_loss.return_value = {"018260"}  # 손절 이력 있음
 
             result = get_today_signals(db, min_probability=Decimal("0.30"))
@@ -254,7 +265,10 @@ class TestGetTodaySignalsBoost:
         db.query.return_value.join.return_value.filter.return_value.all.return_value = [(signal, stock)]
 
         with patch("app.services.surge_trading_service._get_recent_stop_loss_codes") as mock_stop_loss, \
-             patch("app.services.surge_trading_service._get_price_history_sync", return_value=[]):
+             patch("app.services.surge_trading_service._get_price_history_sync", return_value=[]), \
+             patch("app.services.surge_trading_service.datetime") as mock_dt:
+            mock_dt.now.return_value = self._FIXED_NOW_KST
+            mock_dt.combine = datetime.combine
             mock_stop_loss.return_value = {"066570"}
 
             result = get_today_signals(db, min_probability=Decimal("0.30"))
@@ -280,7 +294,10 @@ class TestGetTodaySignalsBoost:
         db.query.return_value.join.return_value.filter.return_value.all.return_value = [(signal, stock)]
 
         with patch("app.services.surge_trading_service._get_recent_stop_loss_codes") as mock_stop_loss, \
-             patch("app.services.surge_trading_service._get_price_history_sync", return_value=[]):
+             patch("app.services.surge_trading_service._get_price_history_sync", return_value=[]), \
+             patch("app.services.surge_trading_service.datetime") as mock_dt:
+            mock_dt.now.return_value = self._FIXED_NOW_KST
+            mock_dt.combine = datetime.combine
             mock_stop_loss.return_value = {"066570"}
 
             result = get_today_signals(db, min_probability=Decimal("0.30"))
@@ -303,7 +320,10 @@ class TestGetTodaySignalsBoost:
         db.query.return_value.join.return_value.filter.return_value.all.return_value = [(signal, stock)]
 
         with patch("app.services.surge_trading_service._get_recent_stop_loss_codes") as mock_stop_loss, \
-             patch("app.services.surge_trading_service._get_price_history_sync", return_value=[]):
+             patch("app.services.surge_trading_service._get_price_history_sync", return_value=[]), \
+             patch("app.services.surge_trading_service.datetime") as mock_dt:
+            mock_dt.now.return_value = self._FIXED_NOW_KST
+            mock_dt.combine = datetime.combine
             mock_stop_loss.return_value = set()  # 손절 이력 없음
 
             result = get_today_signals(db, min_probability=Decimal("0.30"))

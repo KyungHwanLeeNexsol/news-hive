@@ -141,6 +141,7 @@ def test_engine():
     from app.models.ks200_trading import KS200Portfolio, KS200Trade, KS200Signal  # noqa: F401
     from app.models.stock_forum import StockForumPost, StockForumHourly  # noqa: F401
     from app.models.market_regime import MarketRegime  # noqa: F401 — SPEC-AI-015
+    from app.models.surge_portfolio import SurgePortfolio, SurgeTrade  # noqa: F401 — SPEC-AI-021
 
     Base.metadata.create_all(bind=engine)
     yield engine

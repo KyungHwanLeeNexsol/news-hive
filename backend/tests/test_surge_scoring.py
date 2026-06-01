@@ -664,9 +664,8 @@ class TestPriceMomentumFilter:
 
         signal, stock = self._make_signal_with_stock(db, "T008_OVER", probability=0.5)
 
-        # 5일 전 가격 100, 현재가 120 → +20%
-        price_history = [self._make_price_record(100.0)] * 5 + [self._make_price_record(120.0)]
-        # index -6 = price_5d_ago=100, index -1 = current=120
+        # Naver API 내림차순(최신→과거): index 0=최신(120), index 5=5일 전(100) → +20%
+        price_history = [self._make_price_record(120.0)] + [self._make_price_record(100.0)] * 5
 
         with patch(
             "app.services.surge_trading_service._get_price_history_sync",
@@ -674,7 +673,7 @@ class TestPriceMomentumFilter:
         ):
             result = get_today_signals(db)
 
-        stock_codes = [s.stock_code for _, s, _ in result]
+        stock_codes = [s.stock_code for _, s, *_ in result]
         assert "T008_OVER" not in stock_codes, "5일 +20% 과열 종목이 필터링되지 않았습니다"
 
     def test_t009_falling_knife_stock_excluded(self, db: Session):
@@ -683,11 +682,10 @@ class TestPriceMomentumFilter:
 
         signal, stock = self._make_signal_with_stock(db, "T009_FALL", probability=0.5)
 
-        # 어제 가격 100, 현재가 93 → -7%
-        price_history = [self._make_price_record(100.0)] * 4 + [
-            self._make_price_record(100.0),  # 1d_ago (index -2)
-            self._make_price_record(93.0),   # latest (index -1)
-        ]
+        # Naver API 내림차순(최신→과거): index 0=최신(93), index 1=1일 전(100) → -7%
+        price_history = [self._make_price_record(93.0), self._make_price_record(100.0)] + [
+            self._make_price_record(100.0)
+        ] * 4
 
         with patch(
             "app.services.surge_trading_service._get_price_history_sync",
@@ -695,7 +693,7 @@ class TestPriceMomentumFilter:
         ):
             result = get_today_signals(db)
 
-        stock_codes = [s.stock_code for _, s, _ in result]
+        stock_codes = [s.stock_code for _, s, *_ in result]
         assert "T009_FALL" not in stock_codes, "1일 -7% 낙폭과대 종목이 필터링되지 않았습니다"
 
     def test_t010_price_fetch_failure_stock_passes(self, db: Session):
@@ -710,7 +708,7 @@ class TestPriceMomentumFilter:
         ):
             result = get_today_signals(db)
 
-        stock_codes = [s.stock_code for _, s, _ in result]
+        stock_codes = [s.stock_code for _, s, *_ in result]
         assert "T010_FAIL" in stock_codes, "가격 조회 실패 시 종목이 잘못 제외됐습니다"
 
     def test_t010_insufficient_price_history_stock_passes(self, db: Session):
@@ -728,7 +726,7 @@ class TestPriceMomentumFilter:
         ):
             result = get_today_signals(db)
 
-        stock_codes = [s.stock_code for _, s, _ in result]
+        stock_codes = [s.stock_code for _, s, *_ in result]
         assert "T010_INSUF" in stock_codes, "이력 부족 시 종목이 잘못 제외됐습니다"
 
 

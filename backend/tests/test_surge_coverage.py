@@ -16,6 +16,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.database import Base
+# FundSignal은 Disclosure 관계를 가지므로, mapper 초기화를 위해 Disclosure를 import해야 함
+from app.models.disclosure import Disclosure  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +242,9 @@ def test_characterize_theme_propagation_ac001_anchor_high_score(db: Session) -> 
         )
     ]
 
-    count = propagate_theme_group_signals(db, qualified, config)
+    # _get_peer_price_5d_trend는 외부 Naver API를 호출하므로 mock 처리
+    with patch("app.services.surge_detector._get_peer_price_5d_trend", return_value=None):
+        count = propagate_theme_group_signals(db, qualified, config)
 
     assert count >= 1
     signal = (
@@ -407,7 +411,9 @@ def test_characterize_theme_propagation_ac005_dedup_higher_score_wins(db: Sessio
         ),
     ]
 
-    count = propagate_theme_group_signals(db, qualified, config)
+    # _get_peer_price_5d_trend는 외부 Naver API를 호출하므로 mock 처리
+    with patch("app.services.surge_detector._get_peer_price_5d_trend", return_value=None):
+        count = propagate_theme_group_signals(db, qualified, config)
 
     tp_signals = (
         db.query(FundSignal)
