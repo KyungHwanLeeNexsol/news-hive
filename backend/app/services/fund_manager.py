@@ -3682,11 +3682,6 @@ def _run_coverage_expansion(db: Session, surge_results: list[dict]) -> None:
         # 1. 테마 전파: surge_results에서 SurgeCandidate 복원
         qualified: list[SurgeCandidate] = []
         for r in surge_results:
-            # surge_metadata JSON에서 theme_cluster_score 복원 시도
-            import json
-            metadata = {}
-            if r.get("leading_signals"):
-                pass  # leading_signals에는 score 미포함
             # surge_results dict에는 surge_score가 있음
             candidate = SurgeCandidate(
                 stock_code=r.get("stock_code", ""),

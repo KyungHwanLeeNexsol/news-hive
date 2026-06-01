@@ -118,7 +118,6 @@ def _build_coverage_data(
     top_missed_partial = False
 
     try:
-        import signal as _sig
 
         # Windows에서는 SIGALRM 미지원 — threading.Timer 방식으로 타임아웃 구현
         import threading

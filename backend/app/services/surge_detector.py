@@ -2167,10 +2167,6 @@ def detect_group_cascade_signals(
         )
         flagship_name = flagship_row.get("name", flagship_code)
 
-        # 대장주 flagship_prob에서 prefix 재조회
-        flagship_row_stock = (
-            db.query(Stock).filter(Stock.stock_code == flagship_code).first()
-        )
         prefix = flagship_name[: config.min_prefix_len] if flagship_name else ""
 
         metadata = {
