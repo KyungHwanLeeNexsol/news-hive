@@ -1,7 +1,7 @@
 ---
 id: SPEC-AI-028
-version: 0.1.0
-status: planned
+version: 1.0.0
+status: implemented
 created: 2026-06-01
 updated: 2026-06-01
 author: MoAI
