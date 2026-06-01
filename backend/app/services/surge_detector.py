@@ -2019,7 +2019,8 @@ def _fetch_intraday_change_for_cascade(stock_code: str) -> float:
         if resp.status_code != 200:
             return 0.0
         data = resp.json()
-        change_rate = data.get("changeRate", "0")
+        # Naver 모바일 API는 "fluctuationsRatio" 필드를 사용 (changeRate 아님)
+        change_rate = data.get("fluctuationsRatio", data.get("changeRate", "0"))
         return float(str(change_rate).replace("%", "").replace(",", ""))
     except Exception:
         return 0.0
