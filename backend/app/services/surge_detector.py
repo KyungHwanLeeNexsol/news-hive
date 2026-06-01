@@ -74,6 +74,9 @@ class SurgeCandidate:
     # SPEC-AI-020: data-only observability; no filtering applied
     per: float | None = None
     pbr: float | None = None
+    # SPEC-AI-028: 공시 감성 추적 (bullish/bearish/neutral)
+    # bearish=페널티 적용, bullish=정상 시그널, neutral=공시 미관여
+    disclosure_sentiment: str = "neutral"
 
 
 def _sigmoid(x: float) -> float:
@@ -818,15 +821,35 @@ def detect_immediate_disclosure_signal(
 
     # 종목별 최고 시그널 점수 집계
     stock_scores: dict[int, dict] = {}
+    # SPEC-AI-028 REQ-001: 페널티 적용 종목 추적 (bearish sentiment 설정용)
+    penalized_stocks: set[int] = set()
 
     for disc in recent_disclosures:
         rname = disc.report_name or ""
+        ai_sum = disc.ai_summary or ""
+        combined = rname + " " + ai_sum
+
+        # REQ-AI028-001: 역신호 키워드 사전 필터 — 제외 키워드 우선 체크
+        # @MX:NOTE: [AUTO] SPEC-AI-028 — 악재 공시 사전 차단. 제외 키워드 우선 체크
+        disc_filter = config.disclosure_type_filter
+        if any(kw in combined for kw in disc_filter.exclusion_patterns):
+            logger.debug("[즉각공시] %s 역신호 제외: %s", disc.stock_id, rname[:30])
+            continue
+
+        penalty_applied = any(kw in combined for kw in disc_filter.penalty_patterns)
+
         best_score = 0.0
         for keyword, score in _IMMEDIATE_EVENT_PATTERNS:
             if keyword in rname:
                 best_score = max(best_score, score)
         if best_score == 0.0:
             continue
+
+        if penalty_applied:
+            best_score = round(best_score * disc_filter.penalty_factor, 4)
+            logger.debug("[즉각공시] %s 페널티 적용 (%.3f)", disc.stock_id, best_score)
+            if disc.stock_id is not None:
+                penalized_stocks.add(disc.stock_id)
 
         if disc.stock_id not in stock_scores or stock_scores[disc.stock_id]["score"] < best_score:
             stock = db.query(Stock).filter(Stock.id == disc.stock_id).first()
@@ -855,13 +878,16 @@ def detect_immediate_disclosure_signal(
             )
 
     results: list[SurgeCandidate] = []
-    for _, info in stock_scores.items():
+    for stock_id, info in stock_scores.items():
+        # SPEC-AI-028 REQ-001: 페널티 적용 종목은 bearish, 나머지는 bullish
+        sentiment = "bearish" if stock_id in penalized_stocks else "bullish"
         results.append(
             SurgeCandidate(
                 stock_code=info["stock_code"],
                 stock_name=info["stock_name"],
                 immediate_disclosure_score=info["score"],
                 active_detectors=["immediate_disclosure"],
+                disclosure_sentiment=sentiment,
             )
         )
         logger.info(
@@ -1160,6 +1186,7 @@ def surge_candidate_to_signal_metadata(
         "pattern_score": round(candidate.pattern_score, 4),
         "immediate_disclosure_score": round(candidate.immediate_disclosure_score, 4),
         "legacy_score": round(candidate.legacy_score, 4),
+        "disclosure_sentiment": candidate.disclosure_sentiment,  # SPEC-AI-028 REQ-002
     }
 
 
@@ -1963,5 +1990,220 @@ def detect_forum_mention_surge(
     except Exception as e:
         logger.error("[forum_mention_surge] 예외 발생: %s", e, exc_info=True)
         return []
+
+    return signals
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-027: 대기업 그룹 계열사 테마캐리 탐지기
+# ---------------------------------------------------------------------------
+
+def _fetch_intraday_change_for_cascade(stock_code: str) -> float:
+    """대장주의 당일 intraday 등락률(%)을 조회한다.
+
+    네이버 모바일 API를 통해 현재가/기준가를 조회하여 등락률을 계산한다.
+    조회 실패 시 0.0을 반환한다.
+
+    Args:
+        stock_code: 종목코드
+
+    Returns:
+        등락률 (%) — 실패 시 0.0
+    """
+    try:
+        import requests
+        url = (
+            f"https://m.stock.naver.com/api/stock/{stock_code}/basic"
+        )
+        resp = requests.get(url, timeout=3)
+        if resp.status_code != 200:
+            return 0.0
+        data = resp.json()
+        change_rate = data.get("changeRate", "0")
+        return float(str(change_rate).replace("%", "").replace(",", ""))
+    except Exception:
+        return 0.0
+
+
+# @MX:ANCHOR: [AUTO] 그룹 계열사 cascade 탐지 진입점 — fund_manager._run_coverage_expansion 7번째 탐지기로 참조됨
+# @MX:REASON: [AUTO] _run_coverage_expansion()에서 호출, 향후 테스트/스케줄러에서도 직접 호출 가능 (fan_in >= 2)
+# @MX:SPEC: SPEC-AI-027 REQ-001
+def detect_group_cascade_signals(
+    db: Session,
+    surge_results: list[dict],
+    config: "GroupCascadeConfig",  # noqa: F821
+) -> list[FundSignal]:
+    """SPEC-AI-027: 대장주 급등 시 동일 그룹 계열사에 surge_candidate 시그널 발행.
+
+    종목명 접두사 매칭으로 그룹 계열사를 식별하고, 대장주가 급등 조건을 만족하면
+    계열사에 cascade 시그널을 생성한다.
+
+    Args:
+        db: SQLAlchemy 세션
+        surge_results: _gather_surge_candidates 반환값 (surge_candidate dict 목록)
+        config: GroupCascadeConfig
+
+    Returns:
+        생성된 FundSignal 목록
+    """
+    import json as _json
+    from zoneinfo import ZoneInfo
+
+    if not config.enabled:
+        return []
+
+    KST = ZoneInfo("Asia/Seoul")
+    signals: list[FundSignal] = []
+
+    # 오늘 KST 시작 시각 (UTC)
+    today_kst_start = datetime.now(KST).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    ).astimezone(timezone.utc)
+
+    # 오늘 이미 시그널 있는 stock_id → signal_type 집합
+    existing_today: dict[int, set[str]] = {}
+    today_rows = (
+        db.query(FundSignal.stock_id, FundSignal.signal_type)
+        .filter(FundSignal.created_at >= today_kst_start)
+        .all()
+    )
+    for row in today_rows:
+        if row.stock_id not in existing_today:
+            existing_today[row.stock_id] = set()
+        if row.signal_type:
+            existing_today[row.stock_id].add(row.signal_type)
+
+    # cascade 후보 stock_id → 최고 flagship confidence 추적 (AC-008 dedup)
+    # key: cascade_stock_id, value: (flagship_code, flagship_prob, confidence)
+    best_cascade: dict[int, tuple[str, float, float]] = {}
+
+    num_flagships = 0
+    num_candidates_evaluated = 0
+
+    for result in surge_results:
+        stock_code = result.get("stock_code", "")
+        stock_name = result.get("name", "")
+        surge_score = result.get("surge_score", 0.0)
+
+        if not stock_code or not stock_name:
+            continue
+
+        # 대장주 Stock 레코드 조회
+        flagship_stock = (
+            db.query(Stock)
+            .filter(Stock.stock_code == stock_code)
+            .first()
+        )
+        if flagship_stock is None:
+            continue
+
+        # market_cap NULL → flagship 제외 (AC-003)
+        if flagship_stock.market_cap is None:
+            continue
+
+        # flagship 조건 판정
+        is_flagship = False
+        flagship_prob = surge_score
+
+        # 조건 (a): surge_score >= flagship_prob_threshold
+        if surge_score >= config.flagship_prob_threshold:
+            # flagship_min_market_cap 검사
+            if flagship_stock.market_cap >= config.flagship_min_market_cap:
+                is_flagship = True
+
+        # 조건 (b): intraday 등락률 >= flagship_change_pct AND 시총 >= flagship_min_market_cap
+        if not is_flagship and flagship_stock.market_cap >= config.flagship_min_market_cap:
+            intraday_change = _fetch_intraday_change_for_cascade(stock_code)
+            if intraday_change >= config.flagship_change_pct:
+                is_flagship = True
+
+        if not is_flagship:
+            continue
+
+        num_flagships += 1
+
+        # 접두사 추출
+        prefix = stock_name[: config.min_prefix_len]
+        if len(prefix) < config.min_prefix_len:
+            continue
+
+        # @MX:WARN: [AUTO] stocks 테이블 name LIKE 접두사 매칭 — 인덱스 미활용 시 풀스캔 발생 가능
+        # @MX:REASON: [AUTO] stocks.name은 인덱스 없음; 데이터 건수 적어 현재는 허용, 증가 시 인덱스 추가 필요
+        affiliate_candidates = (
+            db.query(Stock)
+            .filter(
+                Stock.name.like(f"{prefix}%"),
+                Stock.stock_code != stock_code,
+                Stock.market_cap >= config.cascade_min_market_cap,
+            )
+            .order_by(Stock.market_cap.desc())
+            .limit(config.max_cascade_per_flagship)
+            .all()
+        )
+
+        for affiliate in affiliate_candidates:
+            num_candidates_evaluated += 1
+
+            # dedup guard: 오늘 이미 시그널 있는 종목 스킵 (AC-006, AC-007)
+            existing_types = existing_today.get(affiliate.id, set())
+            if existing_types:
+                continue
+
+            confidence = round(flagship_prob * config.decay_factor, 4)
+
+            # AC-008: 같은 cascade 종목에 대해 더 높은 flagship 우선
+            if affiliate.id in best_cascade:
+                _, prev_prob, _ = best_cascade[affiliate.id]
+                if flagship_prob <= prev_prob:
+                    continue
+
+            best_cascade[affiliate.id] = (stock_code, flagship_prob, confidence)
+
+    # best_cascade 기준으로 FundSignal 생성
+    for cascade_stock_id, (flagship_code, flagship_prob, confidence) in best_cascade.items():
+        # flagship 이름 조회
+        flagship_row = next(
+            (r for r in surge_results if r.get("stock_code") == flagship_code), {}
+        )
+        flagship_name = flagship_row.get("name", flagship_code)
+
+        # 대장주 flagship_prob에서 prefix 재조회
+        flagship_row_stock = (
+            db.query(Stock).filter(Stock.stock_code == flagship_code).first()
+        )
+        prefix = flagship_name[: config.min_prefix_len] if flagship_name else ""
+
+        metadata = {
+            "surge_basis": ["group_cascade"],
+            "flagship_stock_code": flagship_code,
+            "flagship_prob": round(flagship_prob, 4),
+            "group_prefix": prefix,
+            "surge_probability_score": confidence,
+        }
+
+        signal = FundSignal(
+            stock_id=cascade_stock_id,
+            signal="buy",
+            signal_type="surge_candidate",
+            confidence=confidence,
+            reasoning=(
+                f"[SPEC-AI-027 그룹캐스케이드] 대장주 {flagship_name}({flagship_code}) "
+                f"{flagship_prob:.2f} 급등 → 계열사 동반 상승 기대"
+            ),
+            surge_metadata=_json.dumps(metadata, ensure_ascii=False),
+            paper_executed=True,
+        )
+        db.add(signal)
+        signals.append(signal)
+
+    if signals:
+        db.commit()
+
+    logger.info(
+        "[group_cascade] flagship=%d cascade_eval=%d 생성=%d",
+        num_flagships,
+        num_candidates_evaluated,
+        len(signals),
+    )
 
     return signals

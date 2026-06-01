@@ -1359,6 +1359,9 @@ async def _gather_surge_candidates(
             )
             # created_at 갱신: get_today_signals가 오늘 날짜로 필터링하므로
             # 매일 재탐지 시 날짜를 오늘로 업데이트해야 매수 실행 대상에 포함됨
+            # originally_created_at: 최초 생성 시각 보존 — created_at 갱신 전에 기록
+            if existing.originally_created_at is None:
+                existing.originally_created_at = existing.created_at
             existing.created_at = datetime.now(timezone.utc)
             try:
                 db.flush()
@@ -1377,6 +1380,7 @@ async def _gather_surge_candidates(
                 ),
                 signal_type="surge_candidate",
                 surge_metadata=metadata_json,
+                originally_created_at=datetime.now(timezone.utc),
             )
             db.add(signal)
             try:
@@ -1461,6 +1465,9 @@ async def _gather_surge_candidates(
 
         prev.confidence = decayed_score
         prev.surge_metadata = json.dumps(prev_meta, ensure_ascii=False)
+        # originally_created_at: 최초 생성 시각 보존 — created_at 갱신 전에 기록
+        if prev.originally_created_at is None:
+            prev.originally_created_at = prev.created_at
         prev.created_at = datetime.now(timezone.utc)
         prev.reasoning = (
             f"[급등탐지 Carry-Over] 전일 점수 {original_conf:.3f}에서 5% decay 적용 → {decayed_score:.3f}"
@@ -3746,3 +3753,13 @@ def _run_coverage_expansion(db: Session, surge_results: list[dict]) -> None:
         logger.info("[forum_mention_surge] 완료 — %d건", len(forum_signals))
     except Exception as e:
         logger.error("[forum_mention_surge] 예외 발생: %s", e, exc_info=True)
+
+    # 7. 대기업 그룹 계열사 테마캐리 (SPEC-AI-027)
+    try:
+        from app.services.surge_detector import detect_group_cascade_signals
+        from app.surge_config.surge_settings import GroupCascadeConfig
+        cascade_cfg = GroupCascadeConfig()
+        cascade_signals = detect_group_cascade_signals(db, surge_results, cascade_cfg)
+        logger.info("[group_cascade] 완료 — %d건", len(cascade_signals))
+    except Exception as e:
+        logger.error("[group_cascade] 예외 발생: %s", e, exc_info=True)

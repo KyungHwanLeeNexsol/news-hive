@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +122,22 @@ class ValuationDisqualifiersConfig(BaseModel):
     skip_if_missing: bool = True
 
 
+class DisclosureTypeFilterConfig(BaseModel):
+    """SPEC-AI-028: 공시 유형별 역신호 필터링 설정.
+
+    exclusion_patterns: 해당 키워드가 report_name/ai_summary에 포함된 공시는 즉시 시그널 생성 차단.
+    penalty_patterns: 해당 키워드가 포함된 경우 immediate_disclosure_score에 penalty_factor 배율 적용.
+    skip_bearish_in_today_signals: True이면 get_today_signals()에서 bearish 시그널 제외.
+    """
+
+    # @MX:NOTE: [AUTO] SPEC-AI-028 — 역신호 키워드 필터. 코드 변경 없이 운영 조정 가능
+    # @MX:SPEC: SPEC-AI-028 REQ-AI028-004
+    exclusion_patterns: list[str] = ["유상증자", "전환사채발행", "신주인수권", "주식매수선택권"]
+    penalty_patterns: list[str] = ["최대주주변경", "손실", "영업손실"]
+    penalty_factor: float = 0.3
+    skip_bearish_in_today_signals: bool = True
+
+
 class SurgeDetectionConfig(BaseModel):
     """급등 징후 탐지 전체 설정.
 
@@ -138,6 +154,8 @@ class SurgeDetectionConfig(BaseModel):
     regime_detector_params: dict[str, RegimeDetectorParams] = {}
     # SPEC-AI-018 REQ-006: 밸류에이션 부적격 필터 설정
     valuation_disqualifiers: ValuationDisqualifiersConfig = ValuationDisqualifiersConfig()
+    # SPEC-AI-028: 공시 유형별 역신호 필터링 설정
+    disclosure_type_filter: DisclosureTypeFilterConfig = Field(default_factory=DisclosureTypeFilterConfig)
 
     # @MX:ANCHOR: [AUTO] 앙상블 가중치 합산 검증 — 4개 탐지기 가중치 합산 반드시 1.0
     # @MX:REASON: 가중치 합산 != 1.0 이면 앙상블 스코어 범위가 0~1을 벗어나 시그널 임계값 판정이 왜곡됨
@@ -222,6 +240,21 @@ class ForumMentionConfig(BaseModel):
     baseline_days: int = 7
     mention_window_hours: int = 24
     max_confidence: float = 0.35
+
+
+class GroupCascadeConfig(BaseModel):
+    """SPEC-AI-027: 대기업 그룹 계열사 테마캐리 탐지기 설정."""
+
+    # @MX:NOTE: [AUTO] SPEC-AI-027 — 종목명 접두사 매칭으로 대기업 그룹 계열사 동반 cascade 탐지
+    # @MX:SPEC: SPEC-AI-027
+    enabled: bool = True
+    flagship_prob_threshold: float = 0.70       # 대장주 확률 임계값
+    flagship_change_pct: float = 12.0           # 대장주 intraday 등락률 임계값 (%)
+    flagship_min_market_cap: int = 50000        # 대장주 최소 시총 (억원, 5조원)
+    cascade_min_market_cap: int = 1000          # 계열사 최소 시총 (억원, 1,000억원)
+    min_prefix_len: int = 2                     # 그룹 식별 접두사 최소 길이
+    max_cascade_per_flagship: int = 3           # 대장주당 최대 계열사 수
+    decay_factor: float = 0.7                   # confidence decay 계수
 
 
 class CoverageDashboardConfig(BaseModel):

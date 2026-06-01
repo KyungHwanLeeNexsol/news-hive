@@ -73,6 +73,7 @@ def db() -> Generator[Session, None, None]:
                 financial_summary TEXT,
                 market_summary TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                originally_created_at DATETIME,
                 price_at_signal INTEGER,
                 price_after_1d INTEGER,
                 price_after_3d INTEGER,

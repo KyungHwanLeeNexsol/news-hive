@@ -31,6 +31,7 @@ MARKET_CLOSE = time(15, 30)
 BUY_CUTOFF = time(11, 0)        # 신규 진입 마감: 테마주 1차 파동 이후 추격 매수 차단
 INTRADAY_CRASH_LIMIT = -3.0     # 전일비 -3% 이하: 테마 thesis 붕괴, 매수 제외
 INTRADAY_OVERHEAT_LIMIT = 15.0  # 전일비 +15% 초과: 당일 이미 과열, 상단 매수 제외
+ENTRY_GAPUP_LIMIT = 0.05        # 시그널 기준가 대비 5% 초과 갭업 시 진입 제외 (올릭스 사례 대응)
 
 
 def _get_current_price_sync(stock_code: str) -> Optional[int]:
@@ -196,6 +197,20 @@ def get_today_signals(
         probability, active_detectors = _parse_surge_metadata(signal.surge_metadata)
         if probability is None:
             continue
+
+        # REQ-AI028-002: bearish 공시 시그널 스킵
+        # @MX:NOTE: [AUTO] SPEC-AI-028 — bearish 공시 시그널 today_signals에서 제외. skip_bearish_in_today_signals 설정값 따름
+        # @MX:SPEC: SPEC-AI-028 REQ-AI028-002
+        try:
+            from app.surge_config.surge_settings import get_surge_config as _get_surge_cfg
+            _disc_filter = _get_surge_cfg().disclosure_type_filter
+            if _disc_filter.skip_bearish_in_today_signals:
+                _raw_meta: dict = json.loads(signal.surge_metadata) if signal.surge_metadata else {}
+                if _raw_meta.get("disclosure_sentiment") == "bearish":
+                    logger.debug("[today_signals] %s bearish 공시 시그널 제외", stock.stock_code)
+                    continue
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            pass
 
         # REQ-AI021-001/002: 손절 후 회복 종목 부스트 및 임계값 완화
         # @MX:NOTE: [AUTO] SPEC-AI-021 — 손절 이력 시 +0.10 부스트, theme_cluster-only시 임계값 0.25로 완화
@@ -747,6 +762,20 @@ def execute_buy_orders(
             details.append({"stock_code": stock_code, "action": "skipped", "reason": "intraday_overheat"})
             continue
 
+        # 시그널 기준가 대비 갭업 가드
+        # @MX:NOTE: [AUTO] 시그널 생성 시점 가격 대비 5% 초과 갭업 진입 방지 — 올릭스 사례(+5.1% 갭업 후 즉시 손절)
+        if signal.price_at_signal and isinstance(signal.price_at_signal, (int, float)) and signal.price_at_signal > 0:
+            gapup_ratio = (float(current_price) - signal.price_at_signal) / signal.price_at_signal
+            if gapup_ratio > ENTRY_GAPUP_LIMIT:
+                logger.info(
+                    "[SURGE] %s skipped score=%.3f | theme=%.3f volume=%.3f disclosure=%.3f immediate=%.3f legacy=%.3f | reason=entry_gapup gap=%.2f%%",
+                    stock_code, det["total"], det["theme"], det["volume"], det["disclosure"], det["immediate"], det["legacy"],
+                    gapup_ratio * 100,
+                )
+                skipped += 1
+                details.append({"stock_code": stock_code, "action": "skipped", "reason": "entry_gapup", "gapup_pct": round(gapup_ratio * 100, 2)})
+                continue
+
         # 수량 계산 (floor 처리)
         quantity = floor(float(investment_amount) / float(current_price))
         if quantity <= 0:
@@ -897,12 +926,13 @@ def check_exit_conditions(
     max_holding_days: int = 3,
     same_day_stop_loss_pct: Optional[Decimal] = None,
     multi_day_stop_loss_pct: Optional[Decimal] = None,
+    force_max_holding: bool = False,
 ) -> dict:
     # @MX:ANCHOR: [AUTO] 종료 조건 체크 메인 함수 — 손절/익절/만기 모든 종료 로직 담당
-    # @MX:REASON: [AUTO] 라우터, 스케줄러(surge_check_exits) 등 3개 이상 컴포넌트에서 참조
+    # @MX:REASON: [AUTO] 라우터, 스케줄러(surge_check_exits, surge_force_max_holding_exit) 등 3개 이상 컴포넌트에서 참조
     """종료 조건 체크 메인 함수.
 
-    1. 정규장 시간 체크 (아닐 시 즉시 반환)
+    1. 정규장 시간 체크 (아닐 시 즉시 반환, force_max_holding=True면 예외)
     2. 모든 is_open=True 포지션 순회
     3. 현재가 조회 → PnL 계산
     4. 손절/익절/만기 조건 체크 → 매도 실행
@@ -913,6 +943,10 @@ def check_exit_conditions(
     - multi_day_stop_loss_pct: 멀티데이(holding_days>=1) 손절 임계값 (기본 -7%)
     - 두 파라미터 미제공 시 stop_loss_pct로 fallback (backward compatible)
 
+    force_max_holding: True면 장 마감 후에도 max_holding_period 도달 포지션을 강제 청산.
+    15:40 KST 스케줄러 잡(surge_force_max_holding_exit)에서 사용.
+    가격 조회 실패 시 진입가로 청산 (보수적 fallback).
+
     Returns: {"closed": int, "still_open": int, "errors": int, "details": list}
     """
     # REQ-AI021-003: 보유기간별 손절 임계값 설정
@@ -920,7 +954,7 @@ def check_exit_conditions(
     # @MX:SPEC: SPEC-AI-021
     _same_day_stop = same_day_stop_loss_pct if same_day_stop_loss_pct is not None else Decimal("-0.05")
     _multi_day_stop = multi_day_stop_loss_pct if multi_day_stop_loss_pct is not None else Decimal("-0.07")
-    if not is_market_hours():
+    if not is_market_hours() and not force_max_holding:
         logger.debug("surge_check_exits: 정규장 시간 외 — 스킵")
         return {"closed": 0, "still_open": 0, "errors": 0, "details": [], "reason": "market_closed"}
 
@@ -939,6 +973,19 @@ def check_exit_conditions(
     for trade in open_trades:
         # 현재가 조회
         current_price = _get_current_price_sync(trade.stock_code)
+
+        # REQ-AI021-003: 보유기간별 손절 임계값 차등 적용
+        holding_days = calculate_trading_days_elapsed(trade.entry_date, today)
+
+        # force_max_holding 모드에서 가격 조회 실패 시 max_holding_period 도달 포지션만 진입가 청산
+        if current_price is None and force_max_holding and holding_days >= max_holding_days:
+            # @MX:NOTE: [AUTO] 장 마감 후 가격 조회 불가 시 진입가로 보수적 청산 — 15:40 KST force exit
+            current_price = trade.entry_price
+            logger.warning(
+                "surge_check_exits: %s 가격 조회 실패 — 진입가(%s)로 max_holding_period 청산",
+                trade.stock_code, trade.entry_price,
+            )
+
         if current_price is None:
             logger.warning(
                 "surge_check_exits: %s 현재가 조회 실패 — 다음 사이클로 연기",
@@ -952,14 +999,8 @@ def check_exit_conditions(
             })
             continue
 
-        entry_price = float(trade.entry_price)
-        curr_price = float(current_price)
-        pnl_pct = (curr_price - entry_price) / entry_price
-
         exit_reason = None
 
-        # REQ-AI021-003: 보유기간별 손절 임계값 차등 적용
-        holding_days = calculate_trading_days_elapsed(trade.entry_date, today)
         if holding_days == 0:
             # 당일 진입: -5% 손절 (단기 테마주 급락 시 빠른 손절)
             active_stop_loss = _same_day_stop
@@ -970,6 +1011,10 @@ def check_exit_conditions(
         # backward compatible: stop_loss_pct 파라미터가 명시적으로 기본값과 다른 경우 우선 적용
         if stop_loss_pct != Decimal("-0.05"):
             active_stop_loss = stop_loss_pct
+
+        entry_price = float(trade.entry_price)
+        curr_price = float(current_price)
+        pnl_pct = (curr_price - entry_price) / entry_price
 
         # 손절 조건
         if Decimal(str(pnl_pct)) <= active_stop_loss:

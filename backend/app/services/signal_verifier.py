@@ -6,11 +6,13 @@ REQ-AI-003: 실패한 시그널의 오류 패턴을 AI로 분류한다.
 REQ-AI-004: 과거 적중률 기반 Bayesian 신뢰도 보정을 수행한다.
 """
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
+from app.models.disclosure import Disclosure
 from app.models.fund_signal import FundSignal
 from app.models.stock import Stock
 
@@ -50,6 +52,54 @@ async def _get_current_price(stock_code: str) -> int | None:
         pass
 
     return None
+
+
+_SUPPLY_KEYWORDS: tuple[str, ...] = (
+    "유상증자", "전환사채", "신주인수권부사채", "배정", "희석"
+)
+
+
+def _classify_disclosure_failure(signal: FundSignal, db: Session) -> str | None:
+    """공시 기반 시그널 실패의 결정론적 분류.
+
+    REQ-AI028-003: immediate_disclosure 시그널 실패 시 AI 호출 없이 키워드만으로 분류.
+
+    Returns:
+        "supply_reversal" — 공급 역전 키워드 포함 공시
+        "sector_contagion" — 공시 기반이지만 공급 키워드 없음
+        None — 비공시 시그널 (AI 경로 사용)
+    """
+    # # @MX:NOTE: [AUTO] SPEC-AI-028 — immediate_disclosure 시그널 실패 시 AI 불필요, 키워드만으로 분류
+    # # @MX:SPEC: SPEC-AI-028 REQ-AI028-003
+    is_disclosure_based = False
+
+    if signal.disclosure_id is not None:
+        is_disclosure_based = True
+    elif signal.surge_metadata:
+        try:
+            meta = (
+                json.loads(signal.surge_metadata)
+                if isinstance(signal.surge_metadata, str)
+                else signal.surge_metadata
+            )
+            if "immediate_disclosure" in meta.get("surge_basis", []):
+                is_disclosure_based = True
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    if not is_disclosure_based:
+        return None  # AI 경로 사용
+
+    # 연결 공시 텍스트에서 공급 키워드 탐색
+    disc_text = ""
+    if signal.disclosure_id:
+        disc = db.query(Disclosure).filter(Disclosure.id == signal.disclosure_id).first()
+        if disc:
+            disc_text = (disc.report_name or "") + " " + (disc.ai_summary or "")
+
+    if any(kw in disc_text for kw in _SUPPLY_KEYWORDS):
+        return "supply_reversal"
+    return "sector_contagion"
 
 
 async def _classify_error(signal: FundSignal, stock_name: str) -> str | None:
@@ -219,9 +269,15 @@ async def verify_signals(db: Session) -> dict:
 
             # REQ-AI-003: 실패한 시그널의 오류 패턴 분류
             if signal.is_correct is False:
-                error_cat = await _classify_error(signal, stock.name)
-                if error_cat:
-                    signal.error_category = error_cat
+                # REQ-AI028-003: 공시 기반 시그널 결정론적 short-circuit (AI 호출 전)
+                disc_error_cat = _classify_disclosure_failure(signal, db)
+                if disc_error_cat is not None:
+                    signal.error_category = disc_error_cat
+                else:
+                    # 비공시 시그널: 기존 AI 경로 유지
+                    error_cat = await _classify_error(signal, stock.name)
+                    if error_cat:
+                        signal.error_category = error_cat
 
             signal.verified_at = now
             stats["verified"] += 1

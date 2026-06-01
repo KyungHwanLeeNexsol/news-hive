@@ -598,6 +598,42 @@ def _run_surge_check_exits():
         db.close()
 
 
+def _run_force_max_holding_exit():
+    """장 마감 후 max_holding_period 도달 포지션 강제 청산 (평일 15:40 KST).
+
+    APScheduler 잡 누락(missed 이벤트) 또는 15:30 정규장 종료 직후
+    check_exit_conditions가 실행되지 않은 경우를 대비한 안전망.
+
+    force_max_holding=True로 호출하여 장 외 시간에도 만기 포지션을 청산한다.
+    가격 조회 실패 시 진입가로 보수적 청산(PnL=0) 처리.
+
+    SPEC-AI-013 REQ-SURGE-TRADE-052
+    """
+    _start = _time.monotonic()
+    from app.services.surge_trading_service import check_exit_conditions
+
+    db = SessionLocal()
+    try:
+        result = check_exit_conditions(db, force_max_holding=True)
+        if result["closed"] > 0:
+            logger.info(
+                "Surge force-max-holding 청산 완료: closed=%d, still_open=%d, errors=%d",
+                result["closed"],
+                result["still_open"],
+                result["errors"],
+            )
+        else:
+            logger.debug(
+                "Surge force-max-holding: 청산 대상 없음 (still_open=%d)",
+                result["still_open"],
+            )
+    except Exception as e:
+        logger.error("Surge force-max-holding 청산 잡 실패: %s", e)
+    finally:
+        _record_job_duration("surge_force_max_holding_exit", _time.monotonic() - _start)
+        db.close()
+
+
 def _is_kr_market_open() -> bool:
     """한국 주식시장 거래일 여부를 간이 판정한다 (주말 제외)."""
     from datetime import timezone, timedelta
@@ -1444,6 +1480,20 @@ def start_scheduler():
         minute="*/5",
         timezone="Asia/Seoul",
         id="surge_check_exits",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    # 장 마감 후 max_holding_period 포지션 강제 청산: 평일 15:40 KST (= UTC 06:40)
+    # surge_check_exits 잡이 누락(missed)되더라도 만기 포지션이 다음 날로 이월되지 않도록 보장
+    scheduler.add_job(
+        _run_force_max_holding_exit,
+        "cron",
+        day_of_week="mon-fri",
+        hour=6,         # 15:40 KST = 06:40 UTC
+        minute=40,
+        timezone="UTC",
+        id="surge_force_max_holding_exit",
         max_instances=1,
         coalesce=True,
         replace_existing=True,

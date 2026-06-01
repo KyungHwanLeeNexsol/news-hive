@@ -23,6 +23,11 @@ class FundSignal(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    # 시그널 최초 생성 시각 — created_at은 매일 재탐지 시 오늘 날짜로 갱신되므로
+    # 원본 생성 시각을 별도로 보존한다 (한 번 기록 후 절대 변경 불가).
+    originally_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # 적중률 추적 필드
     price_at_signal: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 시그널 발행 시점 주가

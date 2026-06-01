@@ -77,3 +77,18 @@ surge_detection:
   backtest:
     enabled: true
     evaluation_horizon_days: 5
+  # SPEC-AI-028 REQ-001/002: 공시 유형별 역신호 필터링 설정
+  # 제외 키워드(exclusion_patterns): 해당 공시는 시그널 생성 자체를 차단
+  # 페널티 키워드(penalty_patterns): 즉시 시그널 점수에 penalty_factor 배율 적용
+  disclosure_type_filter:
+    exclusion_patterns:
+      - "유상증자"
+      - "전환사채발행"
+      - "신주인수권"
+      - "주식매수선택권"
+    penalty_patterns:
+      - "최대주주변경"
+      - "손실"
+      - "영업손실"
+    penalty_factor: 0.3
+    skip_bearish_in_today_signals: true
