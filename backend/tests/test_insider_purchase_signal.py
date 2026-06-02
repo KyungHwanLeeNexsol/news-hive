@@ -131,7 +131,7 @@ def _make_stock(
     db: Session,
     stock_code: str,
     name: str = "테스트주식",
-) -> "Stock":
+) -> "Stock":  # noqa: F821
     """테스트용 Stock 레코드 생성."""
     from app.models.sector import Sector
     from app.models.stock import Stock
@@ -158,7 +158,7 @@ def _make_disclosure(
     report_name: str,
     rcept_dt: str | None = None,
     rcept_no: str = "20260101000001",
-) -> "Disclosure":
+) -> "Disclosure":  # noqa: F821
     """테스트용 Disclosure 레코드 생성."""
     from app.models.disclosure import Disclosure
 
@@ -179,7 +179,7 @@ def _make_disclosure(
     return disc
 
 
-def _make_signal_today(db: Session, stock_id: int) -> "FundSignal":
+def _make_signal_today(db: Session, stock_id: int) -> "FundSignal":  # noqa: F821
     """오늘 날짜 FundSignal 생성."""
     from app.models.fund_signal import FundSignal
 

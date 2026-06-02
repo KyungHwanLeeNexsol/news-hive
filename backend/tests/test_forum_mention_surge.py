@@ -120,7 +120,7 @@ def db() -> Generator[Session, None, None]:
 # 헬퍼
 # ---------------------------------------------------------------------------
 
-def _make_stock(db: Session, stock_code: str, name: str = "테스트주식") -> "Stock":
+def _make_stock(db: Session, stock_code: str, name: str = "테스트주식") -> "Stock":  # noqa: F821
     from app.models.sector import Sector
     from app.models.stock import Stock
 
@@ -181,7 +181,7 @@ def _make_posts(
     db.flush()
 
 
-def _make_signal_today(db: Session, stock_id: int) -> "FundSignal":
+def _make_signal_today(db: Session, stock_id: int) -> "FundSignal":  # noqa: F821
     from app.models.fund_signal import FundSignal
 
     signal = FundSignal(

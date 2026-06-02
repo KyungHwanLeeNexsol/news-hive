@@ -126,7 +126,7 @@ def db() -> Generator[Session, None, None]:
 # 헬퍼
 # ---------------------------------------------------------------------------
 
-def _make_sector(db: Session) -> "Sector":
+def _make_sector(db: Session) -> "Sector":  # noqa: F821
     from app.models.sector import Sector
     sector = db.query(Sector).first()
     if sector is None:
@@ -140,7 +140,7 @@ def _make_stock(
     db: Session,
     stock_code: str,
     name: str = "테스트주식",
-) -> "Stock":
+) -> "Stock":  # noqa: F821
     """테스트용 Stock 레코드 생성."""
     from app.models.stock import Stock
 
@@ -160,7 +160,7 @@ def _make_theme_group(
     name: str,
     anchor_stock_id: int | None,
     member_ids: list[int],
-) -> "ThemeGroup":
+) -> "ThemeGroup":  # noqa: F821
     """테마 그룹 + 멤버 연결 생성."""
     from app.models.theme_group import ThemeGroup, StockThemeGroup
 
@@ -175,7 +175,7 @@ def _make_theme_group(
     return group
 
 
-def _make_signal_today(db: Session, stock_id: int) -> "FundSignal":
+def _make_signal_today(db: Session, stock_id: int) -> "FundSignal":  # noqa: F821
     """오늘 날짜 FundSignal 생성."""
     from app.models.fund_signal import FundSignal
 

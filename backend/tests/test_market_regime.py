@@ -23,8 +23,8 @@ def reset_surge_config_singleton():
     yield
     _surge_settings_module._config_singleton = None
 
-from app.models.market_regime import MarketRegime, MarketRegimeEnum
-from app.services.market_regime_service import (
+from app.models.market_regime import MarketRegime, MarketRegimeEnum  # noqa: E402
+from app.services.market_regime_service import (  # noqa: E402
     classify_market_regime,
     get_or_create_today_regime,
 )
@@ -270,7 +270,7 @@ class TestHysteresisLogic:
         query_mock.filter.return_value = filter_mock
         order_by_mock = MagicMock()
         filter_mock.order_by.return_value = order_by_mock
-        all_mock = MagicMock()
+        _all_mock = MagicMock()
         order_by_mock.all.return_value = recent_regimes or []
         filter_mock.first.return_value = existing_today
         return db

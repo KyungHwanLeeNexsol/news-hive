@@ -105,7 +105,7 @@ def db() -> Generator[Session, None, None]:
 # 헬퍼
 # ---------------------------------------------------------------------------
 
-def _make_sector(db: Session) -> "Sector":
+def _make_sector(db: Session) -> "Sector":  # noqa: F821
     from app.models.sector import Sector
     sector = db.query(Sector).first()
     if sector is None:
@@ -120,7 +120,7 @@ def _make_stock(
     stock_code: str,
     name: str,
     market_cap: int | None = 10000,
-) -> "Stock":
+) -> "Stock":  # noqa: F821
     from app.models.stock import Stock
     sector = _make_sector(db)
     stock = Stock(
@@ -138,7 +138,7 @@ def _make_signal_today(
     db: Session,
     stock_id: int,
     signal_type: str = "surge_candidate",
-) -> "FundSignal":
+) -> "FundSignal":  # noqa: F821
     from app.models.fund_signal import FundSignal
     signal = FundSignal(
         stock_id=stock_id,
@@ -183,11 +183,11 @@ def test_characterize_group_cascade_ac001_flagship_prob_cascade_signals(db):
     from app.services.surge_detector import detect_group_cascade_signals
 
     # 대장주: LG (시총>=50000)
-    flagship = _make_stock(db, "003550", "LG", market_cap=600000)
+    _flagship = _make_stock(db, "003550", "LG", market_cap=600000)
     # 계열사 3개 (시총>=1000)
-    aff1 = _make_stock(db, "066570", "LG전자", market_cap=100000)
-    aff2 = _make_stock(db, "051910", "LG화학", market_cap=200000)
-    aff3 = _make_stock(db, "011070", "LG이노텍", market_cap=30000)
+    _aff1 = _make_stock(db, "066570", "LG전자", market_cap=100000)
+    _aff2 = _make_stock(db, "051910", "LG화학", market_cap=200000)
+    _aff3 = _make_stock(db, "011070", "LG이노텍", market_cap=30000)
 
     surge_results = [_make_surge_result("003550", "LG", 0.80)]
     cfg = _make_config()
@@ -221,9 +221,9 @@ def test_characterize_group_cascade_ac002_intraday_flagship(db):
     from app.services.surge_detector import detect_group_cascade_signals
 
     # 삼성전기 (대장주, 시총>=50000)
-    flagship = _make_stock(db, "009150", "삼성전기", market_cap=80000)
+    _flagship = _make_stock(db, "009150", "삼성전기", market_cap=80000)
     # 계열사 (시총>=1000)
-    aff1 = _make_stock(db, "005930", "삼성전자", market_cap=3000000)
+    _aff1 = _make_stock(db, "005930", "삼성전자", market_cap=3000000)
 
     surge_results = [_make_surge_result("009150", "삼성전기", 0.40)]
     cfg = _make_config()
@@ -252,8 +252,8 @@ def test_characterize_group_cascade_ac003_null_market_cap_excluded(db):
     from app.services.surge_detector import detect_group_cascade_signals
 
     # market_cap=None 대장주
-    flagship = _make_stock(db, "009150", "삼성전기", market_cap=None)
-    aff1 = _make_stock(db, "005930", "삼성전자", market_cap=3000000)
+    _flagship = _make_stock(db, "009150", "삼성전기", market_cap=None)
+    _aff1 = _make_stock(db, "005930", "삼성전자", market_cap=3000000)
 
     surge_results = [_make_surge_result("009150", "삼성전기", 0.40)]
     cfg = _make_config()
@@ -275,7 +275,7 @@ def test_characterize_group_cascade_ac004_max_cascade_per_flagship(db):
     """AC-004: 계열사 5개 매칭 → max_cascade_per_flagship=3으로 상위 3개만."""
     from app.services.surge_detector import detect_group_cascade_signals
 
-    flagship = _make_stock(db, "000150", "두산", market_cap=200000)
+    _flagship = _make_stock(db, "000150", "두산", market_cap=200000)
     # 계열사 5개 (시총 내림차순)
     _make_stock(db, "034020", "두산에너빌리티", market_cap=50000)
     _make_stock(db, "042670", "두산밥캣", market_cap=40000)
@@ -302,7 +302,7 @@ def test_characterize_group_cascade_ac005_prefix_too_short_or_no_match(db):
     from app.services.surge_detector import detect_group_cascade_signals
 
     # 이름이 한 글자인 종목 (접두사 min_prefix_len=2 미달)
-    flagship = _make_stock(db, "000010", "가", market_cap=200000)
+    _flagship = _make_stock(db, "000010", "가", market_cap=200000)
     _make_stock(db, "000020", "가나다라", market_cap=10000)
 
     surge_results = [_make_surge_result("000010", "가", 0.80)]
@@ -317,7 +317,7 @@ def test_characterize_group_cascade_ac005b_no_matching_affiliate(db):
     from app.services.surge_detector import detect_group_cascade_signals
 
     # 대장주: "유일무이" 접두사가 다른 종목에 없음
-    flagship = _make_stock(db, "000010", "유일무이전자", market_cap=200000)
+    _flagship = _make_stock(db, "000010", "유일무이전자", market_cap=200000)
     _make_stock(db, "000020", "삼성전자", market_cap=3000000)
 
     surge_results = [_make_surge_result("000010", "유일무이전자", 0.80)]
@@ -335,10 +335,10 @@ def test_characterize_group_cascade_ac006_existing_surge_candidate_skipped(db):
     """AC-006: 계열사에 당일 surge_candidate 이미 존재 → 해당 후보 스킵."""
     from app.services.surge_detector import detect_group_cascade_signals
 
-    flagship = _make_stock(db, "003550", "LG", market_cap=600000)
+    _flagship = _make_stock(db, "003550", "LG", market_cap=600000)
     aff1 = _make_stock(db, "066570", "LG전자", market_cap=100000)
-    aff2 = _make_stock(db, "051910", "LG화학", market_cap=200000)
-    aff3 = _make_stock(db, "011070", "LG이노텍", market_cap=30000)
+    _aff2 = _make_stock(db, "051910", "LG화학", market_cap=200000)
+    _aff3 = _make_stock(db, "011070", "LG이노텍", market_cap=30000)
 
     # LG전자에 오늘 surge_candidate 이미 있음
     _make_signal_today(db, aff1.id, signal_type="surge_candidate")
@@ -362,10 +362,10 @@ def test_characterize_group_cascade_ac007_existing_theme_propagation_skipped(db)
     """AC-007: 계열사에 당일 theme_propagation 시그널 → 해당 후보 스킵."""
     from app.services.surge_detector import detect_group_cascade_signals
 
-    flagship = _make_stock(db, "003550", "LG", market_cap=600000)
-    aff1 = _make_stock(db, "066570", "LG전자", market_cap=100000)
+    _flagship = _make_stock(db, "003550", "LG", market_cap=600000)
+    _aff1 = _make_stock(db, "066570", "LG전자", market_cap=100000)
     aff2 = _make_stock(db, "051910", "LG화학", market_cap=200000)
-    aff3 = _make_stock(db, "011070", "LG이노텍", market_cap=30000)
+    _aff3 = _make_stock(db, "011070", "LG이노텍", market_cap=30000)
 
     # LG화학에 오늘 theme_propagation 시그널
     _make_signal_today(db, aff2.id, signal_type="theme_propagation")
@@ -396,8 +396,8 @@ def test_characterize_group_cascade_ac008_dedup_use_highest_flagship_confidence(
 
     # flagship 두 개는 서로를 cascade 후보로 포함하지 않도록
     # flagship_a, flagship_b 모두 시총이 크고, 계열사는 LG전자(시총 작음)만
-    flagship_a = _make_stock(db, "003550", "LG", market_cap=600000)
-    flagship_b = _make_stock(db, "003560", "LG우", market_cap=600000)
+    _flagship_a = _make_stock(db, "003550", "LG", market_cap=600000)
+    _flagship_b = _make_stock(db, "003560", "LG우", market_cap=600000)
     aff1 = _make_stock(db, "066570", "LG전자", market_cap=5000)
 
     # 두 대장주 모두 LG 접두사 → LG전자가 양쪽에서 매칭
@@ -429,7 +429,7 @@ def test_characterize_group_cascade_ac009_disabled_returns_empty(db):
     """AC-009: enabled=False → 빈 리스트 반환, DB add 0회."""
     from app.services.surge_detector import detect_group_cascade_signals
 
-    flagship = _make_stock(db, "003550", "LG", market_cap=600000)
+    _flagship = _make_stock(db, "003550", "LG", market_cap=600000)
     _make_stock(db, "066570", "LG전자", market_cap=100000)
 
     surge_results = [_make_surge_result("003550", "LG", 0.80)]

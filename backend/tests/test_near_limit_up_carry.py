@@ -111,7 +111,7 @@ def _make_stock(
     stock_code: str,
     name: str = "테스트주식",
     market_cap: int = 1_000_000_000_000,  # 1조 원
-) -> "Stock":
+) -> "Stock":  # noqa: F821
     """테스트용 Stock 레코드 생성 헬퍼."""
     from app.models.sector import Sector
     from app.models.stock import Stock
@@ -139,7 +139,7 @@ def _make_signal(
     signal_type: str = "surge_candidate",
     created_at: datetime | None = None,
     paper_executed: bool = True,
-) -> "FundSignal":
+) -> "FundSignal":  # noqa: F821
     """테스트용 FundSignal 레코드 생성 헬퍼."""
     from app.models.fund_signal import FundSignal
 
@@ -179,7 +179,7 @@ def test_ac001_27pct_creates_surge_candidate(db):
     """AC-001: +27% 종목에서 surge_candidate 시그널 생성, confidence ≈ 0.45."""
     from app.services.surge_detector import detect_near_limit_up_carries
 
-    stock = _make_stock(db, "000010", "상한가근접주")
+    _stock = _make_stock(db, "000010", "상한가근접주")
     cfg = _make_config()
 
     with patch(
@@ -286,7 +286,7 @@ def test_ac006_price_fetch_failure_skips_and_continues(db):
     """AC-006: 첫 종목 가격 조회 실패 → 스킵하고 두 번째 종목 처리 계속."""
     from app.services.surge_detector import detect_near_limit_up_carries
 
-    stock1 = _make_stock(db, "000060", "조회실패주")
+    _stock1 = _make_stock(db, "000060", "조회실패주")
     stock2 = _make_stock(db, "000070", "조회성공주")
 
     def _mock_provider(stock_code: str):

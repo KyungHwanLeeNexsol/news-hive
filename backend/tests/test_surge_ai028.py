@@ -7,11 +7,11 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 import app.surge_config.surge_settings as _settings_module
@@ -32,7 +32,7 @@ from app.surge_config.surge_settings import (
 
 @pytest.fixture(scope="module")
 def engine():
-    from sqlalchemy import ARRAY, event
+    from sqlalchemy import ARRAY
     from sqlalchemy.ext.compiler import compiles
 
     @compiles(ARRAY, "sqlite")
@@ -131,7 +131,6 @@ class TestAC02801ExclusionPattern:
 
     def test_exclusion_keyword_skips_stock(self, db: Session):
         """유상증자 공시는 detect_immediate_disclosure_signal() 결과에 포함되지 않아야 한다."""
-        from datetime import timedelta
 
         from app.services.surge_detector import detect_immediate_disclosure_signal
 
@@ -287,16 +286,17 @@ class TestAC02804TodaySignalsBearishSkip:
         probability: float = 0.50,
     ) -> FundSignal:
         """테스트용 FundSignal 생성."""
-        from datetime import timedelta
+        from datetime import time as dtime
         from zoneinfo import ZoneInfo
 
         KST = ZoneInfo("Asia/Seoul")
-        from datetime import date
 
         # get_today_signals의 날짜 필터: 직전 영업일 15:00 이후
-        # 월요일(2026-06-01)이므로 직전 영업일은 2026-05-29(금요일)
-        # 그 15:00 KST 이후 시각으로 설정
-        created = datetime(2026, 5, 29, 15, 30, tzinfo=KST)
+        # 실행 날짜에 무관하게 동작하도록 오늘 기준 prev_bday를 동적 계산
+        from app.services.surge_trading_service import _get_prev_business_day
+        today_kst = datetime.now(KST).date()
+        prev_bday = _get_prev_business_day(today_kst)
+        created = datetime.combine(prev_bday, dtime(15, 30)).replace(tzinfo=KST)
 
         surge_basis = ["immediate_disclosure"] if sentiment else ["theme_cluster"]
         meta: dict = {
@@ -391,7 +391,6 @@ class TestAC02805SupplyReversalShortCircuit:
             db, stock, report_name="전환사채 발행 결정", rcept_dt="20260601"
         )
 
-        from datetime import timedelta
 
         # 5일 이상 경과한 시그널
         created = datetime(2026, 5, 25, 9, 0, tzinfo=timezone.utc)

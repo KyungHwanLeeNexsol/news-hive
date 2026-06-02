@@ -17,3 +17,8 @@ omit = ["app/seed/*", "app/main.py"]
 [tool.coverage.report]
 show_missing = true
 fail_under = 0
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.15",
+]

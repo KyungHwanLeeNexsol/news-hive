@@ -4,7 +4,7 @@ AC-001~AC-010 검증.
 모든 외부 의존성(DB, 가격 API)은 mock 처리.
 """
 import json
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -95,7 +95,6 @@ class TestGetRecentStopLossCodes:
     def test_ac009_returns_stop_loss_codes(self):
         """AC-009: lookback_days=3 이내 stop_loss 종목 코드 반환."""
         from app.services.surge_trading_service import _get_recent_stop_loss_codes
-        from app.models.surge_portfolio import SurgeTrade
 
         db = _make_db()
 
@@ -117,7 +116,7 @@ class TestGetRecentStopLossCodes:
         """AC-009: take_profit 종목은 결과에 포함되지 않음."""
         from app.services.surge_trading_service import _get_recent_stop_loss_codes
 
-        today = date(2026, 5, 29)
+        _today = date(2026, 5, 29)
         db = _make_db()
 
         # take_profit 종목만 있는 경우

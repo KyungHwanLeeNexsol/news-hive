@@ -124,7 +124,7 @@ def compute_adaptive_threshold(db: Session, config) -> float:
 
     # 3단계: 최종 클램프
     threshold = max(cfg.final_clamp_min, min(cfg.final_clamp_max, threshold))
-    reason_str = ", ".join(reasons)
+    _reason_str = ", ".join(reasons)
 
     logger.info(
         "[임계값] 적응형 산출 완료: %.3f (기본=%.3f, 승률=%s, 레짐=%s)",
@@ -184,7 +184,7 @@ def persist_threshold(
         .returning(SurgeThresholdHistory)
     )
     result = db.execute(stmt)
-    row = result.fetchone()
+    _row = result.fetchone()
     db.flush()
     logger.info(
         "[임계값] surge_threshold_history upsert 완료 — date=%s, threshold=%.3f",

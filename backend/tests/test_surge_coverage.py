@@ -6,16 +6,14 @@ AC-001 ~ AC-018 전체 검증.
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone, timedelta
 from typing import Generator
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.database import Base
 # FundSignal은 Disclosure 관계를 가지므로, mapper 초기화를 위해 Disclosure를 import해야 함
 from app.models.disclosure import Disclosure  # noqa: F401
 
@@ -135,7 +133,7 @@ def db() -> Generator[Session, None, None]:
         session.close()
 
 
-def _make_stock(db: Session, stock_code: str, name: str = "테스트주식", market_cap: int = 500) -> "Stock":
+def _make_stock(db: Session, stock_code: str, name: str = "테스트주식", market_cap: int = 500) -> "Stock":  # noqa: F821
     """테스트용 Stock 레코드 생성 헬퍼 (market_cap 단위: 억원)."""
     from app.models.sector import Sector
     from app.models.stock import Stock
@@ -164,7 +162,7 @@ def _make_fund_signal(
     signal_type: str = "surge_candidate",
     created_at: datetime | None = None,
     paper_executed: bool = False,
-) -> "FundSignal":
+) -> "FundSignal":  # noqa: F821
     """테스트용 FundSignal 레코드 생성 헬퍼."""
     from app.models.fund_signal import FundSignal
 
@@ -190,7 +188,7 @@ def _make_theme_group(
     name: str,
     stock_codes: list[str],
     anchor_code: str | None = None,
-) -> "ThemeGroup":
+) -> "ThemeGroup":  # noqa: F821
     """테스트용 ThemeGroup + StockThemeGroup 레코드 생성 헬퍼."""
     from app.models.theme_group import ThemeGroup, StockThemeGroup
     from app.models.stock import Stock
@@ -225,7 +223,7 @@ def test_characterize_theme_propagation_ac001_anchor_high_score(db: Session) -> 
     from app.models.fund_signal import FundSignal
     from app.surge_config.surge_settings import ThemePropagationConfig
 
-    anchor = _make_stock(db, "066570", "LG전자", market_cap=500)
+    _anchor = _make_stock(db, "066570", "LG전자", market_cap=500)
     peer = _make_stock(db, "003550", "LG", market_cap=300)
     _make_theme_group(db, "LG그룹", ["066570", "003550"], anchor_code="066570")
 
@@ -267,7 +265,7 @@ def test_characterize_theme_propagation_ac002_anchor_low_score(db: Session) -> N
     from app.models.fund_signal import FundSignal
     from app.surge_config.surge_settings import ThemePropagationConfig
 
-    anchor = _make_stock(db, "066570", "LG전자", market_cap=500)
+    _anchor = _make_stock(db, "066570", "LG전자", market_cap=500)
     peer = _make_stock(db, "003550", "LG", market_cap=300)
     _make_theme_group(db, "LG그룹", ["066570", "003550"], anchor_code="066570")
 
@@ -305,7 +303,7 @@ def test_characterize_theme_propagation_ac003_peer_already_has_signal(db: Sessio
     from app.models.fund_signal import FundSignal
     from app.surge_config.surge_settings import ThemePropagationConfig
 
-    anchor = _make_stock(db, "066570", "LG전자", market_cap=500)
+    _anchor = _make_stock(db, "066570", "LG전자", market_cap=500)
     peer = _make_stock(db, "003550", "LG", market_cap=300)
     _make_theme_group(db, "LG그룹", ["066570", "003550"], anchor_code="066570")
     _make_fund_signal(db, peer.id, signal_type="surge_candidate")  # 이미 오늘 시그널 있음
@@ -323,7 +321,7 @@ def test_characterize_theme_propagation_ac003_peer_already_has_signal(db: Sessio
         )
     ]
 
-    count = propagate_theme_group_signals(db, qualified, config)
+    _count = propagate_theme_group_signals(db, qualified, config)
 
     # 피어에 theme_propagation 새로 생성되지 않아야 함
     tp_signals = (
@@ -344,7 +342,7 @@ def test_characterize_theme_propagation_ac004_peer_already_surged(db: Session) -
     from app.models.fund_signal import FundSignal
     from app.surge_config.surge_settings import ThemePropagationConfig
 
-    anchor = _make_stock(db, "066570", "LG전자", market_cap=500)
+    _anchor = _make_stock(db, "066570", "LG전자", market_cap=500)
     peer = _make_stock(db, "003550", "LG", market_cap=300)
     _make_theme_group(db, "LG그룹", ["066570", "003550"], anchor_code="066570")
 
@@ -367,7 +365,7 @@ def test_characterize_theme_propagation_ac004_peer_already_surged(db: Session) -
         "app.services.surge_detector._get_peer_price_5d_trend",
         return_value=25.0,
     ):
-        count = propagate_theme_group_signals(db, qualified, config)
+        _count = propagate_theme_group_signals(db, qualified, config)
 
     signal = (
         db.query(FundSignal)
@@ -387,8 +385,8 @@ def test_characterize_theme_propagation_ac005_dedup_higher_score_wins(db: Sessio
     from app.models.fund_signal import FundSignal
     from app.surge_config.surge_settings import ThemePropagationConfig
 
-    anchor1 = _make_stock(db, "066570", "LG전자", market_cap=500)
-    anchor2 = _make_stock(db, "051910", "LG화학", market_cap=400)
+    _anchor1 = _make_stock(db, "066570", "LG전자", market_cap=500)
+    _anchor2 = _make_stock(db, "051910", "LG화학", market_cap=400)
     peer = _make_stock(db, "003550", "LG", market_cap=300)
     _make_theme_group(db, "LG그룹", ["066570", "051910", "003550"], anchor_code="066570")
 
@@ -413,7 +411,7 @@ def test_characterize_theme_propagation_ac005_dedup_higher_score_wins(db: Sessio
 
     # _get_peer_price_5d_trend는 외부 Naver API를 호출하므로 mock 처리
     with patch("app.services.surge_detector._get_peer_price_5d_trend", return_value=None):
-        count = propagate_theme_group_signals(db, qualified, config)
+        _count = propagate_theme_group_signals(db, qualified, config)
 
     tp_signals = (
         db.query(FundSignal)
@@ -496,7 +494,7 @@ def test_characterize_volume_anomaly_ac007_low_ratio(db: Session) -> None:
         "app.services.naver_finance.fetch_stock_price_history_sync",
         return_value=fake_history,
     ):
-        count = detect_volume_anomaly_dormant_stocks(db, config)
+        _count = detect_volume_anomaly_dormant_stocks(db, config)
 
     signal = (
         db.query(FundSignal)
@@ -536,7 +534,7 @@ def test_characterize_volume_anomaly_ac008_non_dormant_excluded(db: Session) -> 
         "app.services.naver_finance.fetch_stock_price_history_sync",
         return_value=fake_history,
     ):
-        count = detect_volume_anomaly_dormant_stocks(db, config)
+        _count = detect_volume_anomaly_dormant_stocks(db, config)
 
     signal = (
         db.query(FundSignal)
@@ -575,7 +573,7 @@ def test_characterize_volume_anomaly_ac009_insufficient_history(db: Session) -> 
         "app.services.naver_finance.fetch_stock_price_history_sync",
         return_value=fake_history,
     ):
-        count = detect_volume_anomaly_dormant_stocks(db, config)
+        _count = detect_volume_anomaly_dormant_stocks(db, config)
 
     signal = (
         db.query(FundSignal)
@@ -616,7 +614,7 @@ def test_characterize_volume_anomaly_ac010_dedup_with_surge_candidate(db: Sessio
         "app.services.naver_finance.fetch_stock_price_history_sync",
         return_value=fake_history,
     ):
-        count = detect_volume_anomaly_dormant_stocks(db, config)
+        _count = detect_volume_anomaly_dormant_stocks(db, config)
 
     va_signals = (
         db.query(FundSignal)
@@ -767,10 +765,10 @@ def test_characterize_coverage_ac017_top_missed_change_pct_filter(db: Session) -
     reset_coverage_cache()  # 이전 테스트 캐시 초기화
 
     # 시총 2000억 이상, 시그널 없는 종목
-    stock = _make_stock(db, "999001", "고성장주식", market_cap=2000)
+    _stock = _make_stock(db, "999001", "고성장주식", market_cap=2000)
 
     # change_pct 모킹: 고성장 종목은 15% 이상, 일반 종목은 5%
-    mock_price_data = {
+    _mock_price_data = {
         "999001": {"change_rate": 20.0, "current_price": 10000},
     }
 
@@ -795,9 +793,8 @@ def test_characterize_volume_anomaly_ac018_failure_isolation(db: Session) -> Non
     """AC-018: detect_volume_anomaly_dormant_stocks 내부 예외가 surge_candidate 결과에 영향 없음."""
     from app.services.surge_detector import detect_volume_anomaly_dormant_stocks
     from app.surge_config.surge_settings import VolumeAnomalyConfig
-    from app.models.fund_signal import FundSignal
 
-    stock = _make_stock(db, "012345", "비활성주식", market_cap=500)
+    _stock = _make_stock(db, "012345", "비활성주식", market_cap=500)
 
     config = VolumeAnomalyConfig(
         dormant_signal_count_threshold=3,
