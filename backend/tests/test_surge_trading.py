@@ -94,7 +94,7 @@ class TestIsMarketHours:
         from zoneinfo import ZoneInfo
         KST = ZoneInfo("Asia/Seoul")
         # 화요일 10:00 KST
-        dt = datetime(2026, 5, 5, 10, 0, 0, tzinfo=KST)
+        dt = datetime(2026, 5, 20, 10, 0, 0, tzinfo=KST)
         assert is_market_hours(dt) is True
 
     def test_characterize_is_market_hours_weekday_at_open(self):
@@ -102,7 +102,7 @@ class TestIsMarketHours:
         from app.services.surge_trading_service import is_market_hours
         from zoneinfo import ZoneInfo
         KST = ZoneInfo("Asia/Seoul")
-        dt = datetime(2026, 5, 5, 9, 0, 0, tzinfo=KST)
+        dt = datetime(2026, 5, 20, 9, 0, 0, tzinfo=KST)
         assert is_market_hours(dt) is True
 
     def test_characterize_is_market_hours_weekday_at_close(self):
@@ -110,7 +110,7 @@ class TestIsMarketHours:
         from app.services.surge_trading_service import is_market_hours
         from zoneinfo import ZoneInfo
         KST = ZoneInfo("Asia/Seoul")
-        dt = datetime(2026, 5, 5, 15, 30, 0, tzinfo=KST)
+        dt = datetime(2026, 5, 20, 15, 30, 0, tzinfo=KST)
         assert is_market_hours(dt) is True
 
     def test_characterize_is_market_hours_weekday_before_open(self):
@@ -118,7 +118,7 @@ class TestIsMarketHours:
         from app.services.surge_trading_service import is_market_hours
         from zoneinfo import ZoneInfo
         KST = ZoneInfo("Asia/Seoul")
-        dt = datetime(2026, 5, 5, 8, 59, 0, tzinfo=KST)
+        dt = datetime(2026, 5, 20, 8, 59, 0, tzinfo=KST)
         assert is_market_hours(dt) is False
 
     def test_characterize_is_market_hours_weekday_after_close(self):
@@ -126,7 +126,7 @@ class TestIsMarketHours:
         from app.services.surge_trading_service import is_market_hours
         from zoneinfo import ZoneInfo
         KST = ZoneInfo("Asia/Seoul")
-        dt = datetime(2026, 5, 5, 15, 31, 0, tzinfo=KST)
+        dt = datetime(2026, 5, 20, 15, 31, 0, tzinfo=KST)
         assert is_market_hours(dt) is False
 
     def test_characterize_is_market_hours_saturday(self):

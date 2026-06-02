@@ -33,6 +33,25 @@ INTRADAY_CRASH_LIMIT = -3.0     # 전일비 -3% 이하: 테마 thesis 붕괴, �
 INTRADAY_OVERHEAT_LIMIT = 15.0  # 전일비 +15% 초과: 당일 이미 과열, 상단 매수 제외
 ENTRY_GAPUP_LIMIT = 0.05        # 시그널 기준가 대비 5% 초과 갭업 시 진입 제외 (올릭스 사례 대응)
 
+# KRX 임시 공휴일 (토/일 외 시장 휴장일). 매년 갱신 필요.
+# 참고: https://www.krx.co.kr (KRX 공식 휴장일 공고)
+KRX_EXTRA_HOLIDAYS: frozenset[date] = frozenset([
+    # 2026년 임시 공휴일
+    date(2026, 1, 1),    # 신정
+    date(2026, 1, 27),   # 설날 연휴
+    date(2026, 1, 28),   # 설날
+    date(2026, 1, 29),   # 설날 연휴
+    date(2026, 1, 30),   # 설날 연휴
+    date(2026, 3, 1),    # 삼일절
+    date(2026, 5, 5),    # 어린이날
+    date(2026, 6, 3),    # 전국동시지방선거일 (임시공휴일, KRX 휴장)
+    date(2026, 8, 17),   # 광복절 대체공휴일
+    date(2026, 10, 3),   # 개천절
+    date(2026, 10, 9),   # 한글날
+    date(2026, 12, 25),  # 크리스마스
+    date(2026, 12, 31),  # KRX 연말 휴장
+])
+
 
 def _get_current_price_sync(stock_code: str) -> Optional[int]:
     """async fetch_current_price를 sync 컨텍스트에서 실행하는 wrapper.
@@ -84,27 +103,35 @@ def _get_price_history_sync(stock_code: str) -> list:
 def is_market_hours(now: Optional[datetime] = None) -> bool:
     # @MX:ANCHOR: [AUTO] 정규장 시간 가드 — 모든 매수/매도 실행의 전제 조건
     # @MX:REASON: [AUTO] execute_buy_orders, check_exit_conditions, 스케줄러 잡 등 3개 이상 컴포넌트에서 참조
-    """KST 평일 09:00~15:30 여부 확인.
+    """KST 평일(공휴일 제외) 09:00~15:30 여부 확인.
 
     매수/매도 주문은 정규장 시간 외에는 실행하지 않음 (큐잉 X, 단순 스킵).
+    KRX_EXTRA_HOLIDAYS에 등록된 임시공휴일(선거일 등)도 휴장 처리.
     """
     now = now or datetime.now(KST)
     # 토요일(5), 일요일(6)은 휴장
     if now.weekday() >= 5:
+        return False
+    # KRX 임시 공휴일 (선거일 등)
+    if now.date() in KRX_EXTRA_HOLIDAYS:
         return False
     current_time = now.time()
     return MARKET_OPEN <= current_time <= MARKET_CLOSE
 
 
 def is_buy_eligible_hours(now: Optional[datetime] = None, db: Optional[Session] = None) -> bool:
-    """급등예측 신규 매수 가능 시간: KST 평일 09:00~11:00.
+    """급등예측 신규 매수 가능 시간: KST 평일(공휴일 제외) 09:00~11:00.
 
     테마주 급등 1차 파동은 09:00~10:30에 완성되므로 11:00 이후 신규 진입 차단.
     손절 복구: db가 제공되고 당일 손절이 발생한 경우 11:00~15:30 구간에서도 재진입 허용.
     종료 조건 체크(check_exit_conditions)는 MARKET_CLOSE(15:30)까지 계속 실행.
+    KRX_EXTRA_HOLIDAYS에 등록된 임시공휴일(선거일 등)도 매수 불가 처리.
     """
     now = now or datetime.now(KST)
     if now.weekday() >= 5:
+        return False
+    # KRX 임시 공휴일
+    if now.date() in KRX_EXTRA_HOLIDAYS:
         return False
     current_time = now.time()
     if MARKET_OPEN <= current_time <= BUY_CUTOFF:
@@ -132,9 +159,9 @@ def get_or_create_portfolio(db: Session) -> SurgePortfolio:
 
 
 def _get_prev_business_day(ref: date) -> date:
-    """직전 영업일 반환. 토/일이면 금요일로 후퇴한다."""
+    """직전 영업일 반환. 토/일 및 KRX 임시공휴일이면 추가 후퇴."""
     prev = ref - timedelta(days=1)
-    while prev.weekday() >= 5:  # 5=토, 6=일
+    while prev.weekday() >= 5 or prev in KRX_EXTRA_HOLIDAYS:  # 5=토, 6=일
         prev -= timedelta(days=1)
     return prev
 
