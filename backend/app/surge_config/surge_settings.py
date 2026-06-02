@@ -138,6 +138,35 @@ class DisclosureTypeFilterConfig(BaseModel):
     skip_bearish_in_today_signals: bool = True
 
 
+class AdaptiveThresholdConfig(BaseModel):
+    """SPEC-AI-029: 적응형 surge_probability 임계값 설정.
+
+    직전 5거래 승률, 시장 레짐 배율, 콤보/테마 게이트를 조합하여
+    동적으로 임계값을 산출한다.
+    """
+
+    # @MX:NOTE: [AUTO] SPEC-AI-029 — 적응형 임계값 시스템. enabled=False이면 정적 min_score_for_signal 사용
+    # @MX:SPEC: SPEC-AI-029 REQ-AI029-001
+    enabled: bool = True
+    # 직전 N회 종료 거래 승률 계산 창
+    win_rate_window: int = 5
+    # 승률이 이 값 미만이면 임계값 상향 조정
+    win_rate_floor: float = 0.40
+    # 승률 미달 시 기본 임계값에 더할 값
+    win_rate_addition: float = 0.05
+    # 승률 조정 후 상한선
+    win_rate_cap: float = 0.70
+    # 레짐별 배율: BEAR(신중), SIDEWAYS(중립), BULL(완화)
+    regime_multipliers: dict[str, float] = Field(
+        default_factory=lambda: {"BEAR": 1.2, "SIDEWAYS": 1.0, "BULL": 0.9}
+    )
+    # 최종 임계값 하한/상한 클램프
+    final_clamp_min: float = 0.45
+    final_clamp_max: float = 0.85
+    # combo_score=0.0 일 때 테마 점수 최소 기준 (미달 시 종목 제외)
+    combo_zero_theme_floor: float = 0.7
+
+
 class SurgeDetectionConfig(BaseModel):
     """급등 징후 탐지 전체 설정.
 
@@ -156,6 +185,8 @@ class SurgeDetectionConfig(BaseModel):
     valuation_disqualifiers: ValuationDisqualifiersConfig = ValuationDisqualifiersConfig()
     # SPEC-AI-028: 공시 유형별 역신호 필터링 설정
     disclosure_type_filter: DisclosureTypeFilterConfig = Field(default_factory=DisclosureTypeFilterConfig)
+    # SPEC-AI-029: 적응형 surge_probability 임계값 설정
+    adaptive_threshold: AdaptiveThresholdConfig = Field(default_factory=AdaptiveThresholdConfig)
 
     # @MX:ANCHOR: [AUTO] 앙상블 가중치 합산 검증 — 4개 탐지기 가중치 합산 반드시 1.0
     # @MX:REASON: 가중치 합산 != 1.0 이면 앙상블 스코어 범위가 0~1을 벗어나 시그널 임계값 판정이 왜곡됨

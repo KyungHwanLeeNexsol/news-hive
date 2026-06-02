@@ -92,3 +92,17 @@ surge_detection:
       - "영업손실"
     penalty_factor: 0.3
     skip_bearish_in_today_signals: true
+  # SPEC-AI-029 REQ-AI029-001: 적응형 surge_probability 임계값 설정
+  adaptive_threshold:
+    enabled: true
+    win_rate_window: 5
+    win_rate_floor: 0.40
+    win_rate_addition: 0.05
+    win_rate_cap: 0.70
+    regime_multipliers:
+      BEAR: 1.2
+      SIDEWAYS: 1.0
+      BULL: 0.9
+    final_clamp_min: 0.45
+    final_clamp_max: 0.85
+    combo_zero_theme_floor: 0.7

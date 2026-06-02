@@ -596,6 +596,18 @@ def execute_buy_orders(
     portfolio = get_or_create_portfolio(db)
     today_signals = get_today_signals(db, min_probability=min_probability)
 
+    # SPEC-AI-029 REQ-AI029-006: 매수 실행 시 저장된 임계값 읽기 (재산출 없음)
+    from app.surge_config.surge_settings import get_surge_config as _get_surge_config
+    _surge_cfg_exec = _get_surge_config()
+    _adaptive_exec_cfg = _surge_cfg_exec.adaptive_threshold
+    if _adaptive_exec_cfg.enabled:
+        from app.services.surge_threshold_service import get_today_threshold as _get_threshold
+        from app.services.surge_threshold_service import is_combo_theme_gate_passed as _combo_gate
+        _effective_prob_threshold = float(_get_threshold(db, _surge_cfg_exec))
+    else:
+        _effective_prob_threshold = float(_surge_cfg_exec.ensemble.min_score_for_signal)
+    logger.info("[SURGE] 적응형 매수 임계값 = %.3f (adaptive=%s)", _effective_prob_threshold, _adaptive_exec_cfg.enabled)
+
     today_count = count_today_entries(db, exclude_stop_loss=True)
     open_count = count_open_positions(db)
     sector_counts = _get_open_sector_counts(db)
@@ -613,8 +625,7 @@ def execute_buy_orders(
     all_stock_codes = [stock.stock_code for _, stock, _, _boost in today_signals]
     price_cache: dict[str, dict | None] = {}
     if all_stock_codes:
-        from app.surge_config.surge_settings import get_surge_config as _get_surge_config
-        _cfg = _get_surge_config()
+        _cfg = _surge_cfg_exec
         _pq = _cfg.price_query
         price_cache = _get_price_with_change_batch_sync(
             all_stock_codes,
@@ -640,6 +651,33 @@ def execute_buy_orders(
         # REQ-AI016-002: 탐지기별 점수 추출 (매 평가 시작 시점에 파싱)
         # @MX:NOTE: [AUTO] SPEC-AI-016 탐지기별 분해 로그 — 매 평가 종목마다 점수 파싱
         det = _extract_detector_scores(signal.surge_metadata)
+
+        # SPEC-AI-029 REQ-AI029-006: 적응형 임계값 비교 (저장된 값 사용)
+        if probability < _effective_prob_threshold:
+            logger.info(
+                "[SURGE] %s skipped score=%.3f < threshold=%.3f | reason=adaptive_threshold",
+                stock_code, probability, _effective_prob_threshold,
+            )
+            skipped += 1
+            details.append({"stock_code": stock_code, "action": "skipped", "reason": "adaptive_threshold"})
+            continue
+
+        # SPEC-AI-029 REQ-AI029-003: combo=0.0 AND theme < floor → 종목 제외
+        if _adaptive_exec_cfg.enabled:
+            _raw_meta_dict: Optional[dict] = None
+            if signal.surge_metadata:
+                try:
+                    _raw_meta_dict = json.loads(signal.surge_metadata) if isinstance(signal.surge_metadata, str) else signal.surge_metadata
+                except (json.JSONDecodeError, TypeError):
+                    _raw_meta_dict = None
+            if not _combo_gate(_raw_meta_dict, _surge_cfg_exec):
+                logger.info(
+                    "[SURGE] %s skipped score=%.3f | reason=combo_theme_gate (combo=0,theme<%.2f)",
+                    stock_code, probability, _adaptive_exec_cfg.combo_zero_theme_floor,
+                )
+                skipped += 1
+                details.append({"stock_code": stock_code, "action": "skipped", "reason": "combo_theme_gate"})
+                continue
 
         # 일일 최대 진입 한도 체크
         if today_count + executed >= max_daily_entries:

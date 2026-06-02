@@ -105,6 +105,71 @@ def get_coverage_dashboard(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="커버리지 대시보드 조회 실패")
 
 
+@router.get("/threshold-status")
+def get_threshold_status(db: Session = Depends(get_db)):
+    """SPEC-AI-029: 오늘 적응형 임계값 상태 조회.
+
+    오늘 날짜의 surge_threshold_history 레코드를 반환한다.
+    레코드가 없으면 computed_today=false로 응답한다.
+
+    Returns:
+        {
+            "date": "2026-06-02",
+            "threshold": 0.495,
+            "win_rate_5d": 0.6,
+            "regime": "BULL",
+            "reason": "...",
+            "computed_today": true,
+            "fallback_threshold": 0.45
+        }
+    """
+    from datetime import timezone as _tz
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo as _ZoneInfo
+
+    _kst = _ZoneInfo("Asia/Seoul")
+    today = _dt.now(_kst).date()
+
+    try:
+        from app.models.surge_threshold_history import SurgeThresholdHistory
+        from app.surge_config.surge_settings import get_surge_config as _get_cfg
+        from app.services.surge_threshold_service import compute_adaptive_threshold as _compute
+
+        _cfg = _get_cfg()
+        fallback = _cfg.ensemble.min_score_for_signal
+
+        row = db.query(SurgeThresholdHistory).filter(
+            SurgeThresholdHistory.date == today
+        ).first()
+
+        if row:
+            return {
+                "date": str(row.date),
+                "threshold": row.threshold,
+                "win_rate_5d": row.win_rate_5d,
+                "regime": row.regime,
+                "reason": row.reason,
+                "computed_today": True,
+                "fallback_threshold": fallback,
+            }
+        else:
+            # 오늘 레코드 없음 — 실시간 산출값 포함하여 응답
+            computed = _compute(db, _cfg)
+            return {
+                "date": str(today),
+                "threshold": None,
+                "win_rate_5d": None,
+                "regime": None,
+                "reason": None,
+                "computed_today": False,
+                "fallback_threshold": fallback,
+                "computed_if_run_now": computed,
+            }
+    except Exception as e:
+        logger.error("임계값 상태 조회 실패: %s", e)
+        raise HTTPException(status_code=500, detail="임계값 상태 조회 실패")
+
+
 @router.post("/execute")
 def trigger_execute(
     request: Request,
