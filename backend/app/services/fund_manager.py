@@ -2878,7 +2878,6 @@ async def run_surge_signal_generation(db: Session) -> int:
                 _compute_win_rate,
             )
             from app.services.market_regime_service import get_or_create_today_regime
-            from datetime import timezone as _tz2
 
             _surge_cfg = _get_cfg()
             _adaptive_cfg = _surge_cfg.adaptive_threshold

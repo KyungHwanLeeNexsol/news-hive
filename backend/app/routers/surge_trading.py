@@ -123,7 +123,6 @@ def get_threshold_status(db: Session = Depends(get_db)):
             "fallback_threshold": 0.45
         }
     """
-    from datetime import timezone as _tz
     from datetime import datetime as _dt
     from zoneinfo import ZoneInfo as _ZoneInfo
 
