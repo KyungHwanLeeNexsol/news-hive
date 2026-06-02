@@ -537,6 +537,45 @@ def detect_volume_surge_news_combo(
             pass
         _per, _pbr = _extract_valuation(stock_code, _vol_price_data)
 
+        # SPEC-AI-030: 추격매수 방지 게이트 (REQ-AI030-001~003)
+        # @MX:NOTE: [AUTO] SPEC-AI-030 — cfg_guard.enabled=False이면 4개 게이트 전부 우회
+        # @MX:SPEC: SPEC-AI-030
+        cfg_guard = config.combo_chase_guard
+        if cfg_guard.enabled:
+            change_rate = None
+            if _vol_price_data is not None:
+                change_rate = _vol_price_data.get("change_rate")
+
+            # Gate 1 (REQ-AI030-001): 당일 과열 필터
+            if change_rate is None and cfg_guard.exclude_on_price_unavailable:
+                logger.debug("[거래량콤보] %s 가격 조회 실패 — 제외", stock_code)
+                continue
+            if change_rate is not None and change_rate >= cfg_guard.overheat_change_pct:
+                logger.debug(
+                    "[거래량콤보] %s 과열 제외 change_rate=%.2f%%",
+                    stock_code, change_rate,
+                )
+                continue
+
+            # Gate 2 (REQ-AI030-002): 거래량 신선도 검증
+            if len(volumes) >= 2 and volumes[-2] > 0:
+                freshness = volumes[-1] / volumes[-2]
+                if freshness < cfg_guard.min_freshness_ratio:
+                    logger.debug(
+                        "[거래량콤보] %s stale 제외 freshness=%.2f",
+                        stock_code, freshness,
+                    )
+                    continue
+            # volumes[-2] == 0이고 volumes[-1] > 0이면 신선 → 통과
+
+            # Gate 3 (REQ-AI030-003): 분산 패턴 거부 (음수 등락률)
+            if change_rate is not None and change_rate < cfg_guard.distribution_change_pct:
+                logger.debug(
+                    "[거래량콤보] %s 분산패턴 제외 change_rate=%.2f%%",
+                    stock_code, change_rate,
+                )
+                continue
+
         results.append(
             SurgeCandidate(
                 stock_code=stock_code,
@@ -1093,6 +1132,24 @@ def gather_surge_candidates(
                     )
             except Exception:
                 pass
+
+    # SPEC-AI-030 Gate 4 (REQ-AI030-004): combo 단독 신호 buy-pool 미포함
+    # @MX:NOTE: [AUTO] SPEC-AI-030 — combo_score > 0이고 다른 탐지기 점수가 모두 0이면 buy-pool 제외
+    # @MX:SPEC: SPEC-AI-030 REQ-AI030-004
+    _guard = config.combo_chase_guard
+    if _guard.enabled and _guard.require_companion_detector:
+        _combo_only_codes: list[str] = []
+        for _code, _cand in merged.items():
+            if (
+                _cand.combo_score > 0
+                and _cand.theme_cluster_score == 0.0
+                and _cand.immediate_disclosure_score == 0.0
+                and _cand.pattern_score == 0.0
+            ):
+                _combo_only_codes.append(_code)
+                logger.info("[앙상블] %s combo단독 제외", _code)
+        for _code in _combo_only_codes:
+            del merged[_code]
 
     # 앙상블 점수 계산 및 임계값 필터링
     qualified: list[SurgeCandidate] = []

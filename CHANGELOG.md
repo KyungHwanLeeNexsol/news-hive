@@ -4,6 +4,32 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Added — SPEC-AI-030 volume_news_combo 추격매수 방지 4개 게이트 (2026-06-02)
+
+2026-06-02 운영 분석에서 `volume_news_combo` 신호 6건이 100% 실패(평균 -7.7%)한 반면, 유일한 성공 사례(쎄노텍 +10.6%)는 `immediate_disclosure + theme_cluster` 조합을 사용했습니다. 이를 근거로 combo-only 추격매수를 차단하는 4개 게이트를 surge_detector에 추가하여 신호 신뢰도를 강화했습니다.
+
+- **REQ-AI030-001 과열 필터** (`backend/app/services/surge_detector.py`):
+  - 변동률 >= 5.0% 종목 제외로 과도한 상승 모멘텀 차단
+  
+- **REQ-AI030-002 거래량 신선도 검사** (`backend/app/services/surge_detector.py`):
+  - 최근 거래량 대비 이전 거래량 비율 < 1.5 시 제외 (거래량 스파이크의 지속성 부족)
+  
+- **REQ-AI030-003 분포 패턴 거부** (`backend/app/services/surge_detector.py`):
+  - 변동률 < 0.0%(가격 하락) 종목 제외로 약세 신호 차단
+  
+- **REQ-AI030-004 콤보 전용 제외** (`backend/app/services/surge_detector.py`):
+  - `combo_score > 0`이지만 동반 탐지기 없을 때 매수풀 제외 (독립적 신호 부재 시 매수 차단)
+
+- **설정 모델** (`backend/app/surge_config/surge_settings.py`):
+  - 신규 `ComboChaseGuardConfig` 모델 with master switch `enabled=True`
+  - YAML 섹션 `combo_chase_guard` 추가 (`backend/app/surge_config/surge_detection.yaml`)
+  - 마스터 스위치로 backward compatible 비활성화 가능
+  
+- **테스트** (`backend/tests/test_surge_ai030.py` 신규):
+  - 27개 테스트, 모두 통과
+  - 4개 게이트의 개별 및 조합 동작 검증
+  - 기존 신호 타입과의 상호 작용 확인
+
 ### Added — SPEC-AI-024/025/026 급등 시그널 커버리지 추가 확장 (2026-05-29)
 
 세 가지 새로운 급등 탐지기를 `_run_coverage_expansion()`에 추가했습니다:

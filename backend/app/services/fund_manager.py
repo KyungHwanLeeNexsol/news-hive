@@ -2867,6 +2867,40 @@ async def run_surge_signal_generation(db: Session) -> int:
     )
 
     try:
+        # SPEC-AI-029: 시그널 생성 전 적응형 임계값 산출 및 DB 저장
+        # 매수 실행 시점(09:05)에는 여기서 저장된 값을 읽어 사용 (재산출 안 함)
+        try:
+            from app.surge_config.surge_settings import get_surge_config as _get_cfg
+            from app.services.surge_threshold_service import (
+                compute_adaptive_threshold,
+                persist_threshold,
+                _get_recent_closed_trades,
+                _compute_win_rate,
+            )
+            from app.services.market_regime_service import get_or_create_today_regime
+            from datetime import timezone as _tz2
+
+            _surge_cfg = _get_cfg()
+            _adaptive_cfg = _surge_cfg.adaptive_threshold
+
+            if _adaptive_cfg.enabled:
+                _threshold = compute_adaptive_threshold(db, _surge_cfg)
+
+                # 승률 정보 추출 (로그용)
+                _trades = _get_recent_closed_trades(db, _adaptive_cfg.win_rate_window)
+                _win_rate = _compute_win_rate(_trades) if len(_trades) >= _adaptive_cfg.win_rate_window else None
+
+                # 레짐 정보 추출
+                _regime_obj = get_or_create_today_regime(db)
+                _regime_str = _regime_obj.regime.value if _regime_obj else None
+
+                _today_kst = datetime.now(_KST).date()
+                _reason = f"base={_surge_cfg.ensemble.min_score_for_signal:.3f}, win_rate={_win_rate}, regime={_regime_str}"
+                persist_threshold(db, _today_kst, _threshold, _win_rate, _regime_str, _reason)
+                logger.info("[급등시그널] 적응형 임계값 저장 완료: %.3f (date=%s)", _threshold, _today_kst)
+        except Exception as _te:
+            logger.warning("[급등시그널] 적응형 임계값 산출/저장 실패 — 계속 진행: %s", _te)
+
         candidates = await _gather_surge_candidates(db, recent_news, [])
 
         # SPEC-AI-022: surge_candidate 저장 완료 후 커버리지 확장 시그널 생성

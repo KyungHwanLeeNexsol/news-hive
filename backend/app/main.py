@@ -8,6 +8,7 @@ from app.database import SessionLocal, engine, Base  # noqa: F401
 from app.models import Sector, Stock, NewsArticle, NewsStockRelation  # noqa: F401
 from app.models import Commodity, CommodityPrice, SectorCommodityRelation  # noqa: F401
 from app.models.surge_portfolio import SurgePortfolio, SurgeTrade  # noqa: F401
+from app.models.surge_threshold_history import SurgeThresholdHistory  # noqa: F401
 from app.models.sector_insight import SectorInsight  # noqa: F401
 from app.models.disclosure import Disclosure  # noqa: F401
 from app.models.vip_trading import VIPDisclosure, VIPPortfolio, VIPTrade  # noqa: F401
