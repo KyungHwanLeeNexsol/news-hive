@@ -3,7 +3,7 @@
 적응형 surge 확률 임계값의 일별 산출 이력을 저장한다.
 date 컬럼에 UNIQUE 제약을 적용하여 날짜당 단일 레코드를 보장한다.
 
-Revision ID: 057_spec_ai_029_surge_threshold_history
+Revision ID: 057_surge_threshold_history
 Revises: 056_surge_data_integrity
 Create Date: 2026-06-02
 """
@@ -13,7 +13,7 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "057_spec_ai_029_surge_threshold_history"
+revision = "057_surge_threshold_history"
 down_revision = "056_surge_data_integrity"
 branch_labels = None
 depends_on = None
