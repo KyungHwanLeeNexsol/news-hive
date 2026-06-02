@@ -138,6 +138,27 @@ class DisclosureTypeFilterConfig(BaseModel):
     skip_bearish_in_today_signals: bool = True
 
 
+class ComboChaseGuardConfig(BaseModel):
+    """SPEC-AI-030: volume_news_combo 추격매수 방지 게이트 설정.
+
+    4개 게이트로 z-score 임계 돌파 시점에 이미 급등이 끝난 종목을 필터링한다.
+    """
+
+    # @MX:NOTE: [AUTO] SPEC-AI-030 — 추격매수 방지 마스터 스위치. False이면 모든 게이트 비활성
+    # @MX:SPEC: SPEC-AI-030
+    enabled: bool = True
+    # Gate 1 (REQ-AI030-001): 당일 과열 필터 — change_rate >= 이 값이면 제외
+    overheat_change_pct: float = 5.0
+    # Gate 2 (REQ-AI030-002): 거래량 신선도 — volumes[-1]/volumes[-2] < 이 값이면 제외
+    min_freshness_ratio: float = 1.5
+    # Gate 3 (REQ-AI030-003): 분산 패턴 거부 — change_rate < 이 값이면 제외 (0.0=음수만 제외)
+    distribution_change_pct: float = 0.0
+    # Gate 1/3 가격 조회 실패 시 제외 여부
+    exclude_on_price_unavailable: bool = True
+    # Gate 4 (REQ-AI030-004): gather_surge_candidates에서 combo 단독 신호 제외
+    require_companion_detector: bool = True
+
+
 class AdaptiveThresholdConfig(BaseModel):
     """SPEC-AI-029: 적응형 surge_probability 임계값 설정.
 
@@ -187,6 +208,8 @@ class SurgeDetectionConfig(BaseModel):
     disclosure_type_filter: DisclosureTypeFilterConfig = Field(default_factory=DisclosureTypeFilterConfig)
     # SPEC-AI-029: 적응형 surge_probability 임계값 설정
     adaptive_threshold: AdaptiveThresholdConfig = Field(default_factory=AdaptiveThresholdConfig)
+    # SPEC-AI-030: volume_news_combo 추격매수 방지 게이트 설정
+    combo_chase_guard: ComboChaseGuardConfig = Field(default_factory=ComboChaseGuardConfig)
 
     # @MX:ANCHOR: [AUTO] 앙상블 가중치 합산 검증 — 4개 탐지기 가중치 합산 반드시 1.0
     # @MX:REASON: 가중치 합산 != 1.0 이면 앙상블 스코어 범위가 0~1을 벗어나 시그널 임계값 판정이 왜곡됨

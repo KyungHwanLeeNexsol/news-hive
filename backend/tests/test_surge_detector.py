@@ -365,7 +365,12 @@ class TestVolumeNewsCombo:
         original_provider = det_module._volume_provider
         try:
             det_module._volume_provider = lambda code, days: volumes
-            result = detect_volume_surge_news_combo(db, surge_config)
+            # SPEC-AI-030: 게이트 통과 조건 충족 — change_rate=2.0 (< 5.0), z-score 신선
+            with patch(
+                "app.services.surge_detector._fetch_price_change_sync",
+                return_value={"current_price": 10000, "change_rate": 2.0},
+            ):
+                result = detect_volume_surge_news_combo(db, surge_config)
         finally:
             det_module._volume_provider = original_provider
 

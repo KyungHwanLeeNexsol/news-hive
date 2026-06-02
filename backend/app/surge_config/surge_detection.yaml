@@ -106,3 +106,12 @@ surge_detection:
     final_clamp_min: 0.45
     final_clamp_max: 0.85
     combo_zero_theme_floor: 0.7
+  # SPEC-AI-030 REQ-AI030-001~004: volume_news_combo 추격매수 방지 게이트 설정
+  # enabled=False이면 4개 게이트 전부 비활성 (레거시 동작 복원)
+  combo_chase_guard:
+    enabled: true
+    overheat_change_pct: 5.0
+    min_freshness_ratio: 1.5
+    distribution_change_pct: 0.0
+    exclude_on_price_unavailable: true
+    require_companion_detector: true
