@@ -4,6 +4,17 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Planned — 급등 예측 정확도 개선 로드맵 SPEC 초안 (2026-06-02)
+
+2026-06-02 운영 분석(volume_news_combo 전패, theme_cluster 단독 확률 0.27)을 바탕으로
+급등 예측 정확도 개선을 위한 5개 SPEC 초안을 작성했습니다.
+
+- **SPEC-AI-031**: 장 시작 직전 08:45 재확인 스캔 — 18시간 신호 갭 해소, watch_list → confirm_list 2단계 파이프라인
+- **SPEC-AI-032**: 뉴스 속도(Velocity) 탐지기 신설 — 기사 수가 아닌 기사 가속도 측정, theme_cluster 한계 보완
+- **SPEC-AI-033**: `immediate_disclosure` 앙상블 가중치 독립화 — 현재 0.20 공유 → 0.35 전용 가중치로 최고 예측자 반영
+- **SPEC-AI-034**: 실적 기반 앙상블 가중치 보정 — `SurgeTrade` 실적 데이터로 탐지기별 win rate 계산, 가중치 조정 추천
+- **SPEC-AI-035**: 장중 실시간 cascade 감지 — 대장주 급등 시 계열사 당일 진입 기회 포착 (현재는 15:20 후 익일 실행)
+
 ### Added — SPEC-AI-030 volume_news_combo 추격매수 방지 4개 게이트 (2026-06-02)
 
 2026-06-02 운영 분석에서 `volume_news_combo` 신호 6건이 100% 실패(평균 -7.7%)한 반면, 유일한 성공 사례(쎄노텍 +10.6%)는 `immediate_disclosure + theme_cluster` 조합을 사용했습니다. 이를 근거로 combo-only 추격매수를 차단하는 4개 게이트를 surge_detector에 추가하여 신호 신뢰도를 강화했습니다.
