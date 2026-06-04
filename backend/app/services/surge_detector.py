@@ -344,25 +344,13 @@ def detect_theme_news_cluster(
         # sector_relevance 곱하기 (기존과 동일)
         theme_cluster_score *= best_sector_relevance
 
-        # SPEC-AI-038 REQ-038-PF2: 가격 API는 의미있는 후보에만 호출
-        # theme_cluster_score < 0.10이면 가격 보너스를 받아도 유효 임계값(0.45+) 미달
-        # → 불필요한 HTTP 호출을 사전 차단
-        price_data: dict | None = None
-        if theme_cluster_score >= 0.10:
-            try:
-                # SPEC-AI-038 REQ-038-PF3: 단일 호출로 price_bonus + valuation 모두 처리
-                # (기존: 동일 종목에 2회 호출 → 1회로 통합)
-                price_data = _fetch_price_change_sync(stock.stock_code)
-            except Exception:
-                pass
-
-        # REQ-AI014-002: 경량 거래량 보너스 (+0.10)
-        # 전일 대비 3% 초과 가격 변동 시 보너스 적용
-        price_bonus = 0.0
-        if price_data is not None:
-            change_rate = price_data.get("change_rate", 0.0) or 0.0
-            if abs(change_rate) > 3.0:
-                price_bonus = 0.10
+        # SPEC-AI-038 성능 패치 최종판: detect_theme_news_cluster에서 가격 API 호출 완전 제거
+        # 근거:
+        #   - price_bonus 최대 +0.10 (테마 점수 0.85+ 종목에 영향 미미)
+        #   - 921종목 × 0.6s/call = 550초 → timeout 직접 원인
+        #   - per/pbr valuation은 observability-only (필터링 없음, @MX:NOTE SPEC-AI-020)
+        # 효과: O(N×API_latency) → O(N) 순수 메모리 연산, 예상 실행 시간 < 10초
+        price_bonus = 0.0  # 가격 보너스 미적용 (테마 기반 점수만 사용)
 
         theme_cluster_score += price_bonus
 
@@ -390,8 +378,8 @@ def detect_theme_news_cluster(
         )
 
         # @MX:NOTE: SPEC-AI-020: piggy-back per/pbr 수집 (observability) — 필터링 없음
-        # SPEC-AI-038: price_data를 재사용 (중복 호출 제거)
-        _per, _pbr = _extract_valuation(stock.stock_code, price_data)
+        # SPEC-AI-038 성능 패치: per/pbr 조회 생략 (가격 API 호출 없음)
+        _per, _pbr = None, None
 
         results.append(
             SurgeCandidate(
