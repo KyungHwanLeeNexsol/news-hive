@@ -211,6 +211,14 @@ class SurgeDetectionConfig(BaseModel):
     # SPEC-AI-030: volume_news_combo 추격매수 방지 게이트 설정
     combo_chase_guard: ComboChaseGuardConfig = Field(default_factory=ComboChaseGuardConfig)
 
+    # SPEC-AI-036: 품질 floor 게이트 — 보정 confidence / composite_score 최소값
+    # # @MX:NOTE: [AUTO] SPEC-AI-036 — 두 조건 중 하나만 충족해도 시그널 통과 (OR 게이트)
+    # # @MX:SPEC: SPEC-AI-036 REQ-036-003
+    min_calibrated_confidence: float = 0.35
+    min_composite_score: float = 0.60
+    # 캘리브레이터 학습 최소 샘플 수
+    min_calibration_samples: int = 50
+
     # @MX:ANCHOR: [AUTO] 앙상블 가중치 합산 검증 — 4개 탐지기 가중치 합산 반드시 1.0
     # @MX:REASON: 가중치 합산 != 1.0 이면 앙상블 스코어 범위가 0~1을 벗어나 시그널 임계값 판정이 왜곡됨
     @model_validator(mode="after")

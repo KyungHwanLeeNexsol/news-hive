@@ -531,3 +531,37 @@ def calibrate_confidence(raw_confidence: float, accuracy_stats: dict) -> float:
 
     # [0.1, 0.95] 범위로 클램핑
     return max(0.1, min(0.95, calibrated))
+
+
+def get_surge_calibration_pairs(
+    db: Session,
+    lookback_days: int = 90,
+) -> list[tuple[float, int]]:
+    """SPEC-AI-036 REQ-036-004: 캘리브레이터 학습용 (raw_confidence, is_correct) 쌍 반환.
+
+    최근 lookback_days 내 surge_candidate 시그널 중 is_correct가 확정된 레코드만 포함.
+
+    Args:
+        db: SQLAlchemy Session
+        lookback_days: 조회 기간 (일), 기본 90
+
+    Returns:
+        [(raw_confidence, is_correct), ...] 리스트.
+        is_correct ∈ {0, 1}.
+    """
+    from datetime import timedelta
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+
+    rows = (
+        db.query(FundSignal.confidence, FundSignal.is_correct)
+        .filter(
+            FundSignal.signal_type == "surge_candidate",
+            FundSignal.is_correct.isnot(None),
+            FundSignal.verified_at.isnot(None),
+            FundSignal.created_at >= cutoff,
+        )
+        .all()
+    )
+
+    return [(float(r.confidence), int(r.is_correct)) for r in rows]
