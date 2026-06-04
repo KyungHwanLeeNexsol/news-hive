@@ -4,6 +4,29 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Added — SPEC-AI-037 급등 탐지 테마 커버리지 확장 및 비테마 팩터 강화 (2026-06-04)
+
+2026-06-04 시스템 분석에서 13개 하드코딩 테마 외 급등주(게임/엔터/조선/해운 등)가 포착되지 않고,
+`combo_zero_theme_floor: 0.7` 게이트가 비테마 종목을 매수 단계에서 전면 차단하는 문제를 해결했습니다.
+
+- **REQ-037-001 테마 13→20개 확장** (`backend/app/surge_config/surge_detection.yaml`):
+  - 신규 테마: 게임/엔터/조선/해운물류/건설부동산/음식료/화학소재
+  - KRX `_SNAPSHOT` 섹터명 정본으로 매핑 (0건 매칭 오류 없음)
+
+- **REQ-037-002 combo_zero_theme_floor 0.7→0.55** (`surge_detection.yaml`, `surge_threshold_service.py`):
+  - 비테마 비과열 종목의 매수 게이트 진입 허용
+  - 과열(volume_z_score >= 3.0) 시 기존 0.7 유지로 추격매수 억제
+
+- **REQ-037-003 소형주 시총 1000억→500억** (`surge_detection.yaml`):
+  - `min_market_cap_krw: 50_000_000_000` 으로 하향
+
+- **REQ-037-005 비테마 fast path** (`surge_threshold_service.py`):
+  - `disclosure_pattern_score >= 0.70` 또는 `volume_news_combo_score >= 0.80 & 비과열` 시
+    theme=0 종목도 매수 게이트 직통 통과
+
+- **테스트**: `test_surge_ai037.py` 21개 신규 테스트, AC-037-001~006 전부 커버.
+  기존 SPEC-AI-029/030 테스트 회귀 0건. 앙상블 가중치 합 1.00 유지.
+
 ### Added — SPEC-AI-036 composite_score 활성화 및 confidence 캘리브레이션 (2026-06-04)
 
 2026-06-04 라이브 DB 분석에서 발견된 신호 품질 3대 결함(composite_score NULL 428/428, confidence 예측력 0.0001, 신호 과다·저품질)을 해결하는 isotonic regression 기반 품질 개선 시스템을 구현했습니다.
@@ -11,48 +34,21 @@ NewsHive의 주요 변경 사항을 기록합니다.
 #### M1 — composite_score 활성화
 - **새 함수** (`backend/app/services/factor_scoring.py`):
   - `build_surge_factor_scores(candidate, config) -> tuple[str, float]`: SurgeCandidate → (composite_score, factor_scores_json) 변환
-  - 모든 팩터(theme_cluster_score, combo_score, pattern_score, immediate_disclosure_score, legacy_score)의 가중 결합으로 0.0~1.0 스케일 composite_score 산출
 - **개선** (`backend/app/services/fund_manager.py`):
   - `_gather_surge_candidates()`: aggregation point에서 모든 surge_candidate에 composite_score + factor_scores 주입
 - **결과**: 신규 surge_candidate 100% composite_score 채움 (기존 0/428)
 
 #### M2 — Isotonic Regression 캘리브레이터
-- **신규 모듈** (`backend/app/services/surge_calibrator.py` 283줄):
-  - `IsotonicModel`: 단조 증가 보장된 보정 함수 (breakpoints + interpolation)
-  - `train_isotonic(pairs)`: Pure Python PAV (Pool Adjacent Violators) 알고리즘 구현 (numpy/scikit-learn 의존성 없음)
-  - `calibrate_confidence(raw)`: raw confidence → 캘리브레이션된 confidence 변환
-  - `retrain_calibrator(db)`: 90일 검증 신호로 주 1회 자동 재학습
-  - pickle 영속성 + identity fallback (파일 미로드/손상 시)
-- **지원 함수** (`backend/app/services/signal_verifier.py`):
-  - `get_surge_calibration_pairs(db, days=90)`: 검증 완료 surge_candidate → (raw_confidence, is_correct) 쌍 추출
-- **결과**: confidence 분포 개선 대기 (5월 실제 적중 데이터 축적 필요)
+- **신규 모듈** (`backend/app/services/surge_calibrator.py`): Pure Python PAV 알고리즘, pickle 영속성, identity fallback
+- **지원 함수** (`backend/app/services/signal_verifier.py`): `get_surge_calibration_pairs(db, days=90)`
 
 #### M3 — 품질 floor 게이트
-- **개선** (`backend/app/services/fund_manager.py`):
-  - `_gather_surge_candidates()`: floor gate 구현
-  - 조건: `calibrated_confidence >= 0.35 OR composite_score >= 0.60` (기본값)
-- **설정** (`backend/app/surge_config/surge_settings.py`):
-  - 신규 설정 키: `min_calibrated_confidence`, `min_composite_score`, `min_calibration_samples`
-- **결과**: 신호 수 33개/일 → 5~10개/일 범위로 수렴 예상 (floor 임계값 조정 필요)
+- `_gather_surge_candidates()`: `calibrated_confidence >= 0.35 OR composite_score >= 0.60` floor 게이트
 
 #### M4 — Signal Quality Monitoring API
-- **신규 서비스** (`backend/app/services/signal_quality.py` 157줄):
-  - `get_signal_quality_metrics(db, lookback_days=30)`: composite_score 채움률, confidence 분포, Brier score, ECE 반환
-  - 모든 예외 catch → insufficient_data 상태 반환 (HTTP 에러 전파 없음)
-  - REQ-036-007 준수: signal_type별 스케일 분리 보고 (surge=0~1, llm=0~100)
-- **엔드포인트** (`backend/app/routers/fund_manager.py` 594줄):
-  - `GET /api/fund/signal-quality`: 모니터링용 품질 메트릭 조회
-- **결과**: 캘리브레이션 효과 실시간 모니터링 가능
+- **신규**: `GET /api/fund/signal-quality` (composite_score 채움률, Brier score, ECE)
 
-#### 테스트
-- `backend/tests/test_surge_calibrator.py`: 234줄, 40개 테스트 (PAV 단조성, persistence, edge case)
-- `backend/tests/test_surge_ai036.py`: 418줄, 40개 테스트 (M1~M4 acceptance criteria)
-- 모든 1355+80 테스트 통과
-
-#### 알려진 제한사항
-- surge_detector.py의 직접 FundSignal 생성 지점(특정 탐지기)은 SurgeCandidate 객체 없어 composite_score 미할당
-  - 현재 모든 경로는 fund_manager._gather_surge_candidates() aggregation을 거치므로 영향 없음
-  - 향후 새로운 surge 경로 추가 시 해당 지점에서도 composite_score 명시적 할당 필요
+- **테스트**: `test_surge_calibrator.py` 40개 + `test_surge_ai036.py` 40개 신규.
 
 ### Planned — 급등 예측 정확도 개선 로드맵 SPEC 초안 (2026-06-02)
 

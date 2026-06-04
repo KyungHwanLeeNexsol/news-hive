@@ -1,7 +1,7 @@
 ---
 id: SPEC-AI-037
-version: 0.1.0
-status: draft
+version: 1.0.0
+status: completed
 created: 2026-06-04
 updated: 2026-06-04
 author: MoAI
