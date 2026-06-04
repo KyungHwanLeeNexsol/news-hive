@@ -143,14 +143,14 @@ class TestAC02903InsufficientTrades:
 
 
 # ---------------------------------------------------------------------------
-# AC-029-04: 레짐 배율 검증 (BEAR×1.2, SIDEWAYS×1.0, BULL×0.9)
+# AC-029-04: 레짐 배율 검증 (BEAR×1.05, SIDEWAYS×1.0, BULL×0.9) — SPEC-AI-038 REQ-038-002 반영
 # ---------------------------------------------------------------------------
 
 class TestAC02904RegimeMultiplier:
     @pytest.mark.parametrize(
         "regime, multiplier",
         [
-            (MarketRegimeEnum.BEAR, 1.2),
+            (MarketRegimeEnum.BEAR, 1.05),  # SPEC-AI-038: 1.2 → 1.05
             (MarketRegimeEnum.SIDEWAYS, 1.0),
             (MarketRegimeEnum.BULL, 0.9),
         ],

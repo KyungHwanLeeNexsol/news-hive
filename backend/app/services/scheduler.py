@@ -1457,6 +1457,21 @@ def start_scheduler():
         coalesce=True,
         replace_existing=True,
     )
+    # SPEC-AI-038 REQ-038-003: 장중 재탐지 (평일 10:00 KST)
+    # BUY_CUTOFF(11:00) 1시간 전 장중 거래량·공시 데이터로 당일 신규 시그널 탐지.
+    # 10:30 execute_buys 잡이 이 시그널을 읽어 당일 매수를 수행한다.
+    scheduler.add_job(
+        _run_surge_signal_generate,
+        "cron",
+        day_of_week="mon-fri",
+        hour=10,
+        minute=0,
+        timezone="Asia/Seoul",
+        id="surge_signal_generate_intraday",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
     # SPEC-AI-013: 급등예측 모의투자 포트폴리오 작업
     # 매수 실행: 평일 09:00~15:30 KST, 30분 간격
     scheduler.add_job(
