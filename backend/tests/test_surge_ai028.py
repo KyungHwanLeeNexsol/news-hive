@@ -163,16 +163,20 @@ class TestAC02802PenaltyPattern:
 
     def test_penalty_keyword_reduces_score(self, db: Session):
         """최대주주변경이 포함된 공시는 즉시 시그널 점수에 0.3 페널티가 적용된다."""
+        from datetime import date
+
         from app.services.surge_detector import detect_immediate_disclosure_signal
 
         stock = _make_stock(db, code="222222", name="페널티테스트")
 
         # 양성 키워드(자기주식소각 score=0.90) + 페널티 키워드(최대주주변경)
+        # disclosure_window_hours=24 창 내에 있도록 오늘 날짜 사용
+        today_str = date.today().strftime("%Y%m%d")
         _make_disclosure(
             db,
             stock,
             report_name="자기주식소각 결정 및 최대주주변경",
-            rcept_dt="20260601",
+            rcept_dt=today_str,
         )
 
         config = get_surge_config()
@@ -188,14 +192,18 @@ class TestAC02802PenaltyPattern:
 
     def test_penalty_sets_bearish_sentiment(self, db: Session):
         """페널티 키워드 적용 종목은 disclosure_sentiment = 'bearish'."""
+        from datetime import date
+
         from app.services.surge_detector import detect_immediate_disclosure_signal
 
         stock = _make_stock(db, code="222223", name="페널티감성테스트")
+        # disclosure_window_hours=24 창 내에 있도록 오늘 날짜 사용
+        today_str = date.today().strftime("%Y%m%d")
         _make_disclosure(
             db,
             stock,
             report_name="자기주식소각 결정 및 최대주주변경",
-            rcept_dt="20260601",
+            rcept_dt=today_str,
         )
 
         config = get_surge_config()
