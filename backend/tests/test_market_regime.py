@@ -463,7 +463,7 @@ class TestRegimeDetectorParamsModel:
         config = get_surge_config()
         assert "BEAR" in config.regime_detector_params
         bear_params = config.regime_detector_params["BEAR"]
-        assert bear_params.volume_zscore_threshold == 3.0
+        assert bear_params.volume_zscore_threshold == 2.5  # SPEC-AI-038: 3.0 → 2.5
         assert bear_params.news_window_hours == 12
         assert bear_params.min_news_sentiment == 0.50
 
