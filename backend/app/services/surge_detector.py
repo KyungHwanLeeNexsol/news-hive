@@ -627,8 +627,8 @@ def _get_volume_history(stock_code: str, baseline_days: int) -> list[float]:
 
         cached = _price_cache.data.get(stock_code)
         if not cached:
-            # 캐시 미스: 동기 HTTP 요청으로 일봉 히스토리 즉시 조회 (TTL=1h 캐싱)
-            cached = fetch_stock_price_history_sync(stock_code, pages=3)
+            # SPEC-AI-038 성능 패치: pages=3→1로 축소 (20일 baseline에 1페이지 충분, 3→1 HTTP 절감)
+            cached = fetch_stock_price_history_sync(stock_code, pages=1)
         if cached:
             # Naver sise_day는 최신순(newest-first) → 역순으로 변환 후 최근 N일 슬라이스
             records = list(reversed(cached))[-baseline_days:]
