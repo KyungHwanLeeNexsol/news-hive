@@ -28,6 +28,10 @@ def _bucket_index(val: float) -> int:
 def get_signal_quality_metrics(db: Session, lookback_days: int = 30) -> dict:
     """SPEC-AI-036 M4: 시그널 품질 지표를 반환한다.
 
+    # @MX:NOTE: router의 GET /api/fund/signal-quality 엔드포인트에서 호출.
+    # 모든 DB 예외를 catch하여 insufficient_data 상태 반환 → HTTP 에러 전파 안 함.
+    # REQ-036-004 준수: surge와 llm의 composite_score 스케일 분리 보고.
+
     Args:
         db: SQLAlchemy Session
         lookback_days: 조회 기간 (일), 기본 30

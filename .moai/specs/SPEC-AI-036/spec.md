@@ -1,7 +1,7 @@
 ---
 id: SPEC-AI-036
-version: 0.1.0
-status: draft
+version: 1.0.0
+status: completed
 created: 2026-06-04
 updated: 2026-06-04
 author: MoAI
@@ -201,3 +201,38 @@ NewsHive의 급등 매매 시스템은 `surge_detector.py`가 매일 다수의
 | REQ-036-006 | AC-11 | (신규) surge_calibrator.py |
 | REQ-036-007 | AC-2, AC-9 | factor_scoring.py |
 | REQ-036-008 | AC-12 | 전체 (예외 격리) |
+
+## 8. Implementation Notes
+
+### M1 — composite_score 활성화 (완료)
+- `backend/app/services/factor_scoring.py`: `build_surge_factor_scores()` 추가
+- `backend/app/services/fund_manager.py`: `_gather_surge_candidates()`에서 composite_score + factor_scores 주입
+- 모든 surge_candidate 신호에 composite_score(0.0~1.0) 및 factor_scores JSON 할당
+
+### M2 — isotonic 캘리브레이터 (완료)
+- `backend/app/services/surge_calibrator.py` (신규): IsotonicModel, train_isotonic, save/load_calibrator, retrain_calibrator
+- `backend/app/services/signal_verifier.py`: `get_surge_calibration_pairs()` 추가
+- Pure Python PAV (Pool Adjacent Violators) 알고리즘 구현
+- pickle 영속성 + DB 로드 fallback
+
+### M3 — 품질 floor 게이트 (완료)
+- `backend/app/services/fund_manager.py`: `_gather_surge_candidates()`에 floor gate 구현
+  - min_calibrated_confidence (기본 0.35) 또는 min_composite_score (기본 0.60) 기준
+- `backend/app/surge_config/surge_settings.py`: floor 설정 키 추가
+- SPEC-AI-029 적응형 임계값과 함께 적층 적용
+
+### M4 — signal-quality API (완료)
+- `backend/app/services/signal_quality.py` (신규): `get_signal_quality_metrics()`
+- `backend/app/routers/fund_manager.py`: `GET /api/fund/signal-quality` 엔드포인트 (line 594)
+- composite_score 채움률, Brier score, ECE, confidence 분포 제공
+- signal_type별 스케일 분리 보고 (surge=0~1, llm=0~100)
+
+### 구현 편차 (알려진 제한사항)
+
+**계획과의 차이:**
+- **계획**: surge_detector.py의 모든 FundSignal 생성 지점(line ~1638, 1752, 1881, 2028, 2238)에서 composite_score 할당
+- **실제**: fund_manager.py의 `_gather_surge_candidates()`에서 aggregation point에 composite_score 할당
+- **이유**: surge_detector.py의 직접 FundSignal 생성 지점은 SurgeCandidate 객체가 없어 composite_score 계산 불가능
+- **결과**: surge_detector.py의 직접 생성 경로(특정 탐지기가 SurgeCandidate를 거치지 않는 경우)는 composite_score 미할당 상태로 유지
+  - 현재 모든 surge_candidate는 `_gather_surge_candidates()` aggregation을 거쳐 composite_score가 할당됨
+  - 향후 직접 경로 추가 시 해당 지점에서도 composite_score를 명시적으로 할당할 필요

@@ -244,6 +244,9 @@ def calibrate_confidence(raw: float) -> float:
     """raw confidence를 캘리브레이션 모델로 보정한다.
 
     모델 미로드 시 raw 그대로 반환 (예외 전파 없음).
+
+    # @MX:NOTE: SPEC-AI-036 surge 경로의 핵심 캘리브레이션 함수. fund_manager.py 신호 생성 시
+    # 직접 호출되어 confidence를 isotonic 보정된 값으로 변환한다.
     """
     try:
         return get_calibrator().predict(raw)
@@ -260,6 +263,9 @@ def retrain_calibrator(db: object) -> IsotonicModel:
     """DB에서 학습 데이터를 수집하고 캘리브레이터를 재학습한다.
 
     SPEC-AI-036 REQ-036-005 주간 재학습 훅.
+
+    # @MX:NOTE: 스케줄러에서 주 1회 호출되는 캘리브레이터 재학습 진입점.
+    # 모든 예외를 catch하고 기존 모델 반환 → 시그널 생성 파이프라인 중단 방지.
 
     Args:
         db: SQLAlchemy Session (또는 SessionLocal 인스턴스).
