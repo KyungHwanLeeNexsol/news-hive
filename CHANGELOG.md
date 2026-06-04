@@ -4,6 +4,29 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Added — SPEC-AI-037 급등 탐지 테마 커버리지 확장 및 비테마 팩터 강화 (2026-06-04)
+
+2026-06-04 시스템 분석에서 13개 하드코딩 테마 외 급등주(게임/엔터/조선/해운 등)가 포착되지 않고,
+`combo_zero_theme_floor: 0.7` 게이트가 비테마 종목을 매수 단계에서 전면 차단하는 문제를 해결했습니다.
+
+- **REQ-037-001 테마 13→20개 확장** (`backend/app/surge_config/surge_detection.yaml`):
+  - 신규 테마: 게임/엔터/조선/해운물류/건설부동산/음식료/화학소재
+  - KRX `_SNAPSHOT` 섹터명 정본으로 매핑 (0건 매칭 오류 없음)
+
+- **REQ-037-002 combo_zero_theme_floor 0.7→0.55** (`surge_detection.yaml`, `surge_threshold_service.py`):
+  - 비테마 비과열 종목의 매수 게이트 진입 허용
+  - 과열(volume_z_score >= 3.0) 시 기존 0.7 유지로 추격매수 억제
+
+- **REQ-037-003 소형주 시총 1000억→500억** (`surge_detection.yaml`):
+  - `min_market_cap_krw: 50_000_000_000` 으로 하향
+
+- **REQ-037-005 비테마 fast path** (`surge_threshold_service.py`):
+  - `disclosure_pattern_score >= 0.70` 또는 `volume_news_combo_score >= 0.80 & 비과열` 시
+    theme=0 종목도 매수 게이트 직통 통과
+
+- **테스트**: `test_surge_ai037.py` 21개 신규 테스트, AC-037-001~006 전부 커버.
+  기존 SPEC-AI-029/030 테스트 회귀 0건. 앙상블 가중치 합 1.00 유지.
+
 ### Planned — 급등 예측 정확도 개선 로드맵 SPEC 초안 (2026-06-02)
 
 2026-06-02 운영 분석(volume_news_combo 전패, theme_cluster 단독 확률 0.27)을 바탕으로
