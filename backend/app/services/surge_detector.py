@@ -492,6 +492,15 @@ def detect_volume_surge_news_combo(
         logger.debug("[거래량콤보] 긍정 뉴스 관련 종목 없음")
         return []
 
+    # SPEC-AI-038 성능 패치: 거래량 히스토리 조회는 종목당 3 HTTP 요청 → 상위 50개로 제한
+    # 수백 종목 처리 시 수천 API 호출 발생 → timeout 원인
+    _MAX_COMBO_CANDIDATES = 50
+    if len(positive_news_stocks) > _MAX_COMBO_CANDIDATES:
+        positive_news_stocks = dict(
+            sorted(positive_news_stocks.items(), key=lambda x: x[1], reverse=True)[:_MAX_COMBO_CANDIDATES]
+        )
+        logger.info("[거래량콤보] 감성점수 상위 %d개로 제한 (성능 패치)", _MAX_COMBO_CANDIDATES)
+
     # 거래량 z-score 계산 — naver_finance 히스토리 사용
     # @MX:NOTE: 동기 컨텍스트에서 비동기 함수 호출 불가 → 캐시된 데이터 또는 스킵
     # 실제 운영 환경에서는 fund_manager의 비동기 컨텍스트에서 호출되므로
