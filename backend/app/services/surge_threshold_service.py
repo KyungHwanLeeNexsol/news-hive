@@ -239,10 +239,17 @@ def is_combo_theme_gate_passed(surge_metadata: Optional[dict], config) -> bool:
     """combo_score=0.0 AND theme_cluster_score < floor 조합 게이트 검사.
 
     # @MX:NOTE: [AUTO] SPEC-AI-029 REQ-AI029-003 — combo/theme 조합 불량 종목 필터
-    # @MX:SPEC: SPEC-AI-029
+    # @MX:NOTE: [AUTO] SPEC-AI-037 REQ-037-002/005 — 과열 시 원래 floor 적용, 비테마 fast path 추가
+    # @MX:SPEC: SPEC-AI-029, SPEC-AI-037
+    # @MX:WARN: [AUTO] 조건부 분기가 복수 SPEC에 걸쳐 있음 — floor 값 변경 시 과열 기준(0.7)도 함께 검토
+    # @MX:REASON: combo_zero_theme_floor 완화(0.7→0.55) 시 과열 종목이 통과되지 않도록 원래 0.7 적용
 
-    combo_score가 0.0이고 theme_cluster_score가 combo_zero_theme_floor 미만이면
+    combo_score가 0.0이고 theme_cluster_score가 effective_floor 미만이면
     False를 반환하여 해당 종목을 매수 대상에서 제외한다.
+
+    SPEC-AI-037 변경사항:
+    - 과열(volume_z_score >= 3.0) 시 원래 floor 0.7 적용 (완화 적용 안 함)
+    - 비테마(combo_score=0.0, theme_cluster_score=0.0) + 강한 공시/거래량 신호 시 fast path 통과
 
     Args:
         surge_metadata: FundSignal.surge_metadata 딕셔너리 (None 허용)
@@ -251,8 +258,7 @@ def is_combo_theme_gate_passed(surge_metadata: Optional[dict], config) -> bool:
     Returns:
         True이면 게이트 통과 (매수 허용), False이면 게이트 불통과 (제외)
     """
-    floor = config.adaptive_threshold.combo_zero_theme_floor
-
+    # --- 메타데이터 전처리 ---
     if surge_metadata is None:
         # 메타데이터 없음 — 레거시 시그널로 간주, 게이트 통과
         return True
@@ -261,12 +267,46 @@ def is_combo_theme_gate_passed(surge_metadata: Optional[dict], config) -> bool:
     if "combo_score" not in surge_metadata:
         return True
 
-    combo_score = float(surge_metadata.get("combo_score", 0.0))
-    theme_score = float(surge_metadata.get("theme_cluster_score", 0.0))
+    try:
+        combo_score = float(surge_metadata.get("combo_score", 0.0))
+    except Exception:
+        combo_score = 0.0
+    try:
+        theme_score = float(surge_metadata.get("theme_cluster_score", 0.0))
+    except Exception:
+        theme_score = 0.0
 
     # combo_score > 0이면 게이트 적용 안 함
     if combo_score > 0.0:
         return True
 
-    # combo_score == 0.0 인 경우: theme_score가 floor 이상이어야 통과
-    return theme_score >= floor
+    # --- SPEC-AI-037 REQ-037-002b: 과열 여부 판단 ---
+    # volume_z_score >= 3.0 이면 완화된 floor 대신 원래 0.7 적용
+    _OVERHEAT_Z_THRESHOLD = 3.0
+    _ORIGINAL_FLOOR = 0.7
+    try:
+        volume_z = float(surge_metadata.get("volume_z_score", 0.0))
+        is_overheat = volume_z >= _OVERHEAT_Z_THRESHOLD
+    except Exception:
+        is_overheat = False
+
+    effective_floor = _ORIGINAL_FLOOR if is_overheat else config.adaptive_threshold.combo_zero_theme_floor
+
+    # --- SPEC-AI-037 REQ-037-005: 비테마 fast path ---
+    # combo=0.0, theme=0.0인 순수 비테마 종목에 대해 강한 공시/거래량 신호가 있으면 통과
+    if combo_score == 0.0 and theme_score == 0.0:
+        try:
+            disclosure_score = float(surge_metadata.get("disclosure_pattern_score", 0.0))
+            volume_news_score = float(surge_metadata.get("volume_news_combo_score", 0.0))
+            # 강한 공시 신호: disclosure_pattern_score >= 0.70
+            if disclosure_score >= 0.70:
+                return True
+            # 강한 거래량+뉴스 신호: volume_news_combo_score >= 0.80 AND 비과열
+            if volume_news_score >= 0.80 and not is_overheat:
+                return True
+        except Exception:
+            # 예외 발생 시 fast path 생략, 기존 로직으로 계속
+            pass
+
+    # combo_score == 0.0 인 경우: theme_score가 effective_floor 이상이어야 통과
+    return theme_score >= effective_floor

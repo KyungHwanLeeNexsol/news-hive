@@ -210,24 +210,26 @@ class TestAC02905FinalClamp:
 
 
 # ---------------------------------------------------------------------------
-# AC-029-06: combo=0.0, theme=0.6 → 제외 (게이트 불통과)
+# AC-029-06: combo=0.0, theme < floor → 제외 (게이트 불통과)
+# SPEC-AI-037 REQ-037-002: floor 0.7 → 0.55 변경으로 경계값 업데이트
 # ---------------------------------------------------------------------------
 
 class TestAC02906ComboThemeGateExclude:
     def test_combo_zero_theme_below_floor_excluded(self, default_config):
-        """combo=0.0, theme=0.6 → False (제외)"""
-        meta = {"combo_score": 0.0, "theme_cluster_score": 0.6}
+        """combo=0.0, theme=0.5 → False (제외, floor=0.55 미만)"""
+        meta = {"combo_score": 0.0, "theme_cluster_score": 0.5}
         assert is_combo_theme_gate_passed(meta, default_config) is False
 
 
 # ---------------------------------------------------------------------------
-# AC-029-07: combo=0.0, theme=0.7 → 통과
+# AC-029-07: combo=0.0, theme >= floor → 통과
+# SPEC-AI-037 REQ-037-002: floor=0.55 경계값 업데이트
 # ---------------------------------------------------------------------------
 
 class TestAC02907ComboThemeGatePass:
     def test_combo_zero_theme_at_floor_passes(self, default_config):
-        """combo=0.0, theme=0.7 → True (통과, floor 경계값)"""
-        meta = {"combo_score": 0.0, "theme_cluster_score": 0.7}
+        """combo=0.0, theme=0.55 → True (통과, floor 경계값)"""
+        meta = {"combo_score": 0.0, "theme_cluster_score": 0.55}
         assert is_combo_theme_gate_passed(meta, default_config) is True
 
     def test_combo_zero_theme_above_floor_passes(self, default_config):

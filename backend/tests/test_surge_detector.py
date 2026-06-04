@@ -311,10 +311,10 @@ class TestThemeNewsCluster:
     ):
         """시총이 min_market_cap_krw 미만인 종목은 필터링된다 (AC-SURGE-001 시나리오 3).
 
-        min_market_cap_krw = 100,000,000,000원 = 1000억원 = 1000 (억원 단위)
-        → 시총 999 (억원 단위) 종목은 제외
+        SPEC-AI-037 REQ-037-003: min_market_cap_krw = 50,000,000,000원 = 500억원 = 500 (억원 단위)
+        → 시총 499 (억원 단위) 종목은 제외
         """
-        make_stock("소형주", "999999", sector_semiconductor, market_cap=999)
+        make_stock("소형주", "999999", sector_semiconductor, market_cap=499)
 
         news_list = [make_news(f"반도체 기사 {i}", hours_ago=1.0) for i in range(3)]
 
