@@ -4,6 +4,37 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Added — SPEC-AI-038 BEAR threshold cap, volume threshold 완화, 장중 재탐지 + 성능 패치 (2026-06-04)
+
+2026-06-04 운영 분석에서 ①BEAR regime 임계값(0.60)이 너무 높아 combo=0 신호가 전량 차단,
+②volume_zscore 2.5로 combo 발화 불가, ③장 시작 전 1회 배치만으로 당일 급등 미포착,
+④SPEC-AI-037 시총 500억 확장 후 detect_theme_news_cluster가 timeout 발생 문제를 해결했습니다.
+
+#### SPEC-AI-038 임계값·탐지 개선
+- **REQ-038-001 volume_zscore 완화** (`surge_detection.yaml`):
+  - 기본값 2.5→2.0, BEAR 오버라이드 3.0→2.5 — combo 신호 감도 향상
+- **REQ-038-002 BEAR threshold cap** (`surge_detection.yaml`):
+  - `regime_multipliers.BEAR` 1.2→1.05, `final_clamp_max` 0.85→0.65
+  - 저승률+BEAR 복합 시 threshold 0.60→0.525로 하락 (신호 통과 가능해짐)
+- **REQ-038-003 10:00 KST 장중 재탐지** (`scheduler.py`):
+  - `surge_signal_generate_intraday` 잡 추가 (BUY_CUTOFF 1시간 전)
+  - 당일 거래량·공시 기반 시그널을 10:30 execute_buys가 수신 가능
+- **테스트**: `test_surge_ai038.py` 9개 신규 (REQ-038-001~003 전부 커버)
+
+#### 성능 패치 — detect_theme_news_cluster timeout 수정 (SPEC-AI-037 성능 회귀)
+SPEC-AI-037 시총 500억 확장으로 NULL 시총 1684건이 추가 포함 → 종목당 2회 HTTP 호출 = 550초+ timeout.
+
+- **NULL 시총 제거** (`surge_detector.py`):
+  - 무조건 포함 1684건 → 뉴스 창 내 언급된 종목만 포함 (수십 건으로 제한)
+- **theme_cluster 가격 API 완전 제거** (`surge_detector.py`):
+  - `_fetch_price_change_sync` 2회/종목 → 0회 (price_bonus=0.0 고정)
+  - O(N×API) → 순수 메모리 연산, 실행 시간 550초+ → **17초 이하**
+- **volume_combo 50개 상한** (`surge_detector.py`):
+  - positive_news_stocks 무제한 → 감성점수 상위 50개만 처리
+- **거래량 히스토리 pages=3→1** (`surge_detector.py`):
+  - 종목당 3 HTTP 요청 → 1 HTTP 요청 (20일 baseline에 1페이지 충분)
+  - volume_combo 실행 시간 52초 → ~17초
+
 ### Added — SPEC-AI-037 급등 탐지 테마 커버리지 확장 및 비테마 팩터 강화 (2026-06-04)
 
 2026-06-04 시스템 분석에서 13개 하드코딩 테마 외 급등주(게임/엔터/조선/해운 등)가 포착되지 않고,
