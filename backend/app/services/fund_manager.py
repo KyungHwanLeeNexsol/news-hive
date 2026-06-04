@@ -1339,6 +1339,43 @@ async def _gather_surge_candidates(
         metadata = surge_candidate_to_signal_metadata(candidate, surge_config)
         metadata_json = json.dumps(metadata, ensure_ascii=False)
 
+        # SPEC-AI-036: composite_score / factor_scores 계산 (예외 격리)
+        _factor_json: str | None = None
+        _composite: float | None = None
+        try:
+            from app.services.factor_scoring import build_surge_factor_scores
+            _factor_json, _composite = build_surge_factor_scores(candidate, surge_config)
+            if not _factor_json:
+                _factor_json = None
+                _composite = None
+        except Exception as _e:
+            logger.warning("[급등탐지] %s composite_score 계산 실패: %s", candidate.stock_code, _e)
+
+        # SPEC-AI-036: 보정 confidence 산출 (예외 격리)
+        _calibrated_conf = ensemble_score
+        try:
+            from app.services.surge_calibrator import calibrate_confidence
+            _calibrated_conf = calibrate_confidence(ensemble_score)
+        except Exception as _e:
+            logger.warning("[급등탐지] %s 캘리브레이션 실패: %s", candidate.stock_code, _e)
+
+        # SPEC-AI-036 M3: 품질 floor 게이트 (예외 격리)
+        # calibrated_confidence >= min OR composite_score >= min 중 하나면 통과
+        try:
+            _min_conf = surge_config.min_calibrated_confidence
+            _min_comp = surge_config.min_composite_score
+            _comp_val = _composite if _composite is not None else 0.0
+            if _calibrated_conf < _min_conf and _comp_val < _min_comp:
+                logger.info(
+                    "[급등탐지] %s 품질 floor 미달 차단 (calibrated=%.3f<%.3f, composite=%.3f<%.3f)",
+                    candidate.stock_code,
+                    _calibrated_conf, _min_conf,
+                    _comp_val, _min_comp,
+                )
+                continue
+        except Exception as _e:
+            logger.warning("[급등탐지] %s 품질 floor 게이트 실패 (통과로 처리): %s", candidate.stock_code, _e)
+
         # 5영업일 내 중복 시그널 확인 → 있으면 업데이트, 없으면 신규 생성
         existing = (
             db.query(FundSignal)
@@ -1357,6 +1394,11 @@ async def _gather_surge_candidates(
                 f"[SPEC-AI-012 급등 징후] 앙상블 점수: {ensemble_score:.3f}, "
                 f"탐지기: {', '.join(candidate.active_detectors)}"
             )
+            # SPEC-AI-036: composite_score / factor_scores 갱신
+            if _composite is not None:
+                existing.composite_score = _composite
+            if _factor_json:
+                existing.factor_scores = _factor_json
             # created_at 갱신: get_today_signals가 오늘 날짜로 필터링하므로
             # 매일 재탐지 시 날짜를 오늘로 업데이트해야 매수 실행 대상에 포함됨
             # originally_created_at: 최초 생성 시각 보존 — created_at 갱신 전에 기록
@@ -1381,11 +1423,14 @@ async def _gather_surge_candidates(
                 signal_type="surge_candidate",
                 surge_metadata=metadata_json,
                 originally_created_at=datetime.now(timezone.utc),
+                # SPEC-AI-036: composite_score / factor_scores 주입
+                composite_score=_composite,
+                factor_scores=_factor_json,
             )
             db.add(signal)
             try:
                 db.flush()
-                logger.info("[급등탐지] %s 시그널 저장 (score=%.3f)", candidate.stock_code, ensemble_score)
+                logger.info("[급등탐지] %s 시그널 저장 (score=%.3f, composite=%.3f)", candidate.stock_code, ensemble_score, _composite or 0.0)
             except Exception as e:
                 db.rollback()
                 logger.warning("[급등탐지] %s 시그널 저장 실패: %s", candidate.stock_code, e)

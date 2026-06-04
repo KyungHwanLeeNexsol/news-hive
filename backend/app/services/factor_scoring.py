@@ -2,6 +2,8 @@
 
 4개 독립 팩터(뉴스 감성, 기술적 분석, 수급, 밸류에이션)를 각각 0-100 점수로 산출하고,
 가중 합산하여 composite_score를 계산한다.
+
+SPEC-AI-036: surge Path B 전용 build_surge_factor_scores 추가.
 """
 import json
 import logging
@@ -388,3 +390,49 @@ def build_factor_scores_json(
     vs = detect_volume_spike(market_data)
     scores["volume_spike"] = vs["volume_spike"]
     return json.dumps(scores), composite
+
+
+def build_surge_factor_scores(
+    candidate: "SurgeCandidate",  # noqa: F821
+    config: "SurgeDetectionConfig",  # noqa: F821
+) -> tuple[str, float]:
+    """SPEC-AI-036: surge Path B 전용 팩터 점수 빌더.
+
+    LLM Path A(fund_manager.py)와 완전히 독립된 경로.
+    SurgeCandidate의 5개 탐지기 점수와 compute_ensemble_score 결과를
+    composite_score / factor_scores JSON으로 변환한다.
+
+    Args:
+        candidate: SurgeCandidate 객체 (5개 점수 필드 보유)
+        config: SurgeDetectionConfig 설정
+
+    Returns:
+        (factor_scores_json, composite_score) 튜플.
+        composite_score는 0.0~1.0 범위. 예외 발생 시 ("", 0.0) 반환.
+    """
+    # # @MX:ANCHOR: [AUTO] SPEC-AI-036 surge Path B composite_score 진입점
+    # # @MX:REASON: surge_detector.py의 모든 surge_candidate 생성 사이트에서 호출 (fan_in >= 5)
+    # # @MX:SPEC: SPEC-AI-036
+    try:
+        from app.services.surge_detector import compute_ensemble_score
+
+        scores = {
+            "theme_cluster": round(candidate.theme_cluster_score, 4),
+            "combo": round(candidate.combo_score, 4),
+            "pattern": round(candidate.pattern_score, 4),
+            "immediate_disclosure": round(candidate.immediate_disclosure_score, 4),
+            "legacy": round(candidate.legacy_score, 4),
+        }
+
+        composite = compute_ensemble_score(candidate, config)
+        # 안전 클램프: 0.0~1.0 범위 보장
+        composite = max(0.0, min(1.0, composite))
+
+        return json.dumps(scores, ensure_ascii=False), round(composite, 6)
+
+    except Exception:
+        logger.warning(
+            "build_surge_factor_scores 실패, 빈 값 반환",
+            exc_info=True,
+        )
+        return "", 0.0

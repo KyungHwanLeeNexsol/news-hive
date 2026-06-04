@@ -591,6 +591,21 @@ def _build_regime_response(regime) -> MarketRegimeResponse:
     )
 
 
+@router.get("/signal-quality", response_model=dict)
+async def get_signal_quality(
+    lookback_days: int = Query(default=30, ge=1, le=365),
+    db: Session = Depends(get_db),
+):
+    """SPEC-AI-036 M4: 시그널 품질 지표를 반환합니다.
+
+    composite_score 채움률, confidence 분포, Brier Score, ECE를 포함합니다.
+    데이터 부족 시 status="insufficient_data"로 HTTP 200 응답합니다.
+    """
+    from app.services.signal_quality import get_signal_quality_metrics
+
+    return get_signal_quality_metrics(db, lookback_days=lookback_days)
+
+
 @router.get("/market-regime", response_model=MarketRegimeHistoryResponse)
 async def get_market_regime(db: Session = Depends(get_db)):
     """오늘의 시장 레짐과 최근 7일 히스토리를 반환합니다 (SPEC-AI-015).
