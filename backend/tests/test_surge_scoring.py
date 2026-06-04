@@ -249,7 +249,11 @@ class TestSectorOnlyMultiplier:
 # ---------------------------------------------------------------------------
 
 class TestPriceChangeBonus:
-    """T-003: 전일 대비 절댓값 3% 초과 시에만 +0.10 보너스가 적용된다."""
+    """T-003: 가격 변동 보너스 동작 검증.
+
+    SPEC-AI-038 성능 패치: detect_theme_news_cluster에서 가격 API 호출 완전 제거.
+    price_bonus는 더 이상 적용되지 않으며, _price_change_provider 주입 무효.
+    """
 
     def test_t003_price_change_35pct_gives_bonus(
         self,
@@ -259,7 +263,7 @@ class TestPriceChangeBonus:
         make_stock,
         make_news,
     ):
-        """T-003a: 가격 변동 +3.5% → +0.10 보너스 적용."""
+        """T-003a: SPEC-AI-038 이후 price_bonus 제거 — 점수가 뉴스/섹터 기반으로만 결정된다."""
         import app.services.surge_detector as det_module
 
         make_stock("테스트반도체", "111111", sector_semiconductor, market_cap=2000)
@@ -274,10 +278,9 @@ class TestPriceChangeBonus:
             det_module._price_change_provider = original
 
         candidate = next((c for c in result if c.stock_code == "111111"), None)
-        # 보너스가 적용됐음을 검증: 보너스 없는 경우보다 점수가 높아야 함
-        assert candidate is not None
+        assert candidate is not None  # 후보 탐지 자체는 정상 작동
 
-        # 보너스 없는 경우와 비교
+        # SPEC-AI-038: price_bonus 제거로 가격 변동이 점수에 영향 없음
         original = det_module._price_change_provider
         try:
             det_module._price_change_provider = lambda code: {"change_rate": 0.0}
@@ -287,7 +290,8 @@ class TestPriceChangeBonus:
 
         candidate_no_bonus = next((c for c in result_no_bonus if c.stock_code == "111111"), None)
         if candidate_no_bonus:
-            assert candidate.theme_cluster_score > candidate_no_bonus.theme_cluster_score
+            # 가격 변동 무관하게 동일 점수 (price_bonus=0.0 고정)
+            assert candidate.theme_cluster_score == candidate_no_bonus.theme_cluster_score
 
     def test_t003_price_change_25pct_no_bonus(
         self,
@@ -297,14 +301,13 @@ class TestPriceChangeBonus:
         make_stock,
         make_news,
     ):
-        """T-003b: 가격 변동 +2.5% → 보너스 없음 (|2.5| <= 3.0)."""
+        """T-003b: SPEC-AI-038 이후 price_bonus 제거 — 2.5%나 3.5%나 동일 점수."""
         import app.services.surge_detector as det_module
 
         make_stock("테스트칩", "222222", sector_semiconductor, market_cap=2000)
         for i in range(5):
             make_news(f"반도체 관련 {i}", hours_ago=1.0)
 
-        # 2.5% 변동 (임계 3.0% 미달)
         original = det_module._price_change_provider
         try:
             det_module._price_change_provider = lambda code: {"change_rate": 2.5}
@@ -314,7 +317,6 @@ class TestPriceChangeBonus:
 
         candidate = next((c for c in result if c.stock_code == "222222"), None)
 
-        # 3.5% 변동과 비교
         original = det_module._price_change_provider
         try:
             det_module._price_change_provider = lambda code: {"change_rate": 3.5}
@@ -325,8 +327,8 @@ class TestPriceChangeBonus:
         candidate_bonus = next((c for c in result_bonus if c.stock_code == "222222"), None)
 
         if candidate and candidate_bonus:
-            # 2.5% 시 보너스 없으므로 3.5% 시보다 낮아야 함
-            assert candidate.theme_cluster_score < candidate_bonus.theme_cluster_score
+            # SPEC-AI-038: price_bonus 제거로 두 케이스 동일 점수
+            assert candidate.theme_cluster_score == candidate_bonus.theme_cluster_score
 
     def test_t003_negative_change_no_bonus(
         self,
@@ -336,9 +338,7 @@ class TestPriceChangeBonus:
         make_stock,
         make_news,
     ):
-        """T-003c: 가격 변동 -3.5% → 보너스 없음 (절댓값으로 3.5% > 3.0% 이므로 보너스 있음 주의)."""
-        # 주의: REQ-002에서 abs(change_rate) > 3.0이면 보너스 적용
-        # -3.5%: abs(-3.5) = 3.5 > 3.0 → 보너스 적용됨 (양수/음수 모두 적용)
+        """T-003c: SPEC-AI-038 이후 price_bonus 제거 — 음수 변동도 점수 변화 없음."""
         import app.services.surge_detector as det_module
 
         make_stock("테스트낙주", "333333", sector_semiconductor, market_cap=2000)
@@ -362,9 +362,9 @@ class TestPriceChangeBonus:
         candidate_neg = next((c for c in result_neg if c.stock_code == "333333"), None)
         candidate_zero = next((c for c in result_zero if c.stock_code == "333333"), None)
 
-        # abs(-3.5) = 3.5 > 3.0 → 보너스 적용 (SPEC 명시: abs(change_rate) > 3%)
+        # SPEC-AI-038: price_bonus 제거 — 음수/제로 변동 모두 동일 점수
         if candidate_neg and candidate_zero:
-            assert candidate_neg.theme_cluster_score > candidate_zero.theme_cluster_score
+            assert candidate_neg.theme_cluster_score == candidate_zero.theme_cluster_score
 
 
 # ---------------------------------------------------------------------------
