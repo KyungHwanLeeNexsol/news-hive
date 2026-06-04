@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.surge_config.surge_settings import SurgeDetectionConfig
@@ -258,12 +258,28 @@ def detect_theme_news_cluster(
         logger.debug("[테마클러스터] DB에서 관련 섹터를 찾지 못함: %s", all_sector_names)
         return []
 
+    # SPEC-AI-038 성능 패치: NULL 시총 종목을 무조건 포함하면 수천 건의 불필요한 가격 API 호출 발생.
+    # 해결: 뉴스 창 내 언급된 종목코드를 먼저 수집 → NULL 시총 종목은 언급된 것만 포함.
+    _news_mentioned_codes: set[str] = set()
+    for _a in window_news:
+        _combined = (_a.title or "") + " " + (_a.content or "")
+        # 6자리 숫자 코드 언급 여부: 간단한 포함 검사
+        for _tok in _combined.split():
+            if len(_tok) == 6 and _tok.isdigit():
+                _news_mentioned_codes.add(_tok)
+
     stocks = (
         db.query(Stock)
         .filter(
             Stock.sector_id.in_(sector_ids),
-            # market_cap이 NULL인 종목(미업데이트)도 포함 — NULL 제외 시 신규 상장/소형주 누락
-            or_(Stock.market_cap >= min_market_cap_eok, Stock.market_cap.is_(None)),
+            # SPEC-AI-038 REQ-038-PF1: NULL 시총 종목은 뉴스 언급된 것만 포함 (성능 개선)
+            # 기존: or_(market_cap >= floor, market_cap IS NULL) → 최대 2000건 초과
+            # 변경: NULL은 뉴스 언급 종목만 → NULL 포함 수를 수십 건으로 제한
+            or_(
+                Stock.market_cap >= min_market_cap_eok,
+                and_(Stock.market_cap.is_(None), Stock.stock_code.in_(_news_mentioned_codes))
+                if _news_mentioned_codes else Stock.market_cap >= min_market_cap_eok,
+            ),
         )
         .all()
     )
@@ -328,18 +344,25 @@ def detect_theme_news_cluster(
         # sector_relevance 곱하기 (기존과 동일)
         theme_cluster_score *= best_sector_relevance
 
+        # SPEC-AI-038 REQ-038-PF2: 가격 API는 의미있는 후보에만 호출
+        # theme_cluster_score < 0.10이면 가격 보너스를 받아도 유효 임계값(0.45+) 미달
+        # → 불필요한 HTTP 호출을 사전 차단
+        price_data: dict | None = None
+        if theme_cluster_score >= 0.10:
+            try:
+                # SPEC-AI-038 REQ-038-PF3: 단일 호출로 price_bonus + valuation 모두 처리
+                # (기존: 동일 종목에 2회 호출 → 1회로 통합)
+                price_data = _fetch_price_change_sync(stock.stock_code)
+            except Exception:
+                pass
+
         # REQ-AI014-002: 경량 거래량 보너스 (+0.10)
         # 전일 대비 3% 초과 가격 변동 시 보너스 적용
         price_bonus = 0.0
-        try:
-            price_data = _fetch_price_change_sync(stock.stock_code)
-            if price_data is not None:
-                change_rate = price_data.get("change_rate", 0.0) or 0.0
-                if abs(change_rate) > 3.0:
-                    price_bonus = 0.10
-        except Exception:
-            # 가격 조회 실패 시 보너스 없음, 예외 전파 금지
-            price_bonus = 0.0
+        if price_data is not None:
+            change_rate = price_data.get("change_rate", 0.0) or 0.0
+            if abs(change_rate) > 3.0:
+                price_bonus = 0.10
 
         theme_cluster_score += price_bonus
 
@@ -367,12 +390,8 @@ def detect_theme_news_cluster(
         )
 
         # @MX:NOTE: SPEC-AI-020: piggy-back per/pbr 수집 (observability) — 필터링 없음
-        _price_data_for_val = None
-        try:
-            _price_data_for_val = _fetch_price_change_sync(stock.stock_code)
-        except Exception:
-            pass
-        _per, _pbr = _extract_valuation(stock.stock_code, _price_data_for_val)
+        # SPEC-AI-038: price_data를 재사용 (중복 호출 제거)
+        _per, _pbr = _extract_valuation(stock.stock_code, price_data)
 
         results.append(
             SurgeCandidate(

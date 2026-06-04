@@ -92,12 +92,13 @@ class TestBearThresholdCap:
 
     def test_bear_threshold_lower_than_before(self) -> None:
         """BEAR 조건에서 기존(1.2 multiplier, 0.85 clamp)보다 threshold가 낮아야 한다."""
-        # 구버전 설정으로 계산
-        old_cfg = get_surge_config()
+        import copy
+        # 구버전 설정으로 계산 (싱글턴 오염 방지: deepcopy 사용)
+        old_cfg = copy.deepcopy(get_surge_config())
         old_cfg.adaptive_threshold.regime_multipliers["BEAR"] = 1.2
         old_cfg.adaptive_threshold.final_clamp_max = 0.85
 
-        # 신버전 설정으로 계산
+        # 신버전 설정으로 계산 (원본 싱글턴)
         new_cfg = get_surge_config()
 
         with patch("app.services.surge_threshold_service._get_recent_closed_trades") as mock_trades, \
