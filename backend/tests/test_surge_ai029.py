@@ -485,3 +485,24 @@ class TestWinRateCalculation:
 
     def test_empty_returns_none(self):
         assert _compute_win_rate([]) is None
+
+    def test_max_holding_profitable_counts_as_win(self):
+        """max_holding_period + 수익 청산은 승리로 집계."""
+        t = MagicMock(exit_reason="max_holding_period", entry_price=1000, exit_price=1080)
+        assert abs(_compute_win_rate([t]) - 1.0) < 1e-6
+
+    def test_max_holding_loss_counts_as_loss(self):
+        """max_holding_period + 손실 청산은 패배로 집계."""
+        t = MagicMock(exit_reason="max_holding_period", entry_price=1000, exit_price=920)
+        assert abs(_compute_win_rate([t]) - 0.0) < 1e-6
+
+    def test_mixed_with_max_holding(self):
+        """take_profit 2건 + max_holding_period 수익 1건 + stop_loss 2건 → 3/5 = 0.6."""
+        trades = [
+            MagicMock(exit_reason="take_profit", entry_price=1000, exit_price=1150),
+            MagicMock(exit_reason="take_profit", entry_price=2000, exit_price=2300),
+            MagicMock(exit_reason="max_holding_period", entry_price=3000, exit_price=3050),
+            MagicMock(exit_reason="stop_loss", entry_price=4000, exit_price=3680),
+            MagicMock(exit_reason="stop_loss", entry_price=5000, exit_price=4600),
+        ]
+        assert abs(_compute_win_rate(trades) - 0.6) < 1e-6

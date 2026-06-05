@@ -42,8 +42,10 @@ def _get_recent_closed_trades(db: Session, window: int) -> list:
 def _compute_win_rate(trades: list) -> Optional[float]:
     """종료 거래 목록에서 승률을 계산한다.
 
-    승리 조건: exit_reason == "take_profit" (익절)
-    패배 조건: exit_reason in {"stop_loss", "max_holding_period"} (손절/기간 초과)
+    승리 조건:
+      1. exit_reason == "take_profit" (익절)
+      2. exit_reason == "max_holding_period" AND exit_price > entry_price (기간 초과지만 수익)
+    패배 조건: exit_reason == "stop_loss" 또는 max_holding_period이면서 손실
 
     Args:
         trades: SurgeTrade 목록 (is_open=False)
@@ -54,7 +56,14 @@ def _compute_win_rate(trades: list) -> Optional[float]:
     if not trades:
         return None
 
-    wins = sum(1 for t in trades if t.exit_reason == "take_profit")
+    def is_win(t) -> bool:
+        if t.exit_reason == "take_profit":
+            return True
+        if t.exit_reason == "max_holding_period" and t.exit_price and t.entry_price:
+            return t.exit_price > t.entry_price
+        return False
+
+    wins = sum(1 for t in trades if is_win(t))
     return wins / len(trades)
 
 
