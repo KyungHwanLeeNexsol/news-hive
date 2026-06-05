@@ -1,7 +1,9 @@
 # SPEC-AI-039: 급등 탐지 품질 개선 — Carry-Over 제한 + 뉴스 지연 반응 탐지기
 
-**Status**: TODO  
+**Status**: DONE  
 **Created**: 2026-06-05  
+**Completed**: 2026-06-05  
+**Branch**: main (직접 적용)  
 **Priority**: P0 (오늘 운영 분석에서 도출된 즉각 개선 필요 항목)
 
 ---
@@ -78,11 +80,11 @@ high_impact_news:
 
 ## 수용 기준
 
-- [ ] AC-039-001: carry-over 시 originally_created_at 기준 5 역일(≈3 거래일) 초과 시 해당 시그널 skip 처리
-- [ ] AC-039-002: detect_news_delayed_response가 24-72h 고임팩트 뉴스 종목을 SurgeCandidate로 반환
-- [ ] AC-039-003: 고임팩트 키워드 뉴스 포함 시 기본 대비 multiplier 적용된 score 산출
-- [ ] AC-039-004: 앙상블 가중치 합산 = 1.0 (기존 validate_ensemble_weights 통과)
-- [ ] AC-039-005: `uv run pytest tests/ --tb=short -q -m "not slow"` 전 패스
+- [x] AC-039-001: carry-over 시 originally_created_at 기준 5 역일(≈3 거래일) 초과 시 해당 시그널 skip 처리
+- [x] AC-039-002: detect_news_delayed_response가 24-72h 고임팩트 뉴스 종목을 SurgeCandidate로 반환
+- [x] AC-039-003: 고임팩트 키워드 뉴스 포함 시 기본 대비 multiplier 적용된 score 산출
+- [x] AC-039-004: 앙상블 가중치 합산 = 1.0 (기존 validate_ensemble_weights 통과)
+- [x] AC-039-005: `uv run pytest tests/ --tb=short -q -m "not slow"` 1416 패스
 
 ---
 

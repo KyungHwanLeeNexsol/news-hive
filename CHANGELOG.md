@@ -4,6 +4,60 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Added — SPEC-AI-039 급등 탐지 품질 개선 (2026-06-05)
+
+2026-06-05 운영 분석에서 ①carry-over 시그널이 4영업일 반복되며 13개 중 11개 하락(-4% 평균),
+②한올바이오파마 +6.5% 같은 "뉴스 지연 반응" 패턴 미탐지, ③기술이전/임상 등 고임팩트 이벤트 저평가 문제를 해결했습니다.
+
+#### SPEC-AI-039 탐지 품질 개선
+- **REQ-039-001 Carry-Over 최대 3 거래일 제한** (`fund_manager.py`):
+  - `originally_created_at` 기준 5 역일(≈3 거래일) 초과 시 carry-over 대상 제외
+  - 탐지 조건이 소멸한 오래된 시그널이 매수 후보에 지속 잔류하는 문제 해결
+  - `surge_detection.yaml`에 `carryover.max_trading_days: 3` 설정 추가
+- **REQ-039-002 뉴스 지연 반응 탐지기** (`surge_detector.py`):
+  - `detect_news_delayed_response` 함수 신규 추가
+  - 24-72시간 내 고임팩트 뉴스 발생 종목 중 당일 가격 반응 없는 종목 탐지
+  - 한올바이오파마 사례(6/3 뉴스 → 6/5 +6.5%) 패턴 포착 목적
+  - 앙상블 가중치 재조정: `news_delayed: 0.15` 신규 추가 (5번째 탐지기)
+  - 기존 가중치 축소: theme_cluster 0.28→0.25, volume_combo 0.35→0.32 등
+- **REQ-039-003 고임팩트 키워드 뉴스 가중치** (`surge_detection.yaml`):
+  - 기술이전/로열티/기술수출: ×2.0, 임상/FDA/허가/승인: ×1.8, 수주/계약/파트너십: ×1.5
+  - `HighImpactNewsConfig` Pydantic 모델 추가 (`surge_settings.py`)
+- **테스트**: `test_surge_ai039.py` 26개 신규 (AC-039-001~004 전부 커버)
+
+### Fixed — 급등 탐지 시스템 근본 원인 수정 (2026-06-05)
+
+2026-06-05 운영 장애 분석을 통해 3가지 근본 원인(인프라 불안정, BEAR 시장 역방향 전략, 적응형 임계값 피드백 루프)을 해결했습니다.
+
+#### 인프라 안정화
+- **misfire_grace_time 30초→3600초** (`scheduler.py`):
+  - OOM 재시작 후 최대 1시간 내 누락 잡 자동 복구 보장
+- **PostgreSQL idle_in_transaction_session_timeout 무한→5분** (서버 설정):
+  - 오늘 발생한 10분 DB 락 재발 방지
+
+#### 적응형 임계값 개선
+- **win_rate_window 5→10** (`surge_detection.yaml`):
+  - 표본 크기 확대로 단기 손절 연속 시 임계값 급등 방지
+- **BEAR 레짐 multiplier 1.05→1.00** (`surge_detection.yaml`):
+  - 탐지 임계값이 이미 0.42로 낮아졌으므로 추가 배율 불필요
+- **final_clamp_max 0.65→0.55** (`surge_detection.yaml`):
+  - 어떤 조건에서도 적응형 임계값 0.55 이하 보장
+- **BEAR 레짐 position_pct 자동 50% 축소** (`surge_trading_service.py`):
+  - BEAR 레짐 감지 시 14%→7% 자동 적용, 역방향 시장 리스크 감소
+
+#### win_rate 계산 로직 개선
+- **max_holding_period + 수익 청산 = 승리로 집계** (`surge_threshold_service.py`):
+  - 기존: take_profit만 승리 → 아이빔테크놀로지 +1.08% 같은 케이스도 패배 집계
+  - 개선: exit_price > entry_price인 max_holding_period 청산도 승리 인정
+
+#### BEAR 탐지 임계값 완화
+- **BEAR 0.52→0.42, SIDEWAYS 0.50→0.45** (`surge_detection.yaml`):
+  - BEAR 4일째 신규 시그널 0건 탐지 문제 해결
+
+### Fixed — lint 에러 수정 (2026-06-05)
+- `surge_detector.py`: F841 미사용 변수 `article_ids` 제거
+- `test_surge_ai038.py`, `test_surge_ai039.py`: F401 미사용 임포트 6건 제거
+
 ### Added — SPEC-AI-038 BEAR threshold cap, volume threshold 완화, 장중 재탐지 + 성능 패치 (2026-06-04)
 
 2026-06-04 운영 분석에서 ①BEAR regime 임계값(0.60)이 너무 높아 combo=0 신호가 전량 차단,
