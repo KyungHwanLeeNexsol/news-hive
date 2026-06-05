@@ -147,11 +147,13 @@ class TestPhase1ConfigChanges:
         assert config.volume_news_combo.min_news_sentiment == pytest.approx(0.5)
 
     def test_regime_thresholds_unchanged(self):
-        """레짐별 임계값 변경 없음 (BULL=0.38, SIDEWAYS=0.50, BEAR=0.52)."""
+        """레짐별 임계값 확인 (BULL=0.38, SIDEWAYS=0.45, BEAR=0.42).
+        2026-06-05: BEAR 0.52→0.42, SIDEWAYS 0.50→0.45 완화 — BEAR 4일 탐지 0건 문제 수정.
+        """
         config = get_surge_config()
         assert config.ensemble.regime_thresholds.get("BULL") == pytest.approx(0.38)
-        assert config.ensemble.regime_thresholds.get("SIDEWAYS") == pytest.approx(0.50)
-        assert config.ensemble.regime_thresholds.get("BEAR") == pytest.approx(0.52)
+        assert config.ensemble.regime_thresholds.get("SIDEWAYS") == pytest.approx(0.45)
+        assert config.ensemble.regime_thresholds.get("BEAR") == pytest.approx(0.42)
 
     def test_consensus_multipliers_unchanged(self):
         """컨센서스 배율 변경 없음 (1.30 / 1.55)."""
