@@ -8,12 +8,10 @@
 
 from __future__ import annotations
 
-from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-import pytest
 
-from app.surge_config.surge_settings import AdaptiveThresholdConfig, get_surge_config
+from app.surge_config.surge_settings import get_surge_config
 from app.services.surge_threshold_service import compute_adaptive_threshold
 
 

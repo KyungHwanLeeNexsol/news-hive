@@ -1100,8 +1100,6 @@ def detect_news_delayed_response(
         # 종목 코드 → 최고 점수 병합용
         best_scores: dict[str, tuple[float, str, str]] = {}  # code → (score, name, stock_code)
 
-        article_ids = [a.id for a in articles]
-
         # 2. 고임팩트 키워드 필터 + news_stock_relations 조회
         for article in articles:
             search_text = article.title or ""

@@ -9,20 +9,17 @@ AC-039-004: 앙상블 가중치 합산 = 1.0
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-import pytest
 
 from app.services.surge_detector import (
     SurgeCandidate,
     compute_ensemble_score,
     detect_news_delayed_response,
-    gather_surge_candidates,
 )
 from app.surge_config.surge_settings import (
     CarryoverConfig,
     HighImpactNewsConfig,
-    SurgeDetectionConfig,
     get_surge_config,
 )
 
