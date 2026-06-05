@@ -51,10 +51,11 @@ surge_detection:
     min_score_for_signal: 0.45
     # 레짐별 앙상블 임계값 (SPEC-AI-017 REQ-001): 시장 레짐에 따라 차등 적용
     # BULL 장에서는 진입 문턱 낮춰 더 많은 시그널 허용 (0.38), SIDEWAYS/BEAR는 높임
+    # 2026-06-05: BEAR 0.52→0.42, SIDEWAYS 0.50→0.45 완화 — BEAR 4일째 탐지 0건 문제 해결
     regime_thresholds:
       BULL: 0.38
-      SIDEWAYS: 0.50
-      BEAR: 0.52
+      SIDEWAYS: 0.45
+      BEAR: 0.42
     # 컨센서스 배율 (SPEC-AI-017 REQ-002): 복수 탐지기 발동 시 점수 증폭
     # 기존 1.15/1.30 → 1.30/1.55로 상향해 복합 신호 보상 강화
     consensus_multiplier_two: 1.30
