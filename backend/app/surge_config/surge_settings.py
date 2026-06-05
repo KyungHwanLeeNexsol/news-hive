@@ -58,6 +58,52 @@ class DisclosurePatternConfig(BaseModel):
     disclosure_window_hours: int
 
 
+class CarryoverConfig(BaseModel):
+    """SPEC-AI-039 REQ-039-001: carry-over 최대 거래일 제한 설정."""
+
+    # @MX:NOTE: [AUTO] SPEC-AI-039 — 3 거래일 ≈ 5 역일 (주말 1회 포함). cutoff = today - timedelta(days=int(max_trading_days*1.67))
+    # @MX:SPEC: SPEC-AI-039 REQ-039-001
+    max_trading_days: int = 3
+
+
+class HighImpactNewsConfig(BaseModel):
+    """SPEC-AI-039 REQ-039-003: 고임팩트 뉴스 키워드 multiplier 설정.
+
+    기술이전/임상/수주 등 급등 트리거 이벤트를 일반 뉴스보다 차별화 탐지.
+    """
+
+    # @MX:NOTE: [AUTO] SPEC-AI-039 REQ-039-003 — 키워드 카테고리별 multiplier. get_multiplier()로 접근
+    # @MX:SPEC: SPEC-AI-039 REQ-039-003
+    tech_transfer: list[str] = Field(default_factory=lambda: ["기술이전", "로열티", "기술수출"])
+    tech_transfer_multiplier: float = 2.0
+    clinical: list[str] = Field(default_factory=lambda: ["임상", "FDA", "허가", "승인"])
+    clinical_multiplier: float = 1.8
+    contract: list[str] = Field(default_factory=lambda: ["수주", "계약체결", "파트너십"])
+    contract_multiplier: float = 1.5
+
+    def get_multiplier(self, title: str) -> float:
+        """뉴스 제목에서 고임팩트 키워드를 탐지하여 multiplier를 반환한다.
+
+        우선순위: tech_transfer(2.0) > clinical(1.8) > contract(1.5) > default(1.0)
+
+        Args:
+            title: 뉴스 기사 제목 (또는 title+summary 조합)
+
+        Returns:
+            해당 카테고리 multiplier (기본값 1.0)
+        """
+        for kw in self.tech_transfer:
+            if kw in title:
+                return self.tech_transfer_multiplier
+        for kw in self.clinical:
+            if kw in title:
+                return self.clinical_multiplier
+        for kw in self.contract:
+            if kw in title:
+                return self.contract_multiplier
+        return 1.0
+
+
 class EnsembleWeightsConfig(BaseModel):
     """앙상블 스코어 가중치."""
 
@@ -65,6 +111,8 @@ class EnsembleWeightsConfig(BaseModel):
     volume_news_combo: float
     disclosure_pattern: float
     legacy_detectors: float
+    # SPEC-AI-039 REQ-039-002: 뉴스 지연 반응 탐지기 가중치
+    news_delayed: float = 0.0
 
 
 class EnsembleConfig(BaseModel):
@@ -219,13 +267,24 @@ class SurgeDetectionConfig(BaseModel):
     # 캘리브레이터 학습 최소 샘플 수
     min_calibration_samples: int = 50
 
-    # @MX:ANCHOR: [AUTO] 앙상블 가중치 합산 검증 — 4개 탐지기 가중치 합산 반드시 1.0
+    # SPEC-AI-039 REQ-039-001: carry-over 최대 거래일 제한
+    carryover: CarryoverConfig = Field(default_factory=CarryoverConfig)
+    # SPEC-AI-039 REQ-039-003: 고임팩트 뉴스 키워드 multiplier
+    high_impact_news: HighImpactNewsConfig = Field(default_factory=HighImpactNewsConfig)
+
+    # @MX:ANCHOR: [AUTO] 앙상블 가중치 합산 검증 — 5개 탐지기 가중치 합산 반드시 1.0
     # @MX:REASON: 가중치 합산 != 1.0 이면 앙상블 스코어 범위가 0~1을 벗어나 시그널 임계값 판정이 왜곡됨
     @model_validator(mode="after")
     def validate_ensemble_weights(self) -> "SurgeDetectionConfig":
-        """앙상블 가중치 합산이 1.0이어야 한다."""
+        """앙상블 가중치 합산이 1.0이어야 한다 (SPEC-AI-039: news_delayed 포함 5개)."""
         w = self.ensemble.weights
-        total = w.theme_cluster + w.volume_news_combo + w.disclosure_pattern + w.legacy_detectors
+        total = (
+            w.theme_cluster
+            + w.volume_news_combo
+            + w.disclosure_pattern
+            + w.legacy_detectors
+            + w.news_delayed
+        )
         if abs(total - 1.0) > 0.001:
             raise ValueError(
                 f"ensemble weights must sum to 1.0 (got {total:.4f})"

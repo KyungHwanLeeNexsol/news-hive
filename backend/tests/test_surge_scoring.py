@@ -588,17 +588,20 @@ class TestEnsembleClamp:
         assert score == 1.0
 
     def test_t007_exact_clamp_scenario(self, surge_config: SurgeDetectionConfig):
-        """T-007: weighted_sum × 1.30이 1.0 초과하는 구체적 케이스 검증."""
-        # theme=1.0, combo=1.0으로 weighted_sum = 0.35+0.35 = 0.70
-        # multiplier=1.30 (두 탐지기 활성) → 0.70 * 1.15 = 0.805 < 1.0
-        # 세 탐지기: weighted_sum=0.70+0.20=0.90, multiplier=1.30 → 1.17 > 1.0 → 1.0
+        """T-007: weighted_sum × multiplier가 1.0 초과 시 클램프 검증.
+
+        SPEC-AI-039: 5개 탐지기 모두 1.0 → 합산 1.0, 3개 그룹 → 1.55x → clamped to 1.0.
+        """
+        # 5개 탐지기 모두 1.0: weighted_sum = 0.25+0.32+0.18+0.10+0.15 = 1.00
+        # 3개 그룹(news+disclosure+technical) → 1.55x → 1.55 > 1.0 → clamped to 1.0
         candidate = SurgeCandidate(
             stock_code="T007B",
             stock_name="클램프정확",
             theme_cluster_score=1.0,
             combo_score=1.0,
             pattern_score=1.0,
-            legacy_score=0.0,
+            legacy_score=1.0,
+            news_delayed_score=1.0,
         )
         score = compute_ensemble_score(candidate, surge_config)
         assert score == 1.0
@@ -738,28 +741,32 @@ class TestYamlWeightSum:
     """T-011: surge_detection.yaml의 앙상블 가중치 합산이 1.00이다."""
 
     def test_t011_yaml_weights_sum_to_one(self, surge_config: SurgeDetectionConfig):
-        """T-011: YAML 설정 파일 로드 후 앙상블 가중치 합산이 1.00 ± 0.001이다."""
+        """T-011: YAML 설정 파일 로드 후 앙상블 가중치 합산이 1.00 ± 0.001이다.
+        SPEC-AI-039: news_delayed(0.15) 추가 → 5개 탐지기 합산.
+        """
         w = surge_config.ensemble.weights
         total = (
             w.theme_cluster
             + w.volume_news_combo
             + w.disclosure_pattern
             + w.legacy_detectors
+            + w.news_delayed
         )
         assert abs(total - 1.0) < 0.001, (
             f"앙상블 가중치 합산이 1.0이 아닙니다: {total}"
         )
 
     def test_t011_new_weights_values(self, surge_config: SurgeDetectionConfig):
-        """T-011: SPEC-AI-018 REQ-004 가중치 값 검증 (theme=0.28, combo=0.35, disclosure=0.20, legacy=0.17).
+        """T-011: SPEC-AI-039 가중치 값 검증 (theme=0.25, combo=0.32, disclosure=0.18, legacy=0.10, news_delayed=0.15).
 
-        SPEC-AI-018 REQ-004: theme_cluster 0.35→0.28 (과발화 억제), legacy_detectors 0.10→0.17 (기술적 신호 보완)
+        SPEC-AI-039 REQ-039-002: news_delayed(0.15) 추가로 기존 가중치 재조정.
         """
         w = surge_config.ensemble.weights
-        assert abs(w.theme_cluster - 0.28) < 0.001, f"theme_cluster 가중치 오류: {w.theme_cluster}"
-        assert abs(w.volume_news_combo - 0.35) < 0.001, f"volume_news_combo 가중치 오류: {w.volume_news_combo}"
-        assert abs(w.disclosure_pattern - 0.20) < 0.001, f"disclosure_pattern 가중치 오류: {w.disclosure_pattern}"
-        assert abs(w.legacy_detectors - 0.17) < 0.001, f"legacy_detectors 가중치 오류: {w.legacy_detectors}"
+        assert abs(w.theme_cluster - 0.25) < 0.001, f"theme_cluster 가중치 오류: {w.theme_cluster}"
+        assert abs(w.volume_news_combo - 0.32) < 0.001, f"volume_news_combo 가중치 오류: {w.volume_news_combo}"
+        assert abs(w.disclosure_pattern - 0.18) < 0.001, f"disclosure_pattern 가중치 오류: {w.disclosure_pattern}"
+        assert abs(w.legacy_detectors - 0.10) < 0.001, f"legacy_detectors 가중치 오류: {w.legacy_detectors}"
+        assert abs(w.news_delayed - 0.15) < 0.001, f"news_delayed 가중치 오류: {w.news_delayed}"
 
 
 # ---------------------------------------------------------------------------

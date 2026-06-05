@@ -77,6 +77,8 @@ class SurgeCandidate:
     # SPEC-AI-028: 공시 감성 추적 (bullish/bearish/neutral)
     # bearish=페널티 적용, bullish=정상 시그널, neutral=공시 미관여
     disclosure_sentiment: str = "neutral"
+    # SPEC-AI-039 REQ-039-002: 뉴스 지연 반응 점수 (24-72h 고임팩트 뉴스 기반)
+    news_delayed_score: float = 0.0
 
 
 def _sigmoid(x: float) -> float:
@@ -986,6 +988,8 @@ def compute_ensemble_score(candidate: SurgeCandidate, config: SurgeDetectionConf
         + w.volume_news_combo * candidate.combo_score
         + w.disclosure_pattern * best_disclosure_score
         + w.legacy_detectors * candidate.legacy_score
+        # SPEC-AI-039 REQ-039-002: 뉴스 지연 반응 점수 추가 (가중치 0.15)
+        + w.news_delayed * candidate.news_delayed_score
     )
 
     # SPEC-AI-018 REQ-009: 탐지기 그룹 단위 컨센서스 배율 (동일 이벤트 중복 보상 방지)
@@ -1045,6 +1049,137 @@ def _recent_surge_penalty(score: float, price_5d_trend: float | None) -> float:
     return score
 
 
+# @MX:ANCHOR: [AUTO] detect_news_delayed_response — 뉴스 지연 반응 탐지기 진입점
+# @MX:REASON: gather_surge_candidates, 테스트, 외부 API 총 3곳 이상에서 호출될 예정인 공개 탐지기
+# @MX:SPEC: SPEC-AI-039 REQ-039-002
+def detect_news_delayed_response(
+    db: "Session",
+    config: "SurgeDetectionConfig",
+    market_regime: str = "NEUTRAL",
+) -> list[SurgeCandidate]:
+    """최근 24-72시간 내 고임팩트 뉴스 발생 종목을 탐지한다 (지연 반응 패턴).
+
+    한올바이오파마 사례: 6/3 "1조 로열티" 뉴스 → 6/5 +6.5% 급등 패턴 포착용.
+    당일(24h 이내) 동일 종목 기사 있으면 skip (즉각 반응은 다른 탐지기가 처리).
+    DB 쿼리 실패 시 조용히 빈 목록 반환 (기존 탐지기 패턴 준수).
+
+    Args:
+        db: SQLAlchemy 동기 세션
+        config: SurgeDetectionConfig (high_impact_news 설정 포함)
+        market_regime: 시장 레짐 (현재 미사용, 향후 레짐별 감도 조정용)
+
+    Returns:
+        news_delayed_score가 채워진 SurgeCandidate 목록
+    """
+    from app.models.news import NewsArticle
+    from app.models.news_relation import NewsStockRelation
+    from app.models.stock import Stock
+
+    try:
+        now = datetime.now(timezone.utc)
+        # 24-72h 창: 당일 뉴스(24h 이내)는 다른 탐지기가 처리하므로 제외
+        window_start = now - timedelta(hours=72)
+        window_end = now - timedelta(hours=24)
+
+        # 1. 24-72h 이내 발행된 기사 조회
+        articles = (
+            db.query(NewsArticle)
+            .filter(
+                NewsArticle.published_at >= window_start,
+                NewsArticle.published_at < window_end,
+            )
+            .all()
+        )
+
+        if not articles:
+            return []
+
+        hi_cfg = config.high_impact_news
+
+        results: list[SurgeCandidate] = []
+        # 종목 코드 → 최고 점수 병합용
+        best_scores: dict[str, tuple[float, str, str]] = {}  # code → (score, name, stock_code)
+
+        article_ids = [a.id for a in articles]
+
+        # 2. 고임팩트 키워드 필터 + news_stock_relations 조회
+        for article in articles:
+            search_text = article.title or ""
+            if article.ai_summary:
+                search_text = search_text + " " + article.ai_summary
+
+            multiplier = hi_cfg.get_multiplier(search_text)
+            if multiplier == 1.0:
+                # 고임팩트 키워드 없는 기사는 skip
+                continue
+
+            # 3. 해당 기사와 연결된 종목 추출
+            relations = (
+                db.query(NewsStockRelation)
+                .filter(
+                    NewsStockRelation.news_id == article.id,
+                    NewsStockRelation.stock_id.isnot(None),
+                )
+                .all()
+            )
+
+            for rel in relations:
+                # 4. 당일 24h 이내 동일 종목 기사 있으면 skip (즉각 반응 탐지기에서 처리)
+                today_news = (
+                    db.query(NewsArticle)
+                    .filter(
+                        NewsArticle.published_at >= window_end,  # 최근 24h
+                        NewsArticle.relations.any(
+                            NewsStockRelation.stock_id == rel.stock_id
+                        ),
+                    )
+                    .first()
+                )
+                if today_news:
+                    continue
+
+                # 5. 종목 정보 조회
+                stock = db.query(Stock).filter(Stock.id == rel.stock_id).first()
+                if not stock:
+                    continue
+
+                # recency_factor: 뉴스 발행 시각에 따른 가중 (48h 전이 최고)
+                hours_ago = (now - article.published_at).total_seconds() / 3600
+                if hours_ago <= 48:
+                    recency_factor = 1.2
+                else:
+                    recency_factor = 1.0
+
+                # 6. score 산출: base(0.3) × multiplier × recency_factor
+                base_score = 0.3
+                score = round(min(1.0, base_score * multiplier * recency_factor), 4)
+
+                # 최고 점수 종목만 보관 (동일 종목 복수 기사 시 병합)
+                existing = best_scores.get(stock.stock_code)
+                if existing is None or score > existing[0]:
+                    best_scores[stock.stock_code] = (score, stock.name, stock.stock_code)
+
+        # 7. 임계값(0.25) 이상 종목 SurgeCandidate 변환
+        for stock_code, (score, stock_name, _) in best_scores.items():
+            if score >= 0.25:
+                results.append(
+                    SurgeCandidate(
+                        stock_code=stock_code,
+                        stock_name=stock_name,
+                        news_delayed_score=score,
+                        active_detectors=["news_delayed"],
+                    )
+                )
+
+        logger.info("[뉴스지연] %d개 후보 반환 (24-72h 고임팩트 뉴스 기반)", len(results))
+        return results
+
+    except Exception as e:
+        # DB 쿼리 실패 시 조용히 빈 목록 반환 (기존 탐지기 패턴 준수)
+        logger.warning("[뉴스지연] 탐지 실패: %s", e)
+        return []
+
+
 # @MX:NOTE: [AUTO] SPEC-AI-012 앙상블 파이프라인 진입점 — fund_manager._gather_surge_candidates에서 호출
 # @MX:SPEC: SPEC-AI-012
 def gather_surge_candidates(
@@ -1074,6 +1209,8 @@ def gather_surge_candidates(
     pattern_results = detect_disclosure_surge_pattern(db, config)
     # P3: 즉각 공시 이벤트 탐지기 (자사주 소각, 수주, 합병)
     immediate_results = detect_immediate_disclosure_signal(db, config)
+    # SPEC-AI-039 REQ-039-002: 뉴스 지연 반응 탐지기 (24-72h 고임팩트 뉴스 기반)
+    delayed_results = detect_news_delayed_response(db, config, market_regime=market_regime)
 
     # 종목 코드 기준 병합
     merged: dict[str, SurgeCandidate] = {}
@@ -1106,6 +1243,16 @@ def gather_surge_candidates(
             existing.immediate_disclosure_score = candidate.immediate_disclosure_score
             if "immediate_disclosure" not in existing.active_detectors:
                 existing.active_detectors.append("immediate_disclosure")
+        else:
+            merged[candidate.stock_code] = candidate
+
+    # SPEC-AI-039 REQ-039-002: 뉴스 지연 반응 탐지기 결과 병합
+    for candidate in delayed_results:
+        if candidate.stock_code in merged:
+            existing = merged[candidate.stock_code]
+            existing.news_delayed_score = candidate.news_delayed_score
+            if "news_delayed" not in existing.active_detectors:
+                existing.active_detectors.append("news_delayed")
         else:
             merged[candidate.stock_code] = candidate
 

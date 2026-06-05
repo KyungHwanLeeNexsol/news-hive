@@ -196,9 +196,17 @@ class TestAC037005NonThemeFastPath:
 
 class TestAC037006Regression:
     def test_ensemble_weights_sum_to_one(self, cfg: SurgeDetectionConfig) -> None:
-        """앙상블 가중치 합산이 1.0 (±0.001) 이어야 한다."""
+        """앙상블 가중치 합산이 1.0 (±0.001) 이어야 한다.
+        SPEC-AI-039: news_delayed(0.15) 추가 → 5개 탐지기 합산.
+        """
         w = cfg.ensemble.weights
-        total = w.theme_cluster + w.volume_news_combo + w.disclosure_pattern + w.legacy_detectors
+        total = (
+            w.theme_cluster
+            + w.volume_news_combo
+            + w.disclosure_pattern
+            + w.legacy_detectors
+            + w.news_delayed
+        )
         assert abs(total - 1.0) < 0.001, f"가중치 합산 오류: {total:.4f}"
 
     def test_none_metadata_no_exception(self, cfg: SurgeDetectionConfig) -> None:

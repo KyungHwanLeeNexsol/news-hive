@@ -204,9 +204,15 @@ class TestSurgeConfig:
         assert len(surge_config.theme_cluster.keywords) > 0
 
     def test_characterize_ensemble_weights_sum_to_one(self, surge_config: SurgeDetectionConfig):
-        """앙상블 가중치 합산이 1.0이다."""
+        """앙상블 가중치 합산이 1.0이다. SPEC-AI-039: news_delayed(0.15) 포함 5개 탐지기."""
         w = surge_config.ensemble.weights
-        total = w.theme_cluster + w.volume_news_combo + w.disclosure_pattern + w.legacy_detectors
+        total = (
+            w.theme_cluster
+            + w.volume_news_combo
+            + w.disclosure_pattern
+            + w.legacy_detectors
+            + w.news_delayed
+        )
         assert abs(total - 1.0) < 0.001
 
     def test_invalid_weights_raise_value_error(self):
@@ -600,8 +606,8 @@ class TestEnsembleScore:
         """앙상블 점수 < min_score_for_signal(0.45)이면 시그널 없음 (AC-SURGE-004 시나리오 1).
 
         theme=0.40, combo=0.0, pattern=0.0, legacy=0.0
-        → SPEC-AI-018 REQ-004 가중치: score = 0.28 * 0.40 = 0.112 < 0.45
-        → news 그룹 1개 활성 → multiplier=1.00 → final=0.112
+        → SPEC-AI-039 가중치: score = 0.25 * 0.40 = 0.10 < 0.45
+        → news 그룹 1개 활성 → multiplier=1.00 → final=0.10
         """
         candidate = SurgeCandidate(
             stock_code="000001",
@@ -612,8 +618,8 @@ class TestEnsembleScore:
             legacy_score=0.0,
         )
         score = compute_ensemble_score(candidate, surge_config)
-        # SPEC-AI-018 REQ-004 가중치: 0.28 * 0.40 * 1.00(단일그룹) = 0.112
-        assert abs(score - 0.112) < 0.001
+        # SPEC-AI-039 가중치: 0.25 * 0.40 * 1.00(단일그룹) = 0.10
+        assert abs(score - 0.10) < 0.001
         assert score < surge_config.ensemble.min_score_for_signal
 
     def test_characterize_above_threshold_generates_signal(self, surge_config: SurgeDetectionConfig):

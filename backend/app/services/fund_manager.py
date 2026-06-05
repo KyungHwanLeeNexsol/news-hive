@@ -1460,6 +1460,12 @@ async def _gather_surge_candidates(
     prev_window_start = today_start - timedelta(hours=48)
     already_today_codes = {r["stock_code"] for r in results}
 
+    # SPEC-AI-039 REQ-039-001: carry-over 최대 거래일 제한 (3 거래일 ≈ 5 역일)
+    # originally_created_at 기준 5역일 초과 시 skip → 급등 조건 소멸 시그널 반복 제거
+    _co_cfg = surge_config.carryover if hasattr(surge_config, "carryover") and surge_config.carryover else None
+    _max_td = _co_cfg.max_trading_days if _co_cfg else 3
+    _carryover_cutoff = today_start - timedelta(days=int(_max_td * 1.67))  # 3 거래일 ≈ 5 역일
+
     prev_signals = (
         db.query(FundSignal)
         .filter(
@@ -1474,6 +1480,18 @@ async def _gather_surge_candidates(
     for prev in prev_signals:
         stock = db.query(Stock).filter(Stock.id == prev.stock_id).first()
         if not stock or stock.stock_code in already_today_codes:
+            continue
+
+        # SPEC-AI-039 REQ-039-001: originally_created_at 기준 5역일 초과 시 skip
+        # originally_created_at이 NULL이면 created_at으로 fallback
+        _orig = prev.originally_created_at or prev.created_at
+        if _orig < _carryover_cutoff:
+            logger.debug(
+                "[carry-over skip] %s — 3 거래일 초과 (originally=%s, cutoff=%s)",
+                stock.stock_code,
+                _orig.date(),
+                _carryover_cutoff.date(),
+            )
             continue
 
         # 이미 오늘 같은 종목 signal 있으면 skip

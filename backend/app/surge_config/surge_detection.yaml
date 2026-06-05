@@ -41,13 +41,19 @@ surge_detection:
     min_sample_size: 20
     cache_ttl_hours: 24
     disclosure_window_hours: 24
+  # SPEC-AI-039 REQ-039-001: carry-over 최대 거래일 제한
+  carryover:
+    max_trading_days: 3  # 최대 carry-over 거래일 수 (3 거래일 ≈ 5 역일)
   ensemble:
     weights:
-      # SPEC-AI-018 REQ-004: theme_cluster 0.35→0.28 (과발화 억제), legacy_detectors 0.10→0.17 (기술적 신호 보완)
-      theme_cluster: 0.28
-      volume_news_combo: 0.35
-      disclosure_pattern: 0.20
-      legacy_detectors: 0.17
+      # SPEC-AI-039 REQ-039-002: news_delayed 탐지기 추가 (0.15), 기존 가중치 재조정
+      # theme_cluster: 0.28→0.25, volume_news_combo: 0.35→0.32
+      # disclosure_pattern: 0.20→0.18, legacy_detectors: 0.17→0.10, news_delayed: 0.00→0.15
+      theme_cluster: 0.25
+      volume_news_combo: 0.32
+      disclosure_pattern: 0.18
+      legacy_detectors: 0.10
+      news_delayed: 0.15
     min_score_for_signal: 0.45
     # 레짐별 앙상블 임계값 (SPEC-AI-017 REQ-001): 시장 레짐에 따라 차등 적용
     # BULL 장에서는 진입 문턱 낮춰 더 많은 시그널 허용 (0.38), SIDEWAYS/BEAR는 높임
@@ -132,3 +138,22 @@ surge_detection:
     distribution_change_pct: 0.0
     exclude_on_price_unavailable: true
     require_companion_detector: true
+  # SPEC-AI-039 REQ-039-003: 고임팩트 뉴스 키워드 가중치 설정
+  # 기술이전/임상/수주 등 급등 트리거 이벤트를 일반 뉴스보다 차별화 탐지
+  high_impact_news:
+    tech_transfer:
+      - "기술이전"
+      - "로열티"
+      - "기술수출"
+    tech_transfer_multiplier: 2.0
+    clinical:
+      - "임상"
+      - "FDA"
+      - "허가"
+      - "승인"
+    clinical_multiplier: 1.8
+    contract:
+      - "수주"
+      - "계약체결"
+      - "파트너십"
+    contract_multiplier: 1.5
