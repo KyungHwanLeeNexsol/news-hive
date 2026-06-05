@@ -87,8 +87,10 @@ surge_detection:
     BEAR:
       # SPEC-AI-038 REQ-038-001: 3.0→2.5으로 완화 — BEAR 시 과도한 combo 차단 방지
       volume_zscore_threshold: 2.5
+      # 2026-06-05: 0.50→0.35 완화 — 대원제약 ADA 발표(neutral 뉴스 11건) 미탐지 분석 결과
+      # neutral 뉴스도 포함해야 ADA/임상 류 이벤트 포착 가능
       news_window_hours: 12
-      min_news_sentiment: 0.50
+      min_news_sentiment: 0.35
   price_query:
     batch_size: 10
     batch_delay_sec: 0.5
