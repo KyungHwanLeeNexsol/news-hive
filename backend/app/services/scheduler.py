@@ -27,7 +27,9 @@ def _record_job_duration(job_id: str, duration: float) -> None:
 
 scheduler = BackgroundScheduler(
     jobstores={"default": SQLAlchemyJobStore(url=settings.DATABASE_URL)},
-    job_defaults={"misfire_grace_time": 30},
+    # misfire_grace_time: 서버 재시작 후 최대 1시간 이내 누락 잡을 복구 실행
+    # 기존 30초는 2분 이상 재시작 시 잡 영구 소멸 — 1시간으로 확대
+    job_defaults={"misfire_grace_time": 3600, "coalesce": True},
 )
 
 

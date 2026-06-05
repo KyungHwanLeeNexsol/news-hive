@@ -108,18 +108,19 @@ surge_detection:
   # SPEC-AI-029 REQ-AI029-001: 적응형 surge_probability 임계값 설정
   adaptive_threshold:
     enabled: true
-    win_rate_window: 5
+    # 2026-06-05: 5→10 — 표본 크기 확대로 단기 손절 연속에 의한 임계값 급등 방지
+    win_rate_window: 10
     win_rate_floor: 0.40
     win_rate_addition: 0.05
     win_rate_cap: 0.70
     regime_multipliers:
-      # SPEC-AI-038 REQ-038-002: BEAR 1.2→1.05 — 저승률+BEAR 복합 시 threshold 폭등 방지
-      BEAR: 1.05
+      # 2026-06-05: BEAR 1.05→1.00 — 탐지 임계값(0.42)이 이미 낮으므로 추가 배율 불필요
+      BEAR: 1.00
       SIDEWAYS: 1.0
       BULL: 0.9
     final_clamp_min: 0.45
-    # SPEC-AI-038 REQ-038-002: 0.85→0.65 — 어떠한 조건에서도 threshold 0.65 초과 불가
-    final_clamp_max: 0.65
+    # 2026-06-05: 0.65→0.55 — 최악 상황에서도 임계값 0.55 이하로 제한
+    final_clamp_max: 0.55
     # SPEC-AI-037 REQ-037-002: 0.7→0.55로 하향 — 비테마 종목 이중 페널티 완화
     combo_zero_theme_floor: 0.55
   # SPEC-AI-030 REQ-AI030-001~004: volume_news_combo 추격매수 방지 게이트 설정

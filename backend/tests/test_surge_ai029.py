@@ -74,9 +74,11 @@ def _make_trade(db: Session, portfolio_id: int, exit_reason: str, entry_date: da
 
 class TestAC02901WinRateLow:
     def test_win_rate_below_floor_adds_addition(self, db, default_config):
-        """승률 0/5 (0.0) → 기본값 + 0.05"""
+        """승률 0/win_rate_window (0.0) → 기본값 + 0.05
+        2026-06-05: win_rate_window 5→10으로 확대 — 테스트 거래 수 동기화.
+        """
         port = _make_portfolio(db)
-        for _ in range(5):
+        for _ in range(default_config.adaptive_threshold.win_rate_window):
             _make_trade(db, port.id, "stop_loss")
 
         with patch(
@@ -143,14 +145,15 @@ class TestAC02903InsufficientTrades:
 
 
 # ---------------------------------------------------------------------------
-# AC-029-04: 레짐 배율 검증 (BEAR×1.05, SIDEWAYS×1.0, BULL×0.9) — SPEC-AI-038 REQ-038-002 반영
+# AC-029-04: 레짐 배율 검증 (BEAR×1.00, SIDEWAYS×1.0, BULL×0.9)
+# 2026-06-05: BEAR 1.05→1.00 — 탐지 임계값이 이미 0.42로 낮아지므로 중복 배율 제거
 # ---------------------------------------------------------------------------
 
 class TestAC02904RegimeMultiplier:
     @pytest.mark.parametrize(
         "regime, multiplier",
         [
-            (MarketRegimeEnum.BEAR, 1.05),  # SPEC-AI-038: 1.2 → 1.05
+            (MarketRegimeEnum.BEAR, 1.00),  # 2026-06-05: 1.05 → 1.00 (중복 페널티 제거)
             (MarketRegimeEnum.SIDEWAYS, 1.0),
             (MarketRegimeEnum.BULL, 0.9),
         ],

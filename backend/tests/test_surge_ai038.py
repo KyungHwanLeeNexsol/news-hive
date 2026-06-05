@@ -55,28 +55,34 @@ class TestVolumeZscoreThreshold:
 class TestBearThresholdCap:
     """AC-038-002: BEAR regime에서 임계값이 final_clamp_max(0.65)를 초과하지 않아야 한다."""
 
-    def test_bear_multiplier_is_1_05(self) -> None:
-        """BEAR regime_multiplier가 1.05이어야 한다."""
+    def test_bear_multiplier_is_1_00(self) -> None:
+        """BEAR regime_multiplier가 1.00이어야 한다.
+        2026-06-05: 1.05→1.00 — 탐지 임계값(0.42)이 이미 낮아지므로 추가 배율 불필요.
+        """
         cfg = get_surge_config()
         bear_mult = cfg.adaptive_threshold.regime_multipliers.get("BEAR", 1.0)
-        assert bear_mult == 1.05, f"BEAR multiplier 1.05 기대, 실제: {bear_mult}"
+        assert bear_mult == 1.00, f"BEAR multiplier 1.00 기대, 실제: {bear_mult}"
 
-    def test_final_clamp_max_is_0_65(self) -> None:
-        """final_clamp_max가 0.65이어야 한다."""
+    def test_final_clamp_max_is_0_55(self) -> None:
+        """final_clamp_max가 0.55이어야 한다.
+        2026-06-05: 0.65→0.55 — 어떤 조건에서도 임계값 0.55 이하로 제한.
+        """
         cfg = get_surge_config()
-        assert cfg.adaptive_threshold.final_clamp_max == 0.65, (
-            f"clamp_max 0.65 기대, 실제: {cfg.adaptive_threshold.final_clamp_max}"
+        assert cfg.adaptive_threshold.final_clamp_max == 0.55, (
+            f"clamp_max 0.55 기대, 실제: {cfg.adaptive_threshold.final_clamp_max}"
         )
 
-    def test_bear_threshold_capped_at_0_65(self) -> None:
-        """BEAR regime + 저승률 조건에서도 threshold가 0.65를 초과하지 않아야 한다."""
+    def test_bear_threshold_capped_at_0_55(self) -> None:
+        """BEAR regime + 저승률 조건에서도 threshold가 0.55를 초과하지 않아야 한다.
+        2026-06-05: final_clamp_max 0.65→0.55.
+        """
         cfg = get_surge_config()
 
         with patch("app.services.surge_threshold_service._get_recent_closed_trades") as mock_trades, \
              patch("app.services.surge_threshold_service.get_or_create_today_regime") as mock_regime:
-            # 최악 조건: 5거래 모두 패배 (win_rate=0.0)
+            # 최악 조건: win_rate_window 만큼 패배 (win_rate=0.0)
             mock_trades.return_value = [
-                MagicMock(exit_reason="stop_loss") for _ in range(5)
+                MagicMock(exit_reason="stop_loss") for _ in range(cfg.adaptive_threshold.win_rate_window)
             ]
             # BEAR regime
             regime_obj = MagicMock()
@@ -86,8 +92,8 @@ class TestBearThresholdCap:
             db = MagicMock()
             threshold = compute_adaptive_threshold(db, cfg)
 
-        assert threshold <= 0.65, (
-            f"BEAR + 저승률에서 threshold가 0.65 초과: {threshold:.3f}"
+        assert threshold <= 0.55, (
+            f"BEAR + 저승률에서 threshold가 0.55 초과: {threshold:.3f}"
         )
 
     def test_bear_threshold_lower_than_before(self) -> None:
