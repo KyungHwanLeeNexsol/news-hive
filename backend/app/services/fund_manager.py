@@ -1255,14 +1255,30 @@ async def _gather_surge_candidates(
     except Exception as _e:
         logger.warning("[급등탐지] 레짐 조회 실패, NEUTRAL 적용: %s", _e)
 
+    # 성능 패치: sync HTTP 루프를 스레드로 분리 + 5분 글로벌 타임아웃
+    # gather_surge_candidates는 종목당 다중 sync HTTP 호출 — 직접 await 시 event loop 블로킹
+    _GATHER_TIMEOUT_S = 300
     try:
-        candidates = gather_surge_candidates(
-            db=db,
-            recent_news=recent_news,
-            config=surge_config,
-            legacy_candidates=leading_candidates,
-            market_regime=market_regime_str,
+        _loop = asyncio.get_event_loop()
+        candidates = await asyncio.wait_for(
+            _loop.run_in_executor(
+                None,
+                lambda: gather_surge_candidates(
+                    db=db,
+                    recent_news=recent_news,
+                    config=surge_config,
+                    legacy_candidates=leading_candidates,
+                    market_regime=market_regime_str,
+                ),
+            ),
+            timeout=_GATHER_TIMEOUT_S,
         )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "[급등탐지] gather_surge_candidates 타임아웃 %ds 초과 — 빈 리스트 반환",
+            _GATHER_TIMEOUT_S,
+        )
+        return []
     except Exception as e:
         logger.warning("[급등탐지] 탐지기 실행 실패: %s", e)
         return []
