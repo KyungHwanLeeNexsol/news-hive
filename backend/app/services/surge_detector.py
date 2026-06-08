@@ -1285,9 +1285,30 @@ def gather_surge_candidates(
             if "legacy" not in candidate.active_detectors:
                 candidate.active_detectors.append("legacy")
 
+    # SPEC-AI-038 성능 패치 3단계: price_5d_trend 조회(HTTP) 전 상위 N개로 사전 필터
+    # 이유: 테마클러스터가 수백 개 후보 반환 시 모든 종목 HTTP 호출 → 300s 타임아웃 초과
+    # 수정: 기존 점수(HTTP 없음) 기준으로 상위 30개만 남기고 나머지 제거
+    _MAX_PRICE_FETCH_CANDIDATES = 30
+    if len(merged) > _MAX_PRICE_FETCH_CANDIDATES:
+        _original_count = len(merged)
+        def _pre_score(c: SurgeCandidate) -> float:
+            return (
+                c.theme_cluster_score * 0.45
+                + c.combo_score * 0.30
+                + c.pattern_score * 0.15
+                + c.immediate_disclosure_score * 0.05
+                + c.news_delayed_score * 0.05
+            )
+        _sorted_codes = sorted(merged.keys(), key=lambda code: _pre_score(merged[code]), reverse=True)
+        merged = {code: merged[code] for code in _sorted_codes[:_MAX_PRICE_FETCH_CANDIDATES]}
+        logger.info(
+            "[급등탐지] price_5d_trend 조회 전 상위 %d개로 사전 필터 (성능 패치, 원본=%d개)",
+            _MAX_PRICE_FETCH_CANDIDATES,
+            _original_count,
+        )
+
     # SPEC-AI-018 REQ-005 fix: price_5d_trend를 candidate에 직접 채움
     # legacy_candidates=[]인 run_surge_signal_generation 경로에서도 페널티가 작동하도록
-    # fetch_stock_price_history_sync는 volume combo 탐지기가 이미 호출해 캐시됨 → 추가 비용 없음
     from app.services.naver_finance import fetch_stock_price_history_sync as _fetch_ph
     for code, candidate in merged.items():
         if code in legacy_lookup:
