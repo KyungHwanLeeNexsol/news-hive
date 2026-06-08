@@ -494,9 +494,9 @@ def detect_volume_surge_news_combo(
         logger.debug("[거래량콤보] 긍정 뉴스 관련 종목 없음")
         return []
 
-    # SPEC-AI-038 성능 패치: 거래량 히스토리 조회는 종목당 3 HTTP 요청 → 상위 50개로 제한
-    # 수백 종목 처리 시 수천 API 호출 발생 → timeout 원인
-    _MAX_COMBO_CANDIDATES = 50
+    # SPEC-AI-038 성능 패치: 거래량 히스토리 조회는 종목당 3 HTTP 요청 → 상위 20개로 제한
+    # 수백 종목 처리 시 수천 API 호출 발생 → timeout 원인 (50→20으로 축소: 최악 750s→300s)
+    _MAX_COMBO_CANDIDATES = 20
     if len(positive_news_stocks) > _MAX_COMBO_CANDIDATES:
         positive_news_stocks = dict(
             sorted(positive_news_stocks.items(), key=lambda x: x[1], reverse=True)[:_MAX_COMBO_CANDIDATES]
@@ -790,6 +790,16 @@ def detect_disclosure_surge_pattern(
                     "stock_code": stock.stock_code,
                     "stock_name": stock.name,
                 }
+
+    # 성능 패치: 가격 API 호출 종목 수 제한 (공시패턴 탐지기 — cap 없어 월요일 누적 공시 시 hang 발생)
+    _MAX_DISCLOSURE_CANDIDATES = 30
+    if len(stock_scores) > _MAX_DISCLOSURE_CANDIDATES:
+        stock_scores = dict(
+            sorted(stock_scores.items(), key=lambda x: x[1]["score"], reverse=True)[
+                :_MAX_DISCLOSURE_CANDIDATES
+            ]
+        )
+        logger.info("[공시패턴] 점수 상위 %d개로 제한 (성능 패치)", _MAX_DISCLOSURE_CANDIDATES)
 
     results: list[SurgeCandidate] = []
     for _, info in stock_scores.items():

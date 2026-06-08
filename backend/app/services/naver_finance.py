@@ -790,7 +790,7 @@ def fetch_stock_price_history_sync(stock_code: str, pages: int = 3) -> list[Pric
 
     results: list[PriceRecord] = []
     try:
-        with httpx.Client(timeout=10, follow_redirects=True) as client:
+        with httpx.Client(timeout=5, follow_redirects=True) as client:
             for page in range(1, pages + 1):
                 url = SISE_DAY_URL.format(code=stock_code, page=page)
                 resp = client.get(url, headers=HEADERS)
