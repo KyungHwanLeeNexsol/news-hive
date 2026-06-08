@@ -4,6 +4,26 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fixed — 급등 시그널 생성 Hang 수정 — 3단계 성능 패치 (2026-06-08)
+
+10:00/15:20 KST 스케줄 잡이 50분~1.5시간 hang하는 근본 원인을 분석하고 3단계 패치로 해결했습니다.
+
+**근본 원인**: `_gather_surge_candidates()`가 sync `gather_surge_candidates()` 직접 호출 → asyncio event loop 블로킹. 이후 `gather_surge_candidates()` 내부에서 637개 후보 전량 HTTP 호출(`fetch_stock_price_history_sync`) → 총 실행 시간 637초+ (300초 타임아웃 초과).
+
+- **패치 1 — 탐지기 후보 상한 축소** (`surge_detector.py`, commit `0585108`):
+  - `_MAX_COMBO_CANDIDATES` 50→20 (volume_news_combo 후보 제한)
+  - `_MAX_DISCLOSURE_CANDIDATES = 30` 신규 추가 (immediate_disclosure 후보 제한)
+  - `fetch_stock_price_history_sync` 개별 HTTP timeout 10→5s
+- **패치 2 — run_in_executor + 5분 글로벌 타임아웃** (`fund_manager.py`, commit `647efab`):
+  - `gather_surge_candidates()` 호출을 `run_in_executor(None, lambda: ...)`로 스레드 분리
+  - `asyncio.wait_for(timeout=300s)` 래핑 → asyncio event loop 블로킹 완전 해소
+  - 타임아웃 초과 시 빈 리스트 반환 (기존: 무한 hang)
+- **패치 3 — price_5d_trend HTTP 루프 전 사전 필터** (`surge_detector.py`, commit `39fdb0f`):
+  - `_MAX_PRICE_FETCH_CANDIDATES = 30` 상수 추가
+  - 기존 점수(theme_cluster 45% + combo 30% + pattern 15% + disclosure 5% + news_delayed 5%) 기준 상위 30개만 HTTP 호출 대상으로 제한
+  - **637개 → 30개 HTTP 요청으로 축소**: price_5d_trend 단계 ~637초 → ~30초
+  - 전체 실행 시간: ~145초 (300초 글로벌 타임아웃 이내 안정 완료)
+
 ### Fixed — BEAR 레짐 뉴스 감성 임계값 완화 (2026-06-05)
 
 오늘 상한가 분석에서 대원제약(+29.94%)이 6/4 ADA 발표 neutral 뉴스 11건을 보유했음에도
