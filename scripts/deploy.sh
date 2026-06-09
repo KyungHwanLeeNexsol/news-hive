@@ -4,10 +4,10 @@
 
 set -e
 
-# 동시 배포 방지: 다른 배포가 진행 중이면 즉시 종료
+# 동시 배포 방지: 다른 배포가 진행 중이면 최대 5분 대기 후 실행
 LOCK_FILE="/tmp/newshive-deploy.lock"
 exec 200>"$LOCK_FILE"
-flock -n 200 || { echo "!!! 다른 배포가 진행 중입니다. 잠시 후 재시도하세요."; exit 1; }
+flock --wait 300 200 || { echo "!!! 배포 락 획득 실패 (5분 초과). 서버를 확인하세요."; exit 1; }
 
 cd /home/ubuntu/news-hive
 
