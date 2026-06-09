@@ -4,6 +4,41 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Changed — 급등예측 시스템 4항목 개선 (2026-06-09)
+
+포트폴리오 리셋 후 급등 시그널 품질 개선을 위해 4가지 우선순위 패치를 적용했습니다.
+
+**배경**: 6/4~6/8 운영 결과 분석 → volume_news_combo 6/6 실패(-7.7% 평균), carry-over 저신뢰도 시그널 누적, BEAR 레짐 시 불필요한 매수 진행 문제 확인.
+
+- **P0 — Carry-Over 최소 임계값 상향** (`fund_manager.py`, commit `8412696`):
+  - 기존 0.265 → **0.50** 으로 상향
+  - 신뢰도가 낮은 carry-over 시그널이 매수 풀에 잔류하는 문제 차단
+  - `decayed_score < 0.50` 조건 추가
+
+- **P1a — volume_news_combo 탐지기 비활성화** (`surge_detection.yaml`, `surge_settings.py`, `surge_detector.py`):
+  - `VolumeNewsComboConfig`에 `enabled` 플래그 추가
+  - YAML: `volume_news_combo.enabled: false`
+  - 함수 진입 시 즉시 빈 리스트 반환 → 앙상블 가중치(0.32)는 유지
+  - 근거: 6/6 실패, -7.7% 평균 — 거래량 스파이크 = 고점 추격 패턴 확인
+
+- **P1b — BEAR 레짐 신규 매수 완전 중단** (`surge_trading_service.py`):
+  - 기존: BEAR 감지 시 position_pct 50% 축소(14%→7%)
+  - 변경: `execute_buy_orders()` 진입 즉시 `return {"executed": 0, ...}` — 완전 중단
+  - 자본 보존 최우선 원칙 적용
+
+- **P2 — 적응형 임계값 하한 상향** (`surge_detection.yaml`):
+  - `adaptive_threshold.final_clamp_min: 0.45 → 0.50`
+  - 거래 데이터 부족/리셋 직후 fallback 임계값을 0.50으로 고정
+
+### Fixed — 급등 탐지기 단위테스트 격리 수정 (2026-06-09)
+
+`volume_news_combo.enabled: false` YAML 설정 후 단위테스트 11개가 빈 배열을 반환받아 실패하는 문제를 해결했습니다.
+
+- **근본 원인**: `get_surge_config()` 싱글턴이 YAML 설정을 그대로 반환 → 탐지기 내부 로직 단위테스트에서도 `enabled=False` 적용
+- **`test_surge_ai030.py::_make_config()`**: `volume_news_combo.enabled=True` 강제 (gate 로직 테스트용)
+- **`test_surge_detector.py::surge_config` 픽스처**: `volume_news_combo.enabled=True` 강제 (탐지기 내부 로직 검증용)
+- **결과**: 1416 passed (기존 1405 → 11 실패 해소), 4 skipped, 3 xpassed
+
 ### Fixed — 급등 시그널 생성 Hang 수정 — 3단계 성능 패치 (2026-06-08)
 
 10:00/15:20 KST 스케줄 잡이 50분~1.5시간 hang하는 근본 원인을 분석하고 3단계 패치로 해결했습니다.
