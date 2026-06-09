@@ -42,8 +42,11 @@ def surge_config() -> SurgeDetectionConfig:
     """테스트용 SurgeDetectionConfig (기본 설정 파일 기준)."""
     from app.surge_config.surge_settings import get_surge_config
 
-    # 싱글턴 재사용 (실제 YAML 파일 기준)
-    return get_surge_config()
+    config = get_surge_config()
+    # volume_news_combo는 운영환경에서 비활성화되어 있으나
+    # 탐지기 단위테스트에서는 내부 로직 검증을 위해 강제 활성화
+    enabled_vnc = config.volume_news_combo.model_copy(update={"enabled": True})
+    return config.model_copy(update={"volume_news_combo": enabled_vnc})
 
 
 @pytest.fixture

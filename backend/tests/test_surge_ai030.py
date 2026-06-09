@@ -127,8 +127,10 @@ def _make_config(**override_guard_fields) -> SurgeDetectionConfig:
     """기본 설정에 ComboChaseGuardConfig를 오버라이드한 SurgeDetectionConfig 반환."""
     base = get_surge_config()
     guard = ComboChaseGuardConfig(**{**ComboChaseGuardConfig().model_dump(), **override_guard_fields})
-    # Pydantic 모델은 immutable → model_copy로 교체
-    return base.model_copy(update={"combo_chase_guard": guard})
+    # volume_news_combo는 운영환경에서 비활성화되어 있으나
+    # 게이트 로직 단위테스트를 위해 탐지기 자체를 강제 활성화
+    enabled_vnc = base.volume_news_combo.model_copy(update={"enabled": True})
+    return base.model_copy(update={"combo_chase_guard": guard, "volume_news_combo": enabled_vnc})
 
 
 # ---------------------------------------------------------------------------
