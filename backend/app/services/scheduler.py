@@ -1354,6 +1354,11 @@ def _run_market_regime_update():
 
 def start_scheduler():
     """Start the background news crawl scheduler."""
+    # scheduler.start()을 add_job() 이전에 호출해야 SQLAlchemyJobStore가
+    # 초기화된 상태에서 replace_existing=True가 정상 작동함.
+    # start() 이전에 add_job()을 호출하면 pending 잡이 DB의 기존 잡을
+    # 교체하지 못해 next_run_time이 구 버전으로 stuck되는 버그 발생.
+    scheduler.start()
     interval = settings.NEWS_CRAWL_INTERVAL_MINUTES
     scheduler.add_job(
         _run_crawl_job,
@@ -1879,7 +1884,6 @@ def start_scheduler():
         replace_existing=True,
     )
 
-    scheduler.start()
     logger.info(
         f"Scheduler started: crawling every {interval} min, "
         f"KS200 daily scan at 15:30 KST, "
