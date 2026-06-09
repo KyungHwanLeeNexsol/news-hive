@@ -4,6 +4,16 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fixed — APScheduler SQLAlchemyJobStore replace_existing 버그 수정 (2026-06-09)
+
+13일간 DART 공시 크롤링이 중단된 근본 원인을 발견하고 수정했습니다. (commit `df0b2a2`)
+
+- **근본 원인**: `start_scheduler()`에서 `scheduler.start()` 이전에 `add_job(replace_existing=True)` 호출 → `SQLAlchemyJobStore` 미초기화 상태에서 replace_existing이 DB 기존 잡을 교체하지 못함 → `dart_crawl.next_run_time`이 이전 서비스 실행값으로 stuck → `misfire_grace_time=3600` 초과로 잡 영구 건너뜀
+- **영향 기간**: 2026-05-27 ~ 2026-06-09 (13일 disclosures 데이터 공백)
+- **수정**: `backend/app/services/scheduler.py` `start_scheduler()` 함수 첫 줄에 `scheduler.start()` 이동 (add_job() 이전으로)
+- **데이터 복구**: 수동 크롤 실행으로 June 2, 4, 5, 8, 9 공시 2,199건 복구 (June 3: 지방선거, June 6: 현충일, June 7~8: 주말 — 공시 없음)
+- **결과**: `dart_crawl next_run_time` 정상화 (18:11 KST 다음 실행), `surge_preday_scan next_run_time = 2026-06-10 17:00 KST`
+
 ### Added — SPEC-AI-042 야간·장전 공시 기반 갭업 조기 포착 (2026-06-09)
 
 야간·장전 공시(장 마감 15:30 ~ 장 시작 09:00 사이)를 포착하여 익일 갭업 초기에 조기 진입하는 3단계 폐루프를 구현했습니다.
