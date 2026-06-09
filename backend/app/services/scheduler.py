@@ -777,6 +777,115 @@ def _is_kr_market_open() -> bool:
     return now_kst.weekday() < 5
 
 
+def _is_trading_day() -> bool:
+    """KRX 거래일 여부 판정 (주말 + KRX 임시 공휴일 포함).
+
+    # @MX:NOTE: [AUTO] SPEC-AI-042 REQ-042-011 — surge_preday_scan/preopen_refresh/early_entry 잡용
+    #   _is_kr_market_open()은 주말만 체크하지만, 이 함수는 KRX_EXTRA_HOLIDAYS도 포함한다.
+    """
+    from datetime import timezone, timedelta
+    from app.services.surge_trading_service import KRX_EXTRA_HOLIDAYS
+
+    kst = timezone(timedelta(hours=9))
+    now_kst = datetime.now(kst)
+    if now_kst.weekday() >= 5:  # 토(5)/일(6)
+        return False
+    if now_kst.date() in KRX_EXTRA_HOLIDAYS:
+        return False
+    return True
+
+
+def _run_surge_preday_scan():
+    """SPEC-AI-042: 장 마감 후 공시 스캔 (평일 17:00 KST).
+
+    당일 15:30 KST 이후 접수된 공시를 대상으로 두 탐지기를 실행하여
+    preday_disclosure 시그널을 저장한다.
+
+    REQ-042-001, REQ-042-011
+    """
+    if not _is_trading_day():
+        logger.debug("주말/휴장일 — surge_preday_scan 스킵")
+        return
+
+    _start = _time.monotonic()
+    from app.services.preday_signal_service import post_market_scan
+    from datetime import timezone as _tz, timedelta as _td
+    from datetime import time as _time_cls
+
+    kst = _tz(_td(hours=9))
+    today_kst = datetime.now(kst).date()
+    scan_from_dt = datetime.combine(today_kst, _time_cls(15, 30)).replace(tzinfo=kst)
+
+    db = SessionLocal()
+    try:
+        count = post_market_scan(db, scan_from_dt)
+        logger.info("surge_preday_scan 완료: %d개 시그널 저장", count)
+    except Exception as e:
+        logger.exception("surge_preday_scan 잡 실패: %s", e)
+    finally:
+        _record_job_duration("surge_preday_scan", _time.monotonic() - _start)
+        db.close()
+
+
+def _run_surge_preopen_refresh():
+    """SPEC-AI-042: 장전 워치리스트 갱신 (평일 08:00 KST).
+
+    전날 17:00 KST 이후 접수된 공시를 재스캔하여 preday_disclosure 시그널을 보완한다.
+
+    REQ-042-003, REQ-042-011
+    """
+    if not _is_trading_day():
+        logger.debug("주말/휴장일 — surge_preopen_refresh 스킵")
+        return
+
+    _start = _time.monotonic()
+    from app.services.preday_signal_service import preopen_watchlist_refresh
+
+    db = SessionLocal()
+    try:
+        count = preopen_watchlist_refresh(db)
+        logger.info("surge_preopen_refresh 완료: %d개 시그널 추가", count)
+    except Exception as e:
+        logger.exception("surge_preopen_refresh 잡 실패: %s", e)
+    finally:
+        _record_job_duration("surge_preopen_refresh", _time.monotonic() - _start)
+        db.close()
+
+
+def _run_surge_preday_early_entry():
+    """SPEC-AI-042: preday_disclosure 시그널 조기 진입 (평일 09:05 KST).
+
+    preday_disclosure 보유 종목의 갭 비율을 조회하여
+    0% <= gap < gap_entry_threshold 범위 종목에 execute_buy_orders를 호출한다.
+    is_buy_eligible_hours/BUY_CUTOFF 가드에 의존 (우회 금지, REQ-042-013).
+
+    REQ-042-005~007, REQ-042-011, REQ-042-013
+    """
+    if not _is_trading_day():
+        logger.debug("주말/휴장일 — surge_preday_early_entry 스킵")
+        return
+
+    _start = _time.monotonic()
+    from app.services.preday_signal_service import early_entry_check
+
+    db = SessionLocal()
+    try:
+        result = early_entry_check(db)
+        logger.info(
+            "surge_preday_early_entry 완료: candidates=%d, entered=%d, "
+            "skipped_gapup=%d, skipped_gapdown=%d",
+            result.get("candidates", 0),
+            result.get("entered", 0),
+            result.get("skipped_gapup", 0),
+            result.get("skipped_gapdown", 0),
+        )
+    except Exception as e:
+        logger.exception("surge_preday_early_entry 잡 실패: %s", e)
+    finally:
+        _record_job_duration("surge_preday_early_entry", _time.monotonic() - _start)
+        db.close()
+
+
 # ---------------------------------------------------------------------------
 # SPEC-KS200-001: KOSPI 200 스토캐스틱+이격도 자동매매 스케줄 작업
 # ---------------------------------------------------------------------------
@@ -1729,6 +1838,47 @@ def start_scheduler():
         replace_existing=True,
     )
 
+    # SPEC-AI-042: 야간·장전 공시 기반 갭업 조기 포착 잡 (3개)
+    # 17:00 KST — 장 마감 후 공시 스캔 (preday_disclosure 시그널 생성)
+    scheduler.add_job(
+        _run_surge_preday_scan,
+        "cron",
+        day_of_week="mon-fri",
+        hour=17,
+        minute=0,
+        timezone="Asia/Seoul",
+        id="surge_preday_scan",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    # 08:00 KST — 장전 워치리스트 갱신 (전날 17:00 이후 공시 재스캔)
+    scheduler.add_job(
+        _run_surge_preopen_refresh,
+        "cron",
+        day_of_week="mon-fri",
+        hour=8,
+        minute=0,
+        timezone="Asia/Seoul",
+        id="surge_preopen_refresh",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    # 09:05 KST — preday_disclosure 조기 진입 (id: surge_preday_early_entry ≠ fund_morning_execute)
+    scheduler.add_job(
+        _run_surge_preday_early_entry,
+        "cron",
+        day_of_week="mon-fri",
+        hour=9,
+        minute=5,
+        timezone="Asia/Seoul",
+        id="surge_preday_early_entry",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+
     scheduler.start()
     logger.info(
         f"Scheduler started: crawling every {interval} min, "
@@ -1747,7 +1897,9 @@ def start_scheduler():
         f"failure_aggregation at 18:30 KST, "
         f"prompt_improvement every Sunday 22:00 KST, "
         f"ab_test_evaluation every Sunday 22:30 KST, "
-        f"factor_weight_adapt on 1st of month 23:00 KST"
+        f"factor_weight_adapt on 1st of month 23:00 KST, "
+        f"surge_preday_scan at 17:00 KST, surge_preopen_refresh at 08:00 KST, "
+        f"surge_preday_early_entry at 09:05 KST"
     )
 
 

@@ -36,6 +36,9 @@ surge_detection:
     volume_baseline_days: 20
     news_window_hours: 24
     min_news_sentiment: 0.5
+  # SPEC-AI-042 REQ-042-008: 장전 갭업 조기 진입 임계값
+  # 0 <= change_rate < gap_entry_threshold → 조기 진입, >= threshold → skip(갭풀백 위임)
+  gap_entry_threshold: 0.05
   disclosure_pattern:
     historical_surge_threshold_pct: 10.0
     historical_lookback_days: 5

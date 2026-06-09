@@ -179,7 +179,12 @@ def get_today_signals(
     날짜 기준: 직전 영업일 15:00 KST 이후 생성된 시그널 포함.
     전일 15:20 스케줄러가 생성한 시그널을 익일 09:00 매수에 사용할 수 있도록
     단순 "당일" 필터에서 확장한다. 주말 처리: 월요일은 금요일 15:00 이후 포함.
+
+    SPEC-AI-042 REQ-042-004/009: preday_disclosure 시그널(당일 08:00 KST 이후 생성)도
+    포함하여 워치리스트를 합집합(stock_id 기준 중복 제거)으로 반환한다.
     """
+    # @MX:ANCHOR: [AUTO] SPEC-AI-042 REQ-042-004 — surge_candidate ∪ preday_disclosure 워치리스트
+    # @MX:REASON: execute_buy_orders, early_entry_check, 테스트 등 복수 콜러
     now_kst = datetime.now(KST)
     today_kst = now_kst.date()
 
@@ -200,6 +205,21 @@ def get_today_signals(
         .filter(FundSignal.signal_type == "surge_candidate")
         .all()
     )
+
+    # SPEC-AI-042 REQ-042-009: preday_disclosure 시그널(당일 08:00 KST 이후) 추가 조회
+    # surge_candidate 경로(직전 영업일 15:00 기준)는 그대로 보존
+    preday_cutoff = datetime.combine(today_kst, time(8, 0)).replace(tzinfo=KST)
+    preday_signals_with_stocks = (
+        db.query(FundSignal, Stock)
+        .join(Stock, FundSignal.stock_id == Stock.id)
+        .filter(
+            FundSignal.signal_type == "preday_disclosure",
+            FundSignal.created_at >= preday_cutoff,
+        )
+        .all()
+    )
+    # preday 시그널을 합산 (stock_id 중복 제거는 아래 result 처리 시 수행)
+    signals_with_stocks = list(signals_with_stocks) + list(preday_signals_with_stocks)
 
     # Python 레벨에서 날짜 필터 및 확률 필터 적용
     result = []

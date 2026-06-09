@@ -274,6 +274,12 @@ class SurgeDetectionConfig(BaseModel):
     # SPEC-AI-039 REQ-039-003: 고임팩트 뉴스 키워드 multiplier
     high_impact_news: HighImpactNewsConfig = Field(default_factory=HighImpactNewsConfig)
 
+    # SPEC-AI-042 REQ-042-008: 장전 갭업 조기 진입 임계값 (하드코딩 금지)
+    # 0 <= change_rate < gap_entry_threshold → 조기 진입
+    # change_rate >= gap_entry_threshold → skip (갭풀백 위임)
+    # @MX:NOTE: [AUTO] SPEC-AI-042 — 갭 필터 임계값. 변경 시 surge_detection.yaml에서만 조정
+    gap_entry_threshold: float = 0.05
+
     # @MX:ANCHOR: [AUTO] 앙상블 가중치 합산 검증 — 5개 탐지기 가중치 합산 반드시 1.0
     # @MX:REASON: 가중치 합산 != 1.0 이면 앙상블 스코어 범위가 0~1을 벗어나 시그널 임계값 판정이 왜곡됨
     @model_validator(mode="after")

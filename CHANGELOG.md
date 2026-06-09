@@ -4,6 +4,47 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Added — SPEC-AI-042 야간·장전 공시 기반 갭업 조기 포착 (2026-06-09)
+
+야간·장전 공시(장 마감 15:30 ~ 장 시작 09:00 사이)를 포착하여 익일 갭업 초기에 조기 진입하는 3단계 폐루프를 구현했습니다.
+
+#### M1 — 장 마감 후 공시 스캔 (17:00 KST)
+- **post_market_scan** (`backend/app/services/preday_signal_service.py`, 17:00 KST):
+  - 당일 15:30 이후 접수 공시를 대상으로 `detect_immediate_disclosure_signal` 및 `detect_disclosure_surge_pattern` 실행
+  - 공시 기반 탐지기만으로 `signal_type="preday_disclosure"` FundSignal 생성
+  - 중복 방지: `disclosure_id` 기반 1차 / `surge_metadata` JSON 2차 검증
+  - `surge_metadata` 필드: `{"detector": <탐지기명>, "disclosure_id": <id>, "source": "preday_scan", "scan_from": "<ISO>"}`
+
+#### M2 — 장전 워치리스트 갱신 (08:00 KST)
+- **preopen_watchlist_refresh** (`backend/app/services/preday_signal_service.py`, 08:00 KST):
+  - 전날 17:00 이후 생성된 `preday_disclosure` 시그널 수집
+  - 당일 00:00 이후 접수된 신규 공시 재스캔하여 추가 시그널 생성
+  - watch_list = `get_today_signals()` ∪ `preday_disclosure` (stock_id 기준 중복 제거)
+
+#### M3 — 9:05 KST 조기 진입 결정 (09:05 KST)
+- **early_entry_check** (`backend/app/services/preday_signal_service.py`, 09:05 KST):
+  - `preday_disclosure` 보유 종목별 gap_rate 조회 (`fetch_current_price_with_change`)
+  - 갭 필터 3분류:
+    - gap_rate < 0% (갭다운) → skip
+    - gap_rate >= 5%(gap_entry_threshold) → skip (기존 gap_pullback에 위임)
+    - 0% ≤ gap_rate < 5% → 조기 매수 대상 채택
+  - 기존 `execute_buy_orders` 로직 재사용 (max_open_positions=7, position_pct=0.14, BEAR 중단 등 전 게이트)
+
+#### M4 — 설정 및 통합
+- **surge_detection.yaml**: `gap_entry_threshold: 0.05` 필드 추가
+- **surge_trading_service.py**: `get_today_signals()` 분기에 `preday_disclosure`(당일 08:00 cutoff) 포함
+- **scheduler.py**: 3개 신규 잡 등록
+  - `surge_preday_scan` (17:00)
+  - `surge_preopen_refresh` (08:00)
+  - `surge_preday_early_entry` (09:05)
+
+#### 구현 특성
+- DB 마이그레이션 없음 (기존 `signal_type`, `disclosure_id`, `surge_metadata` 컬럼 재사용)
+- 신규 탐지기 없음 (기존 공시 탐지기 2종만 재사용)
+- 기존 15:20/10:00 시그널 생성 잡 무변경
+- change_rate를 갭 대용 지표로 사용 (시가 미제공으로 인한 근사)
+- 09:05 기존 `fund_morning_execute` 잡과 독립 실행 (id 분리, 동시 현금 경쟁 허용 — execute_buy_orders 내 한도 게이트 관리)
+
 ### Added — SPEC-AI-041 급등예측 자동평가·자가개선 루프 (2026-06-09)
 
 급등 예측 시그널의 실제 적중률을 평가하고, 앙상블 가중치를 자동으로 조정하는 완전 자동화 루프를 구현했습니다.
