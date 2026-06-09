@@ -445,6 +445,10 @@ def detect_volume_surge_news_combo(
     Returns:
         SurgeCandidate 목록 (combo_score 채워짐)
     """
+    # P1a: enabled=False이면 즉시 반환 — 탐지기 완전 비활성화
+    if not config.volume_news_combo.enabled:
+        return []
+
     # REQ-018-004: 레짐별 파라미터 오버라이드
     # @MX:NOTE: [AUTO] SIDEWAYS/미등록 레짐은 volume_news_combo 기본값 사용
     cfg = config.volume_news_combo

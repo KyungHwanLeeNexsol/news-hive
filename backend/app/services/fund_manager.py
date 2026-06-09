@@ -1521,7 +1521,8 @@ async def _gather_surge_candidates(
 
         original_conf = prev.confidence
         decayed_score = round(original_conf * 0.95, 4)
-        if decayed_score < 0.265:
+        # P0: carry-over 최소 임계값 0.265→0.50 — 저신뢰도 carryover 시그널 차단
+        if decayed_score < 0.50:
             continue
 
         # surge_metadata에 carry-over 정보 추가

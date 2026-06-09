@@ -623,17 +623,16 @@ def execute_buy_orders(
     portfolio = get_or_create_portfolio(db)
     today_signals = get_today_signals(db, min_probability=min_probability)
 
-    # BEAR 레짐 시 포지션 크기 50% 축소 — 역방향 시장에서 리스크 관리
-    # BULL/SIDEWAYS 시에는 기본값(14%) 그대로 사용
+    # P1b: BEAR 레짐 시 신규 매수 완전 중단 — 자본 보존 우선 (기존 50% 축소에서 강화)
     try:
         from app.services.market_regime_service import get_or_create_today_regime as _get_regime
         _regime_obj = _get_regime(db)
         _regime_str = _regime_obj.regime.name if _regime_obj else "NEUTRAL"
         if _regime_str == "BEAR":
-            position_pct = position_pct * Decimal("0.5")
-            logger.info("[SURGE] BEAR 레짐 — position_pct %.2f → %.2f (50%% 축소)", float(position_pct / Decimal("0.5")), float(position_pct))
+            logger.info("[SURGE] BEAR 레짐 — 신규 매수 완전 중단 (자본 보존)")
+            return {"executed": 0, "skipped": 0, "failed": 0, "details": [], "reason": "bear_market"}
     except Exception as _re:
-        logger.warning("[SURGE] 레짐 조회 실패, 기본 position_pct 유지: %s", _re)
+        logger.warning("[SURGE] 레짐 조회 실패, 기본 진행: %s", _re)
 
     # SPEC-AI-029 REQ-AI029-006: 매수 실행 시 저장된 임계값 읽기 (재산출 없음)
     from app.surge_config.surge_settings import get_surge_config as _get_surge_config

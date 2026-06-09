@@ -29,6 +29,8 @@ surge_detection:
     # SPEC-AI-037 REQ-037-003: 500억(50_000_000_000)으로 하향 — 소형 테마주 커버리지 확대
     min_market_cap_krw: 50000000000
   volume_news_combo:
+    # P1a: 비활성화 — 6/6 실패(-7.7% 평균), 거래량 스파이크=고점 추격 패턴 확인됨 (2026-06-09)
+    enabled: false
     # SPEC-AI-038 REQ-038-001: 2.5→2.0으로 완화 — combo 신호 감도 향상 (BEAR 시 3.0→2.5 별도 오버라이드)
     volume_zscore_threshold: 2.0
     volume_baseline_days: 20
@@ -126,7 +128,8 @@ surge_detection:
       BEAR: 1.00
       SIDEWAYS: 1.0
       BULL: 0.9
-    final_clamp_min: 0.45
+    # P2: 0.45→0.50 — 거래 데이터 부족/리셋 후 fallback 임계값을 0.50으로 상향
+    final_clamp_min: 0.50
     # 2026-06-05: 0.65→0.55 — 최악 상황에서도 임계값 0.55 이하로 제한
     final_clamp_max: 0.55
     # SPEC-AI-037 REQ-037-002: 0.7→0.55로 하향 — 비테마 종목 이중 페널티 완화

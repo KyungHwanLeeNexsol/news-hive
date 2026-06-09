@@ -41,6 +41,8 @@ class ThemeClusterConfig(BaseModel):
 class VolumeNewsComboConfig(BaseModel):
     """거래량 이상 + 뉴스 콤보 설정."""
 
+    # P1a: 탐지기 비활성화 플래그 — False이면 detect_volume_news_combo가 빈 목록 반환
+    enabled: bool = True
     volume_zscore_threshold: float
     volume_baseline_days: int
     news_window_hours: int
