@@ -4,6 +4,81 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Added — SPEC-AI-041 급등예측 자동평가·자가개선 루프 (2026-06-09)
+
+급등 예측 시그널의 실제 적중률을 평가하고, 앙상블 가중치를 자동으로 조정하는 완전 자동화 루프를 구현했습니다.
+시스템은 매일 장마감 후 4단계 스케줄로 실행되며, 안전 게이트(R11/R12)를 통해 부정적 성능 개선을 방지합니다.
+
+#### M1 — 신규 DB 모델 및 마이그레이션
+- **SurgeActualOutcome** (`backend/app/models/surge_actual_outcome.py`):
+  - 장마감 후 실제 급등주 수집 (상한가/급등 기준)
+  - 마이그레이션: `backend/alembic/versions/058_surge_actual_outcome.py`
+  
+- **SurgePredictionEvaluation** (`backend/app/models/surge_prediction_evaluation.py`):
+  - T-1 FundSignal 대비 T 실제 결과 비교 (TP/FP/FN, precision/recall/F1)
+  - LLM 기반 miss 분석 (FN 시그널이 왜 실패했는지 근본 원인 진단)
+  - 마이그레이션: `backend/alembic/versions/059_surge_prediction_evaluation.py`
+  
+- **SurgeAutoImprovementLog** (`backend/app/models/surge_auto_improvement_log.py`):
+  - 앙상블 가중치 조정 이력 및 성능 변화 기록
+  - 마이그레이션: `backend/alembic/versions/060_surge_auto_improvement_log.py`
+
+#### M2 — 자동평가 서비스 (16:10 / 16:30 / 16:50 KST)
+- **collect_daily_surge_outcomes** (`backend/app/services/surge_actual_outcome_service.py`, 16:10 KST):
+  - 장마감 후 KRX 상한가·급등 종목 수집
+  - `asyncio.Semaphore(10)` 병렬 제한 (Naver Finance API 레이트 리밋)
+  - ON CONFLICT DO UPDATE로 중복 upsert 처리
+  
+- **evaluate_surge_predictions** (`backend/app/services/surge_evaluation_service.py`, 16:30 KST):
+  - T-1 FundSignal 조회: `surge_metadata IS NOT NULL` 조건으로 급등 시그널 판별
+  - 실제 결과와 비교해 TP/FP/FN 분류
+  - precision/recall/F1 메트릭 계산
+  - FN 종목에 대해 Claude API로 miss 분석 수행 (API 비용 관리: 1일 최대 5건)
+  
+- **analyze_and_improve** (`backend/app/services/surge_auto_improver.py`, 16:50 KST):
+  - 최근 5 거래일 win_rate, precision, recall 기반 가중치 최적화
+  - **R11 안전 게이트**: 5거래일 데이터 미만 시 개선 중단 (unstable 조건)
+  - **R12 안전 게이트**: 개선 후 recall < 20% 시 롤백 (recall 급락 방지)
+  - YAML 주석 보존 패치: `_patch_yaml_values()` (ruamel.yaml 미설치, pyyaml만 사용)
+  - SurgeAutoImprovementLog에 before/after 가중치 + 개선 사유 기록
+
+#### M3 — 일일 리포트 (17:05 KST)
+- **run_daily_report** (`backend/app/services/surge_actual_outcome_service.py`, 17:05 KST):
+  - 어제 신호 적중률 요약
+  - 오늘 새로운 개선사항 (YAML 변경 있을 경우)
+  - Telegram 채널 전송 (TELEGRAM_ADMIN_CHAT_ID 환경변수)
+  - 환경변수 미설정 시 리포트 전송 스킵 (에러 아님)
+
+#### M4 — API 엔드포인트
+- **GET /api/fund/evaluation** (`backend/app/routers/surge_trading.py`):
+  - 평가 이력 조회 (최근 30일, 페이지 기반)
+  
+- **GET /api/fund/evaluation/{date}** (`backend/app/routers/surge_trading.py`):
+  - 특정 날짜의 상세 평가 결과
+  
+- **GET /api/fund/improvements** (`backend/app/routers/surge_trading.py`):
+  - 가중치 개선 이력 조회
+
+#### M5 — 스케줄러 통합
+- `backend/app/services/scheduler.py`:
+  - 16:10 KST: `collect_daily_surge_outcomes`
+  - 16:30 KST: `evaluate_surge_predictions`
+  - 16:50 KST: `analyze_and_improve`
+  - 17:05 KST: `run_daily_report`
+
+#### M6 — 테스트 47개 추가
+- `backend/tests/test_surge_actual_outcome_service.py` (15개)
+- `backend/tests/test_surge_evaluation_service.py` (16개)
+- `backend/tests/test_surge_auto_improver.py` (12개)
+- `backend/tests/test_surge_eval_endpoints.py` (4개)
+- **결과**: 1463 passed (기존 1416 → 47 증가)
+
+#### 의사결정 기록
+- **Decision-R11**: 5거래일 미만 데이터는 성능 지표가 unstable하므로 개선 중단 (최소 5거래일 데이터 필수)
+- **Decision-R12**: 개선 후 recall < 20% 시 미탐지 회신이 과다하므로 롤백 (신호 신뢰도 > 신호 량)
+- **Decision-FundSignal**: `surge_metadata IS NOT NULL` 조건으로 급등 시그널 판별 (FundSignal 모델에 signal_date 컬럼 없으므로 created_at 사용)
+- **Decision-Telegram**: TELEGRAM_ADMIN_CHAT_ID 미설정 시 리포트 스킵 (시스템 에러 아님, 운영 선택)
+
 ### Changed — 급등예측 시스템 4항목 개선 (2026-06-09)
 
 포트폴리오 리셋 후 급등 시그널 품질 개선을 위해 4가지 우선순위 패치를 적용했습니다.

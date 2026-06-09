@@ -418,3 +418,11 @@ def get_surge_config() -> SurgeDetectionConfig:
         _config_singleton = _load_config_from_yaml(_CONFIG_PATH)
         logger.debug("SurgeDetectionConfig 로드 완료: %s", _CONFIG_PATH)
     return _config_singleton
+
+
+def reload_surge_config() -> SurgeDetectionConfig:
+    """싱글턴 캐시를 비우고 surge_detection.yaml을 재로드한다."""
+    global _config_singleton
+    _config_singleton = _load_config_from_yaml(_CONFIG_PATH)
+    logger.info("SurgeDetectionConfig 재로드 완료: %s", _CONFIG_PATH)
+    return _config_singleton

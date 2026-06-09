@@ -143,6 +143,9 @@ def test_engine():
     from app.models.market_regime import MarketRegime  # noqa: F401 — SPEC-AI-015
     from app.models.surge_portfolio import SurgePortfolio, SurgeTrade  # noqa: F401 — SPEC-AI-021
     from app.models.surge_threshold_history import SurgeThresholdHistory  # noqa: F401 — SPEC-AI-029
+    from app.models.surge_actual_outcome import SurgeActualOutcome  # noqa: F401 — SPEC-AI-041
+    from app.models.surge_prediction_evaluation import SurgePredictionEvaluation  # noqa: F401 — SPEC-AI-041
+    from app.models.surge_auto_improvement_log import SurgeAutoImprovementLog  # noqa: F401 — SPEC-AI-041
 
     Base.metadata.create_all(bind=engine)
     yield engine

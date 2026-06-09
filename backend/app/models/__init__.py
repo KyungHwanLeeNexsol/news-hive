@@ -30,6 +30,9 @@ from app.models.following import (
 from app.models.securities_report import SecuritiesReport
 from app.models.market_regime import MarketRegime, MarketRegimeEnum
 from app.models.theme_group import ThemeGroup, StockThemeGroup
+from app.models.surge_actual_outcome import SurgeActualOutcome
+from app.models.surge_prediction_evaluation import SurgePredictionEvaluation
+from app.models.surge_auto_improvement_log import SurgeAutoImprovementLog
 
 __all__ = [
     "Sector", "Stock", "NewsArticle", "NewsStockRelation",
@@ -46,4 +49,7 @@ __all__ = [
     "SecuritiesReport",
     "MarketRegime", "MarketRegimeEnum",
     "ThemeGroup", "StockThemeGroup",
+    "SurgeActualOutcome",
+    "SurgePredictionEvaluation",
+    "SurgeAutoImprovementLog",
 ]

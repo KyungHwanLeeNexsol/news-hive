@@ -506,6 +506,137 @@ def _run_auto_register_stocks():
         db.close()
 
 
+def _run_surge_collect_outcomes():
+    """SPEC-AI-041: 당일 실제 급등주 결과 수집 (평일 16:10 KST)."""
+    if not _is_kr_market_open():
+        logger.debug("주말 — surge 결과 수집 스킵")
+        return
+
+    _start = _time.monotonic()
+    from app.services.surge_actual_outcome_service import collect_daily_surge_outcomes
+    from datetime import date as _date
+
+    db = SessionLocal()
+    try:
+        count = asyncio.run(collect_daily_surge_outcomes(db, _date.today()))
+        logger.info("surge 실제 결과 수집 완료: %d건", count)
+    except Exception:
+        logger.exception("surge collect outcomes 실패")
+        raise
+    finally:
+        _record_job_duration("surge_collect_outcomes", _time.monotonic() - _start)
+        db.close()
+
+
+def _run_surge_verify_predictions():
+    """SPEC-AI-041: T-1 시그널 vs T 실제 결과 평가 (평일 16:30 KST)."""
+    if not _is_kr_market_open():
+        logger.debug("주말 — surge 예측 검증 스킵")
+        return
+
+    _start = _time.monotonic()
+    from app.services.surge_evaluation_service import (
+        evaluate_surge_predictions,
+        analyze_misses_with_llm,
+    )
+    from datetime import date as _date
+
+    db = SessionLocal()
+    try:
+        today = _date.today()
+        evaluation = evaluate_surge_predictions(db, today)
+        logger.info(
+            "surge 예측 평가 완료: precision=%.3f, recall=%.3f, f1=%.3f",
+            evaluation.precision or 0.0,
+            evaluation.recall or 0.0,
+            evaluation.f1_score or 0.0,
+        )
+
+        if evaluation.false_negative > 0:
+            # FN 종목 조회
+            from app.models.surge_actual_outcome import SurgeActualOutcome as _SAO
+            from app.models.fund_signal import FundSignal as _FS
+            from app.models.stock import Stock as _Stock
+            from sqlalchemy import func as _func
+
+            from app.services.surge_trading_service import _get_prev_business_day
+            prev_day = _get_prev_business_day(today)
+
+            predicted_codes = {
+                row.stock_code
+                for row in db.query(_Stock.stock_code)
+                .join(_FS, _FS.stock_id == _Stock.id)
+                .filter(
+                    _FS.surge_metadata.isnot(None),
+                    _func.date(_FS.created_at) == prev_day,
+                )
+                .all()
+            }
+
+            missed = [
+                {"stock_code": r.stock_code, "stock_name": r.stock_name, "change_rate": r.change_rate}
+                for r in db.query(_SAO.stock_code, _SAO.stock_name, _SAO.change_rate)
+                .filter(_SAO.trading_date == today, _SAO.was_surge.is_(True))
+                .all()
+                if r.stock_code not in predicted_codes
+            ]
+
+            analysis = asyncio.run(analyze_misses_with_llm(missed, db))
+            evaluation.miss_analysis_json = analysis
+            db.commit()
+            logger.info("LLM 미스 분석 저장 완료")
+    except Exception:
+        logger.exception("surge verify predictions 실패")
+        raise
+    finally:
+        _record_job_duration("surge_verify_predictions", _time.monotonic() - _start)
+        db.close()
+
+
+def _run_surge_auto_improve():
+    """SPEC-AI-041: 탐지기 가중치 자동 개선 (평일 16:50 KST)."""
+    if not _is_kr_market_open():
+        logger.debug("주말 — surge 자동 개선 스킵")
+        return
+
+    _start = _time.monotonic()
+    from app.services.surge_auto_improver import analyze_and_improve
+    from datetime import date as _date
+
+    db = SessionLocal()
+    try:
+        logs = analyze_and_improve(db, _date.today())
+        logger.info("surge 자동 개선 완료: %d개 파라미터 변경", len(logs))
+    except Exception:
+        logger.exception("surge auto improve 실패")
+        raise
+    finally:
+        _record_job_duration("surge_auto_improve", _time.monotonic() - _start)
+        db.close()
+
+
+def _run_surge_daily_report():
+    """SPEC-AI-041: 텔레그램 일일 리포트 발송 (평일 17:05 KST)."""
+    if not _is_kr_market_open():
+        logger.debug("주말 — surge 리포트 스킵")
+        return
+
+    _start = _time.monotonic()
+    from app.services.surge_auto_improver import run_daily_report
+    from datetime import date as _date
+
+    db = SessionLocal()
+    try:
+        asyncio.run(run_daily_report(db, _date.today()))
+        logger.info("surge 일일 리포트 발송 완료")
+    except Exception:
+        logger.exception("surge daily report 실패")
+        raise
+    finally:
+        _record_job_duration("surge_daily_report", _time.monotonic() - _start)
+        db.close()
+
+
 def _run_surge_signal_generate():
     """급등예측 시그널 독립 생성 (평일 15:20 KST, 장 마감 10분 전).
 
@@ -1511,6 +1642,60 @@ def start_scheduler():
         minute=40,
         timezone="UTC",
         id="surge_force_max_holding_exit",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+
+    # SPEC-AI-041: 급등예측 평가 파이프라인 (4단계, 장 마감 후 순차 실행)
+    # 16:10 — 실제 급등주 결과 수집
+    scheduler.add_job(
+        _run_surge_collect_outcomes,
+        "cron",
+        day_of_week="mon-fri",
+        hour=16,
+        minute=10,
+        timezone="Asia/Seoul",
+        id="surge_collect_outcomes",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    # 16:30 — T-1 시그널 vs T 실제 결과 평가
+    scheduler.add_job(
+        _run_surge_verify_predictions,
+        "cron",
+        day_of_week="mon-fri",
+        hour=16,
+        minute=30,
+        timezone="Asia/Seoul",
+        id="surge_verify_predictions",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    # 16:50 — 탐지기 가중치 자동 조정
+    scheduler.add_job(
+        _run_surge_auto_improve,
+        "cron",
+        day_of_week="mon-fri",
+        hour=16,
+        minute=50,
+        timezone="Asia/Seoul",
+        id="surge_auto_improve",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    # 17:05 — 텔레그램 일일 리포트 발송
+    scheduler.add_job(
+        _run_surge_daily_report,
+        "cron",
+        day_of_week="mon-fri",
+        hour=17,
+        minute=5,
+        timezone="Asia/Seoul",
+        id="surge_daily_report",
         max_instances=1,
         coalesce=True,
         replace_existing=True,

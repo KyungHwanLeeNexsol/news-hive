@@ -4,6 +4,7 @@
 POST /surge/execute는 관리자 인증 필요.
 """
 import logging
+from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
@@ -192,3 +193,139 @@ def trigger_execute(
     except Exception as e:
         logger.error("Surge 수동 매수 트리거 실패: %s", e)
         raise HTTPException(status_code=500, detail="매수 실행 실패")
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-041: 급등 예측 평가 및 자동 개선 이력 조회 엔드포인트
+# ---------------------------------------------------------------------------
+
+@router.get("/evaluation")
+def get_evaluations(
+    days: int = Query(10, ge=1, le=90),
+    db: Session = Depends(get_db),
+):
+    """최근 N일 급등 예측 평가 결과 목록을 반환한다.
+
+    Returns:
+        SurgePredictionEvaluation 레코드 목록 (evaluation_date 내림차순)
+    """
+    try:
+        from app.models.surge_prediction_evaluation import SurgePredictionEvaluation
+
+        rows = (
+            db.query(SurgePredictionEvaluation)
+            .order_by(SurgePredictionEvaluation.evaluation_date.desc())
+            .limit(days)
+            .all()
+        )
+        return [
+            {
+                "evaluation_date": str(row.evaluation_date),
+                "predicted_count": row.predicted_count,
+                "actual_surge_count": row.actual_surge_count,
+                "true_positive": row.true_positive,
+                "false_positive": row.false_positive,
+                "false_negative": row.false_negative,
+                "precision": row.precision,
+                "recall": row.recall,
+                "f1_score": row.f1_score,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        logger.error("급등 예측 평가 목록 조회 실패: %s", e)
+        raise HTTPException(status_code=500, detail="평가 목록 조회 실패")
+
+
+@router.get("/evaluation/{date_str}")
+def get_evaluation_by_date(
+    date_str: str,
+    db: Session = Depends(get_db),
+):
+    """특정 날짜의 급등 예측 평가 결과를 상세 조회한다.
+
+    Args:
+        date_str: 날짜 문자열 (YYYY-MM-DD)
+
+    Returns:
+        SurgePredictionEvaluation 전체 필드 (miss_analysis_json 포함)
+
+    Raises:
+        HTTPException(404): 해당 날짜 평가 데이터 없음
+        HTTPException(400): 날짜 형식 오류
+    """
+    try:
+        eval_date = date.fromisoformat(date_str)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"날짜 형식 오류: {date_str} (YYYY-MM-DD 필요)")
+
+    try:
+        from app.models.surge_prediction_evaluation import SurgePredictionEvaluation
+
+        row = (
+            db.query(SurgePredictionEvaluation)
+            .filter(SurgePredictionEvaluation.evaluation_date == eval_date)
+            .first()
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"{date_str} 평가 데이터 없음")
+
+        return {
+            "evaluation_date": str(row.evaluation_date),
+            "predicted_count": row.predicted_count,
+            "actual_surge_count": row.actual_surge_count,
+            "true_positive": row.true_positive,
+            "false_positive": row.false_positive,
+            "false_negative": row.false_negative,
+            "precision": row.precision,
+            "recall": row.recall,
+            "f1_score": row.f1_score,
+            "miss_analysis_json": row.miss_analysis_json,
+            "improvements_applied_json": row.improvements_applied_json,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("급등 예측 평가 상세 조회 실패: %s", e)
+        raise HTTPException(status_code=500, detail="평가 상세 조회 실패")
+
+
+@router.get("/improvements")
+def get_improvements(
+    days: int = Query(10, ge=1, le=90),
+    db: Session = Depends(get_db),
+):
+    """최근 N일 자동 파라미터 개선 이력 목록을 반환한다.
+
+    각 날짜에 여러 파라미터가 변경될 수 있으므로 days*20개를 상한으로 조회한다.
+
+    Returns:
+        SurgeAutoImprovementLog 레코드 목록 (applied_at 내림차순)
+    """
+    try:
+        from app.models.surge_auto_improvement_log import SurgeAutoImprovementLog
+
+        rows = (
+            db.query(SurgeAutoImprovementLog)
+            .order_by(SurgeAutoImprovementLog.applied_at.desc())
+            .limit(days * 20)
+            .all()
+        )
+        return [
+            {
+                "id": row.id,
+                "applied_at": row.applied_at.isoformat() if row.applied_at else None,
+                "evaluation_date": str(row.evaluation_date),
+                "parameter_path": row.parameter_path,
+                "old_value": row.old_value,
+                "new_value": row.new_value,
+                "rationale": row.rationale,
+                "rolling_window_days": row.rolling_window_days,
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        logger.error("자동 개선 이력 조회 실패: %s", e)
+        raise HTTPException(status_code=500, detail="개선 이력 조회 실패")
