@@ -1578,7 +1578,14 @@ async def _gather_surge_candidates(
         })
         logger.info("[carry-over] %s 브리핑 후보 추가", stock.stock_code)
 
-    logger.info("[급등탐지] 최종 %d개 후보 반환 (carry-over 포함)", len(results))
+    if not results:
+        logger.warning(
+            "[급등탐지] 최종 0개 후보 (탐지기 결과=%d개, carry-over=%d개) — DB저장/필터 문제 가능성",
+            len(candidates) if candidates else 0,
+            len(prev_signals) if prev_signals else 0,
+        )
+    else:
+        logger.info("[급등탐지] 최종 %d개 후보 반환 (carry-over 포함)", len(results))
     return results
 
 
@@ -2987,7 +2994,10 @@ async def run_surge_signal_generation(db: Session) -> int:
 
         db.commit()
         count = len(candidates) if candidates else 0
-        logger.info("[급등시그널] 15:20 독립 생성 완료: %d개 후보", count)
+        if count == 0:
+            logger.warning("[급등시그널] 15:20 독립 생성 완료: 0개 후보 — 탐지 결과 없음")
+        else:
+            logger.info("[급등시그널] 15:20 독립 생성 완료: %d개 후보", count)
         return count
     except Exception as e:
         db.rollback()

@@ -1418,10 +1418,16 @@ def gather_surge_candidates(
     # 앙상블 점수 내림차순 정렬
     qualified.sort(key=lambda c: compute_ensemble_score(c, config), reverse=True)
 
-    logger.info(
-        "[앙상블] 최종 급등 후보 %d개 (레짐=%s, 유효임계=%.2f)",
-        len(qualified), market_regime, effective_threshold,
-    )
+    if not qualified:
+        logger.warning(
+            "[앙상블] 최종 급등 후보 0개 (레짐=%s, 유효임계=%.2f, 전체탐지=%d개)",
+            market_regime, effective_threshold, len(merged),
+        )
+    else:
+        logger.info(
+            "[앙상블] 최종 급등 후보 %d개 (레짐=%s, 유효임계=%.2f)",
+            len(qualified), market_regime, effective_threshold,
+        )
     return qualified
 
 

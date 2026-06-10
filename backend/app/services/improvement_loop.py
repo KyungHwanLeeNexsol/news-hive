@@ -173,6 +173,15 @@ async def generate_improved_prompt(db: Session, failure_summary: dict) -> str | 
         for cat, cnt in failure_summary.get("error_category_dist", {}).items()
     )
 
+    # 분석 데이터가 없으면 Gemini 호출 자체를 생략
+    total_verified = failure_summary.get("total_verified", 0)
+    if total_verified == 0 or (not worst_signals and not error_dist_text):
+        logger.warning(
+            "AI 프롬프트 생성 스킵: 분석 데이터 부족 (검증=%d건, 저성과 시그널 없음)",
+            total_verified,
+        )
+        return None
+
     meta_prompt = f"""당신은 AI 투자 시그널 시스템의 프롬프트 엔지니어입니다.
 
 ## 현재 프롬프트 (일부)
