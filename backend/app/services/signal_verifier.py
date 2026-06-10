@@ -185,11 +185,13 @@ async def verify_signals(db: Session) -> dict:
 
     price_cache: dict[str, int | None] = {}
 
-    # 공시 기반 시그널 유형 목록
+    # 공시 기반 시그널 유형 목록 (3일 후 검증 적용)
+    # preday_disclosure: 장 마감 후 공시 기반 예측 — 1~3 거래일 내 반응이 빠름
     _DISCLOSURE_SIGNAL_TYPES = frozenset({
         "disclosure_impact",
         "sector_ripple",
         "gap_pullback_candidate",
+        "preday_disclosure",
     })
 
     for signal in unverified:

@@ -50,10 +50,12 @@ def evaluate_surge_predictions(
     )
 
     # 2. T-1 surge_candidate 시그널 조회 (created_at 날짜 기준)
+    # preday_disclosure는 제외: 공시 기반 단기 반응 예측이므로 was_surge(10%+) 기준과 불일치
     signal_rows = (
         db.query(FundSignal.stock_id, Stock.stock_code)
         .join(Stock, FundSignal.stock_id == Stock.id)
         .filter(
+            FundSignal.signal_type == "surge_candidate",
             FundSignal.surge_metadata.isnot(None),
             sqlfunc.date(FundSignal.created_at) == prev_business_day,
         )

@@ -449,9 +449,10 @@ def get_prediction_history(
         if include_today:
             today_signals = signals_by_date.get(today, [])
             if today_signals:
-                today_list = []
+                today_surge_signals = []
+                today_disclosure_signals = []
                 for fs, st in today_signals:
-                    today_list.append({
+                    item = {
                         "stock_code": st.stock_code,
                         "stock_name": st.name,
                         "signal_type": fs.signal_type,
@@ -463,11 +464,16 @@ def get_prediction_history(
                         "alpha_pct": None,
                         "is_correct": None,
                         "error_category": None,
-                    })
+                    }
+                    if fs.signal_type == "surge_candidate":
+                        today_surge_signals.append(item)
+                    elif fs.signal_type == "preday_disclosure":
+                        today_disclosure_signals.append(item)
                 result.append({
                     "trading_date": str(today),
                     "target_date": None,
-                    "predicted_count": len(today_list),
+                    # surge_candidate 시그널만 카운트 (DB 집계 버그 방어)
+                    "predicted_count": len(today_surge_signals),
                     "actual_surge_count": None,
                     "true_positive": None,
                     "false_positive": None,
@@ -477,18 +483,20 @@ def get_prediction_history(
                     "f1_score": None,
                     "avg_alpha_pct": None,
                     "error_breakdown": {},
-                    "signals": today_list,
+                    # 하위호환: signals = surge + disclosure 전체
+                    "signals": today_surge_signals + today_disclosure_signals,
+                    "surge_signals": today_surge_signals,
+                    "disclosure_signals": today_disclosure_signals,
                 })
 
         for ev in evals:
             # T-1 시그널 조회: 평가 레코드(T)에는 전일(T-1) 시그널이 대응됨
             day_signals = signals_by_date.get(signal_date_for_eval[ev.evaluation_date], [])
-            signal_list = []
+            surge_signals = []
+            disclosure_signals = []
             error_counts: Counter = Counter()
             for fs, st in day_signals:
-                if fs.error_category:
-                    error_counts[fs.error_category] += 1
-                signal_list.append({
+                item = {
                     "stock_code": st.stock_code,
                     "stock_name": st.name,
                     "signal_type": fs.signal_type,
@@ -500,18 +508,29 @@ def get_prediction_history(
                     "alpha_pct": fs.alpha_pct,
                     "is_correct": fs.is_correct,
                     "error_category": fs.error_category,
-                })
+                }
+                if fs.signal_type == "surge_candidate":
+                    surge_signals.append(item)
+                    # error_breakdown: surge_candidate 기준으로만 집계
+                    if fs.error_category:
+                        error_counts[fs.error_category] += 1
+                elif fs.signal_type == "preday_disclosure":
+                    disclosure_signals.append(item)
 
-            # avg_alpha_pct: 검증 완료(verified)된 시그널만 평균
-            verified = [s["alpha_pct"] for s in signal_list if s["alpha_pct"] is not None]
+            # avg_alpha_pct: surge_candidate 검증 완료 시그널만 평균
+            verified = [s["alpha_pct"] for s in surge_signals if s["alpha_pct"] is not None]
             avg_alpha = sum(verified) / len(verified) if verified else None
+
+            # predicted_count: DB 저장값 대신 실시간 재계산 (집계 버그 방어)
+            surge_count_live = len(surge_signals)
 
             result.append({
                 # signal_date(T-1)을 행 레이블로 사용: "6/9 행 = 6/9에 생성한 시그널 = 6/10 예측"
                 "trading_date": str(signal_date_for_eval[ev.evaluation_date]),
                 # target_date(T) = 실제 예측 대상일 (급등이 발생하는 날)
                 "target_date": str(ev.evaluation_date),
-                "predicted_count": ev.predicted_count,
+                # surge_candidate만 실시간 카운트 (DB 저장값 ev.predicted_count 무시)
+                "predicted_count": surge_count_live,
                 "actual_surge_count": ev.actual_surge_count,
                 "true_positive": ev.true_positive,
                 "false_positive": ev.false_positive,
@@ -521,7 +540,10 @@ def get_prediction_history(
                 "f1_score": ev.f1_score,
                 "avg_alpha_pct": avg_alpha,
                 "error_breakdown": dict(error_counts),
-                "signals": signal_list,
+                # 하위호환: signals = surge + disclosure 전체
+                "signals": surge_signals + disclosure_signals,
+                "surge_signals": surge_signals,
+                "disclosure_signals": disclosure_signals,
             })
 
         return result
@@ -529,3 +551,41 @@ def get_prediction_history(
     except Exception as e:
         logger.error("예측 기록 조회 실패: %s", e)
         raise HTTPException(status_code=500, detail="예측 기록 조회 실패")
+
+
+@router.post("/re-evaluate/{date_str}")
+def re_evaluate_surge_predictions(
+    date_str: str,
+    db: Session = Depends(get_db),
+):
+    """특정 날짜의 급등 예측 평가 결과를 재계산한다.
+
+    평가 버그 수정 후 과거 데이터 재처리에 사용한다.
+    DB에 저장된 기존 평가 레코드를 올바른 값으로 덮어쓴다.
+
+    Args:
+        date_str: 재평가할 날짜 (YYYY-MM-DD 형식, T 당일 기준)
+    """
+    from app.services.surge_evaluation_service import evaluate_surge_predictions
+
+    try:
+        eval_date = date.fromisoformat(date_str)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"날짜 형식 오류: {date_str}")
+
+    try:
+        evaluation = evaluate_surge_predictions(db, eval_date)
+        return {
+            "evaluation_date": str(evaluation.evaluation_date),
+            "predicted_count": evaluation.predicted_count,
+            "actual_surge_count": evaluation.actual_surge_count,
+            "true_positive": evaluation.true_positive,
+            "false_positive": evaluation.false_positive,
+            "false_negative": evaluation.false_negative,
+            "precision": evaluation.precision,
+            "recall": evaluation.recall,
+            "f1_score": evaluation.f1_score,
+        }
+    except Exception as e:
+        logger.error("급등 예측 재평가 실패: %s", e)
+        raise HTTPException(status_code=500, detail="재평가 실패")

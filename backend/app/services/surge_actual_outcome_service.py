@@ -67,6 +67,38 @@ async def collect_daily_surge_outcomes(db: Session, trading_date: date) -> int:
         code_to_market[code] = "KOSPI"  # KOSPI 우선 (덮어쓰기)
 
     unique_codes = list(code_to_market.keys())
+
+    # 예측 종목 보완: T-1 surge_candidate 예측 종목이 top-100 밖이어도 결과 수집
+    # top-100에 없는 예측 종목을 누락하면 평가 시 TP 계산에서 영구 제외됨
+    try:
+        from app.models.fund_signal import FundSignal
+        from app.models.stock import Stock as _StockModel
+        from app.services.surge_trading_service import _get_prev_business_day
+        from sqlalchemy import func as _sqlfunc
+
+        prev_day = _get_prev_business_day(trading_date)
+        predicted_rows = (
+            db.query(_StockModel.stock_code, _StockModel.market)
+            .join(FundSignal, FundSignal.stock_id == _StockModel.id)
+            .filter(
+                FundSignal.signal_type == "surge_candidate",
+                FundSignal.surge_metadata.isnot(None),
+                _sqlfunc.date(FundSignal.created_at) == prev_day,
+            )
+            .distinct()
+            .all()
+        )
+        supplement_count = 0
+        for row in predicted_rows:
+            if row.stock_code not in code_to_market:
+                code_to_market[row.stock_code] = row.market or "UNKNOWN"
+                supplement_count += 1
+        if supplement_count:
+            unique_codes = list(code_to_market.keys())
+            logger.info("예측 종목 보완: top-100 외 %d개 추가 (T-1=%s)", supplement_count, prev_day)
+    except Exception as _supp_e:
+        logger.warning("예측 종목 보완 실패 — top-100 결과만 사용: %s", _supp_e)
+
     logger.info(
         "급등 결과 수집 시작: trading_date=%s, KOSPI=%d, KOSDAQ=%d, 중복제거=%d",
         trading_date, len(kospi_codes), len(kosdaq_codes), len(unique_codes),

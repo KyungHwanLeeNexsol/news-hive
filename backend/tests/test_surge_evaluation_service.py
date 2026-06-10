@@ -94,6 +94,7 @@ class TestTPFPFNCalculation:
             signal = FundSignal(
                 stock_id=stocks[code],
                 signal="buy",
+                signal_type="surge_candidate",
                 confidence=0.7,
                 reasoning="테스트",
                 surge_metadata='{"surge_basis": ["theme_cluster"], "theme_cluster_score": 0.8}',
