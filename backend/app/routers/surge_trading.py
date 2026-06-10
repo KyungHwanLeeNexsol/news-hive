@@ -381,7 +381,8 @@ def get_prediction_history(
     Returns:
         날짜별 예측 평가 + 개별 시그널 목록 (evaluation_date 내림차순)
     """
-    from collections import Counter
+    from collections import Counter, defaultdict
+    from datetime import datetime, timedelta
     from app.models.surge_prediction_evaluation import SurgePredictionEvaluation
     from app.models.fund_signal import FundSignal
     from app.models.stock import Stock
@@ -395,24 +396,39 @@ def get_prediction_history(
             .all()
         )
 
+        if not evals:
+            return []
+
+        # N+1 방지: 모든 날짜 시그널을 단일 쿼리로 조회 (범위 비교로 인덱스 사용)
+        date_min = min(ev.evaluation_date for ev in evals)
+        date_max = max(ev.evaluation_date for ev in evals)
+        start_dt = datetime.combine(date_min, datetime.min.time())
+        end_dt = datetime.combine(date_max + timedelta(days=1), datetime.min.time())
+
+        all_signals = (
+            db.query(FundSignal, Stock)
+            .join(Stock, FundSignal.stock_id == Stock.id)
+            .filter(
+                FundSignal.signal_type.in_(["surge_candidate", "preday_disclosure"]),
+                FundSignal.signal == "buy",
+                FundSignal.created_at >= start_dt,
+                FundSignal.created_at < end_dt,
+            )
+            .order_by(FundSignal.created_at.desc(), FundSignal.confidence.desc())
+            .all()
+        )
+
+        # 날짜별 그룹핑 (Python, DB 왕복 없음)
+        signals_by_date: dict = defaultdict(list)
+        for fs, st in all_signals:
+            signals_by_date[fs.created_at.date()].append((fs, st))
+
         result = []
         for ev in evals:
-            # 해당 날짜에 생성된 surge 관련 시그널 조회
-            signals_q = (
-                db.query(FundSignal, Stock)
-                .join(Stock, FundSignal.stock_id == Stock.id)
-                .filter(
-                    FundSignal.signal_type.in_(["surge_candidate", "preday_disclosure"]),
-                    FundSignal.signal == "buy",
-                    func.date(FundSignal.created_at) == ev.evaluation_date,
-                )
-                .order_by(FundSignal.confidence.desc())
-                .all()
-            )
-
+            day_signals = signals_by_date.get(ev.evaluation_date, [])
             signal_list = []
             error_counts: Counter = Counter()
-            for fs, st in signals_q:
+            for fs, st in day_signals:
                 if fs.error_category:
                     error_counts[fs.error_category] += 1
                 signal_list.append({
