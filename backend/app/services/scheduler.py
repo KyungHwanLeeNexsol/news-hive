@@ -594,7 +594,7 @@ def _run_surge_verify_predictions():
 
 
 def _run_surge_auto_improve():
-    """SPEC-AI-041: 탐지기 가중치 자동 개선 (평일 16:50 KST)."""
+    """SPEC-AI-041: 탐지기 가중치 자동 개선 (평일 19:00 KST, verify_signals 18:00 이후)."""
     if not _is_kr_market_open():
         logger.debug("주말 — surge 자동 개선 스킵")
         return
@@ -1788,13 +1788,13 @@ def start_scheduler():
         coalesce=True,
         replace_existing=True,
     )
-    # 16:50 — 탐지기 가중치 자동 조정
+    # 19:00 — 탐지기 가중치 자동 조정 (verify_signals 18:00 완료 후)
     scheduler.add_job(
         _run_surge_auto_improve,
         "cron",
         day_of_week="mon-fri",
-        hour=16,
-        minute=50,
+        hour=19,
+        minute=0,
         timezone="Asia/Seoul",
         id="surge_auto_improve",
         max_instances=1,
