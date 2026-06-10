@@ -1001,3 +1001,11 @@ export async function fetchSurgePerformance(days = 30): Promise<import('./types'
   if (!res.ok) return [];
   return res.json();
 }
+
+// @MX:ANCHOR: [AUTO] SPEC-AI-043 급등 예측 기록 API - SurgePredictionDay[] 반환 진입점
+// @MX:REASON: fetchSurgePredictionHistory는 page.tsx에서 직접 호출하는 공개 API 경계
+export async function fetchSurgePredictionHistory(days = 30): Promise<import('./types').SurgePredictionDay[]> {
+  const res = await fetchWithRetry(`${API_BASE}/surge-trading/prediction-history?days=${days}`);
+  if (!res.ok) return [];
+  return res.json();
+}

@@ -1719,47 +1719,45 @@ def start_scheduler():
         coalesce=True,
         replace_existing=True,
     )
-    # SPEC-AI-013: 급등예측 모의투자 포트폴리오 작업
-    # 매수 실행: 평일 09:00~15:30 KST, 30분 간격
-    scheduler.add_job(
-        _run_surge_execute_buys,
-        "cron",
-        day_of_week="mon-fri",
-        hour="9-15",
-        minute="0,30",
-        timezone="Asia/Seoul",
-        id="surge_execute_buys",
-        max_instances=1,
-        coalesce=True,
-        replace_existing=True,
-    )
-    # 종료 조건 체크: 평일 09:00~15:30 KST, 5분 간격
-    scheduler.add_job(
-        _run_surge_check_exits,
-        "cron",
-        day_of_week="mon-fri",
-        hour="9-15",
-        minute="*/5",
-        timezone="Asia/Seoul",
-        id="surge_check_exits",
-        max_instances=1,
-        coalesce=True,
-        replace_existing=True,
-    )
-    # 장 마감 후 max_holding_period 포지션 강제 청산: 평일 15:40 KST (= UTC 06:40)
-    # surge_check_exits 잡이 누락(missed)되더라도 만기 포지션이 다음 날로 이월되지 않도록 보장
-    scheduler.add_job(
-        _run_force_max_holding_exit,
-        "cron",
-        day_of_week="mon-fri",
-        hour=6,         # 15:40 KST = 06:40 UTC
-        minute=40,
-        timezone="UTC",
-        id="surge_force_max_holding_exit",
-        max_instances=1,
-        coalesce=True,
-        replace_existing=True,
-    )
+    # SPEC-AI-043: 포트폴리오 실행 비활성화 — 예측 기록 모드로 전환
+    # surge_execute_buys, surge_check_exits, surge_force_max_holding_exit 잡 비활성화
+    # (SurgePortfolio/SurgeTrade 데이터는 보존, 복구 가능)
+    # scheduler.add_job(  # DISABLED by SPEC-AI-043
+    #     _run_surge_execute_buys,
+    #     "cron",
+    #     day_of_week="mon-fri",
+    #     hour="9-15",
+    #     minute="0,30",
+    #     timezone="Asia/Seoul",
+    #     id="surge_execute_buys",
+    #     max_instances=1,
+    #     coalesce=True,
+    #     replace_existing=True,
+    # )
+    # scheduler.add_job(  # DISABLED by SPEC-AI-043
+    #     _run_surge_check_exits,
+    #     "cron",
+    #     day_of_week="mon-fri",
+    #     hour="9-15",
+    #     minute="*/5",
+    #     timezone="Asia/Seoul",
+    #     id="surge_check_exits",
+    #     max_instances=1,
+    #     coalesce=True,
+    #     replace_existing=True,
+    # )
+    # scheduler.add_job(  # DISABLED by SPEC-AI-043
+    #     _run_force_max_holding_exit,
+    #     "cron",
+    #     day_of_week="mon-fri",
+    #     hour=6,         # 15:40 KST = 06:40 UTC
+    #     minute=40,
+    #     timezone="UTC",
+    #     id="surge_force_max_holding_exit",
+    #     max_instances=1,
+    #     coalesce=True,
+    #     replace_existing=True,
+    # )
 
     # SPEC-AI-041: 급등예측 평가 파이프라인 (4단계, 장 마감 후 순차 실행)
     # 16:10 — 실제 급등주 결과 수집

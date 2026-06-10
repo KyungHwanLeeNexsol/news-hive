@@ -665,3 +665,32 @@ export interface SurgePerformancePoint {
   date: string;
   cumulative_return_pct: number;
 }
+
+export interface SurgeSignalRecord {
+  stock_code: string;
+  stock_name: string;
+  signal_type: string;
+  confidence: number;
+  composite_score: number | null;
+  price_at_signal: number | null;
+  price_after_1d: number | null;
+  return_pct: number | null;
+  alpha_pct: number | null;
+  is_correct: boolean | null;
+  error_category: string | null;
+}
+
+export interface SurgePredictionDay {
+  trading_date: string;
+  predicted_count: number;
+  actual_surge_count: number;
+  true_positive: number;
+  false_positive: number;
+  false_negative: number;
+  precision: number | null;
+  recall: number | null;
+  f1_score: number | null;
+  avg_alpha_pct: number | null;
+  error_breakdown: Record<string, number>;
+  signals: SurgeSignalRecord[];
+}

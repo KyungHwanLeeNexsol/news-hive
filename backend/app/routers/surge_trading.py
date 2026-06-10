@@ -7,6 +7,7 @@ import logging
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -238,6 +239,43 @@ def get_evaluations(
         raise HTTPException(status_code=500, detail="평가 목록 조회 실패")
 
 
+def _get_signal_details_for_date(db: Session, eval_date) -> list:
+    """특정 날짜의 surge 시그널 목록을 반환하는 내부 헬퍼."""
+    from app.models.fund_signal import FundSignal
+    from app.models.stock import Stock
+
+    try:
+        rows = (
+            db.query(FundSignal, Stock)
+            .join(Stock, FundSignal.stock_id == Stock.id)
+            .filter(
+                FundSignal.signal_type.in_(["surge_candidate", "preday_disclosure"]),
+                FundSignal.signal == "buy",
+                func.date(FundSignal.created_at) == eval_date,
+            )
+            .order_by(FundSignal.confidence.desc())
+            .all()
+        )
+        return [
+            {
+                "stock_code": st.code,
+                "stock_name": st.name,
+                "signal_type": fs.signal_type,
+                "confidence": fs.confidence,
+                "composite_score": fs.composite_score,
+                "price_at_signal": fs.price_at_signal,
+                "price_after_1d": fs.price_after_1d,
+                "return_pct": fs.return_pct,
+                "alpha_pct": fs.alpha_pct,
+                "is_correct": fs.is_correct,
+                "error_category": fs.error_category,
+            }
+            for fs, st in rows
+        ]
+    except Exception:
+        return []
+
+
 @router.get("/evaluation/{date_str}")
 def get_evaluation_by_date(
     date_str: str,
@@ -284,6 +322,7 @@ def get_evaluation_by_date(
             "miss_analysis_json": row.miss_analysis_json,
             "improvements_applied_json": row.improvements_applied_json,
             "created_at": row.created_at.isoformat() if row.created_at else None,
+            "signal_details": _get_signal_details_for_date(db, eval_date),
         }
     except HTTPException:
         raise
@@ -329,3 +368,86 @@ def get_improvements(
     except Exception as e:
         logger.error("자동 개선 이력 조회 실패: %s", e)
         raise HTTPException(status_code=500, detail="개선 이력 조회 실패")
+
+
+@router.get("/prediction-history")
+def get_prediction_history(
+    days: int = Query(30, ge=1, le=90),
+    db: Session = Depends(get_db),
+):
+    """최근 N거래일의 날짜별 예측 기록을 시그널 목록 포함하여 반환한다.
+
+    Returns:
+        날짜별 예측 평가 + 개별 시그널 목록 (evaluation_date 내림차순)
+    """
+    from collections import Counter
+    from app.models.surge_prediction_evaluation import SurgePredictionEvaluation
+    from app.models.fund_signal import FundSignal
+    from app.models.stock import Stock
+
+    try:
+        evals = (
+            db.query(SurgePredictionEvaluation)
+            .order_by(SurgePredictionEvaluation.evaluation_date.desc())
+            .limit(days)
+            .all()
+        )
+
+        result = []
+        for ev in evals:
+            # 해당 날짜에 생성된 surge 관련 시그널 조회
+            signals_q = (
+                db.query(FundSignal, Stock)
+                .join(Stock, FundSignal.stock_id == Stock.id)
+                .filter(
+                    FundSignal.signal_type.in_(["surge_candidate", "preday_disclosure"]),
+                    FundSignal.signal == "buy",
+                    func.date(FundSignal.created_at) == ev.evaluation_date,
+                )
+                .order_by(FundSignal.confidence.desc())
+                .all()
+            )
+
+            signal_list = []
+            error_counts: Counter = Counter()
+            for fs, st in signals_q:
+                if fs.error_category:
+                    error_counts[fs.error_category] += 1
+                signal_list.append({
+                    "stock_code": st.code,
+                    "stock_name": st.name,
+                    "signal_type": fs.signal_type,
+                    "confidence": fs.confidence,
+                    "composite_score": fs.composite_score,
+                    "price_at_signal": fs.price_at_signal,
+                    "price_after_1d": fs.price_after_1d,
+                    "return_pct": fs.return_pct,
+                    "alpha_pct": fs.alpha_pct,
+                    "is_correct": fs.is_correct,
+                    "error_category": fs.error_category,
+                })
+
+            # avg_alpha_pct: 검증 완료(verified)된 시그널만 평균
+            verified = [s["alpha_pct"] for s in signal_list if s["alpha_pct"] is not None]
+            avg_alpha = sum(verified) / len(verified) if verified else None
+
+            result.append({
+                "trading_date": str(ev.evaluation_date),
+                "predicted_count": ev.predicted_count,
+                "actual_surge_count": ev.actual_surge_count,
+                "true_positive": ev.true_positive,
+                "false_positive": ev.false_positive,
+                "false_negative": ev.false_negative,
+                "precision": ev.precision,
+                "recall": ev.recall,
+                "f1_score": ev.f1_score,
+                "avg_alpha_pct": avg_alpha,
+                "error_breakdown": dict(error_counts),
+                "signals": signal_list,
+            })
+
+        return result
+
+    except Exception as e:
+        logger.error("예측 기록 조회 실패: %s", e)
+        raise HTTPException(status_code=500, detail="예측 기록 조회 실패")
