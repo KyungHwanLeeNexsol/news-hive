@@ -243,6 +243,7 @@ def _get_signal_details_for_date(db: Session, eval_date) -> list:
     """특정 날짜의 surge 시그널 목록을 반환하는 내부 헬퍼."""
     from app.models.fund_signal import FundSignal
     from app.models.stock import Stock
+    from app.models.disclosure import Disclosure  # FundSignal.disclosure 관계 해소용
 
     try:
         rows = (
@@ -384,6 +385,7 @@ def get_prediction_history(
     from app.models.surge_prediction_evaluation import SurgePredictionEvaluation
     from app.models.fund_signal import FundSignal
     from app.models.stock import Stock
+    from app.models.disclosure import Disclosure  # FundSignal.disclosure 관계 해소용
 
     try:
         evals = (
