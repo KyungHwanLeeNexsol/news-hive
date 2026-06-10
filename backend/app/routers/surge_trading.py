@@ -382,7 +382,7 @@ def get_prediction_history(
         날짜별 예측 평가 + 개별 시그널 목록 (evaluation_date 내림차순)
     """
     from collections import Counter, defaultdict
-    from datetime import datetime, timedelta
+    from datetime import date as date_cls, datetime, timedelta
     from app.models.surge_prediction_evaluation import SurgePredictionEvaluation
     from app.models.fund_signal import FundSignal
     from app.models.stock import Stock
@@ -396,12 +396,18 @@ def get_prediction_history(
             .all()
         )
 
-        if not evals:
-            return []
+        today = date_cls.today()
+        eval_dates = {ev.evaluation_date for ev in evals}
+
+        # 오늘 평가 레코드가 없으면 시그널 범위를 오늘까지 확장 (15:20 생성 후 18:00 전 구간 대응)
+        include_today = today not in eval_dates
 
         # N+1 방지: 모든 날짜 시그널을 단일 쿼리로 조회 (범위 비교로 인덱스 사용)
-        date_min = min(ev.evaluation_date for ev in evals)
-        date_max = max(ev.evaluation_date for ev in evals)
+        if evals:
+            date_min = min(ev.evaluation_date for ev in evals)
+            date_max = today if include_today else max(ev.evaluation_date for ev in evals)
+        else:
+            date_min = date_max = today
         start_dt = datetime.combine(date_min, datetime.min.time())
         end_dt = datetime.combine(date_max + timedelta(days=1), datetime.min.time())
 
@@ -424,6 +430,41 @@ def get_prediction_history(
             signals_by_date[fs.created_at.date()].append((fs, st))
 
         result = []
+
+        # 오늘 평가 레코드 없이 시그널만 있으면 상단에 미평가 항목 추가
+        if include_today:
+            today_signals = signals_by_date.get(today, [])
+            if today_signals:
+                today_list = []
+                for fs, st in today_signals:
+                    today_list.append({
+                        "stock_code": st.stock_code,
+                        "stock_name": st.name,
+                        "signal_type": fs.signal_type,
+                        "confidence": fs.confidence,
+                        "composite_score": fs.composite_score,
+                        "price_at_signal": fs.price_at_signal,
+                        "price_after_1d": None,
+                        "return_pct": None,
+                        "alpha_pct": None,
+                        "is_correct": None,
+                        "error_category": None,
+                    })
+                result.append({
+                    "trading_date": str(today),
+                    "predicted_count": len(today_list),
+                    "actual_surge_count": None,
+                    "true_positive": None,
+                    "false_positive": None,
+                    "false_negative": None,
+                    "precision": None,
+                    "recall": None,
+                    "f1_score": None,
+                    "avg_alpha_pct": None,
+                    "error_breakdown": {},
+                    "signals": today_list,
+                })
+
         for ev in evals:
             day_signals = signals_by_date.get(ev.evaluation_date, [])
             signal_list = []
