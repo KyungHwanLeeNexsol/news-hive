@@ -398,16 +398,18 @@ def get_prediction_history(
         )
 
         today = date_cls.today()
-        eval_dates = {ev.evaluation_date for ev in evals}
-
-        # 오늘 평가 레코드가 없으면 시그널 범위를 오늘까지 확장 (15:20 생성 후 18:00 전 구간 대응)
-        include_today = today not in eval_dates
 
         # evaluation_date(T) → signal_date(T-1) 매핑: 평가 레코드는 전일 시그널을 평가한다.
-        # 예) evaluation_date=6/9 → 6/8 시그널이 6/9에 급등했는지 평가
+        # 예) evaluation_date=6/10 → signal_date=6/9 (6/9 시그널이 6/10에 급등했는지 평가)
         signal_date_for_eval: dict[date_cls, date_cls] = {
             ev.evaluation_date: _get_prev_business_day(ev.evaluation_date) for ev in evals
         }
+
+        # 오늘 시그널이 이미 어떤 평가 레코드의 T-1에 해당하지 않으면 미평가 행으로 포함.
+        # eval_dates(T) 기준이 아닌 already_covered_signal_dates(T-1) 기준으로 판정:
+        # eval_dates에 오늘(T)이 있어도 그건 어제 시그널을 평가한 것이므로 오늘 시그널은 별도 표시 필요.
+        already_covered_signal_dates = set(signal_date_for_eval.values())
+        include_today = today not in already_covered_signal_dates
 
         # N+1 방지: 모든 날짜 시그널을 단일 쿼리로 조회 (범위 비교로 인덱스 사용)
         # 범위는 T-1 시그널 날짜 기준 (eval 날짜가 아님)
