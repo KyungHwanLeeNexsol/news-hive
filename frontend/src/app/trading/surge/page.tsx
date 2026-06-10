@@ -103,12 +103,10 @@ function DayRow({ day }: { day: SurgePredictionDay }) {
       >
         <td className="px-4 py-3 text-[13px] font-semibold text-gray-800">
           <span className="mr-2 text-gray-400 text-[11px]">{open ? '▲' : '▼'}</span>
-          <span>{day.trading_date}</span>
-          {day.target_date && (
-            <div className="text-[10px] text-gray-400 font-normal mt-0.5">
-              → 예측 대상: {day.target_date}
-            </div>
-          )}
+          {day.trading_date}
+        </td>
+        <td className="px-4 py-3 text-[13px] text-gray-600">
+          {day.target_date ?? <span className="text-gray-300">-</span>}
         </td>
         <td className="px-4 py-3 text-right text-[13px] text-gray-700">{day.predicted_count}</td>
         <td className="px-4 py-3 text-right text-[13px] text-gray-700">
@@ -128,7 +126,7 @@ function DayRow({ day }: { day: SurgePredictionDay }) {
       </tr>
       {open && (
         <tr>
-          <td colSpan={6} className="bg-gray-50 px-4 py-3">
+          <td colSpan={7} className="bg-gray-50 px-4 py-3">
             {day.signals.length === 0 ? (
               <div className="text-[12px] text-gray-400 text-center py-3">시그널 없음</div>
             ) : (
@@ -247,7 +245,8 @@ function SurgeContent() {
           <table className="w-full text-[13px]">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200">
-                <th className="text-left px-4 py-3 font-semibold text-gray-600">날짜</th>
+                <th className="text-left px-4 py-3 font-semibold text-gray-600">시그널 생성일</th>
+                <th className="text-left px-4 py-3 font-semibold text-gray-600">예측 대상일</th>
                 <th className="text-right px-4 py-3 font-semibold text-gray-600">예측 수</th>
                 <th className="text-right px-4 py-3 font-semibold text-gray-600">적중 / 오보</th>
                 <th className="text-right px-4 py-3 font-semibold text-gray-600">정밀도</th>
