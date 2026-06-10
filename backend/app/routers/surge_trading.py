@@ -387,6 +387,7 @@ def get_prediction_history(
     from app.models.fund_signal import FundSignal
     from app.models.stock import Stock
     from app.models.disclosure import Disclosure  # noqa: F401 — FundSignal.disclosure 관계 해소용
+    from app.services.surge_trading_service import _get_prev_business_day
 
     try:
         evals = (
@@ -402,10 +403,21 @@ def get_prediction_history(
         # 오늘 평가 레코드가 없으면 시그널 범위를 오늘까지 확장 (15:20 생성 후 18:00 전 구간 대응)
         include_today = today not in eval_dates
 
+        # evaluation_date(T) → signal_date(T-1) 매핑: 평가 레코드는 전일 시그널을 평가한다.
+        # 예) evaluation_date=6/9 → 6/8 시그널이 6/9에 급등했는지 평가
+        signal_date_for_eval: dict[date_cls, date_cls] = {
+            ev.evaluation_date: _get_prev_business_day(ev.evaluation_date) for ev in evals
+        }
+
         # N+1 방지: 모든 날짜 시그널을 단일 쿼리로 조회 (범위 비교로 인덱스 사용)
-        if evals:
-            date_min = min(ev.evaluation_date for ev in evals)
-            date_max = today if include_today else max(ev.evaluation_date for ev in evals)
+        # 범위는 T-1 시그널 날짜 기준 (eval 날짜가 아님)
+        signal_dates = list(signal_date_for_eval.values())
+        if include_today:
+            signal_dates.append(today)  # 오늘 생성 시그널(미평가)도 포함
+
+        if signal_dates:
+            date_min = min(signal_dates)
+            date_max = max(signal_dates)
         else:
             date_min = date_max = today
         start_dt = datetime.combine(date_min, datetime.min.time())
@@ -466,7 +478,8 @@ def get_prediction_history(
                 })
 
         for ev in evals:
-            day_signals = signals_by_date.get(ev.evaluation_date, [])
+            # T-1 시그널 조회: 평가 레코드(T)에는 전일(T-1) 시그널이 대응됨
+            day_signals = signals_by_date.get(signal_date_for_eval[ev.evaluation_date], [])
             signal_list = []
             error_counts: Counter = Counter()
             for fs, st in day_signals:
