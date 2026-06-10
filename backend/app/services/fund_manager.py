@@ -1376,12 +1376,16 @@ async def _gather_surge_candidates(
             logger.warning("[급등탐지] %s 캘리브레이션 실패: %s", candidate.stock_code, _e)
 
         # SPEC-AI-036 M3: 품질 floor 게이트 (예외 격리)
+        # bypass 종목(theme >= strong_single_bypass_threshold)은 이미 강한 단일 신호로 검증됨 → 면제
         # calibrated_confidence >= min OR composite_score >= min 중 하나면 통과
+        _is_bypass = (
+            candidate.theme_cluster_score >= surge_config.ensemble.strong_single_bypass_threshold
+        )
         try:
             _min_conf = surge_config.min_calibrated_confidence
             _min_comp = surge_config.min_composite_score
             _comp_val = _composite if _composite is not None else 0.0
-            if _calibrated_conf < _min_conf and _comp_val < _min_comp:
+            if not _is_bypass and _calibrated_conf < _min_conf and _comp_val < _min_comp:
                 logger.info(
                     "[급등탐지] %s 품질 floor 미달 차단 (calibrated=%.3f<%.3f, composite=%.3f<%.3f)",
                     candidate.stock_code,
