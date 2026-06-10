@@ -464,6 +464,7 @@ def get_prediction_history(
                     })
                 result.append({
                     "trading_date": str(today),
+                    "target_date": None,
                     "predicted_count": len(today_list),
                     "actual_surge_count": None,
                     "true_positive": None,
@@ -506,6 +507,8 @@ def get_prediction_history(
             result.append({
                 # signal_date(T-1)을 행 레이블로 사용: "6/9 행 = 6/9에 생성한 시그널 = 6/10 예측"
                 "trading_date": str(signal_date_for_eval[ev.evaluation_date]),
+                # target_date(T) = 실제 예측 대상일 (급등이 발생하는 날)
+                "target_date": str(ev.evaluation_date),
                 "predicted_count": ev.predicted_count,
                 "actual_surge_count": ev.actual_surge_count,
                 "true_positive": ev.true_positive,

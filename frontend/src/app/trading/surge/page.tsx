@@ -103,13 +103,18 @@ function DayRow({ day }: { day: SurgePredictionDay }) {
       >
         <td className="px-4 py-3 text-[13px] font-semibold text-gray-800">
           <span className="mr-2 text-gray-400 text-[11px]">{open ? '▲' : '▼'}</span>
-          {day.trading_date}
+          <span>{day.trading_date}</span>
+          {day.target_date && (
+            <div className="text-[10px] text-gray-400 font-normal mt-0.5">
+              → 예측 대상: {day.target_date}
+            </div>
+          )}
         </td>
         <td className="px-4 py-3 text-right text-[13px] text-gray-700">{day.predicted_count}</td>
         <td className="px-4 py-3 text-right text-[13px] text-gray-700">
-          <span className="text-[#e12343] font-semibold">{day.true_positive}</span>
+          <span className="text-[#e12343] font-semibold">{day.true_positive ?? '-'}</span>
           <span className="text-gray-400 mx-1">/</span>
-          <span className="text-[#1261c4]">{day.false_positive}</span>
+          <span className="text-[#1261c4]">{day.false_positive ?? '-'}</span>
         </td>
         <td className={`px-4 py-3 text-right text-[13px] font-semibold ${pctColor(day.precision != null ? day.precision * 100 - 20 : null)}`}>
           {day.precision != null ? `${(day.precision * 100).toFixed(1)}%` : '-'}
@@ -137,7 +142,7 @@ function DayRow({ day }: { day: SurgePredictionDay }) {
                       <th className="text-right px-3 py-2 text-gray-500 font-semibold">예측가</th>
                       <th className="text-right px-3 py-2 text-gray-500 font-semibold">실제가(+1일)</th>
                       <th className="text-right px-3 py-2 text-gray-500 font-semibold">등락률</th>
-                      <th className="text-right px-3 py-2 text-gray-500 font-semibold">알파</th>
+                      <th className="text-right px-3 py-2 text-gray-500 font-semibold">초과수익률</th>
                       <th className="text-center px-3 py-2 text-gray-500 font-semibold">적중</th>
                       <th className="text-right px-3 py-2 text-gray-500 font-semibold">오류분류</th>
                     </tr>
@@ -224,11 +229,11 @@ function SurgeContent() {
         <StatCard
           label="전체 정밀도"
           value={overallPrecision != null ? `${(overallPrecision * 100).toFixed(1)}%` : '-'}
-          sub={`TP ${totalTP} / FP ${totalFP}`}
+          sub={`적중 ${totalTP} / 오보 ${totalFP}`}
           highlight={overallPrecision != null && overallPrecision >= 0.3}
         />
         <StatCard
-          label="평균 알파 수익률"
+          label="평균 초과수익률"
           value={avgAlpha != null ? fmtPct(avgAlpha) : '-'}
           sub="검증 완료 시그널"
         />
@@ -244,9 +249,9 @@ function SurgeContent() {
               <tr className="bg-gray-50 border-b border-gray-200">
                 <th className="text-left px-4 py-3 font-semibold text-gray-600">날짜</th>
                 <th className="text-right px-4 py-3 font-semibold text-gray-600">예측 수</th>
-                <th className="text-right px-4 py-3 font-semibold text-gray-600">TP / FP</th>
+                <th className="text-right px-4 py-3 font-semibold text-gray-600">적중 / 오보</th>
                 <th className="text-right px-4 py-3 font-semibold text-gray-600">정밀도</th>
-                <th className="text-right px-4 py-3 font-semibold text-gray-600">평균 알파</th>
+                <th className="text-right px-4 py-3 font-semibold text-gray-600">평균 초과수익률</th>
                 <th className="text-right px-4 py-3 font-semibold text-gray-600">주요 오류</th>
               </tr>
             </thead>

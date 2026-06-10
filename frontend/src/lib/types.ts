@@ -682,6 +682,7 @@ export interface SurgeSignalRecord {
 
 export interface SurgePredictionDay {
   trading_date: string;
+  target_date: string | null;
   predicted_count: number;
   actual_surge_count: number;
   true_positive: number;
