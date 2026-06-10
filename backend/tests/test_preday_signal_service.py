@@ -86,8 +86,10 @@ def _make_disclosure(
     db: Session,
     stock_id: int,
     report_name: str = "자기주식소각",
-    rcept_dt: str = "20260609",
+    rcept_dt: str | None = None,
 ) -> Disclosure:
+    if rcept_dt is None:
+        rcept_dt = datetime.now(KST).strftime("%Y%m%d")
     disc = Disclosure(
         corp_code="00000001",
         corp_name="테스트기업",
