@@ -1396,6 +1396,16 @@ async def _gather_surge_candidates(
         except Exception as _e:
             logger.warning("[급등탐지] %s 품질 floor 게이트 실패 (통과로 처리): %s", candidate.stock_code, _e)
 
+        # 시그널 생성 시점 현재가 조회 — 낮은 confidence로 매수 미실행 시에도 signal_verifier 검증 가능하도록
+        _signal_current_price: int | None = None
+        try:
+            from app.services.naver_finance import fetch_current_price_with_change_sync
+            _price_data = fetch_current_price_with_change_sync(candidate.stock_code)
+            if _price_data:
+                _signal_current_price = _price_data.get("current_price")
+        except Exception as _price_e:
+            logger.debug("[급등탐지] %s 현재가 조회 실패: %s", candidate.stock_code, _price_e)
+
         # 5영업일 내 중복 시그널 확인 → 있으면 업데이트, 없으면 신규 생성
         existing = (
             db.query(FundSignal)
@@ -1425,6 +1435,9 @@ async def _gather_surge_candidates(
             if existing.originally_created_at is None:
                 existing.originally_created_at = existing.created_at
             existing.created_at = datetime.now(timezone.utc)
+            # 매수 실행가(paper_trading에서 기록)가 없는 경우에만 현재가로 보완
+            if existing.price_at_signal is None and _signal_current_price is not None:
+                existing.price_at_signal = _signal_current_price
             try:
                 db.flush()
                 logger.debug("[급등탐지] %s 기존 시그널 업데이트", candidate.stock_code)
@@ -1446,6 +1459,8 @@ async def _gather_surge_candidates(
                 # SPEC-AI-036: composite_score / factor_scores 주입
                 composite_score=_composite,
                 factor_scores=_factor_json,
+                # 시그널 생성 시점 현재가 — 매수 미실행 시에도 signal_verifier 검증 가능
+                price_at_signal=_signal_current_price,
             )
             db.add(signal)
             try:
