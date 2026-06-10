@@ -259,7 +259,7 @@ def _get_signal_details_for_date(db: Session, eval_date) -> list:
         )
         return [
             {
-                "stock_code": st.code,
+                "stock_code": st.stock_code,
                 "stock_name": st.name,
                 "signal_type": fs.signal_type,
                 "confidence": fs.confidence,
@@ -416,7 +416,7 @@ def get_prediction_history(
                 if fs.error_category:
                     error_counts[fs.error_category] += 1
                 signal_list.append({
-                    "stock_code": st.code,
+                    "stock_code": st.stock_code,
                     "stock_name": st.name,
                     "signal_type": fs.signal_type,
                     "confidence": fs.confidence,
