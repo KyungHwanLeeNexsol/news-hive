@@ -1404,7 +1404,7 @@ async def _gather_surge_candidates(
             if _price_data:
                 _signal_current_price = _price_data.get("current_price")
         except Exception as _price_e:
-            logger.debug("[급등탐지] %s 현재가 조회 실패: %s", candidate.stock_code, _price_e)
+            logger.warning("[급등탐지] %s 현재가 조회 실패 (price_at_signal=None): %s", candidate.stock_code, _price_e)
 
         # 5영업일 내 중복 시그널 확인 → 있으면 업데이트, 없으면 신규 생성
         existing = (

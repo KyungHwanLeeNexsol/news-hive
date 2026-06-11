@@ -1116,8 +1116,9 @@ async def fetch_top_movers_codes(market: str = "KOSDAQ", limit: int = 30) -> lis
             resp.raise_for_status()
 
         soup = BeautifulSoup(resp.text, "html.parser")
-        # 각 행의 종목 링크: /item/main.naver?code=XXXXXX
-        for a_tag in soup.select("td.name a[href*='code=']"):
+        # 2026-05-20 HTML 구조 변경: td.name → a.tltle (CSS 클래스명 변경)
+        # 순위 tr 내의 종목 링크 파싱
+        for a_tag in soup.select("a.tltle[href*='code=']"):
             href = a_tag.get("href", "")
             code_match = re.search(r"code=(\d{6})", href)
             if code_match:
