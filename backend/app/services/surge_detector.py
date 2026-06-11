@@ -2143,6 +2143,7 @@ def detect_forum_mention_surge(
 
     try:
         from app.models.stock_forum import StockForumPost
+        from app.services.naver_finance import fetch_current_price_with_change_sync
 
         now = datetime.now(timezone.utc)
         today_kst_start = datetime.now(KST).replace(
@@ -2168,13 +2169,14 @@ def detect_forum_mention_surge(
         recent_rows = (
             db.query(
                 StockForumPost.stock_id,
+                StockForumPost.stock_code,
                 sqlfunc.count(StockForumPost.id).label("recent_count"),
             )
             .filter(
                 StockForumPost.stock_id.isnot(None),
                 StockForumPost.post_date >= recent_cutoff,
             )
-            .group_by(StockForumPost.stock_id)
+            .group_by(StockForumPost.stock_id, StockForumPost.stock_code)
             .all()
         )
 
@@ -2239,6 +2241,12 @@ def detect_forum_mention_surge(
                 surge_metadata=_json.dumps(metadata, ensure_ascii=False),
                 paper_executed=True,
             )
+            try:
+                price_data = fetch_current_price_with_change_sync(row.stock_code)
+                if price_data and price_data.get("current_price"):
+                    signal.price_at_signal = price_data["current_price"]
+            except Exception:
+                pass
             db.add(signal)
             signals.append(signal)
 
