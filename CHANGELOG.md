@@ -4,6 +4,28 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fixed — volume_news_combo 탐지기 재활성화 (2026-06-11)
+
+CSS 버그(2026-05-20~06-10) 기간 동안 `actual_surge_count=0` 오기록으로 오염된 평가 데이터를 근거로
+잘못 비활성화된 `volume_news_combo` 탐지기를 복원했습니다. (commit `ce4c964`)
+
+- **문제**: Naver HTML CSS 버그로 실제 급등주 데이터가 16일간 수집 안 됨 → 2026-06-05 예측 6건의 "6/6 실패(-7.7%)" 평가가 오염 데이터 기반 → 2026-06-09 탐지기 비활성화
+- **영향**: `volume_news_combo` 비활성화 시 가중치 합 0.68 → 단일 탐지기 최대 점수 0.25 < BEAR 임계값 0.42 → 2026-06-09 이후 앙상블 예측 0건
+- **수정**: `surge_detection.yaml` `volume_news_combo.enabled: false → true` 복원
+- **보호**: SPEC-AI-030 게이트(overheat/freshness/companion_detector) 추격매수 방지 유지
+
+### Planned — SPEC-AI-044 비테마 기술적 모멘텀 급등 탐지기 (2026-06-11)
+
+2026-06-10 기준 93개 급등 종목 중 뉴스/공시 없이 순수 수급으로 급등한 종목(STX그린로지스 +30%, 마니커 +30%, 코미코 +29%)을
+포착하기 위한 6번째 탐지기 계획을 수립했습니다.
+
+- **신규**: `detect_technical_momentum_surge()` — 뉴스/공시 미의존 순수 기술적 패턴 탐지기
+- **컴포넌트**: 순수 거래량 돌파(20일 평균 5배), 상대강도(KOSDAQ 대비), 52주 신고가 근접, 연속 양봉
+- **대상**: 시총 500억~5조 중소형주
+- **앙상블 통합**: `detector_groups["technical"]` 추가, 가중치 0.11 신규 배분 (6가지 합 = 1.00)
+- **SPEC 위치**: `.moai/specs/SPEC-AI-044/spec.md` (REQ-044-001~012)
+- **목표**: 비테마 급등 종목 recall 20% 이상 향상
+
 ### Fixed — APScheduler SQLAlchemyJobStore replace_existing 버그 수정 (2026-06-09)
 
 13일간 DART 공시 크롤링이 중단된 근본 원인을 발견하고 수정했습니다. (commit `df0b2a2`)
