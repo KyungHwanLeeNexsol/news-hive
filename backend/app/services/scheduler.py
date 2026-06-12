@@ -2,7 +2,7 @@ import asyncio
 import logging
 import threading
 import time as _time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -128,6 +128,7 @@ def _cleanup_old_disclosures(db):
 def _run_dart_crawl():
     """Sync wrapper that runs the async DART disclosure crawl."""
     _start = _time.monotonic()
+    logger.info("DART crawl 시작 (days=7)")
     from app.services.dart_crawler import fetch_dart_disclosures, backfill_disclosure_stock_ids, backfill_disclosure_report_types
 
     db = SessionLocal()
@@ -149,6 +150,73 @@ def _run_dart_crawl():
     # DART 공시 크롤링 후 키워드 매칭 실행 (SPEC-FOLLOW-001)
     _run_keyword_matching()
 
+
+def _send_dart_stale_alert(elapsed_hours: float) -> None:
+    """DART stale 감지 시 Telegram 관리자 알림."""
+    import os
+    chat_id = os.environ.get("TELEGRAM_ADMIN_CHAT_ID")
+    if not chat_id:
+        logger.debug("TELEGRAM_ADMIN_CHAT_ID 미설정, DART alert 스킵")
+        return
+    try:
+        from app.services.telegram_service import send_telegram_message
+        msg = (
+            f"⚠️ [NewsHive] DART 공시 크롤러 이상\n"
+            f"마지막 수집: {elapsed_hours:.1f}시간 전\n"
+            f"자동 재크롤 트리거 중..."
+        )
+        asyncio.run(send_telegram_message(chat_id, msg))
+    except Exception as e:
+        logger.warning("DART stale 알림 발송 실패: %s", e)
+
+
+def _check_dart_health() -> None:
+    """DART stale 감지 watchdog — 2시간 이상 공시 미수집 시 자동 재크롤.
+
+    장 시간(07:00~18:00 KST)에만 동작한다. 수집 지연 2시간 초과 시:
+      1. CRITICAL 로그 출력
+      2. Telegram 관리자 알림 (TELEGRAM_ADMIN_CHAT_ID 설정 시)
+      3. APScheduler dart_crawl 잡을 즉시 재실행 예약
+    """
+    from sqlalchemy import func as sqlfunc
+    from app.models.disclosure import Disclosure
+
+    now_kst = datetime.now(timezone(timedelta(hours=9)))
+    if not (7 <= now_kst.hour < 18):
+        return
+
+    db = SessionLocal()
+    try:
+        latest = db.query(sqlfunc.max(Disclosure.created_at)).scalar()
+        now_utc = datetime.now(timezone.utc)
+
+        if latest is None:
+            elapsed_hours = 999.0
+        else:
+            # PostgreSQL TIMESTAMPTZ → timezone-aware; naive datetime이면 UTC로 간주
+            if latest.tzinfo is None:
+                latest = latest.replace(tzinfo=timezone.utc)
+            elapsed_hours = (now_utc - latest).total_seconds() / 3600
+
+        if elapsed_hours > 2.0:
+            logger.critical(
+                "DART HEALTH ALERT: 마지막 공시 수집이 %.1f시간 전입니다. 즉시 재크롤 트리거.",
+                elapsed_hours,
+            )
+            _send_dart_stale_alert(elapsed_hours)
+            job = scheduler.get_job("dart_crawl")
+            if job:
+                job.modify(next_run_time=now_utc)
+                logger.info("DART HEALTH: dart_crawl 즉시 실행 예약 완료")
+            else:
+                logger.error("DART HEALTH: dart_crawl 잡을 찾을 수 없음, 직접 실행")
+                _run_dart_crawl()
+        else:
+            logger.debug("DART HEALTH: OK (%.1fh 전 수집)", elapsed_hours)
+    except Exception as e:
+        logger.error("DART HEALTH check 실패: %s", e)
+    finally:
+        db.close()
 
 
 @retry_with_backoff(max_attempts=3)
@@ -1366,7 +1434,7 @@ def start_scheduler():
         minutes=interval,
         id="news_crawl",
         replace_existing=True,
-        next_run_time=datetime.now(),
+        next_run_time=datetime.now(timezone.utc),
     )
     # DART 공시 크롤링 (설정 기반 주기, 시작 시 즉시 실행)
     scheduler.add_job(
@@ -1375,7 +1443,16 @@ def start_scheduler():
         minutes=settings.DART_CRAWL_INTERVAL_MINUTES,
         id="dart_crawl",
         replace_existing=True,
-        next_run_time=datetime.now(),
+        next_run_time=datetime.now(timezone.utc),
+    )
+    # DART stale 감지 watchdog: 90분 간격, 서비스 시작 5분 후 첫 실행
+    scheduler.add_job(
+        _check_dart_health,
+        "interval",
+        minutes=90,
+        id="dart_health_check",
+        replace_existing=True,
+        next_run_time=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
     # SPEC-FOLLOW-002: 증권사 리포트 크롤링 (30분 간격)
     scheduler.add_job(
@@ -1392,7 +1469,7 @@ def start_scheduler():
         hours=settings.MARKET_CAP_UPDATE_HOURS,
         id="market_cap_update",
         replace_existing=True,
-        next_run_time=datetime.now(),
+        next_run_time=datetime.now(timezone.utc),
     )
     # 데일리 브리핑 + 매수/매도 시그널 생성: 매일 08:30 KST (장 시작 전, 평일만)
     # SPEC-AI-015: 시장 레짐 사전 분류 (08:55 KST — 브리핑 5분 전)
@@ -1461,7 +1538,7 @@ def start_scheduler():
         minutes=10,
         id="commodity_price_fetch",
         replace_existing=True,
-        next_run_time=datetime.now(),
+        next_run_time=datetime.now(timezone.utc),
     )
     # 원자재 뉴스 크롤링: 30분 간격 (뉴스 크롤링 직후)
     scheduler.add_job(
