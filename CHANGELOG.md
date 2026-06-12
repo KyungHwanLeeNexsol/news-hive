@@ -4,6 +4,32 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fixed — prediction-history 예측 대상일 계산 개선 (2026-06-12)
+
+`/api/surge-trading/prediction-history` API에서 `target_date`가 null로 반환되던 문제를 수정했습니다.
+금요일 등 장 마감 후 시그널 생성 시 주말·공휴일을 건너뛰고 다음 영업일을 정확히 표시합니다. (commit `5c6484a`)
+
+- **문제**: `prediction-history` 오늘 시그널 블록의 `target_date` 필드가 하드코딩된 `None`으로 반환됨
+- **추가**: `surge_trading_service.py` — `_get_next_business_day(ref)` 함수 신규 추가 (KRX 임시공휴일 + 주말 고려)
+- **수정**: `surge_trading.py` — `target_date: None` → `_get_next_business_day(today)` 계산값으로 변경
+- **동작**: 금요일 시그널 → target_date = 다음 월요일, 연휴 전날 → target_date = 연휴 다음 영업일
+
+### Fixed — price_at_signal null 및 disclosure_impact 시그널 누락 수정 (2026-06-12)
+
+탐지기 2종과 API 쿼리에서 누락된 데이터를 수정했습니다. (commit `0c24729`)
+
+#### price_at_signal null 수정 (surge_detector.py)
+
+- **`detect_near_limit_up_carries`**: FundSignal 생성 시 `price_at_signal` 미설정 → `_fetch_price_change_sync()` 결과 주입
+- **`detect_group_cascade_signals`**: 계열사 시그널 생성 시 `price_at_signal` 미설정 → for 루프 내 Stock 조회 + 현재가 API 호출 추가
+- **영향 범위**: 오늘 이전 생성된 시그널은 여전히 null (장 마감 후 실행 → Naver API 반환값 없음), 내일부터 정상
+
+#### disclosure_impact 시그널 표시 누락 수정 (surge_trading.py)
+
+- **문제**: `prediction-history` API가 `disclosure_impact` signal_type을 조회 필터 2곳 + 분류 elif 2곳에서 누락
+- **수정**: 쿼리 조건 및 분류 로직 4곳에 `"disclosure_impact"` 추가
+- **결과**: `disclosure_signals` 배열에 공시 연쇄 시그널이 정상 표시됨
+
 ### Fixed — volume_news_combo 탐지기 재활성화 (2026-06-11)
 
 CSS 버그(2026-05-20~06-10) 기간 동안 `actual_surge_count=0` 오기록으로 오염된 평가 데이터를 근거로
