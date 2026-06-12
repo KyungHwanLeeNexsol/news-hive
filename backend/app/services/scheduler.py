@@ -82,13 +82,13 @@ def _run_crawl_job():
 
 
 def _cleanup_old_articles(db):
-    """Delete news articles older than 7 days."""
+    """Delete news articles older than 5 days."""
     from datetime import datetime, timedelta, timezone
     from sqlalchemy import func
     from app.models.news import NewsArticle
     from app.models.news_relation import NewsStockRelation
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=5)
 
     # Keep freshly collected articles even when published_at is missing.
     # Otherwise the same URL can be re-crawled and re-notified on the next cycle.
@@ -109,33 +109,33 @@ def _cleanup_old_articles(db):
         NewsArticle.id.in_(old_ids)
     ).delete(synchronize_session=False)
     db.commit()
-    logger.info(f"Cleaned up {len(old_ids)} articles older than 7 days")
+    logger.info(f"Cleaned up {len(old_ids)} articles older than 5 days")
 
 
 def _cleanup_old_disclosures(db):
-    """Delete disclosures older than 7 days based on rcept_dt (YYYYMMDD string)."""
+    """Delete disclosures older than 5 days based on rcept_dt (YYYYMMDD string)."""
     from datetime import datetime, timedelta
     from app.models.disclosure import Disclosure
 
-    cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y%m%d")
+    cutoff = (datetime.now() - timedelta(days=5)).strftime("%Y%m%d")
     deleted = db.query(Disclosure).filter(Disclosure.rcept_dt < cutoff).delete(synchronize_session=False)
     if deleted:
         db.commit()
-        logger.info(f"Cleaned up {deleted} disclosures older than 7 days")
+        logger.info(f"Cleaned up {deleted} disclosures older than 5 days")
 
 
 @retry_with_backoff(max_attempts=3)
 def _run_dart_crawl():
     """Sync wrapper that runs the async DART disclosure crawl."""
     _start = _time.monotonic()
-    logger.info("DART crawl 시작 (days=7)")
+    logger.info("DART crawl 시작 (days=5)")
     from app.services.dart_crawler import fetch_dart_disclosures, backfill_disclosure_stock_ids, backfill_disclosure_report_types
 
     db = SessionLocal()
     try:
         _cleanup_old_disclosures(db)
-        # days=7: 서비스 다운타임 후 최대 7일치 복구 가능 (기존 days=3은 공백 발생)
-        count = asyncio.run(fetch_dart_disclosures(db, days=7))
+        # days=5: 공휴일 연속 휴장(최대 3일) + 복구 버퍼 2일. watchdog 2h 재실행으로 장기 다운타임 불필요.
+        count = asyncio.run(fetch_dart_disclosures(db, days=5))
         logger.info(f"DART crawl completed: {count} new disclosures")
         # Re-link any previously unlinked disclosures
         backfill_disclosure_stock_ids(db)
