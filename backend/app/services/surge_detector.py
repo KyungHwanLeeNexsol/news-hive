@@ -1845,6 +1845,7 @@ def detect_near_limit_up_carries(
                 reasoning=reasoning,
                 surge_metadata=_json.dumps(metadata, ensure_ascii=False),
                 paper_executed=True,
+                price_at_signal=price_data.get("current_price"),
             )
             db.add(signal)
             signals.append(signal)
@@ -2445,6 +2446,21 @@ def detect_group_cascade_signals(
             "surge_probability_score": confidence,
         }
 
+        # price_at_signal 조회 (cascade 종목 현재가)
+        _cascade_price: int | None = None
+        _cascade_stock = db.query(Stock).filter(Stock.id == cascade_stock_id).first()
+        if _cascade_stock:
+            try:
+                _cascade_price_data = _fetch_price_change_sync(_cascade_stock.stock_code)
+                if _cascade_price_data:
+                    _cascade_price = _cascade_price_data.get("current_price")
+            except Exception as _ce:
+                logger.warning(
+                    "[group_cascade] %s 현재가 조회 실패 (price_at_signal=None): %s",
+                    _cascade_stock.stock_code,
+                    _ce,
+                )
+
         signal = FundSignal(
             stock_id=cascade_stock_id,
             signal="buy",
@@ -2456,6 +2472,7 @@ def detect_group_cascade_signals(
             ),
             surge_metadata=_json.dumps(metadata, ensure_ascii=False),
             paper_executed=True,
+            price_at_signal=_cascade_price,
         )
         db.add(signal)
         signals.append(signal)

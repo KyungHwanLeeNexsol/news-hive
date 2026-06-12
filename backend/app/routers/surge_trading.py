@@ -250,7 +250,7 @@ def _get_signal_details_for_date(db: Session, eval_date) -> list:
             db.query(FundSignal, Stock)
             .join(Stock, FundSignal.stock_id == Stock.id)
             .filter(
-                FundSignal.signal_type.in_(["surge_candidate", "preday_disclosure"]),
+                FundSignal.signal_type.in_(["surge_candidate", "preday_disclosure", "disclosure_impact"]),
                 FundSignal.signal == "buy",
                 func.date(FundSignal.created_at) == eval_date,
             )
@@ -429,7 +429,7 @@ def get_prediction_history(
             db.query(FundSignal, Stock)
             .join(Stock, FundSignal.stock_id == Stock.id)
             .filter(
-                FundSignal.signal_type.in_(["surge_candidate", "preday_disclosure"]),
+                FundSignal.signal_type.in_(["surge_candidate", "preday_disclosure", "disclosure_impact"]),
                 FundSignal.signal == "buy",
                 FundSignal.created_at >= start_dt,
                 FundSignal.created_at < end_dt,
@@ -467,7 +467,7 @@ def get_prediction_history(
                     }
                     if fs.signal_type == "surge_candidate":
                         today_surge_signals.append(item)
-                    elif fs.signal_type == "preday_disclosure":
+                    elif fs.signal_type in ("preday_disclosure", "disclosure_impact"):
                         today_disclosure_signals.append(item)
                 result.append({
                     "trading_date": str(today),
@@ -514,7 +514,7 @@ def get_prediction_history(
                     # error_breakdown: surge_candidate 기준으로만 집계
                     if fs.error_category:
                         error_counts[fs.error_category] += 1
-                elif fs.signal_type == "preday_disclosure":
+                elif fs.signal_type in ("preday_disclosure", "disclosure_impact"):
                     disclosure_signals.append(item)
 
             # avg_alpha_pct: surge_candidate 검증 완료 시그널만 평균
