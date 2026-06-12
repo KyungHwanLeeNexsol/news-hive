@@ -178,7 +178,7 @@ class TestComboChaseGuardConfigDefaults:
         assert guard.overheat_change_pct == 5.0
         assert guard.min_freshness_ratio == 1.5
         assert guard.distribution_change_pct == 0.0
-        assert guard.exclude_on_price_unavailable is True
+        assert guard.exclude_on_price_unavailable is False  # 2026-06-12: Naver API 실패 시 차단 완화
         assert guard.require_companion_detector is True
 
 
