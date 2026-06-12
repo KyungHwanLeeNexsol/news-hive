@@ -387,7 +387,7 @@ def get_prediction_history(
     from app.models.fund_signal import FundSignal
     from app.models.stock import Stock
     from app.models.disclosure import Disclosure  # noqa: F401 — FundSignal.disclosure 관계 해소용
-    from app.services.surge_trading_service import _get_prev_business_day
+    from app.services.surge_trading_service import _get_prev_business_day, _get_next_business_day
 
     try:
         evals = (
@@ -471,7 +471,7 @@ def get_prediction_history(
                         today_disclosure_signals.append(item)
                 result.append({
                     "trading_date": str(today),
-                    "target_date": None,
+                    "target_date": str(_get_next_business_day(today)),
                     # surge_candidate 시그널만 카운트 (DB 집계 버그 방어)
                     "predicted_count": len(today_surge_signals),
                     "actual_surge_count": None,

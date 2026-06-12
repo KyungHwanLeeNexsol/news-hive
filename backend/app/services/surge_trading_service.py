@@ -166,6 +166,14 @@ def _get_prev_business_day(ref: date) -> date:
     return prev
 
 
+def _get_next_business_day(ref: date) -> date:
+    """다음 영업일 반환. 토/일 및 KRX 임시공휴일이면 추가 전진."""
+    nxt = ref + timedelta(days=1)
+    while nxt.weekday() >= 5 or nxt in KRX_EXTRA_HOLIDAYS:
+        nxt += timedelta(days=1)
+    return nxt
+
+
 def get_today_signals(
     db: Session,
     min_probability: Decimal = Decimal("0.30"),
