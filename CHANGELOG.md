@@ -4,6 +4,47 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Diagnosed — 급등예측 정확도 0% 근본 원인 3단계 연쇄 분석 (2026-06-15)
+
+DB 쿼리 기반 실증 분석으로 6/09~6/12 기간 급등예측 precision=recall=0% 원인을 확인했습니다.
+
+#### 연쇄 장애 흐름
+
+```
+① CSS 버그(87ce948) → Naver 크롤링 실패 → actual_surge_count=0 오기록 (2026-05-20~06-10)
+        ↓
+② "volume_news_combo 6/6 실패" 오판 → 탐지기 비활성화 (2026-06-09)
+        ↓
+③ 유일 잔존 탐지기: forum_mention_surge → 대원강업(000430) 단 1종목 매일 반복 예측
+        ↓
+④ 대원강업 ≥10% 급등 없음 → TP=0, precision=recall=0% × 4일 반복
+```
+
+#### DB 확인 결과
+
+```sql
+-- fund_signals (surge_candidate) 탐지기별 분포
+6/09: 대원강업, basis=["forum_mention_surge"]  -- predicted_count=0 (6/08 시그널 기준)
+6/10: 대원강업, basis=["forum_mention_surge"]  -- predicted_count=1, actual=93, TP=0
+6/11: 대원강업, basis=["forum_mention_surge"]  -- predicted_count=1, actual=0
+6/12: 35종목, basis=[theme_cluster, volume_news_combo, group_cascade, ...]  -- predicted_count=1(평가 기준은 6/11)
+```
+
+- 6/12 volume_news_combo 재활성화(ce4c964) + 코스피 +4.6% 대폭등일 조합 → 35종목 시그널 생성
+- 6/09~6/11 평가는 모두 "고장 기간" 데이터 기반 → 자동개선 학습 baseline 오염
+
+#### 수동 백필 실행 (2026-06-15)
+
+- 대상: 6/11 surge_actual_outcome 200종목 기준 6/12 가격 변동률 산출
+- 결과: `surge_actual_outcome` 200건 upsert (trading_date=2026-06-12), 급등(≥10%) 79건 확인
+- 효과: `surge_prediction_evaluation` 4건(6/09~6/12) 확보 → 오늘 16:30 자동 파이프라인 후 5건 → R11 게이트 통과
+- 오늘 19:00 KST: **첫 자동개선 실행 예정** (recall=0% → `min_score_for_signal -= 0.02` 적용 예상)
+
+#### 향후 전망
+
+- 5~10거래일(6/20~6/27경) 후 정상 평가 데이터 누적 시 실질적 정확도 개선 확인 가능
+- `forum_mention_surge` 탐지기(대원강업 반복 예측)의 신뢰도 재검토 필요
+
 ### Fixed — prediction-history 예측 대상일 계산 개선 (2026-06-12)
 
 `/api/surge-trading/prediction-history` API에서 `target_date`가 null로 반환되던 문제를 수정했습니다.
