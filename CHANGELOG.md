@@ -4,6 +4,13 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fixed — surge_verify_predictions 실행 시각 16:30 → 18:30 KST 변경 (2026-06-16)
+
+- `_run_surge_verify_predictions` 스케줄: 16:30 KST → 18:30 KST
+- 배경: 자동 개선(19:00)이 항상 recall=0.000 기반으로 min_score를 반복 하향 조정하는 원인 수정
+- 올바른 실행 순서 확립: collect_outcomes(16:10) → verify_signals(18:00) → evaluate(18:30) → auto_improve(19:00)
+- 커밋: `cae2ede`
+
 ### Diagnosed — 급등예측 정확도 0% 근본 원인 3단계 연쇄 분석 (2026-06-15)
 
 DB 쿼리 기반 실증 분석으로 6/09~6/12 기간 급등예측 precision=recall=0% 원인을 확인했습니다.
