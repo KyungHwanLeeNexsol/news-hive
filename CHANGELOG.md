@@ -4,6 +4,35 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fixed — Naver 모바일 API 엔드포인트 교체 + PendingRollbackError 방어 (2026-06-16)
+
+Naver `/integration` 엔드포인트가 `stockInfo: {}` 빈 객체를 반환하도록 변경되어 `price_at_signal`이 전량 NULL로 기록되던 문제와 SSL 드롭 시 `_run_surge_collect_outcomes`가 `PendingRollbackError`로 실패하던 문제를 수정했습니다.
+
+#### 수정 1: `fetch_current_price_with_change_sync` 엔드포인트 교체 (commit `ce23b6d`)
+
+- **문제**: 동기 가격 조회 함수가 `/api/stock/{code}/integration` 사용 → `stockInfo: {}` 반환 → `price_at_signal=NULL`
+- **수정**: `/api/stock/{code}/price` 엔드포인트 사용, 반환 형식 dict→list 파싱 변경
+- **영향**: 오늘(6/16) 15:21 KST 생성된 33개 시그널의 `price_at_signal` 전량 NULL — 내일 15:20부터 정상 복구
+- 서버 재시작 후 검증: 삼성전자 343,000원(+1.78%), SK하이닉스 2,382,000원(+4.11%) 정상 조회 확인
+
+#### 수정 2: `collect_daily_surge_outcomes` PendingRollbackError 방어 (commit `2e11c6c`)
+
+- **문제**: 종목명 조회(`db.query(Stock...)`) 중 SSL 드롭(`psycopg2.OperationalError`) 발생 → 세션이 PendingRollback 상태 → 후속 `db.execute(upsert)` 실패
+- **수정**: except 블록에 `db.rollback()` 추가 → 세션 상태 초기화 후 upsert 정상 진행
+- **위치**: `surge_actual_outcome_service.py:158`
+
+#### 수정 3: `fetch_current_price_with_change` async fallback 교체 (commit `2e11c6c`)
+
+- 동기 버전과 동일하게 `/integration` → `/price` 엔드포인트 교체
+- 반환 형식 변경에 따라 list 파싱으로 업데이트
+
+#### 6/16 급등 결과 수동 백필
+
+- `_run_surge_collect_outcomes`가 오늘 16:21 KST 실패하여 당일 데이터 미수집
+- 수정 배포 후 수동 실행: 206건 upsert (KOSPI/KOSDAQ 상위 종목 + 예측 보완)
+- 급등 확인: 47종목(change_rate ≥ 10%), 최대 +30%
+- 내일 18:30 `surge_verify_predictions` 시 6/16 데이터 정상 반영 예정
+
 ### Fixed — surge_verify_predictions 실행 시각 16:30 → 18:30 KST 변경 (2026-06-16)
 
 - `_run_surge_verify_predictions` 스케줄: 16:30 KST → 18:30 KST
