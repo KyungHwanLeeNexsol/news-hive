@@ -1191,27 +1191,28 @@ async def fetch_current_price_with_change(stock_code: str) -> dict | None:
         except Exception:
             continue
 
-    # 모바일 API fallback
+    # 모바일 API fallback (/integration 폐기 → /price 엔드포인트, 2026-06-16)
     mobile_url = (
-        f"https://m.stock.naver.com/api/stock/{stock_code}/integration"
+        f"https://m.stock.naver.com/api/stock/{stock_code}/price"
     )
     try:
         async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
             resp = await client.get(mobile_url, headers=HEADERS)
             resp.raise_for_status()
         data = resp.json()
-        stock_info = data.get("stockInfo", {})
-        price_str = stock_info.get("closePrice", "")
-        rate_str = stock_info.get("fluctuationsRatio", "0")
-        if price_str:
-            try:
-                rate = float(str(rate_str).replace(",", ""))
-            except (ValueError, TypeError):
-                rate = 0.0
-            return {
-                "current_price": _parse_comma_int(str(price_str)),
-                "change_rate": rate,
-            }
+        if data and isinstance(data, list):
+            item = data[0]
+            price_str = item.get("closePrice", "")
+            rate_str = item.get("fluctuationsRatio", "0")
+            if price_str:
+                try:
+                    rate = float(str(rate_str).replace(",", ""))
+                except (ValueError, TypeError):
+                    rate = 0.0
+                return {
+                    "current_price": _parse_comma_int(str(price_str)),
+                    "change_rate": rate,
+                }
     except Exception as e:
         logger.debug("fetch_current_price_with_change fallback 실패 (%s): %s", stock_code, e)
 

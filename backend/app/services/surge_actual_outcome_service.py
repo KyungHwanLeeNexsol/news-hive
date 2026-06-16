@@ -156,6 +156,12 @@ async def collect_daily_surge_outcomes(db: Session, trading_date: date) -> int:
         stock_name_map = {row.stock_code: row.name for row in stock_rows}
     except Exception as e:
         logger.warning("종목명 조회 실패 — 코드로 대체: %s", e)
+        # SSL 연결 끊김(OperationalError) 시 세션이 PendingRollback 상태에 빠짐.
+        # 이후 db.execute(upsert)가 PendingRollbackError로 실패하므로 명시적 rollback.
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
     for row in rows_to_upsert:
         code = row["stock_code"]
