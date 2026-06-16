@@ -597,7 +597,7 @@ def _run_surge_collect_outcomes():
 
 
 def _run_surge_verify_predictions():
-    """SPEC-AI-041: T-1 시그널 vs T 실제 결과 평가 (평일 16:30 KST)."""
+    """SPEC-AI-041: T-1 시그널 vs T 실제 결과 평가 (평일 18:30 KST, verify_signals 18:00 완료 후)."""
     if not _is_kr_market_open():
         logger.debug("주말 — surge 예측 검증 스킵")
         return
@@ -1850,12 +1850,12 @@ def start_scheduler():
         coalesce=True,
         replace_existing=True,
     )
-    # 16:30 — T-1 시그널 vs T 실제 결과 평가
+    # 18:30 — T-1 시그널 vs T 실제 결과 평가 (verify_signals 18:00 완료 후)
     scheduler.add_job(
         _run_surge_verify_predictions,
         "cron",
         day_of_week="mon-fri",
-        hour=16,
+        hour=18,
         minute=30,
         timezone="Asia/Seoul",
         id="surge_verify_predictions",
