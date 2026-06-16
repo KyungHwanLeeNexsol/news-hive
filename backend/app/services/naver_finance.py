@@ -812,16 +812,23 @@ def fetch_current_price_with_change_sync(stock_code: str) -> dict | None:
 
     동기 컨텍스트(_fetch_price_change_sync)에서 현재가 조회가 필요할 때 사용.
     asyncio.run() 없이 httpx.Client로 직접 호출하여 이벤트 루프 충돌을 방지한다.
+
+    엔드포인트: /api/stock/{code}/price (리스트 반환)
+    이전 /integration 엔드포인트는 stockInfo: {} 빈 객체를 반환하여 폐기.
     """
-    mobile_url = f"https://m.stock.naver.com/api/stock/{stock_code}/integration"
+    # @MX:ANCHOR: [AUTO] price_at_signal 주입 경로 — fund_manager, disclosure_impact_scorer 등 다수 호출
+    # @MX:REASON: [AUTO] /integration → /price 엔드포인트 교체 (2026-06-16). 반환 형식이 dict→list로 변경.
+    mobile_url = f"https://m.stock.naver.com/api/stock/{stock_code}/price"
     try:
         with httpx.Client(timeout=5, follow_redirects=True) as client:
             resp = client.get(mobile_url, headers=HEADERS)
             resp.raise_for_status()
         data = resp.json()
-        stock_info = data.get("stockInfo", {})
-        price_str = stock_info.get("closePrice", "")
-        rate_str = stock_info.get("fluctuationsRatio", "0")
+        if not data or not isinstance(data, list):
+            return None
+        item = data[0]
+        price_str = item.get("closePrice", "")
+        rate_str = item.get("fluctuationsRatio", "0")
         if price_str:
             try:
                 rate = float(str(rate_str).replace(",", ""))
