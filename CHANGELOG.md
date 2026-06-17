@@ -4,6 +4,42 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Featured — SPEC-AI-051: 급등주 탐지 커버리지 확장 3종 (2026-06-17)
+
+볼린저 밴드 스퀴즈 탐지기, 공시 키워드 Tier 배수, 14:30 갭상승 런너 파이프라인 — 3개 독립 기능으로 기존 파이프라인이 놓치던 탐지 공백을 구조적으로 보완했습니다.
+
+#### Feature 1 — 볼린저 밴드 스퀴즈 탐지기 (REQ-AI051-001~003)
+
+- **추가**: `calculate_bollinger_bandwidth_squeeze(prices, lookback=60)` — `technical_indicators.py`. 60일 슬라이딩 윈도우로 BandWidth를 계산하고 당일 BandWidth가 60일 최저 이하인 종목을 스퀴즈로 판정
+- **추가**: `detect_bollinger_squeeze_signals(db, config)` — `surge_detector.py`. 시총 상위 200종목 스캔, `squeeze_score` 0.0~1.0 정규화
+- **추가**: `SurgeCandidate.squeeze_score: float = 0.0` 필드 (런타임 전용, DB 비영속화)
+- **추가**: 스케줄러 잡 `id="surge_bollinger_squeeze"` — 15:10 KST Mon-Fri (15:20 KST 기존 잡보다 선행)
+- **설정**: `BollingerSqueezeConfig(BaseModel)` — `surge_settings.py`
+
+#### Feature 2 — 공시 키워드 Tier 배수 (REQ-AI051-004~006)
+
+- **추가**: `_KEYWORD_TIER1`, `_KEYWORD_TIER2`, `_KEYWORD_TIER3` 사전 — `disclosure_impact_scorer.py`
+  - Tier 1 (×2.0): FDA 승인, 세계 최초, 독점 공급, 최대주주 변경, 국가전략기술, 국책사업 선정
+  - Tier 2 (×1.5): 공급계약 체결, 지분 인수, 합병, MOU 체결, 수주, 자사주 소각
+  - Tier 3 (×1.2): 신제품 출시, 신규 수주, 매출 급증, 계열사 지원
+- **추가**: `_get_keyword_tier_multiplier(report_name, ai_summary) -> float` — 최고 Tier 1개 배수 반환
+- **수정**: `score_disclosure_impact()` 계약/실적/기본값 경로에 Tier 배수 적용 + 100 캡 (루틴 거버넌스 5.0 고정 경로 면제)
+
+#### Feature 3 — 14:30 갭상승 런너 파이프라인 (REQ-AI051-007~011)
+
+- **추가**: `detect_gap_up_runners(db, config)` — `surge_detector.py`. 당일 리더 시그널(`signal_type IN surge_candidate/immediate_disclosure`, `confidence≥0.75`)의 동일 섹터 2/3등 종목을 `gap_up_runners` FundSignal로 생성 (`confidence = leader * 0.7`)
+- **추가**: 스케줄러 잡 `id="surge_gap_up_runners"` — 14:30 KST Mon-Fri
+- **수정**: `early_entry_check()` signal_type 필터 확장 — `preday_disclosure` + `gap_up_runners` 동시 픽업 (`preday_signal_service.py`)
+- **설정**: `GapUpRunnersConfig(BaseModel)` — `surge_settings.py`
+- **제약**: DB 마이그레이션 없음 (`gap_up_runners`는 기존 `FundSignal.signal_type` String 값 활용)
+
+#### 테스트
+
+- `backend/tests/test_spec_ai_051.py` 신규 — 15개 단위 테스트 (볼린저 4개 + 키워드 Tier 6개 + 런너 5개) 전체 통과
+- `backend/tests/test_disclosure_impact_scorer.py` 갱신 — "합병" 키워드 Tier 2 반영 (M&A 기대값 30.0 → 45.0)
+
+---
+
 ### Featured — SPEC-AI-050: 급등예측 커버리지 구조적 개선 (2026-06-17)
 
 5가지 구조적 원인으로 인한 급등예측 recall=0% 문제를 해결하는 5개 요구사항을 구현했습니다.

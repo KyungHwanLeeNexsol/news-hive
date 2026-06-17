@@ -1,7 +1,7 @@
 ---
 id: SPEC-AI-051
 version: 1.0.0
-status: draft
+status: completed
 created: 2026-06-17
 updated: 2026-06-17
 author: kyunghwan
@@ -135,3 +135,43 @@ issue_number: 0
 - **기존 탐지기 가중치 변경 금지**: `EnsembleWeightsConfig`의 `theme_cluster`/`volume_news_combo`/`disclosure_pattern`/`legacy_detectors` 가중치를 변경하지 않는다. 스퀴즈는 **가산(additive)**으로만 통합한다.
 - **DB 마이그레이션 미추가**: `gap_up_runners`는 기존 `FundSignal.signal_type`(String) 값으로 표현. 신규 컬럼/테이블/migration 파일을 생성하지 않는다. `squeeze_score`는 DB 영속화하지 않는다.
 - **denormalized P&L 컬럼 미추가**: `SurgeTrade`에 profit/return 컬럼을 추가하지 않는다(파생 계산 유지).
+
+---
+
+## 구현 노트 (Implementation Notes)
+
+> 완료일: 2026-06-17 | 커밋: `0565474` | 브랜치: `feature/SPEC-AI-051`
+
+### 실제 구현 vs. 계획 비교
+
+| 항목 | 계획 | 실제 | 비고 |
+|---|---|---|---|
+| squeeze_score 필드 | dataclass 추가 | 완료 | 기본값 0.0, DB 비영속화 |
+| calculate_bollinger_bandwidth_squeeze() | technical_indicators.py 신규 | 완료 | @MX:ANCHOR 태그 추가 |
+| detect_bollinger_squeeze_signals() | surge_detector.py 신규 | 완료 | max_stocks_to_check=200 |
+| 스케줄러 15:10 잡 | surge_bollinger_squeeze | 완료 | Mon-Fri, 15:20 잡보다 선행 |
+| Tier 1/2/3 키워드 사전 | disclosure_impact_scorer.py | 완료 | _KEYWORD_TIER1~3 상수 |
+| _get_keyword_tier_multiplier() | 신규 헬퍼 | 완료 | 루틴 거버넌스 면제 유지 |
+| detect_gap_up_runners() | surge_detector.py 신규 | 완료 | confidence_decay=0.7 |
+| 스케줄러 14:30 잡 | surge_gap_up_runners | 완료 | Mon-Fri, 당일 미체결 |
+| early_entry_check() 필터 확장 | signal_type IN 확장 | 완료 | gap_up_runners 포함 |
+| BollingerSqueezeConfig | surge_settings.py | 완료 | SPEC에 없던 설정 클래스 추가 (범위 내) |
+| GapUpRunnersConfig | surge_settings.py | 완료 | SPEC에 없던 설정 클래스 추가 (범위 내) |
+| 테스트 | test_spec_ai_051.py 신규 | 완료 | 15개 테스트 전체 통과 |
+
+### 범위 확장 (SPEC 계획 대비 추가된 사항)
+
+- `surge_settings.py`에 `BollingerSqueezeConfig`, `GapUpRunnersConfig` Pydantic 설정 클래스 추가 — 하드코딩 방지를 위한 자연스러운 확장
+- `test_disclosure_impact_scorer.py` 기존 테스트 수정 — "합병" 키워드가 Tier 2에 포함됨에 따라 M&A 기대값 30.0 → 45.0 조정
+
+### 미구현 항목
+
+없음. REQ-AI051-001 ~ REQ-AI051-011 전체 구현 완료.
+
+### TRUST 5 게이트
+
+- **Tested**: 15/15 단위 테스트 통과, Ruff 린트 클린
+- **Readable**: Python 코드 관례 준수, 한국어 코드 주석
+- **Unified**: 기존 Pydantic BaseModel 패턴, 지연 임포트 패턴 일관 적용
+- **Secured**: 외부 입력 없음, SQL 인젝션 없음, 기존 동작 영향 최소화
+- **Trackable**: conventional commit `feat(surge)`, SPEC ID 참조

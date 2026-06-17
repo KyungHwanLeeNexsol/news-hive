@@ -1,6 +1,6 @@
 # SPEC-AI-051 인수 기준 (Acceptance Criteria)
 
-id: SPEC-AI-051 | version: 1.0.0 | status: draft | priority: high
+id: SPEC-AI-051 | version: 1.0.0 | status: completed | priority: high
 
 각 시나리오는 Given-When-Then 형식이며, 마지막 열은 pytest 검증 방법을 나타낸다.
 
