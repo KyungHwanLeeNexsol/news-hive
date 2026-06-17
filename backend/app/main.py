@@ -71,8 +71,9 @@ async def lifespan(app: FastAPI):
         git reset --hard로 auto.yaml이 삭제됐을 때 기동 시 자동 복원한다.
         복구 실패는 비치명적 — 경고 로그만 출력하고 기본 YAML로 동작한다.
         """
+        from pathlib import Path as _Path
         import yaml as _yaml
-        _auto_path = Path(__file__).parent / "surge_config" / "surge_detection.auto.yaml"
+        _auto_path = _Path(__file__).parent / "surge_config" / "surge_detection.auto.yaml"
         if _auto_path.exists():
             return  # 이미 존재하면 스킵
 

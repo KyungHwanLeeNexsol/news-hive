@@ -21,17 +21,12 @@ DDD PRESERVE: 기존 동작 특성화 테스트도 포함.
 
 from __future__ import annotations
 
-import json
 import shutil
-import tempfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Generator
 from unittest.mock import MagicMock, patch
 
-import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
 
 # ---------------------------------------------------------------------------
@@ -164,8 +159,6 @@ class TestAC3WindowExpansion:
     def test_ac_3_1_recall_zero_3days_window_expansion(self, db: Session, tmp_path: Path):
         """AC-3-1: 3일 연속 recall=0 + 모든 탐지기 기여=0 → news_window_hours +12."""
         from app.services.surge_auto_improver import analyze_and_improve
-        from app.surge_config.surge_settings import SurgeDetectionConfig, RegimeDetectorParams
-        from unittest.mock import MagicMock
 
         today = date(2026, 6, 17)
 
@@ -194,27 +187,26 @@ class TestAC3WindowExpansion:
 
         mock_cfg.regime_detector_params = {"BEAR": bear_params}
 
-        patch_calls: list = []
+        write_calls: list = []
 
-        def capture_patch(yaml_path, updates):
-            patch_calls.append((yaml_path, dict(updates)))
+        def capture_write(updates):
+            write_calls.append(dict(updates))
 
         with (
-            patch("app.services.surge_auto_improver._YAML_PATH", tmp_yaml),
             patch("app.services.surge_auto_improver.reload_surge_config"),
-            patch("app.services.surge_auto_improver._patch_yaml_values", side_effect=capture_patch),
+            patch("app.services.surge_auto_improver._write_auto_yaml", side_effect=capture_write),
             patch("app.services.surge_auto_improver.get_surge_config", return_value=mock_cfg),
         ):
             analyze_and_improve(db, today)
 
-        # news_window_hours 패치 호출 여부 확인
-        window_patches = [
-            (path, updates)
-            for path, updates in patch_calls
+        # news_window_hours 업데이트 호출 여부 확인
+        window_writes = [
+            updates
+            for updates in write_calls
             if any("news_window_hours" in k for k in updates)
         ]
-        assert len(window_patches) >= 1, (
-            f"news_window_hours 패치 기대, 실제 패치 호출: {patch_calls}"
+        assert len(window_writes) >= 1, (
+            f"news_window_hours 업데이트 기대, 실제 _write_auto_yaml 호출: {write_calls}"
         )
 
     def test_ac_3_2_window_ceiling_48(self):
@@ -228,7 +220,6 @@ class TestAC3WindowExpansion:
     def test_ac_3_3_recall_positive_no_window_change(self, db: Session):
         """AC-3-3: recall > 0이면 윈도우 확장 없음."""
         from app.services.surge_auto_improver import analyze_and_improve
-        from unittest.mock import MagicMock
 
         today = date(2026, 6, 17)
 
@@ -624,7 +615,6 @@ class TestPreserveExistingBehavior:
     def test_preserve_auto_improver_min_score_logic(self, db: Session):
         """PRESERVE: recall < 0.30이면 min_score -0.02 조정 기존 로직 유지."""
         from app.services.surge_auto_improver import analyze_and_improve
-        from unittest.mock import MagicMock
 
         today = date(2026, 6, 17)
 

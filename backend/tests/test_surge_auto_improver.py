@@ -5,23 +5,18 @@ T-015에 따른 가중치 정규화, 클램프, 일일 캡, R11/R12/R6 로직 �
 
 from __future__ import annotations
 
-import json
 import tempfile
 from datetime import date, timedelta
-from decimal import Decimal
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 from sqlalchemy.orm import Session
 
-from app.models.surge_actual_outcome import SurgeActualOutcome
 from app.models.surge_auto_improvement_log import SurgeAutoImprovementLog
 from app.models.surge_prediction_evaluation import SurgePredictionEvaluation
 from app.services.surge_auto_improver import (
     _parse_detector_contributions,
     _patch_yaml_values,
-    _replace_yaml_value,
     analyze_and_improve,
     format_telegram_report,
 )
@@ -428,7 +423,7 @@ class TestR12AutoRollback:
             logs = analyze_and_improve(db, today)
 
         # rollback 로그 존재 확인
-        rollback_logs = [l for l in logs if l.rationale == "auto_rollback"]
+        rollback_logs = [log for log in logs if log.rationale == "auto_rollback"]
         assert len(rollback_logs) > 0, "자동 롤백 로그가 생성되어야 함"
 
     def test_rollback_restores_old_value(self, db):
@@ -461,7 +456,7 @@ class TestR12AutoRollback:
         ):
             logs = analyze_and_improve(db, today)
 
-        rollback_logs = [l for l in logs if l.rationale == "auto_rollback"]
+        rollback_logs = [log for log in logs if log.rationale == "auto_rollback"]
         if rollback_logs:
             rl = rollback_logs[0]
             # old와 new가 교체됨

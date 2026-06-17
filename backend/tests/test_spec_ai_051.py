@@ -5,7 +5,6 @@ T-010 AC-001 ~ AC-011 전체 검증.
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from typing import Generator
 from unittest.mock import MagicMock, patch
@@ -393,7 +392,7 @@ class TestDetectGapUpRunners:
         # 섹터 + 리더 종목 + 피어 2개 생성
         sector = _make_sector(db, "반도체")
         leader = _make_stock(db, "000010", "리더주식", market_cap=5_000_000_000_000, sector_id=sector.id)
-        peer1 = _make_stock(db, "000020", "피어주식1", market_cap=3_000_000_000_000, sector_id=sector.id)
+        _make_stock(db, "000020", "피어주식1", market_cap=3_000_000_000_000, sector_id=sector.id)
         _make_stock(db, "000030", "피어주식2", market_cap=2_000_000_000_000, sector_id=sector.id)
 
         # 당일 리더 시그널 등록
@@ -417,7 +416,7 @@ class TestDetectGapUpRunners:
 
         sector = _make_sector(db, "반도체")
         leader = _make_stock(db, "000010", "리더주식", market_cap=5_000_000_000_000, sector_id=sector.id)
-        peer1 = _make_stock(db, "000020", "피어주식1", market_cap=3_000_000_000_000, sector_id=sector.id)
+        _make_stock(db, "000020", "피어주식1", market_cap=3_000_000_000_000, sector_id=sector.id)
 
         _make_fund_signal(db, leader.id, signal_type="surge_candidate", confidence=0.85)
         db.commit()

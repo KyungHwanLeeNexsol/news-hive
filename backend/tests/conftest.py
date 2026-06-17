@@ -193,6 +193,38 @@ def client(db: Session) -> TestClient:
 
 
 # ---------------------------------------------------------------------------
+# surge_config 격리 픽스처
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _surge_auto_yaml_isolation():
+    """각 테스트를 surge_detection.auto.yaml 오염으로부터 격리한다.
+
+    test_surge_auto_improver.py의 analyze_and_improve()가 auto.yaml을 생성·reload하면
+    후속 테스트의 get_surge_config() 싱글턴이 오염될 수 있다.
+    각 테스트 전후에 auto.yaml을 삭제하고 캐시를 리셋하여 기본 YAML 설정으로 복원한다.
+    """
+    from pathlib import Path
+    from app.surge_config.surge_settings import reload_surge_config
+
+    auto_path = (
+        Path(__file__).parent.parent / "app" / "surge_config" / "surge_detection.auto.yaml"
+    )
+
+    # 테스트 전: 이전 테스트가 남긴 auto.yaml 정리
+    if auto_path.exists():
+        auto_path.unlink()
+        reload_surge_config()
+
+    yield
+
+    # 테스트 후: 현재 테스트가 생성한 auto.yaml 정리
+    if auto_path.exists():
+        auto_path.unlink()
+        reload_surge_config()
+
+
+# ---------------------------------------------------------------------------
 # 팩토리 픽스처 -- 테스트 데이터 생성 헬퍼
 # ---------------------------------------------------------------------------
 
