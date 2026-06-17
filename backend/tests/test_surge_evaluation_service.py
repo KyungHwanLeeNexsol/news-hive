@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 from unittest.mock import patch
 
 import pytest
 from sqlalchemy.orm import Session
 
 from app.models.surge_actual_outcome import SurgeActualOutcome
-from app.models.surge_prediction_evaluation import SurgePredictionEvaluation
 
 
 # ---------------------------------------------------------------------------
