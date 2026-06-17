@@ -4,6 +4,47 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Featured — SPEC-AI-050: 급등예측 커버리지 구조적 개선 (2026-06-17)
+
+5가지 구조적 원인으로 인한 급등예측 recall=0% 문제를 해결하는 5개 요구사항을 구현했습니다.
+
+#### REQ-1: 요일 기반 동적 news_window_hours (커밋 `c2fb207`)
+
+- **문제**: 월요일 실행 시 news_window_hours=12h로 금요일 오후~토요일 뉴스가 포착 범위 밖
+- **수정**: `_resolve_dynamic_news_window(base_hours, run_dt)` 헬퍼 추가 — 직전 거래일이 2역일 이상이면 `min(72, base_hours×4)` 확장 (예: 12h → 48h)
+- **적용**: `detect_volume_surge_news_combo` 내 VolumeNewsComboConfig 생성 시 동적 윈도우 주입
+
+#### REQ-2: BEAR 레짐 news_window_hours 완화 (커밋 `c2fb207`)
+
+- **문제**: `surge_detection.yaml` BEAR 레짐 `news_window_hours: 12` — 약세장일수록 뉴스 포착이 더욱 제한
+- **수정**: `BEAR.news_window_hours: 12 → 24`
+- **추가**: 자가개선 루프가 BEAR 레짐 윈도우를 24h 미만으로 설정 시도하면 자동 클램프
+
+#### REQ-3: 자가개선 루프 레짐 윈도우 확장 (커밋 `c2fb207`)
+
+- **문제**: 자가개선 루프(`analyze_and_improve`)가 `min_score`만 조정하고 recall=0 지속 시 근본 원인인 뉴스 윈도우는 건드리지 않음
+- **버그**: `_replace_yaml_value`가 정수값을 `f"{:.4f}"` 형식(예: "24.0000")으로 기록
+- **수정 1**: `_replace_yaml_value` int 타입 감지 분기 추가 → `str(int)` 포맷 사용
+- **수정 2**: recall=0 3일 연속 + 탐지기 contribution=0 → 활성 레짐 `news_window_hours +12h` (최대 48h), SurgeAutoImprovementLog 기록, R12 롤백 호환
+
+#### REQ-4: group_cascade 정밀도 가드 (커밋 `c2fb207`)
+
+- **문제**: `group_cascade` 탐지기가 유효 신뢰도(flagship_prob × decay_factor) 낮은 계열사 종목에 단독 신호를 과다 생성
+- **수정**: `GroupCascadeConfig`에 `require_companion_detector: bool = True`, `companion_required_below_prob: float = 0.4` 필드 추가
+- **동작**: 유효 신뢰도 < 0.4 이고 동반 탐지기 시그널 없으면 cascade 신호 차단
+
+#### REQ-5: weekend_gap_up 신규 탐지기 (커밋 `c2fb207`)
+
+- **추가**: `detect_weekend_gap_up_signals()` — 최근 10거래일 급등 이력(`was_surge=True`) + 활성 섹터/테마 매칭 종목 탐지
+- **앙상블 가중치**: `weekend_gap_up: 0.10` 신설, `legacy_detectors: 0.10 → 0.00`
+- **배선**: `fund_manager._run_coverage_expansion`에 try/except 격리 추가
+- **가드**: `_is_weekend_gap_up_day()` — 월요일/연휴 직후에만 활성화
+
+#### 테스트
+
+- `backend/tests/test_spec_ai_050.py` 신규 — 25개 인수 기준(AC) + 특성화 테스트 전체 통과
+- 전체 테스트 스위트: 1511 passed, 0 failed (이전 15개 실패 → 0개)
+
 ### Fixed — Naver 모바일 API 엔드포인트 교체 + PendingRollbackError 방어 (2026-06-16)
 
 Naver `/integration` 엔드포인트가 `stockInfo: {}` 빈 객체를 반환하도록 변경되어 `price_at_signal`이 전량 NULL로 기록되던 문제와 SSL 드롭 시 `_run_surge_collect_outcomes`가 `PendingRollbackError`로 실패하던 문제를 수정했습니다.
