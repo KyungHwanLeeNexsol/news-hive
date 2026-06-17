@@ -64,6 +64,76 @@ async def lifespan(app: FastAPI):
     # Startup: run migrations synchronously (fast, required before serving)
     _run_migrations()
 
+    # auto.yaml 복구: 파일이 없으면 SurgeAutoImprovementLog에서 최신값 재생성
+    def _restore_auto_yaml():
+        """배포 후 surge_detection.auto.yaml이 사라진 경우 DB에서 복구한다.
+
+        git reset --hard로 auto.yaml이 삭제됐을 때 기동 시 자동 복원한다.
+        복구 실패는 비치명적 — 경고 로그만 출력하고 기본 YAML로 동작한다.
+        """
+        import yaml as _yaml
+        _auto_path = Path(__file__).parent / "surge_config" / "surge_detection.auto.yaml"
+        if _auto_path.exists():
+            return  # 이미 존재하면 스킵
+
+        _logger = logging.getLogger(__name__)
+        _logger.info("auto.yaml 없음 — SurgeAutoImprovementLog에서 복구 시도")
+
+        try:
+            from app.database import SessionLocal
+            from app.models.surge_auto_improvement_log import SurgeAutoImprovementLog
+            from sqlalchemy import func as sqlfunc
+
+            db = SessionLocal()
+            try:
+                # 각 parameter_path별 최신 new_value 조회
+                subq = (
+                    db.query(
+                        SurgeAutoImprovementLog.parameter_path,
+                        sqlfunc.max(SurgeAutoImprovementLog.applied_at).label("latest_at"),
+                    )
+                    .group_by(SurgeAutoImprovementLog.parameter_path)
+                    .subquery()
+                )
+                rows = (
+                    db.query(SurgeAutoImprovementLog)
+                    .join(
+                        subq,
+                        (SurgeAutoImprovementLog.parameter_path == subq.c.parameter_path)
+                        & (SurgeAutoImprovementLog.applied_at == subq.c.latest_at),
+                    )
+                    .all()
+                )
+
+                if not rows:
+                    _logger.info("SurgeAutoImprovementLog 비어있음 — auto.yaml 복구 불필요")
+                    return
+
+                # dot-path → 중첩 dict 구성 (surge_detection 최상위 키 포함)
+                auto_data: dict = {"surge_detection": {}}
+                for row in rows:
+                    parts = ["surge_detection"] + row.parameter_path.split(".")
+                    target = auto_data
+                    for key in parts[:-1]:
+                        if key not in target or not isinstance(target[key], dict):
+                            target[key] = {}
+                        target = target[key]
+                    target[parts[-1]] = round(float(row.new_value), 4)
+
+                with open(_auto_path, "w", encoding="utf-8") as f:
+                    f.write("# surge_detection.auto.yaml — 자동 복구 (SurgeAutoImprovementLog 기반)\n")
+                    _yaml.dump(auto_data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+                from app.surge_config.surge_settings import reload_surge_config
+                reload_surge_config()
+                _logger.info("auto.yaml 복구 완료: %d개 파라미터", len(rows))
+            finally:
+                db.close()
+        except Exception as exc:
+            logging.getLogger(__name__).warning("auto.yaml 복구 실패 (비중요): %s", exc)
+
+    _restore_auto_yaml()
+
     # Seed sectors + stocks in background (lightweight JSON read)
     def _run_seed():
         _logger = logging.getLogger(__name__)

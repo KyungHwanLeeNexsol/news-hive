@@ -18,6 +18,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from sqlalchemy import func as sqlfunc
 from sqlalchemy.orm import Session
 
@@ -30,8 +32,10 @@ from app.surge_config.surge_settings import get_surge_config, reload_surge_confi
 
 logger = logging.getLogger(__name__)
 
-# surge_detection.yaml 경로
+# surge_detection.yaml 경로 (참조용 — 직접 수정하지 않음)
 _YAML_PATH = Path(__file__).parent.parent / "surge_config" / "surge_detection.yaml"
+# 자동 개선 오버라이드 파일 (git reset --hard에서 보호, .gitignore 등록됨)
+_AUTO_YAML_PATH = Path(__file__).parent.parent / "surge_config" / "surge_detection.auto.yaml"
 
 # 탐지기 이름 목록 (YAML 가중치 키와 동일) — 자동 개선 대상 탐지기
 # @MX:NOTE: [AUTO] SPEC-AI-050 REQ-5 — weekend_gap_up은 커버리지 확장 탐지기로 자동 개선(가중치 조정) 제외
@@ -150,6 +154,38 @@ def _replace_yaml_value(lines: list[str], parts: list[str], new_val: float) -> l
 
     logger.warning("YAML 패치 실패: 경로 '%s'를 찾을 수 없음", ".".join(parts))
     return result
+
+
+def _write_auto_yaml(updates: dict[str, float]) -> None:
+    """auto.yaml에 mutable 설정값을 누적 저장한다 (배포 후에도 유지됨).
+
+    # @MX:NOTE: [AUTO] 메인 YAML 대신 auto.yaml에만 기록. git reset --hard에서 보호됨.
+
+    updates 형식: {"ensemble.weights.theme_cluster": 0.25, "ensemble.min_score_for_signal": 0.43}
+    dot-path는 surge_detection 아래 경로 (surge_detection 키 제외).
+    기존 auto.yaml의 값을 로드한 후 덮어쓰는 방식으로 누적 저장한다.
+    """
+    # 기존 auto.yaml 로드 (없으면 빈 dict)
+    auto_data: dict = {}
+    if _AUTO_YAML_PATH.exists():
+        with open(_AUTO_YAML_PATH, encoding="utf-8") as f:
+            auto_data = yaml.safe_load(f) or {}
+
+    # dot-path 업데이트: "ensemble.weights.theme_cluster" → surge_detection.ensemble.weights.theme_cluster
+    for dot_path, new_val in updates.items():
+        parts = ["surge_detection"] + dot_path.split(".")
+        target = auto_data
+        for key in parts[:-1]:
+            if key not in target or not isinstance(target[key], dict):
+                target[key] = {}
+            target = target[key]
+        target[parts[-1]] = round(float(new_val), 4)
+
+    with open(_AUTO_YAML_PATH, "w", encoding="utf-8") as f:
+        f.write("# surge_detection.auto.yaml — 자동 생성 파일 (수동 편집 금지)\n")
+        f.write("# 배포 시 git reset --hard에서 보호됨 (.gitignore). 자동개선 누적 설정.\n")
+        yaml.dump(auto_data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+    logger.info("auto.yaml 업데이트: %s", list(updates.keys()))
 
 
 def analyze_and_improve(
@@ -395,12 +431,12 @@ def analyze_and_improve(
 
             db.commit()
 
-            # 롤백 값을 실제 YAML에 적용
+            # 롤백 값을 auto.yaml에 적용 (메인 YAML은 수정하지 않음)
             rollback_updates: dict[str, float] = {}
             for prev_log in prev_logs:
                 rollback_updates[prev_log.parameter_path] = prev_log.old_value
 
-            _patch_yaml_values(str(_YAML_PATH), rollback_updates)
+            _write_auto_yaml(rollback_updates)
             reload_surge_config()
 
             return logs
@@ -433,7 +469,7 @@ def analyze_and_improve(
             else:
                 new_window = min(48, current_window + 12)
                 regime_key = f"regime_detector_params.{_current_regime}.news_window_hours"
-                _patch_yaml_values(str(_YAML_PATH), {regime_key: new_window})
+                _write_auto_yaml({regime_key: float(new_window)})
                 reload_surge_config()
                 _window_log = SurgeAutoImprovementLog(
                     evaluation_date=trading_date,
@@ -478,9 +514,9 @@ def analyze_and_improve(
             yaml_updates[key] = 24
 
     if yaml_updates:
-        _patch_yaml_values(str(_YAML_PATH), yaml_updates)
+        _write_auto_yaml(yaml_updates)
         reload_surge_config()
-        logger.info("YAML 업데이트 완료: %s", list(yaml_updates.keys()))
+        logger.info("auto.yaml 업데이트 완료: %s", list(yaml_updates.keys()))
 
     # ---------------------------------------------------------------------------
     # Step 7 — 로그 기록 (R7)

@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 
 # 설정 파일 경로 (이 파일과 동일 디렉토리)
 _CONFIG_PATH = Path(__file__).parent / "surge_detection.yaml"
+# 자동 개선 오버라이드 파일 (git reset --hard에서 보호됨, .gitignore에 추가됨)
+_AUTO_CONFIG_PATH = Path(__file__).parent / "surge_detection.auto.yaml"
 
 
 class RegimeDetectorParams(BaseModel):
@@ -436,10 +438,32 @@ class CoverageDashboardConfig(BaseModel):
     top_missed_timeout_seconds: float = 15.0
 
 
+def _deep_merge(base: dict, override: dict) -> dict:
+    """두 딕셔너리를 재귀적으로 병합한다. override 값이 우선한다."""
+    result = base.copy()
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
 def _load_config_from_yaml(path: Path) -> SurgeDetectionConfig:
-    """YAML 파일에서 SurgeDetectionConfig를 로드한다."""
+    """YAML 파일에서 SurgeDetectionConfig를 로드한다.
+
+    surge_detection.auto.yaml이 존재하면 deep_merge로 오버라이드를 적용한다.
+    auto.yaml은 배포 시 git reset --hard에서 보호되므로 자동개선 값이 유지된다.
+    """
     with open(path, encoding="utf-8") as f:
         raw: dict[str, Any] = yaml.safe_load(f)
+
+    if _AUTO_CONFIG_PATH.exists():
+        with open(_AUTO_CONFIG_PATH, encoding="utf-8") as f:
+            auto_raw: dict[str, Any] = yaml.safe_load(f) or {}
+        if auto_raw:
+            raw = _deep_merge(raw, auto_raw)
+            logger.debug("auto.yaml 오버라이드 적용: %s", _AUTO_CONFIG_PATH)
 
     surge_raw = raw.get("surge_detection", {})
     return SurgeDetectionConfig.model_validate(surge_raw)

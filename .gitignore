@@ -219,3 +219,9 @@ frontend/node_modules/
 frontend/.next/
 frontend/out/
 CLAUDE.local.md
+
+# ===========================================
+# Surge Auto-Improvement Override
+# ===========================================
+# 배포 시 git reset --hard에서 보호 — 자동개선 누적 설정 유지
+backend/app/surge_config/surge_detection.auto.yaml
