@@ -115,6 +115,10 @@ class EnsembleWeightsConfig(BaseModel):
     legacy_detectors: float
     # SPEC-AI-039 REQ-039-002: 뉴스 지연 반응 탐지기 가중치
     news_delayed: float = 0.0
+    # SPEC-AI-050 REQ-5: 주말 갭업 탐지기 가중치 (커버리지 확장용, 앙상블 합산에는 포함)
+    # @MX:NOTE: [AUTO] SPEC-AI-050 REQ-5 — weekend_gap_up은 coverage-expansion 탐지기. 가중치 필드는 합산 검증용
+    # @MX:SPEC: SPEC-AI-050 REQ-5
+    weekend_gap_up: float = 0.10
 
 
 class EnsembleConfig(BaseModel):
@@ -280,11 +284,11 @@ class SurgeDetectionConfig(BaseModel):
     # @MX:NOTE: [AUTO] SPEC-AI-042 — 갭 필터 임계값. 변경 시 surge_detection.yaml에서만 조정
     gap_entry_threshold: float = 0.05
 
-    # @MX:ANCHOR: [AUTO] 앙상블 가중치 합산 검증 — 5개 탐지기 가중치 합산 반드시 1.0
+    # @MX:ANCHOR: [AUTO] 앙상블 가중치 합산 검증 — 6개 탐지기 가중치 합산 반드시 1.0
     # @MX:REASON: 가중치 합산 != 1.0 이면 앙상블 스코어 범위가 0~1을 벗어나 시그널 임계값 판정이 왜곡됨
     @model_validator(mode="after")
     def validate_ensemble_weights(self) -> "SurgeDetectionConfig":
-        """앙상블 가중치 합산이 1.0이어야 한다 (SPEC-AI-039: news_delayed 포함 5개)."""
+        """앙상블 가중치 합산이 1.0이어야 한다 (SPEC-AI-050: weekend_gap_up 포함 6개)."""
         w = self.ensemble.weights
         total = (
             w.theme_cluster
@@ -292,6 +296,7 @@ class SurgeDetectionConfig(BaseModel):
             + w.disclosure_pattern
             + w.legacy_detectors
             + w.news_delayed
+            + w.weekend_gap_up
         )
         if abs(total - 1.0) > 0.001:
             raise ValueError(
@@ -384,6 +389,12 @@ class GroupCascadeConfig(BaseModel):
     min_prefix_len: int = 2                     # 그룹 식별 접두사 최소 길이
     max_cascade_per_flagship: int = 3           # 대장주당 최대 계열사 수
     decay_factor: float = 0.7                   # confidence decay 계수
+    # SPEC-AI-050 REQ-4: companion guard — effective_confidence < companion_required_below_prob 시
+    # 다른 탐지기 시그널(companion)이 없으면 cascade 시그널 차단
+    # @MX:NOTE: [AUTO] SPEC-AI-050 REQ-4 — 저확률 단독 cascade 시그널 필터링 (기본값 인스턴스에서만 사용)
+    # @MX:SPEC: SPEC-AI-050 REQ-4
+    require_companion_detector: bool = True
+    companion_required_below_prob: float = 0.4
 
 
 class CoverageDashboardConfig(BaseModel):

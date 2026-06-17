@@ -55,11 +55,13 @@ surge_detection:
       # SPEC-AI-039 REQ-039-002: news_delayed 탐지기 추가 (0.15), 기존 가중치 재조정
       # theme_cluster: 0.28→0.25, volume_news_combo: 0.35→0.32
       # disclosure_pattern: 0.20→0.18, legacy_detectors: 0.17→0.10, news_delayed: 0.00→0.15
+      # SPEC-AI-050 REQ-5: legacy_detectors 0.10→0.00, weekend_gap_up 0.10 신규 추가 (합계 유지 1.0)
       theme_cluster: 0.25
       volume_news_combo: 0.32
       disclosure_pattern: 0.18
-      legacy_detectors: 0.10
+      legacy_detectors: 0.00
       news_delayed: 0.15
+      weekend_gap_up: 0.10
     min_score_for_signal: 0.45
     # 레짐별 앙상블 임계값 (SPEC-AI-017 REQ-001): 시장 레짐에 따라 차등 적용
     # BULL 장에서는 진입 문턱 낮춰 더 많은 시그널 허용 (0.38), SIDEWAYS/BEAR는 높임
@@ -95,7 +97,8 @@ surge_detection:
       volume_zscore_threshold: 2.5
       # 2026-06-05: 0.50→0.35 완화 — 대원제약 ADA 발표(neutral 뉴스 11건) 미탐지 분석 결과
       # neutral 뉴스도 포함해야 ADA/임상 류 이벤트 포착 가능
-      news_window_hours: 12
+      # SPEC-AI-050 REQ-2: 12→24 상향 — BEAR 국면 주말 직후 뉴스 커버리지 부족 보완, 24h 클램프 하한
+      news_window_hours: 24
       min_news_sentiment: 0.35
   price_query:
     batch_size: 10

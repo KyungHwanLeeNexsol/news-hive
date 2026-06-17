@@ -217,7 +217,12 @@ def test_characterize_group_cascade_ac001_flagship_prob_cascade_signals(db):
 # ---------------------------------------------------------------------------
 
 def test_characterize_group_cascade_ac002_intraday_flagship(db):
-    """AC-002: surge_prob=0.40(<0.70), intraday=23.73%>=12.0 AND 시총>=50000 → flagship 인정."""
+    """AC-002: surge_prob=0.40(<0.70), intraday=23.73%>=12.0 AND 시총>=50000 → flagship 인정.
+
+    SPEC-AI-050: require_companion_detector=True(기본값), confidence=0.40*0.7=0.28<0.4
+    → companion guard 차단으로 시그널 0건.
+    companion guard 비활성화(require_companion_detector=False) 시에는 시그널 발생.
+    """
     from app.services.surge_detector import detect_group_cascade_signals
 
     # 삼성전기 (대장주, 시총>=50000)
@@ -226,7 +231,9 @@ def test_characterize_group_cascade_ac002_intraday_flagship(db):
     _aff1 = _make_stock(db, "005930", "삼성전자", market_cap=3000000)
 
     surge_results = [_make_surge_result("009150", "삼성전기", 0.40)]
-    cfg = _make_config()
+
+    # require_companion_detector=False → SPEC-AI-050 이전 동작 복원
+    cfg = _make_config(require_companion_detector=False)
 
     # intraday 변동률 23.73% 모킹
     with patch(
