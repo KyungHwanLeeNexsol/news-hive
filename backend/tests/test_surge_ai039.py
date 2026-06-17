@@ -312,7 +312,9 @@ class TestEnsembleWeights:
     """AC-039-004: 앙상블 가중치 합산이 1.0이어야 한다."""
 
     def test_ensemble_weights_sum_to_1(self) -> None:
-        """theme(0.25) + combo(0.32) + disclosure(0.18) + legacy(0.10) + delayed(0.15) = 1.0."""
+        """theme(0.25) + combo(0.32) + disclosure(0.18) + legacy(0.00) + delayed(0.15) + wgu(0.10) = 1.0.
+        SPEC-AI-050: legacy_detectors 0.10→0.00, weekend_gap_up 0.10 신규 추가.
+        """
         cfg = get_surge_config()
         w = cfg.ensemble.weights
         total = (
@@ -321,18 +323,21 @@ class TestEnsembleWeights:
             + w.disclosure_pattern
             + w.legacy_detectors
             + w.news_delayed
+            + w.weekend_gap_up
         )
         assert abs(total - 1.0) <= 0.001, f"가중치 합산 1.0 기대, 실제: {total:.4f}"
 
     def test_individual_weights_match_spec(self) -> None:
-        """각 탐지기 가중치가 SPEC-AI-039 명세와 일치해야 한다."""
+        """각 탐지기 가중치가 SPEC-AI-050 명세와 일치해야 한다."""
         cfg = get_surge_config()
         w = cfg.ensemble.weights
         assert w.theme_cluster == 0.25, f"theme_cluster 0.25 기대, 실제: {w.theme_cluster}"
         assert w.volume_news_combo == 0.32, f"volume_news_combo 0.32 기대, 실제: {w.volume_news_combo}"
         assert w.disclosure_pattern == 0.18, f"disclosure_pattern 0.18 기대, 실제: {w.disclosure_pattern}"
-        assert w.legacy_detectors == 0.10, f"legacy_detectors 0.10 기대, 실제: {w.legacy_detectors}"
+        # SPEC-AI-050: legacy_detectors 0.10→0.00, weekend_gap_up 0.10 신규 추가
+        assert w.legacy_detectors == 0.00, f"legacy_detectors 0.00 기대, 실제: {w.legacy_detectors}"
         assert w.news_delayed == 0.15, f"news_delayed 0.15 기대, 실제: {w.news_delayed}"
+        assert w.weekend_gap_up == 0.10, f"weekend_gap_up 0.10 기대, 실제: {w.weekend_gap_up}"
 
     def test_validate_ensemble_weights_passes(self) -> None:
         """validate_ensemble_weights 모델 검증자가 통과해야 한다 (예외 없음)."""

@@ -464,7 +464,8 @@ class TestRegimeDetectorParamsModel:
         assert "BEAR" in config.regime_detector_params
         bear_params = config.regime_detector_params["BEAR"]
         assert bear_params.volume_zscore_threshold == 2.5  # SPEC-AI-038: 3.0 → 2.5
-        assert bear_params.news_window_hours == 12
+        # SPEC-AI-050 REQ-2: 12→24 상향 — BEAR 국면 주말 직후 뉴스 커버리지 부족 보완
+        assert bear_params.news_window_hours == 24
         # 2026-06-05: 0.50→0.35 완화 — 대원제약 ADA neutral 뉴스 미탐지 분석 결과
         assert bear_params.min_news_sentiment == 0.35
 

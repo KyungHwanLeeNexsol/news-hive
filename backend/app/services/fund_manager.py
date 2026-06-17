@@ -3900,3 +3900,15 @@ def _run_coverage_expansion(db: Session, surge_results: list[dict]) -> None:
         logger.info("[group_cascade] 완료 — %d건", len(cascade_signals))
     except Exception as e:
         logger.error("[group_cascade] 예외 발생: %s", e, exc_info=True)
+
+    # 8. SPEC-AI-050 REQ-5: 주말 갭업 탐지기 (커버리지 확장)
+    try:
+        from app.services.surge_detector import detect_weekend_gap_up_signals
+        from app.surge_config.surge_settings import get_surge_config as _get_cfg
+        _surge_cfg = _get_cfg()
+        weekend_signals = detect_weekend_gap_up_signals(db, _surge_cfg)
+        logger.info("[weekend_gap_up] 완료 — 후보 %d건", len(weekend_signals))
+        # weekend_gap_up 결과는 dict 목록으로 반환 (FundSignal 미생성 — 앙상블 외부 커버리지 정보)
+        # 향후 gather_surge_candidates와 통합 예정
+    except Exception as e:
+        logger.error("[weekend_gap_up] 탐지기 실패 (무시): %s", e, exc_info=True)

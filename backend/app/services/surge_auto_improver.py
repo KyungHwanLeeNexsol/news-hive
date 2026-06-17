@@ -33,8 +33,12 @@ logger = logging.getLogger(__name__)
 # surge_detection.yaml 경로
 _YAML_PATH = Path(__file__).parent.parent / "surge_config" / "surge_detection.yaml"
 
-# 탐지기 이름 목록 (YAML 가중치 키와 동일)
+# 탐지기 이름 목록 (YAML 가중치 키와 동일) — 자동 개선 대상 탐지기
+# @MX:NOTE: [AUTO] SPEC-AI-050 REQ-5 — weekend_gap_up은 커버리지 확장 탐지기로 자동 개선(가중치 조정) 제외
 _DETECTORS = ["theme_cluster", "volume_news_combo", "disclosure_pattern", "legacy_detectors", "news_delayed"]
+
+# 가중치 합산 검증 시 포함할 전체 탐지기 목록 (weekend_gap_up 포함)
+_ALL_WEIGHT_KEYS = [*_DETECTORS, "weekend_gap_up"]
 
 
 def _parse_detector_contributions(surge_metadata: dict[str, Any]) -> set[str]:
@@ -130,8 +134,12 @@ def _replace_yaml_value(lines: list[str], parts: list[str], new_val: float) -> l
                     comment = rest[comment_idx:]
                 else:
                     comment = ""
-                # 소수점 4자리로 포맷
-                new_line = line[: len(line) - len(stripped)] + f"{key_part} {new_val:.4f}{comment}\n"
+                # SPEC-AI-050 REQ-3: int 타입은 정수 포맷, float은 소수점 4자리
+                if isinstance(new_val, int) and not isinstance(new_val, bool):
+                    new_val_str = str(new_val)
+                else:
+                    new_val_str = f"{new_val:.4f}"
+                new_line = line[: len(line) - len(stripped)] + f"{key_part} {new_val_str}{comment}\n"
                 result[i] = new_line
                 return result
             else:
@@ -308,8 +316,10 @@ def analyze_and_improve(
             cap_total = sum(daily_capped.values())
             final_weight = {d: daily_capped[d] / cap_total for d in _DETECTORS}
 
-    # 사전 검증 (CRITICAL)
-    weight_sum = sum(final_weight.values())
+    # 사전 검증 (CRITICAL): _DETECTORS + weekend_gap_up(고정) 합산 = 1.0
+    # weekend_gap_up은 커버리지 확장 탐지기로 자동 개선 대상 외 → 현재 YAML 값 유지
+    _wgu_weight = cfg.ensemble.weights.weekend_gap_up
+    weight_sum = sum(final_weight.values()) + _wgu_weight
     assert abs(weight_sum - 1.0) <= 0.001, (
         f"앙상블 가중치 합산 오류: {weight_sum:.6f} (1.0이어야 함)"
     )
@@ -396,6 +406,53 @@ def analyze_and_improve(
             return logs
 
     # ---------------------------------------------------------------------------
+    # Step 5.5 — SPEC-AI-050 REQ-3: 3일 연속 recall=0 + 탐지기 기여=0 → 윈도우 확장
+    # ---------------------------------------------------------------------------
+    # 탐지기별 기여율 (detector_hit_rates: 탐지기명 → 기여율, 단 0분모이면 0.0)
+    detector_hit_rates: dict[str, float] = dict(hit_rates)
+
+    recent_3_recalls = recall_values[:3] if len(recall_values) >= 3 else []
+    all_zero_recall = len(recent_3_recalls) == 3 and all(r == 0.0 for r in recent_3_recalls)
+    all_zero_contrib = all(v == 0.0 for v in detector_hit_rates.values())
+
+    if all_zero_recall and all_zero_contrib:
+        # 현재 시장 레짐 조회 (가장 최근 평가일 기준)
+        _current_cfg = get_surge_config()
+        # BEAR 레짐 우선 (보수적), 없으면 SIDEWAYS
+        _candidate_regimes = list(_current_cfg.regime_detector_params.keys())
+        _current_regime = _candidate_regimes[0] if _candidate_regimes else "BEAR"
+
+        _regime_param = _current_cfg.regime_detector_params.get(_current_regime)
+        if _regime_param is not None:
+            current_window = _regime_param.news_window_hours
+            if current_window >= 48:
+                logger.info(
+                    "[REQ-3] 윈도우 상한 48h 도달 (%d) — 추가 확장 없음",
+                    current_window,
+                )
+            else:
+                new_window = min(48, current_window + 12)
+                regime_key = f"regime_detector_params.{_current_regime}.news_window_hours"
+                _patch_yaml_values(str(_YAML_PATH), {regime_key: new_window})
+                reload_surge_config()
+                _window_log = SurgeAutoImprovementLog(
+                    evaluation_date=trading_date,
+                    parameter_path=regime_key,
+                    old_value=float(current_window),
+                    new_value=float(new_window),
+                    rationale="recall=0 3일 연속 + 탐지기 기여=0 → coverage gap 보완 윈도우 확장",
+                    rolling_window_days=3,
+                )
+                db.add(_window_log)
+                logs.append(_window_log)
+                logger.info(
+                    "[REQ-3] 3일 연속 recall=0 + 탐지기 기여=0: %s %dh → %dh",
+                    regime_key,
+                    current_window,
+                    new_window,
+                )
+
+    # ---------------------------------------------------------------------------
     # Step 6 — YAML 대상 업데이트 (주석 보존 라인 패치)
     # ---------------------------------------------------------------------------
     yaml_updates: dict[str, float] = {}
@@ -410,6 +467,15 @@ def analyze_and_improve(
     # min_score 변경분
     if abs(new_min_score - current_min_score) > 1e-6:
         yaml_updates["ensemble.min_score_for_signal"] = new_min_score
+
+    # SPEC-AI-050 REQ-2 클램프: BEAR.news_window_hours < 24이면 24로 강제 조정
+    for key, val in list(yaml_updates.items()):
+        if "BEAR.news_window_hours" in key and val < 24:
+            logger.warning(
+                "[REQ-2 클램프] BEAR.news_window_hours %s < 24 → 24로 클램프",
+                val,
+            )
+            yaml_updates[key] = 24
 
     if yaml_updates:
         _patch_yaml_values(str(_YAML_PATH), yaml_updates)

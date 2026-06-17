@@ -421,6 +421,54 @@ _price_change_provider: Callable[[str], dict | None] | None = None
 
 
 # ---------------------------------------------------------------------------
+# SPEC-AI-050 REQ-1: 동적 뉴스 윈도우 헬퍼
+# ---------------------------------------------------------------------------
+
+def _resolve_dynamic_news_window(base_hours: int, run_dt: datetime) -> int:
+    """주말/연휴 직후 뉴스 윈도우를 동적으로 확장한다.
+
+    # @MX:NOTE: [AUTO] SPEC-AI-050 REQ-1 — 월요일 또는 직전 거래일과 2역일 이상 차이 시 윈도우 4배 확장 (최대 72h)
+    # @MX:SPEC: SPEC-AI-050 REQ-1
+
+    Args:
+        base_hours: 기본 news_window_hours (레짐 파라미터에서 가져옴)
+        run_dt: 실행 시각 (datetime)
+
+    Returns:
+        확장된 news_window_hours (역일 차이 < 2이면 base_hours 그대로)
+    """
+    from app.services.surge_trading_service import _get_prev_business_day
+
+    run_date = run_dt.date() if hasattr(run_dt, "date") else run_dt
+    prev_biz = _get_prev_business_day(run_date)
+    calendar_diff = (run_date - prev_biz).days
+
+    if calendar_diff >= 2:
+        expanded = min(72, base_hours * 4)
+        logger.info(
+            "[동적윈도우] 주말/연휴 직후 확장 적용: %dh → %dh (직전 거래일 %d역일 전)",
+            base_hours,
+            expanded,
+            calendar_diff,
+        )
+        return expanded
+    return base_hours
+
+
+def _is_weekend_gap_up_day(run_dt: datetime) -> bool:
+    """주말/연휴 직후 갭업 탐지 대상일 여부를 반환한다.
+
+    # @MX:NOTE: [AUTO] SPEC-AI-050 REQ-5 — 직전 거래일과 2역일 이상 차이 시 True
+    # @MX:SPEC: SPEC-AI-050 REQ-5
+    """
+    from app.services.surge_trading_service import _get_prev_business_day
+
+    run_date = run_dt.date() if hasattr(run_dt, "date") else run_dt
+    prev_biz = _get_prev_business_day(run_date)
+    return (run_date - prev_biz).days >= 2
+
+
+# ---------------------------------------------------------------------------
 # 탐지기 2: 거래량 이상 + 뉴스 콤보
 # ---------------------------------------------------------------------------
 
@@ -454,12 +502,18 @@ def detect_volume_surge_news_combo(
     cfg = config.volume_news_combo
     regime_params = config.regime_detector_params.get(market_regime)
     if regime_params is not None:
+        # SPEC-AI-050 REQ-1: 주말/연휴 직후 동적 윈도우 확장 적용
+        from zoneinfo import ZoneInfo as _ZI
+        _KST = _ZI("Asia/Seoul")
+        _run_dt = datetime.now(_KST)
+        _dynamic_window = _resolve_dynamic_news_window(regime_params.news_window_hours, _run_dt)
+
         # Pydantic 모델이므로 직접 필드 접근 (copy + 오버라이드)
         from app.surge_config.surge_settings import VolumeNewsComboConfig
         cfg = VolumeNewsComboConfig(
             volume_zscore_threshold=regime_params.volume_zscore_threshold,
             volume_baseline_days=cfg.volume_baseline_days,
-            news_window_hours=regime_params.news_window_hours,
+            news_window_hours=_dynamic_window,
             min_news_sentiment=regime_params.min_news_sentiment,
         )
     # @MX:NOTE: 운영환경(PostgreSQL)은 timezone-aware, 테스트(SQLite)는 naive — 양쪽 호환
@@ -2428,8 +2482,33 @@ def detect_group_cascade_signals(
 
             best_cascade[affiliate.id] = (stock_code, flagship_prob, confidence)
 
+    # SPEC-AI-050 REQ-4: companion guard 차단 카운터
+    companion_blocked = 0
+
     # best_cascade 기준으로 FundSignal 생성
     for cascade_stock_id, (flagship_code, flagship_prob, confidence) in best_cascade.items():
+        # SPEC-AI-050 REQ-4: companion guard — 저확률 cascade 단독 시그널 차단
+        if config.require_companion_detector and confidence < config.companion_required_below_prob:
+            existing_types = existing_today.get(cascade_stock_id, set())
+            # group_cascade 시그널만 있거나 시그널이 없으면 차단
+            non_cascade_types = existing_types - {"surge_candidate"}
+            has_companion = bool(non_cascade_types) or any(
+                st != "surge_candidate" for st in existing_types
+            )
+            # 오늘 이미 다른 탐지기(group_cascade 제외)에서 surge_candidate 시그널이 있는지 확인
+            # existing_today는 이미 오늘 전체 시그널을 포함하므로,
+            # 다른 탐지기 기여 여부는 surge_metadata에서 판단하기 어려움
+            # 따라서 단순히 오늘 어떤 시그널이라도 있으면 companion이 있다고 봄
+            has_companion = bool(existing_types)
+            if not has_companion:
+                companion_blocked += 1
+                logger.debug(
+                    "[group_cascade] companion 가드 차단: stock_id=%d confidence=%.3f",
+                    cascade_stock_id,
+                    confidence,
+                )
+                continue
+
         # flagship 이름 조회
         flagship_row = next(
             (r for r in surge_results if r.get("stock_code") == flagship_code), {}
@@ -2481,10 +2560,125 @@ def detect_group_cascade_signals(
         db.commit()
 
     logger.info(
-        "[group_cascade] flagship=%d cascade_eval=%d 생성=%d",
+        "[group_cascade] flagship=%d cascade_eval=%d 생성=%d companion_blocked=%d",
         num_flagships,
         num_candidates_evaluated,
         len(signals),
+        companion_blocked,
     )
 
     return signals
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-050 REQ-5: 주말 갭업 탐지기
+# ---------------------------------------------------------------------------
+
+def detect_weekend_gap_up_signals(
+    db: Session,
+    config: SurgeDetectionConfig,
+    run_dt: datetime | None = None,
+) -> list[dict]:
+    """주말/연휴 갭업 후보 탐지 — 최근 10거래일 급등 이력 + 활성 테마 섹터 매칭.
+
+    # @MX:NOTE: [AUTO] SPEC-AI-050 REQ-5 — _is_weekend_gap_up_day() False이면 즉시 []
+    # @MX:SPEC: SPEC-AI-050 REQ-5
+
+    월요일(또는 연휴 직후)에만 활성화되며, 최근 10거래일(영업일) 내 급등(was_surge=True)
+    종목 중 활성 뉴스 테마 섹터와 일치하는 종목을 후보로 반환한다.
+
+    Args:
+        db: SQLAlchemy 동기 세션
+        config: SurgeDetectionConfig
+        run_dt: 실행 시각 (None이면 현재 KST 시각 사용)
+
+    Returns:
+        surge_candidate dict 목록 (surge_basis=["weekend_gap_up"])
+    """
+    from zoneinfo import ZoneInfo as _ZI
+
+    _KST = _ZI("Asia/Seoul")
+
+    if run_dt is None:
+        run_dt = datetime.now(_KST)
+
+    if not _is_weekend_gap_up_day(run_dt):
+        logger.debug("[weekend_gap_up] 주말/연휴 직후 아님 — 스킵")
+        return []
+
+    from app.models.surge_actual_outcome import SurgeActualOutcome
+
+    # 최근 10거래일(역일 기준 약 15일) 급등 이력 조회
+    cutoff_date = run_dt.date() - timedelta(days=15)
+
+    try:
+        surged_rows = (
+            db.query(
+                SurgeActualOutcome.stock_code,
+                SurgeActualOutcome.trading_date,
+            )
+            .filter(
+                SurgeActualOutcome.was_surge.is_(True),
+                SurgeActualOutcome.trading_date >= cutoff_date,
+            )
+            .all()
+        )
+    except Exception as e:
+        logger.warning("[weekend_gap_up] 급등 이력 조회 실패 (스킵): %s", e)
+        return []
+
+    if not surged_rows:
+        logger.debug("[weekend_gap_up] 최근 10거래일 급등 종목 없음")
+        return []
+
+    surged_codes: set[str] = {row.stock_code for row in surged_rows}
+
+    # 테마 클러스터 설정에서 활성 섹터 목록 추출
+    sector_theme_map = config.theme_cluster.sector_theme_map
+    # 값(섹터 목록)을 평탄화하여 활성 섹터 집합 생성
+    active_sectors: set[str] = set()
+    for sectors_list in sector_theme_map.values():
+        active_sectors.update(sectors_list)
+
+    results: list[dict] = []
+
+    for stock_code in surged_codes:
+        # 종목 정보 조회
+        stock = (
+            db.query(Stock)
+            .filter(Stock.stock_code == stock_code)
+            .first()
+        )
+        if stock is None:
+            continue
+
+        # 섹터 매칭 (Stock → Sector)
+        sector_match = False
+        if stock.sector_id is not None:
+            sector_obj = (
+                db.query(Sector)
+                .filter(Sector.id == stock.sector_id)
+                .first()
+            )
+            if sector_obj and sector_obj.name in active_sectors:
+                sector_match = True
+
+        if not sector_match:
+            continue
+
+        results.append({
+            "stock_code": stock_code,
+            "stock_id": stock.id,
+            "name": stock.name,
+            "surge_basis": ["weekend_gap_up"],
+            "surge_probability_score": 0.5,
+            "weekend_gap_up_score": 0.5,
+        })
+
+    logger.info(
+        "[weekend_gap_up] 후보 %d개 탐지 (surged_codes=%d, active_sectors=%d)",
+        len(results),
+        len(surged_codes),
+        len(active_sectors),
+    )
+    return results

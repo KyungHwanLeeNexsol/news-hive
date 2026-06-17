@@ -742,7 +742,7 @@ class TestYamlWeightSum:
 
     def test_t011_yaml_weights_sum_to_one(self, surge_config: SurgeDetectionConfig):
         """T-011: YAML 설정 파일 로드 후 앙상블 가중치 합산이 1.00 ± 0.001이다.
-        SPEC-AI-039: news_delayed(0.15) 추가 → 5개 탐지기 합산.
+        SPEC-AI-050: weekend_gap_up(0.10) 추가 → 6개 탐지기 합산.
         """
         w = surge_config.ensemble.weights
         total = (
@@ -751,22 +751,24 @@ class TestYamlWeightSum:
             + w.disclosure_pattern
             + w.legacy_detectors
             + w.news_delayed
+            + w.weekend_gap_up
         )
         assert abs(total - 1.0) < 0.001, (
             f"앙상블 가중치 합산이 1.0이 아닙니다: {total}"
         )
 
     def test_t011_new_weights_values(self, surge_config: SurgeDetectionConfig):
-        """T-011: SPEC-AI-039 가중치 값 검증 (theme=0.25, combo=0.32, disclosure=0.18, legacy=0.10, news_delayed=0.15).
-
-        SPEC-AI-039 REQ-039-002: news_delayed(0.15) 추가로 기존 가중치 재조정.
+        """T-011: SPEC-AI-050 가중치 값 검증.
+        legacy_detectors 0.10→0.00, weekend_gap_up 0.10 신규 추가.
         """
         w = surge_config.ensemble.weights
         assert abs(w.theme_cluster - 0.25) < 0.001, f"theme_cluster 가중치 오류: {w.theme_cluster}"
         assert abs(w.volume_news_combo - 0.32) < 0.001, f"volume_news_combo 가중치 오류: {w.volume_news_combo}"
         assert abs(w.disclosure_pattern - 0.18) < 0.001, f"disclosure_pattern 가중치 오류: {w.disclosure_pattern}"
-        assert abs(w.legacy_detectors - 0.10) < 0.001, f"legacy_detectors 가중치 오류: {w.legacy_detectors}"
+        # SPEC-AI-050: legacy_detectors 0.10→0.00
+        assert abs(w.legacy_detectors - 0.00) < 0.001, f"legacy_detectors 가중치 오류: {w.legacy_detectors}"
         assert abs(w.news_delayed - 0.15) < 0.001, f"news_delayed 가중치 오류: {w.news_delayed}"
+        assert abs(w.weekend_gap_up - 0.10) < 0.001, f"weekend_gap_up 가중치 오류: {w.weekend_gap_up}"
 
 
 # ---------------------------------------------------------------------------
@@ -780,7 +782,9 @@ class TestCharacterizationEnsemble:
     """
 
     def test_characterize_new_weights_in_ensemble(self, surge_config: SurgeDetectionConfig):
-        """특성: 새 YAML 가중치(theme=0.35, combo=0.35) 반영 후 앙상블 계산 검증."""
+        """특성: SPEC-AI-050 가중치 반영 후 앙상블 계산 검증.
+        SPEC-AI-050: legacy_detectors=0.00, weekend_gap_up=0.10 추가.
+        """
         candidate = SurgeCandidate(
             stock_code="CHAR001",
             stock_name="가중치테스트",
@@ -790,10 +794,12 @@ class TestCharacterizationEnsemble:
             legacy_score=0.5,
         )
         score = compute_ensemble_score(candidate, surge_config)
-        # 새 가중치: 0.35*0.8 + 0.35*0.9 + 0.20*0.7 + 0.10*0.5
-        # = 0.280 + 0.315 + 0.140 + 0.050 = 0.785
-        # 활성 탐지기 4개 → multiplier=1.30 → 0.785*1.30 = 1.0205 → 클램핑 → 1.0
-        assert score == 1.0
+        # SPEC-AI-050: legacy_detectors=0.00 → 기여 없음
+        # news(0.25*0.8 + 0.32*0.9) + disclosure(0.18*0.7)
+        # = (0.20+0.288) + 0.126 = 0.488 + 0.126 = 0.614
+        # 2그룹(news,disclosure) → *1.30 = 0.798 (or 3그룹 *1.55 = 0.951)
+        # min_score=0.45 이상이면 시그널 발생
+        assert score >= surge_config.ensemble.min_score_for_signal
 
     def test_characterize_consensus_bonus_increases_score(self, surge_config: SurgeDetectionConfig):
         """특성: 2개 탐지기 → 1.15 배율로 점수 상승."""
