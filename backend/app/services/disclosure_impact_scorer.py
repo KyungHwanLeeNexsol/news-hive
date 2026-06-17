@@ -80,6 +80,31 @@ _MNA_KEYWORDS = [
 ]
 _MNA_BONUS = 20
 
+# SPEC-AI-051: 공시 키워드 Tier 배수 사전
+# Tier 1 (×2.0): 최고가치 이벤트
+_KEYWORD_TIER1 = ["FDA 승인", "세계 최초", "독점 공급", "최대주주 변경", "국가전략기술", "국책사업 선정"]
+# Tier 2 (×1.5): 고가치 기업 이벤트
+_KEYWORD_TIER2 = ["공급계약 체결", "지분 인수", "합병", "MOU 체결", "수주", "자사주 소각"]
+# Tier 3 (×1.2): 중가치 이벤트
+_KEYWORD_TIER3 = ["신제품 출시", "신규 수주", "매출 급증", "계열사 지원"]
+
+
+def _get_keyword_tier_multiplier(report_name: str, ai_summary: str) -> float:
+    """report_name + ai_summary에서 최고 Tier 키워드 1개의 배수 반환.
+
+    매칭 없으면 1.0 반환 (배수 없음).
+    누적 적용 없이 최고 Tier 1개만 사용.
+    """
+    text = report_name + " " + ai_summary
+    if any(kw in text for kw in _KEYWORD_TIER1):
+        return 2.0
+    if any(kw in text for kw in _KEYWORD_TIER2):
+        return 1.5
+    if any(kw in text for kw in _KEYWORD_TIER3):
+        return 1.2
+    return 1.0
+
+
 # @MX:NOTE: 지주사 임시 블랙리스트 — 섹터 파급 후보에서 제외
 # @MX:REASON: 지주사는 본업 노출이 희석되어 있어 섹터 단위 이벤트에 연동되지 않음.
 #             stocks 테이블에 company_type 컬럼 도입 전까지 임시 운영
@@ -160,6 +185,8 @@ def score_disclosure_impact(
         if contract_amt:
             ratio = contract_amt / market_cap_億
             score = min(ratio * 500, 100.0)
+            # SPEC-AI-051 REQ-AI051-005: Tier 배수 적용 (루틴 거버넌스 경로 제외)
+            score = min(score * _get_keyword_tier_multiplier(report_name, ai_summary), 100.0)
             return round(score, 1)
 
     # 실적변동 (REQ-DISC-003): AI 요약에서 변화율 추출
@@ -168,7 +195,9 @@ def score_disclosure_impact(
         if pct_m:
             try:
                 pct = float(pct_m.group(1))
-                return round(min(pct, 100.0), 1)
+                # SPEC-AI-051 REQ-AI051-005: Tier 배수 적용
+                multiplied = round(min(pct * _get_keyword_tier_multiplier(report_name, ai_summary), 100.0), 1)
+                return multiplied
             except ValueError:
                 pass
 
@@ -179,7 +208,9 @@ def score_disclosure_impact(
     if report_type == "기업지배구조" and any(kw in report_name for kw in _MNA_KEYWORDS):
         base += _MNA_BONUS
 
-    return float(base)
+    # SPEC-AI-051 REQ-AI051-005: Tier 배수 적용
+    multiplier = _get_keyword_tier_multiplier(report_name, ai_summary)
+    return round(min(float(base) * multiplier, 100.0), 1)
 
 
 async def capture_baseline_price(disclosure: Disclosure) -> int | None:

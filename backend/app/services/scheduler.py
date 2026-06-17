@@ -705,6 +705,54 @@ def _run_surge_daily_report():
         db.close()
 
 
+def _run_bollinger_squeeze_detect():
+    """볼린저 밴드 스퀴즈 탐지 (평일 15:10 KST, 15:20 시그널 생성 직전).
+
+    SPEC-AI-051 REQ-AI051-003
+    """
+    if not _is_kr_market_open():
+        logger.debug("주말 — 볼린저 스퀴즈 탐지 스킵")
+        return
+
+    _start = _time.monotonic()
+    db = SessionLocal()
+    try:
+        from app.services.surge_detector import detect_bollinger_squeeze_signals
+        from app.surge_config.surge_settings import BollingerSqueezeConfig
+        cfg = BollingerSqueezeConfig()
+        results = detect_bollinger_squeeze_signals(db, cfg)
+        logger.info("볼린저 스퀴즈 탐지 완료: %d건", len(results))
+    except Exception as e:
+        logger.error("볼린저 스퀴즈 탐지 잡 실패: %s", e)
+    finally:
+        _record_job_duration("surge_bollinger_squeeze", _time.monotonic() - _start)
+        db.close()
+
+
+def _run_gap_up_runner_detect():
+    """갭상승 런너 파이프라인 (평일 14:30 KST, 당일 체결 아님 — 익일 전용).
+
+    SPEC-AI-051 REQ-AI051-010
+    """
+    if not _is_kr_market_open():
+        logger.debug("주말 — 갭상승 런너 탐지 스킵")
+        return
+
+    _start = _time.monotonic()
+    db = SessionLocal()
+    try:
+        from app.services.surge_detector import detect_gap_up_runners
+        from app.surge_config.surge_settings import GapUpRunnersConfig
+        cfg = GapUpRunnersConfig()
+        results = detect_gap_up_runners(db, cfg)
+        logger.info("갭상승 런너 탐지 완료: %d건", len(results))
+    except Exception as e:
+        logger.error("갭상승 런너 탐지 잡 실패: %s", e)
+    finally:
+        _record_job_duration("surge_gap_up_runners", _time.monotonic() - _start)
+        db.close()
+
+
 def _run_surge_signal_generate():
     """급등예측 시그널 독립 생성 (평일 15:20 KST, 장 마감 10분 전).
 
@@ -1762,6 +1810,32 @@ def start_scheduler():
         minute=10,
         timezone="Asia/Seoul",
         id="auto_register_stocks",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    # SPEC-AI-051: 갭상승 런너 파이프라인 (평일 14:30 KST, 익일 갭상승 후보 사전 등록)
+    scheduler.add_job(
+        _run_gap_up_runner_detect,
+        "cron",
+        day_of_week="mon-fri",
+        hour=14,
+        minute=30,
+        timezone="Asia/Seoul",
+        id="surge_gap_up_runners",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    # SPEC-AI-051: 볼린저 밴드 스퀴즈 탐지 (평일 15:10 KST, 15:20 생성 직전)
+    scheduler.add_job(
+        _run_bollinger_squeeze_detect,
+        "cron",
+        day_of_week="mon-fri",
+        hour=15,
+        minute=10,
+        timezone="Asia/Seoul",
+        id="surge_bollinger_squeeze",
         max_instances=1,
         coalesce=True,
         replace_existing=True,

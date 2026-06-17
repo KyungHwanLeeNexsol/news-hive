@@ -103,8 +103,16 @@ class TestScoreDisclosureImpact:
         assert score_disclosure_impact(d, None) == 10.0
 
     def test_기업지배구조_MnA_가산점수(self):
-        """기업지배구조 공시 — 합병/분할 등 M&A 키워드 감지 → 기본 10 + 20 = 30."""
-        for keyword in ("합병계약 체결", "회사분할결정", "영업양수도 결정", "주식교환"):
+        """기업지배구조 공시 — 합병/분할 등 M&A 키워드 감지 → 기본 10 + 20 = 30.
+
+        SPEC-AI-051: '합병' 키워드는 Tier 2(×1.5) 적용 → 30 × 1.5 = 45.
+        분할/영업양수도/주식교환은 Tier 배수 없음 → 30 그대로.
+        """
+        # "합병" 포함 → Tier 2(×1.5) 적용: (10+20) * 1.5 = 45.0
+        d = _make_disclosure(report_type="기업지배구조", report_name="합병계약 체결")
+        assert score_disclosure_impact(d, None) == 45.0, "합병계약 체결"
+        # 아래 키워드는 Tier 2 미해당 → 기본 30.0
+        for keyword in ("회사분할결정", "영업양수도 결정", "주식교환"):
             d = _make_disclosure(report_type="기업지배구조", report_name=keyword)
             assert score_disclosure_impact(d, None) == 30.0, keyword
 

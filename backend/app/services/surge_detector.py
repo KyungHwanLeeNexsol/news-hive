@@ -79,6 +79,8 @@ class SurgeCandidate:
     disclosure_sentiment: str = "neutral"
     # SPEC-AI-039 REQ-039-002: 뉴스 지연 반응 점수 (24-72h 고임팩트 뉴스 기반)
     news_delayed_score: float = 0.0
+    # SPEC-AI-051 REQ-AI051-001: 볼린저 밴드 스퀴즈 점수 (0.0~1.0)
+    squeeze_score: float = 0.0
 
 
 def _sigmoid(x: float) -> float:
@@ -2682,3 +2684,212 @@ def detect_weekend_gap_up_signals(
         len(active_sectors),
     )
     return results
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-051 REQ-AI051-001~003: 볼린저 밴드 스퀴즈 탐지기
+# ---------------------------------------------------------------------------
+
+def detect_bollinger_squeeze_signals(
+    db: Session,
+    config: "BollingerSqueezeConfig",  # noqa: F821
+) -> list[SurgeCandidate]:
+    """SPEC-AI-051: 볼린저 밴드 스퀴즈 탐지 — 시총 상위 종목 일봉 분석.
+
+    # @MX:NOTE: [AUTO] SPEC-AI-051 REQ-AI051-003 — 15:10 스케줄러 잡에서 호출
+    # @MX:SPEC: SPEC-AI-051 REQ-AI051-001~003
+
+    시총 상위 config.max_stocks_to_check 종목의 일봉을 조회하여
+    볼린저 밴드 폭(BW)이 60일 최솟값에 해당하는(스퀴즈) 종목을 SurgeCandidate로 반환한다.
+    FundSignal은 생성하지 않으며 15:20 파이프라인에 통합된다.
+
+    Args:
+        db: SQLAlchemy 세션
+        config: BollingerSqueezeConfig
+
+    Returns:
+        squeeze_score >= config.min_squeeze_score 인 SurgeCandidate 목록
+    """
+    if not config.enabled:
+        return []
+
+    from app.services.naver_finance import fetch_stock_price_history_sync
+    from app.services.technical_indicators import calculate_bollinger_bandwidth_squeeze
+
+    logger.info("[bollinger_squeeze] 스퀴즈 탐지 시작 (대상: 시총 상위 %d종목)", config.max_stocks_to_check)
+
+    # 시총 상위 N 종목 (market_cap None 제외)
+    top_stocks = (
+        db.query(Stock)
+        .filter(Stock.market_cap.isnot(None))
+        .order_by(Stock.market_cap.desc())
+        .limit(config.max_stocks_to_check)
+        .all()
+    )
+
+    results: list[SurgeCandidate] = []
+
+    for stock in top_stocks:
+        try:
+            price_records = fetch_stock_price_history_sync(stock.stock_code, pages=config.price_pages)
+            if not price_records:
+                continue
+
+            # 종가 추출 (최신순 내림차순 — fetch_stock_price_history_sync 반환 순서)
+            close_prices = [r.close for r in price_records]
+
+            result = calculate_bollinger_bandwidth_squeeze(close_prices, lookback=config.lookback_days)
+            if result is None:
+                continue
+
+            if not result["squeeze"]:
+                continue
+
+            squeeze_score = result["squeeze_score"]
+            if squeeze_score < config.min_squeeze_score:
+                continue
+
+            candidate = SurgeCandidate(
+                stock_code=stock.stock_code,
+                stock_name=stock.name,
+                squeeze_score=squeeze_score,
+                active_detectors=["bollinger_squeeze"],
+            )
+            results.append(candidate)
+
+        except Exception as e:
+            logger.debug("[bollinger_squeeze] %s 처리 오류 (스킵): %s", stock.stock_code, e)
+            continue
+
+    logger.info("[bollinger_squeeze] 스퀴즈 탐지 완료: %d건", len(results))
+    return results
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-051 REQ-AI051-007~009: 14:30 갭상승 런너 파이프라인
+# ---------------------------------------------------------------------------
+
+def detect_gap_up_runners(
+    db: Session,
+    config: "GapUpRunnersConfig",  # noqa: F821
+) -> list[FundSignal]:
+    """SPEC-AI-051: 당일 급등 리더 종목의 섹터 2/3등 종목을 익일 갭상승 후보로 등록.
+
+    # @MX:WARN: [AUTO] 섹터별 중복 리더 처리 + 오픈 포지션 조회 포함 — 분기 수 높음
+    # @MX:REASON: leader_signals 순회 중 sector_id 중복 체크, open_position 조회, price_data 조회가
+    #             중첩되어 복잡도가 높다. 대량 리더 시그널 입력 시 성능 주의.
+    # @MX:SPEC: SPEC-AI-051 REQ-AI051-007~009
+
+    REQ-AI051-007: 당일 confidence >= min_leader_confidence 인 리더 시그널 조회
+    REQ-AI051-008: 동일 섹터 시총 2/3위 피어 선정 (open position 보유 종목 제외)
+    REQ-AI051-009: confidence = leader.confidence * confidence_decay 로 감쇠
+
+    Args:
+        db: SQLAlchemy 세션
+        config: GapUpRunnersConfig
+
+    Returns:
+        생성된 FundSignal 목록 (signal_type="gap_up_runners")
+    """
+    import json as _json
+    from zoneinfo import ZoneInfo
+
+    if not config.enabled:
+        return []
+
+    KST = ZoneInfo("Asia/Seoul")
+    signals: list[FundSignal] = []
+
+    try:
+        # 당일 KST 00:00 기준 UTC 변환
+        today_kst_start = datetime.now(KST).replace(hour=0, minute=0, second=0, microsecond=0)
+        today_utc_start = today_kst_start.astimezone(timezone.utc)
+
+        # 당일 고신뢰 리더 시그널 조회 (REQ-AI051-007)
+        leader_signals = (
+            db.query(FundSignal, Stock)
+            .join(Stock, FundSignal.stock_id == Stock.id)
+            .filter(
+                FundSignal.signal_type.in_(["surge_candidate", "immediate_disclosure"]),
+                FundSignal.confidence >= config.min_leader_confidence,
+                FundSignal.created_at >= today_utc_start,
+            )
+            .all()
+        )
+
+        if not leader_signals:
+            logger.info("[gap_up_runners] 리더 시그널 없음")
+            return []
+
+        # 리더별 섹터 런너 선정
+        processed_sector_ids: set[int] = set()
+        registered_runner_ids: set[int] = set()  # 중복 런너 방지
+
+        for leader_signal, leader_stock in leader_signals:
+            if leader_stock.sector_id in processed_sector_ids:
+                continue  # 동일 섹터 중복 처리 방지
+            processed_sector_ids.add(leader_stock.sector_id)
+
+            # 동일 섹터 종목 market_cap 내림차순 (None 제외, 리더 제외)
+            sector_peers = (
+                db.query(Stock)
+                .filter(
+                    Stock.sector_id == leader_stock.sector_id,
+                    Stock.market_cap.isnot(None),
+                    Stock.id != leader_stock.id,
+                )
+                .order_by(Stock.market_cap.desc())
+                .limit(5)  # 상위 5개에서 2/3등 추출
+                .all()
+            )
+
+            # 2등, 3등 피어 (인덱스 0, 1)
+            runners = sector_peers[:2]
+
+            for runner in runners:
+                if runner.id in registered_runner_ids:
+                    continue
+
+                # 이미 오픈된 SurgeTrade 있는 종목 제외 (REQ-AI051-008)
+                from app.services.surge_trading_service import get_open_position
+                if get_open_position(db, runner.stock_code):
+                    continue
+
+                # 현재가 조회 (REQ-AI051-008)
+                price_data = _fetch_price_change_sync(runner.stock_code)
+                current_price = price_data.get("current_price") if price_data else None
+
+                confidence = round(leader_signal.confidence * config.confidence_decay, 4)
+                reasoning = (
+                    f"오늘 {leader_stock.name} +{leader_signal.confidence * 100:.0f}% 급등 "
+                    f"테마 2/3등 종목, 익일 갭상승 저격"
+                )
+                metadata = {
+                    "surge_basis": ["gap_up_runners"],
+                    "leader_stock_code": leader_stock.stock_code,
+                    "leader_signal_type": leader_signal.signal_type,
+                    "leader_confidence": leader_signal.confidence,
+                }
+
+                signal = FundSignal(
+                    stock_id=runner.id,
+                    signal="buy",
+                    signal_type="gap_up_runners",
+                    confidence=confidence,
+                    reasoning=reasoning,
+                    surge_metadata=_json.dumps(metadata, ensure_ascii=False),
+                    price_at_signal=current_price,
+                )
+                db.add(signal)
+                signals.append(signal)
+                registered_runner_ids.add(runner.id)
+
+        if signals:
+            db.commit()
+            logger.info("[gap_up_runners] %d건 등록", len(signals))
+
+    except Exception as e:
+        logger.error("[gap_up_runners] 예외 발생: %s", e, exc_info=True)
+        return []
+
+    return signals

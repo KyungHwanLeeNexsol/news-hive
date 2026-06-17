@@ -151,6 +151,71 @@ def _bollinger_bands(prices: list[float], period: int = 20, std_dev: float = 2.0
     return upper, middle, lower
 
 
+def calculate_bollinger_bandwidth_squeeze(
+    prices: list[float],
+    lookback: int = 60,
+) -> dict | None:
+    """볼린저 밴드 폭 스퀴즈 판정.
+
+    # @MX:ANCHOR: [AUTO] SPEC-AI-051 REQ-AI051-002 — 볼린저 스퀴즈 공개 헬퍼 진입점
+    # @MX:REASON: detect_bollinger_squeeze_signals 및 테스트 코드에서 직접 참조하는 공개 API
+
+    Args:
+        prices: 종가 리스트 (최신순 내림차순). 최소 lookback+20 개 필요.
+        lookback: 스퀴즈 판정 룩백 기간 (기본값 60 영업일).
+
+    Returns:
+        {
+            "squeeze": bool,          # 현재 BW ≤ 60일 최솟값이면 True
+            "squeeze_score": float,   # 1.0 - (current_bw / max_bw), [0.0, 1.0] 클램프
+            "current_bw": float,      # 당일 볼린저 밴드 폭
+            "min_bw": float,          # lookback 기간 최솟값 (당일 포함)
+        }
+        또는 데이터 부족 시 None.
+    """
+    # 최소 데이터 요구: lookback개 슬라이딩 윈도우 × 볼린저 period 20
+    # k=0 → prices[0:20], k=lookback-1 → prices[lookback-1:lookback+19]
+    required = lookback + 20 - 1  # = lookback+19
+    if len(prices) < required:
+        return None
+
+    # 각 슬라이딩 윈도우 k에 대해 밴드 폭(BW) 계산
+    bandwidth: list[float] = []
+    for k in range(lookback):
+        window = prices[k : k + 20]
+        upper, middle, lower = _bollinger_bands(window)
+        if upper is None or middle is None or lower is None or middle == 0:
+            # 유효하지 않은 윈도우는 스킵 → 충분한 데이터 없음으로 처리
+            return None
+        bw = (upper - lower) / middle
+        bandwidth.append(bw)
+
+    if not bandwidth:
+        return None
+
+    current_bw = bandwidth[0]                      # 당일 (k=0)
+    past_bw = bandwidth[1:]                        # 과거 (k=1..lookback-1)
+    min_past_bw = min(past_bw) if past_bw else current_bw
+    max_bw = max(bandwidth)                        # 전체(당일 포함) 최댓값
+
+    # 스퀴즈: 당일 BW가 과거 lookback-1일 중 최솟값 이하
+    squeeze = current_bw <= min_past_bw
+
+    # 스퀴즈 점수: 1.0 - (current_bw / max_bw), [0.0, 1.0] 클램프
+    if max_bw > 0:
+        raw_score = 1.0 - (current_bw / max_bw)
+    else:
+        raw_score = 0.0
+    squeeze_score = max(0.0, min(1.0, raw_score))
+
+    return {
+        "squeeze": squeeze,
+        "squeeze_score": squeeze_score,
+        "current_bw": current_bw,
+        "min_bw": min(bandwidth),
+    }
+
+
 def calculate_atr(prices: list[dict], period: int = 14) -> float | None:
     """ATR (Average True Range) 계산 - Wilder's Smoothing 방식.
 
