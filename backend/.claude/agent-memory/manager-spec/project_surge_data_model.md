@@ -17,4 +17,8 @@ Facts about the news-hive surge-trading subsystem that are easy to misstate in S
 
 - **Surge-trading router prefix is `/api/surge-trading`** (`backend/app/routers/surge_trading.py` line 15), admin auth helper is `_verify_admin_token` (from `app.routers.auth`).
 
+- **`early_entry_check()` filters strictly on one signal_type.** `preday_signal_service.early_entry_check()` (the 09:05 KST `surge_preday_early_entry` consumer) queries `FundSignal.signal_type == "preday_disclosure"` only (PREDAY_SIGNAL_TYPE constant). Any new SPEC that introduces a new signal_type and claims it will be "picked up by the existing preday/early-entry mechanism" is WRONG unless it ALSO extends this filter. Verified 2026-06-17 for SPEC-AI-051 gap_up_runners.
+
+- **`score_disclosure_impact()` has 4 early-return paths.** `disclosure_impact_scorer.py:138-182` returns at: routine-governance cap (`5.0`, line 154), contract-ratio (line 163), 실적변동 % (line 171), or `_BASE_IMPACT_BY_TYPE` default (line 176-182). Any new post-processing (multiplier, bonus) must be placed carefully — the routine-governance `5.0` return happens FIRST and must stay exempt from later adjustments.
+
 Related: [[project-surge-spec-conventions]]

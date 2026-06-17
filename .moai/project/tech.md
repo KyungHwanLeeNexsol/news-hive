@@ -1,316 +1,100 @@
-# NewsHive - Technology Stack Documentation
+﻿# NewsHive — Tech Stack
 
-## Framework & Language Overview
+## Backend
 
-| Category | Technology | Version | Purpose |
-|----------|-----------|---------|---------|
-| **Backend Framework** | FastAPI | 0.115.6 | Async REST API framework |
-| **Backend Language** | Python | 3.12+ | Server-side implementation |
-| **Frontend Framework** | Next.js | 16.1.6 | React SSR framework |
-| **Frontend Language** | TypeScript | 5.9.3 | Type-safe frontend code |
-| **Frontend Runtime** | React | 19.2.4 | UI component library |
+| 항목 | 버전 / 내용 |
+|------|------------|
+| Language | Python 3.12+ |
+| Framework | FastAPI 0.115.6 |
+| ASGI Server | Uvicorn 0.34.0 |
+| ORM | SQLAlchemy 2.0.36 |
+| Migration | Alembic 1.14.1 (앱 시작 시 자동 실행) |
+| Scheduler | APScheduler 3.10.4 (SQLAlchemy 잡스토어, misfire_grace=3600s) |
+| Package Manager | uv (pip fallback) |
+| DB | PostgreSQL 16 (로컬 설치, Docker 없음) |
+| Cache | Redis 7 (선택, 인메모리 폴백) |
 
----
+## AI / ML
 
-## Database & Caching
+| 항목 | 내용 |
+|------|------|
+| Primary LLM | Google Gemini (free tier, 20req/day 제한) |
+| Fallback LLM | Z.AI (GLM) → OpenAI |
+| 용도 | 감성 분석, 종목 분류, 프롬프트 자동 개선, 키워드 생성 |
 
-| Component | Technology | Version | Purpose |
-|-----------|-----------|---------|---------|
-| **Primary Database** | PostgreSQL | 16 | Relational data storage |
-| **ORM** | SQLAlchemy | 2.0 | Async database abstraction |
-| **Migrations** | Alembic | — | Database versioning |
-| **Cache** | Redis | 7 | In-memory caching |
-| **Connection Pool** | asyncpg | — | PostgreSQL async driver |
+## External APIs
 
----
+| API | 용도 | 주의사항 |
+|-----|------|----------|
+| Naver Finance | 주가 스크래핑 (현재가, 일봉) | HTML 구조 변경 시 선택자 수정 필요 |
+| Naver News | 뉴스 검색 | 401 주기적 발생 (키 만료) |
+| DART | 공시 크롤링 | API 키 필요, 30분 주기 |
+| KIS (한국투자증권) | 실시간 주가 (미래 확장) | WebSocket 기반 |
 
-## Task Scheduling & Background Jobs
+## Frontend
 
-| Component | Technology | Version | Purpose |
-|-----------|-----------|---------|---------|
-| **Task Scheduler** | APScheduler | 3.10.4 | Background job scheduling |
-| **Job Storage** | PostgreSQL | 16 | Persistent job store |
-| **Execution** | APScheduler | 3.10.4 | 30-minute news collection cycles |
+| 항목 | 버전 |
+|------|------|
+| Framework | Next.js 16.1.6 (App Router) |
+| UI Library | React 19.2.4 |
+| Language | TypeScript 5.9.3 |
+| Styling | Tailwind CSS 4.2.0 |
+| State | Zustand 5.0.12 |
+| Charts | Recharts 3.8.1, Lightweight-charts 5.1.0 |
+| Deploy | Vercel (main 브랜치 자동 배포) |
 
----
+## Infrastructure
 
-## AI & NLP Integration
+| 항목 | 내용 |
+|------|------|
+| Server | OCI VM.Standard.E2.1.Micro (Ubuntu, 140.245.76.242) |
+| Process | systemd (newshive.service) |
+| Deploy | scripts/deploy.sh (git pull + pip + alembic + systemctl) |
+| Monitoring | Prometheus + Grafana (monitoring/ 디렉토리) |
+| Deploy Guard | 15:15~15:45 KST 자동 대기 (급등 시그널 생성 중 배포 차단) |
 
-| Component | Technology | Version | Purpose |
-|-----------|-----------|---------|---------|
-| **AI - Primary** | Google GenAI | 1.14.0 | Gemini API for classification |
-| **AI - Fallback** | OpenAI SDK | — | OpenRouter API integration |
-| **Use Cases** | Gemini + Claude | — | Sentiment/urgency classification, briefing |
+## Testing
 
----
+| 항목 | 내용 |
+|------|------|
+| Framework | pytest 8.3.4 + pytest-asyncio 0.25.0 |
+| Coverage | pytest-cov 6.0.0 |
+| Time mocking | freezegun 1.4.0 |
+| 실행 | uv run pytest tests/ --tb=short -q -m "not slow" |
+| 총 테스트 수 | 1511개+ (SPEC-AI-050 기준) |
 
-## Market Data & External APIs
+## Linting
 
-| Component | Technology | Purpose |
-|-----------|-----------|---------|
-| **Korean News** | Naver Search API | News article collection |
-| **Global News** | Google News RSS | Macro and international news |
-| **Disclosures** | DART | Corporate disclosure tracking |
-| **Stock Prices** | Naver Finance | Real-time stock data fetching |
-| **Market Index** | KRX API | Korean exchange data |
-
----
-
-## Frontend Stack
-
-| Category | Technology | Version | Purpose |
-|----------|-----------|---------|---------|
-| **Styling** | Tailwind CSS | 4.2.0 | Utility-first CSS |
-| **State Management** | Zustand | 5.0.12 | Global state |
-| **Charting** | Recharts | 3.8.1 | React charts |
-| **Technical Charts** | Lightweight-charts | 5.1.0 | Trading charts |
-
----
-
-## Development Tools
-
-| Category | Technology | Purpose |
-|----------|-----------|---------|
-| **Python Linting** | ruff | Fast PEP 8 linter |
-| **Python Formatting** | ruff format | Code formatting |
-| **Type Checking** | mypy | Static type checking |
-| **Testing** | pytest | 888 tests, 85%+ coverage |
-| **Async Testing** | pytest-asyncio | Async test support |
-| **Package Manager** | uv | Fast Python package manager |
-| **Frontend Linting** | ESLint | JavaScript/TypeScript |
-
----
-
-## Deployment & Infrastructure
-
-| Component | Technology | Details |
-|-----------|-----------|---------|
-| **Backend Host** | OCI VM | Standard.E2.1.Micro, Ubuntu |
-| **Backend Port** | 8000 | uvicorn ASGI server |
-| **Service Manager** | systemd | Linux service management |
-| **Frontend Host** | Vercel | Global CDN, auto-deploy |
-| **Backend IP** | 140.245.76.242 | Fixed OCI instance |
-
----
-
-## Framework Choice Rationale
-
-### FastAPI
-- Async-first design with built-in validation (Pydantic)
-- High performance, automatic OpenAPI docs
-- Suitable for high-concurrency news processing
-
-### SQLAlchemy 2.0
-- Native async support with full ORM features
-- Type safety and relationship management
-- Suitable for complex stock/sector/commodity relationships
-
-### Pydantic v2
-- High-performance validation and serialization
-- Type hints and JSON schema generation
-- Used for request/response validation across 20 routers
-
-### Next.js 16
-- Server-side rendering with React 19 and TypeScript
-- Built-in optimization and file-based routing
-- Vercel deployment for global CDN
-
-### APScheduler with PostgreSQL
-- Persistent job scheduling without external service
-- Survives service restarts
-- Used for 30-minute news collection and 06:00 briefing
-
-### Redis
-- In-memory caching for hot data
-- Sub-millisecond latency
-- Cache stock prices, sector scores, rate limiting
-
----
-
-## Development Environment
-
-### Minimum Versions
-- Python 3.12+ (f-strings, match statements)
-- Node.js 20+ (ESM modules)
-- PostgreSQL 14+ (JSON operators)
-- Redis 6.0+ (stream support)
-
-### Local Setup
 ```bash
-# Backend
-cd backend
-python -m venv venv
-source venv/bin/activate
-uv pip install -r requirements.txt
-cp .env.example .env
-alembic upgrade head
-
-# Frontend
-cd frontend
-npm install
-
-# Database
-docker-compose up -d
+uv run ruff check .      # 린팅
+uv run mypy app/         # 타입 체크
 ```
 
-### Required Environment Variables
-- GEMINI_API_KEY
-- NAVER_CLIENT_ID, NAVER_CLIENT_SECRET
-- TELEGRAM_BOT_TOKEN
-- DATABASE_URL (PostgreSQL asyncpg)
-- REDIS_URL
-- OPENROUTER_API_KEY (fallback)
+## Key Constants (Business Logic)
 
----
+| 상수 | 값 | 위치 |
+|------|-----|------|
+| BUY_CUTOFF | time(11, 0) | surge_trading_service.py |
+| max_open_positions | 7 | surge_trading_service.py |
+| position_pct | 0.14 (14%) | surge_trading_service.py |
+| max_daily_entries | 5 | surge_trading_service.py |
+| 손절 | -8% | surge_trading_service.py |
+| 익절 | +15% | surge_trading_service.py |
+| 최대 보유 | 5거래일 | surge_trading_service.py |
 
-## Build & Test Commands
+## SPEC Implementation History
 
-### Backend
-
-#### Development
-```bash
-cd backend
-uv run uvicorn app.main:app --reload --port 8000
-```
-
-#### Testing
-```bash
-cd backend
-uv run pytest tests/ --tb=short -q -m "not slow"
-uv run pytest tests/ --cov=app --cov-report=html
-```
-
-#### Code Quality
-```bash
-cd backend
-uv run ruff check .                    # Lint
-uv run mypy app/                       # Type check
-uv run ruff format .                   # Format
-```
-
-#### Database Migrations
-```bash
-cd backend
-alembic revision --autogenerate -m "description"
-alembic upgrade head
-alembic downgrade -1
-```
-
-### Frontend
-
-#### Development
-```bash
-cd frontend
-npm run dev                # http://localhost:3000
-```
-
-#### Build & Production
-```bash
-cd frontend
-npm run build
-npm run start
-npm run lint
-```
-
----
-
-## Performance Targets
-
-### API Response Time
-- Median: < 500ms
-- p95: < 2 seconds
-- p99: < 5 seconds
-
-### Database Queries
-- News retrieval (10): < 100ms
-- Stock lookup: < 50ms
-- Relation graph (depth 3): < 500ms
-
-### Frontend
-- Page load (Lighthouse): >80 score
-- Time to Interactive: < 3 seconds
-
-### Infrastructure
-- Backend uptime: >99%
-- Database availability: >99.9%
-- News collection: 100% success
-
----
-
-## Known Constraints
-
-### AI API
-- Gemini free tier: 20 requests/day (rate limiting critical)
-- Solution: Queue + OpenRouter fallback
-
-### Infrastructure
-- Single OCI VM: No horizontal scaling
-- Solution: Async/await for concurrency
-
-### Market Data
-- Naver API: Periodic 401 errors
-- Solution: Automatic retry with backoff
-
-### Development
-- Python 3.12: f-string dict literals cause SyntaxError
-- Solution: Use single-line dicts or variables
-
----
-
-## Upgrade Paths
-
-### FastAPI 0.115 → 1.0
-- Non-breaking changes
-- Recommended: Test all AI classification
-
-### SQLAlchemy 2.0 → 2.1+
-- Query syntax compatible
-- Recommended: Performance improvements
-
-### PostgreSQL 16 → 17+
-- All SQL compatible
-- Recommended: Monitor performance
-
-### Python 3.12 → 3.13+
-- Type hints syntax compatible
-- Recommended: Enables JIT compiler
-
-### Next.js 16 → 17+
-- Check App Router stability
-- Recommended: Test in staging
-
----
-
-## Monitoring & Observability
-
-### Logging
-- JSON structured logging via python-json-logger
-- All jobs logged to stdout/systemd journal
-- Key events: API start, job completion, errors
-
-### Metrics
-- APScheduler job success/failure rates
-- Gemini API quota usage
-- Database query latency
-- API endpoint latency
-- Cache hit rate
-
-### Health Checks
-- GET /health → 200 OK
-- Database: Connection pool status
-- Redis: PING
-- API: GET /stocks/top
-
----
-
-## Context7 Integration
-
-For library documentation:
-- FastAPI: tiangolo/fastapi
-- SQLAlchemy: sqlalchemy/sqlalchemy
-- PostgreSQL: postgres/postgres
-- Redis: redis/redis
-- pytest: pytest-dev/pytest
-- pydantic: pydantic/pydantic
-- Next.js: vercel/next.js
-- React: facebook/react
+| SPEC | 내용 | 상태 |
+|------|------|------|
+| SPEC-AI-003 | 4종 선행 기술 탐지기 | 완료 |
+| SPEC-AI-004 | 공시 기반 선제 시그널 | 완료 |
+| SPEC-AI-006 | 자동 개선 루프 | 완료 |
+| SPEC-AI-012 | 4종 앙상블 급등 탐지 | 완료 |
+| SPEC-AI-013 | 자동 매매 포트폴리오 | 완료 |
+| SPEC-AI-027 | 그룹 계열사 테마캐리 탐지 | 완료 |
+| SPEC-AI-028 | 공시 역신호 필터링 | 완료 |
+| SPEC-AI-029 | 적응형 급등 확률 임계값 | 완료 |
+| SPEC-AI-030 | volume_news_combo 추격매수 방지 | 완료 |
+| SPEC-AI-041 | 급등예측 자동평가·자가개선 루프 | 완료 |
+| SPEC-AI-042 | Preday 공시 갭업 조기 진입 | 완료 |
+| SPEC-AI-050 | 주말갭업탐지 + 동적뉴스윈도우 + BEAR방어 | 완료 (2026-06-17) |

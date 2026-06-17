@@ -1,247 +1,113 @@
-# NewsHive - Project Structure Documentation
+﻿# NewsHive — Project Structure
 
-## Directory Tree (Top 2 Levels)
+## Top-Level Layout
 
 ```
 news-hive/
-├── backend/                    # FastAPI Python backend
-│   ├── app/
-│   │   ├── main.py            # FastAPI app, lifespan, migrations
-│   │   ├── database.py        # SQLAlchemy async setup
-│   │   ├── models/            # 30+ ORM models
-│   │   ├── routers/           # 20 REST API modules
-│   │   ├── schemas/           # Pydantic validators
-│   │   ├── services/          # 50+ business logic services
-│   │   └── seed/              # Database seed data
-│   ├── alembic/               # 50+ database migrations
-│   ├── tests/                 # 888 pytest tests
-│   ├── pyproject.toml         # uv/Poetry, pytest config
-│   └── .env.example           # Environment template
-│
-├── frontend/                   # Next.js 16 React frontend
-│   ├── src/app/               # 20+ route pages
-│   ├── src/components/        # React components
-│   ├── src/store/             # Zustand state
-│   ├── src/utils/             # Utilities
-│   ├── package.json           # npm dependencies
-│   └── tailwind.config.ts     # Tailwind CSS
-│
-├── scripts/                    # Deployment utilities
-│   ├── deploy.sh              # Production deploy
-│   └── setup.sh               # Infrastructure setup
-│
-├── docker-compose.yml         # Local: PostgreSQL + Redis
-├── .moai/                     # MoAI config
-├── .claude/                   # Claude Code rules
-├── README.md                  # Korean overview
-└── CHANGELOG.md               # Version history
+├── backend/           # FastAPI Python 백엔드 (주요 비즈니스 로직)
+├── frontend/          # Next.js 16 + React 19 프론트엔드
+├── monitoring/        # Prometheus + Grafana (docker-compose.monitoring.yml)
+├── scripts/           # 배포·유틸리티 스크립트
+├── docker-compose.yml # PostgreSQL 16 + Redis 7 로컬 개발 환경
+└── CHANGELOG.md       # 릴리즈 히스토리
 ```
 
----
-
-## Architecture Pattern
-
-**Layered Monolith**: Separation of concerns with clear boundaries.
+## Backend Structure
 
 ```
-Frontend (Next.js, port 3000)
-    ↓ HTTP/JSON
-REST API (FastAPI, port 8000)
-    ↓
-Service Layer (Crawlers, AI, scoring)
-    ↓
-Data Access (SQLAlchemy ORM)
-    ↓
-Task Scheduler (APScheduler)
-    ↓
-PostgreSQL 16 + Redis 7
+backend/app/
+├── main.py            # FastAPI 앱 엔트리포인트, Lifespan, APScheduler 초기화
+├── config.py          # Pydantic BaseSettings (API keys, DB, Redis, JWT, SMTP 등)
+├── database.py        # SQLAlchemy 엔진 (풀 10+20, 재연결 1800s)
+├── models/            # 38개 SQLAlchemy 데이터 모델
+├── services/          # 55+ 서비스 모듈
+├── routers/           # 22개 FastAPI 라우터
+└── alembic/           # DB 마이그레이션 (061개+ 버전)
 ```
 
----
+## Key Services (services/)
 
-## Key File Locations
+### 크롤링
+| 파일 | 역할 |
+|------|------|
+| news_crawler.py | 메인 뉴스 크롤 오케스트레이터 (멀티소스) |
+| dart_crawler.py | DART 공시 크롤러 (5일 lookback) |
+| crawlers/naver.py | Naver News Search API |
+| crawlers/google.py | Google News RSS |
+| crawlers/korean_rss.py | 한국 금융 RSS |
+| forum_crawler.py | 주식 포럼 크롤러 |
 
-### Backend Entry Points
-- **App**: `backend/app/main.py` (FastAPI instance + lifespan)
-- **Database**: `backend/app/database.py` (AsyncEngine setup)
-- **Scheduler**: `backend/app/services/scheduler.py` (APScheduler jobs)
+### 급등 탐지 (핵심)
+| 파일 | 역할 |
+|------|------|
+| surge_detector.py | 6종 탐지기 앙상블, 글로벌 캐시 (_surge_rate_cache) |
+| surge_trading_service.py | 자동 매매 실행, BUY_CUTOFF=11:00, max_positions=7 |
+| surge_calibrator.py | 동적 임계값 캘리브레이션 |
+| surge_threshold_service.py | 임계값 히스토리 추적 (SPEC-AI-029) |
+| surge_auto_improver.py | 급등 파라미터 자동 개선 (YAML 패치) |
+| surge_evaluation_service.py | 시그널 평가 메트릭 |
+| surge_backtest.py | 백테스트 프레임워크 |
 
-### API Routers (20 modules)
-| Router | Purpose |
-|--------|---------|
-| `news.py` | News CRUD, search |
-| `stocks.py` | Stock data, relations |
-| `sectors.py` | Sector momentum |
-| `fund_manager.py` | Stock candidates |
-| `following.py` | User watch lists |
-| `disclosures.py` | DART data |
-| `vip_trading.py` | VIP signals |
-| `ks200_trading.py` | Index signals |
-| `paper_trading.py` | Paper trades |
-| `push.py` | Push notifications |
-| `auth.py` | Authentication |
-| `chat.py` | AI chat |
-| Plus 8 more (commodities, alerts, macro, etc.) |
+### 공시 처리
+| 파일 | 역할 |
+|------|------|
+| disclosure_impact_scorer.py | 공시 임팩트 스코어링 (SPEC-AI-004) |
+| preday_signal_service.py | 장 마감 후 공시 → 다음날 갭업 시그널 (SPEC-AI-042) |
 
-### Business Services (50+ modules)
-- `ai_classifier.py` - Sentiment/urgency classification
-- `ai_client.py` - Gemini/OpenAI wrapper
-- `fund_manager.py` - Stock selection
-- `factor_scoring.py` - 4-factor scoring
-- `relation_propagator.py` - Indirect impacts
-- `keyword_generator.py` - AI keywords
-- `keyword_matcher.py` - Notifications
-- `news_crawler.py` - Collection orchestration
-- `naver_finance.py` - Stock price API
-- `technical_indicators.py` - RSI, MACD, Bands
-- `disclosure_impact_scorer.py` - DART analysis
-- `ks200_signal.py` - Index signals
-- Plus 38+ additional services
+### 자동 개선
+| 파일 | 역할 |
+|------|------|
+| improvement_loop.py | 30일 실패 패턴 집계, 프롬프트·팩터가중치 최적화 |
+| factor_scoring.py | 다중 팩터 스코어링 (뉴스 감성, 기술적, 수급, 밸류에이션) |
+| prompt_versioner.py | 프롬프트 버전 관리 |
 
-### ORM Models (30+ classes)
-Located in `backend/app/models/`:
-- News, Stock, Sector, Commodity
-- FundSignal, KS200Signal, VIPTrade, PaperTrade
-- StockFollowing, Disclosure, MacroAlert
-- User, DailyBriefing, EconomicEvent
-- Plus 15+ additional models
+### 시장 데이터
+| 파일 | 역할 |
+|------|------|
+| naver_finance.py | Naver Finance HTTP 스크래핑 (현재가, 변동률) |
+| technical_indicators.py | RSI, MACD, 볼린저밴드 등 기술적 지표 |
+| market_regime_service.py | 시장 레짐 분류 (상승/하락/중립) |
+| macro_risk.py | 뉴스 기반 거시 리스크 탐지 |
 
-### Database Migrations
-`backend/alembic/versions/` - 50+ numbered files
-- Example: `036_spec_ai_004_disclosure_impact.py`
-- Run auto on app startup
-- Manual: `alembic upgrade head`
+### 인프라
+| 파일 | 역할 |
+|------|------|
+| scheduler.py | APScheduler 잡 오케스트레이터 (SQLAlchemy 잡스토어) |
+| ai_classifier.py | AI 감성 분석·분류 (Gemini → Z.AI → OpenAI 폴백) |
+| cache.py | 인메모리 캐시 + Redis 폴백 |
+| metrics.py | Prometheus 메트릭 |
 
-### Test Suite
-`backend/tests/` - 888 passing tests
-- Run: `cd backend && uv run pytest tests/ -q -m "not slow"`
-- Target: 85%+ coverage
+## Key Models (models/)
 
-### Frontend Pages (Next.js App Router)
-```
-frontend/src/app/
-├── page.tsx               # Home
-├── news/[id]/page.tsx    # News detail
-├── stocks/page.tsx       # Stock list
-├── sectors/page.tsx      # Sector analysis
-├── following/[code]/     # Watch list detail
-├── disclosures/page.tsx  # DART list
-├── ks200_trading/        # Index signals
-├── vip_trading/          # VIP portfolio
-├── paper_trading/        # Paper trading
-├── chat/page.tsx         # AI chat
-├── auth/login            # Login/register
-├── ... (20+ total)
-```
+| 모델 | 핵심 필드 |
+|------|----------|
+| FundSignal | stock_id, signal_type, confidence, price_at_signal, is_correct, alpha_pct, surge_metadata |
+| SurgePortfolio / SurgeTrade | initial_capital=5M, entry_price, exit_price, exit_reason |
+| NewsArticle | title, url, sentiment, urgency, ai_summary |
+| Disclosure | corp_code, report_name, impact_score, reflected_pct |
+| SurgeThresholdHistory | threshold values over time (SPEC-AI-029) |
+| SurgePredictionEvaluation | model metrics, recall, precision |
 
----
+## Routers (API Endpoints)
 
-## Module Organization
+| 라우터 | 경로 | 주요 기능 |
+|--------|------|-----------|
+| surge_trading.py | /api/surge-trading | 급등 포트폴리오 조회, 시그널 확인 |
+| fund_manager.py | /api/fund-manager | 관리자 대시보드 |
+| following.py | /api/following | 관심 종목 + Telegram 알림 |
+| disclosures.py | /api/disclosures | DART 공시 검색 |
+| auth.py | /api/auth | JWT 로그인 + 관리자 토큰 |
 
-### Backend Layers
+## Scheduled Jobs
 
-**Routes** - HTTP handling, validation, serialization
-**Services** - Business logic, external APIs, orchestration
-**Models** - ORM definitions, relationships, queries
-**Infrastructure** - Database, scheduler, logging setup
-
-### Frontend Structure
-
-**Pages** - Route-based components
-**Components** - Reusable React elements
-**State** - Zustand stores
-**Utils** - Helpers, API client, constants
-
----
-
-## Data Flow Examples
-
-### News Pipeline
-Crawlers → NewsArticle DB → AI classification → Stock relation matching → Indirect propagation → Notifications
-
-### Fund Manager Selection
-Recent news → 4-factor scoring → Ranking → FundSignal DB
-
-### Briefing Generation
-Macro alerts → Sector momentum → Candidate analysis → KS200 signals → Disclosure impact → Gemini briefing → Push
-
-### Stock Following
-User follows → AI keywords (4 categories) → Periodic matching → Telegram notifications
-
----
-
-## Environment & Deployment
-
-### Local Development
-```bash
-docker-compose up -d
-cd backend && uv run uvicorn app.main:app --reload --port 8000
-cd frontend && npm run dev
-```
-
-### Required Environment Variables
-- GEMINI_API_KEY - Google GenAI
-- NAVER_CLIENT_ID, NAVER_CLIENT_SECRET - Naver
-- TELEGRAM_BOT_TOKEN - Telegram Bot
-- DATABASE_URL - PostgreSQL asyncpg
-- REDIS_URL - Redis
-- OPENROUTER_API_KEY - Fallback AI
-
-### Production
-- Backend: OCI VM (140.245.76.242:8000), systemd
-- Frontend: Vercel (auto-deploy from main)
-- Database: PostgreSQL 16 on OCI
-
-### Migrations
-- Auto on startup
-- Manual: `alembic upgrade head`
-- New: `alembic revision --autogenerate -m "desc"`
-
----
-
-## Performance & Constraints
-
-### Bottlenecks
-- Gemini free tier: 20 requests/day (rate limiting critical)
-- Single VM: No horizontal scaling
-- News collection: 30-minute intervals (batch-based)
-
-### Optimization
-- AsyncIO/await throughout
-- Redis caching for hot data
-- Database indices on frequent columns
-- Connection pooling
-- Background job distribution
-
-### Monitoring
-- JSON logging to stdout
-- APScheduler job tracking
-- Database query logging
-- API latency tracking
-
----
-
-## Commands
-
-| Task | Command |
-|------|---------|
-| Install deps | `cd backend && uv pip install` |
-| Dev server | `cd backend && uv run uvicorn app.main:app --reload` |
-| Tests | `cd backend && uv run pytest tests/ -q -m "not slow"` |
-| Type check | `cd backend && uv run mypy app/` |
-| Lint | `cd backend && uv run ruff check .` |
-| Format | `cd backend && uv run ruff format .` |
-| Migration | `cd backend && alembic revision --autogenerate -m "desc"` |
-| Migrate | `cd backend && alembic upgrade head` |
-| Frontend dev | `cd frontend && npm run dev` |
-| Frontend build | `cd frontend && npm run build` |
-
----
-
-## Quality Standards
-
-- Linting: ruff
-- Type checking: mypy
-- Testing: pytest 85%+ coverage
-- Formatting: ruff format
-- Standards: SQLAlchemy 2.0, FastAPI, Pydantic v2, async/await
+| 잡 | 실행 시각 | 주기 | 목적 |
+|----|----------|------|------|
+| _run_crawl_job | 상시 | ~10분 | 뉴스 크롤 + 감성 분석 + 매크로 리스크 |
+| _run_dart_crawl | 상시 | ~30분 | DART 공시 크롤 |
+| Surge signal gen | 10:00 KST | 매일 | 급등 시그널 생성 (핵심 잡) |
+| _run_preday_entry | 09:05 KST | 매일 | 갭업 조기 진입 |
+| collect_outcomes | 16:10 KST | 매일 | 당일 급등 결과 수집 |
+| surge_verify | 18:30 KST | 매일 | 예측 정확도 검증 |
+| auto_improve | 19:00 KST | 매일 | 파라미터 자동 개선 |
+| improve_prompts | 22:00 KST | 매주 일요일 | AI 프롬프트 정제 |
+| factor_weights | 23:00 KST | 매월 1일 | 팩터 가중치 최적화 |
