@@ -359,11 +359,12 @@ def early_entry_check(db: Session) -> dict:
     today_kst = datetime.now(KST).date()
     preday_cutoff = datetime.combine(today_kst, time(8, 0)).replace(tzinfo=KST)
 
+    # SPEC-AI-051 REQ-AI051-011: gap_up_runners 시그널도 조기 진입 후보에 포함
     preday_signals_with_stocks = (
         db.query(FundSignal, Stock)
         .join(Stock, FundSignal.stock_id == Stock.id)
         .filter(
-            FundSignal.signal_type == PREDAY_SIGNAL_TYPE,
+            FundSignal.signal_type.in_([PREDAY_SIGNAL_TYPE, "gap_up_runners"]),
             FundSignal.created_at >= preday_cutoff,
         )
         .all()

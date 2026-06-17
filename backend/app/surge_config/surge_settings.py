@@ -397,6 +397,30 @@ class GroupCascadeConfig(BaseModel):
     companion_required_below_prob: float = 0.4
 
 
+class BollingerSqueezeConfig(BaseModel):
+    """SPEC-AI-051: 볼린저 밴드 스퀴즈 탐지 설정."""
+
+    enabled: bool = True
+    # 시총 상위 N 종목만 평가
+    max_stocks_to_check: int = 200
+    # 일봉 조회 페이지 수 (pages=6 ≈ 60 거래일)
+    price_pages: int = 6
+    # 스퀴즈 판정 룩백 기간 (영업일)
+    lookback_days: int = 60
+    # 스퀴즈 점수 최소 임계값 (미만 종목 제외)
+    min_squeeze_score: float = 0.5
+
+
+class GapUpRunnersConfig(BaseModel):
+    """SPEC-AI-051: 14:30 갭상승 런너 파이프라인 설정."""
+
+    enabled: bool = True
+    # 리더 시그널 최소 confidence 임계값
+    min_leader_confidence: float = 0.75
+    # 런너 confidence 감쇠율 (leader.confidence * decay)
+    confidence_decay: float = 0.7
+
+
 class CoverageDashboardConfig(BaseModel):
     """SPEC-AI-022 REQ-004: 커버리지 대시보드 API 설정."""
 
