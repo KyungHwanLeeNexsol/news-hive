@@ -3008,18 +3008,40 @@ async def run_surge_signal_generation(db: Session) -> int:
 
         candidates = await _gather_surge_candidates(db, recent_news, [])
 
-        # SPEC-AI-022: surge_candidate 저장 완료 후 커버리지 확장 시그널 생성
-        _run_coverage_expansion(db, candidates)
-
+        # surge_candidates 즉시 커밋 — 15분+ 실행 결과를 즉시 보호 (이후 오류와 무관)
         db.commit()
         count = len(candidates) if candidates else 0
         if count == 0:
             logger.warning("[급등시그널] 15:20 독립 생성 완료: 0개 후보 — 탐지 결과 없음")
         else:
             logger.info("[급등시그널] 15:20 독립 생성 완료: %d개 후보", count)
+
+        # SPEC-AI-022: 커버리지 확장 — 새 세션으로 SSL 오염 격리
+        # gather_surge_candidates가 12~15분 실행되는 동안 기존 DB 연결이 idle→SSL 끊김
+        # 새 세션을 열면 깨끗한 연결을 보장한다
+        from app.database import SessionLocal as _SessionLocal
+        _exp_db = _SessionLocal()
+        try:
+            _run_coverage_expansion(_exp_db, candidates)
+            _exp_db.commit()
+        except Exception as _e:
+            logger.error("[커버리지확장] 전체 실패 (surge_candidate 결과 보존됨): %s", _e)
+            try:
+                _exp_db.rollback()
+            except Exception:
+                pass
+        finally:
+            try:
+                _exp_db.close()
+            except Exception:
+                pass
+
         return count
     except Exception as e:
-        db.rollback()
+        try:
+            db.rollback()
+        except Exception:
+            pass
         logger.error("[급등시그널] 독립 생성 실패: %s", e)
         return 0
 
