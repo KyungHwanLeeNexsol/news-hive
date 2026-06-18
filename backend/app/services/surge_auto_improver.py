@@ -348,9 +348,11 @@ def analyze_and_improve(
                 for d in _DETECTORS
             }
 
-            # 마지막 재정규화
+            # 마지막 재정규화: weekend_gap_up(고정) 제외 비율로 스케일링
+            # _DETECTORS 5개 합산 목표 = 1.0 - weekend_gap_up (예: 0.90)
+            _wgu_target = 1.0 - cfg.ensemble.weights.weekend_gap_up
             cap_total = sum(daily_capped.values())
-            final_weight = {d: daily_capped[d] / cap_total for d in _DETECTORS}
+            final_weight = {d: daily_capped[d] / cap_total * _wgu_target for d in _DETECTORS}
 
     # 사전 검증 (CRITICAL): _DETECTORS + weekend_gap_up(고정) 합산 = 1.0
     # weekend_gap_up은 커버리지 확장 탐지기로 자동 개선 대상 외 → 현재 YAML 값 유지
