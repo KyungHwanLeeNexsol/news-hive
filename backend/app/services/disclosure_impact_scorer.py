@@ -89,13 +89,13 @@ _KEYWORD_TIER2 = ["공급계약 체결", "지분 인수", "합병", "MOU 체결"
 _KEYWORD_TIER3 = ["신제품 출시", "신규 수주", "매출 급증", "계열사 지원"]
 
 
-def _get_keyword_tier_multiplier(report_name: str, ai_summary: str) -> float:
+def _get_keyword_tier_multiplier(report_name: str, ai_summary: str | None) -> float:
     """report_name + ai_summary에서 최고 Tier 키워드 1개의 배수 반환.
 
     매칭 없으면 1.0 반환 (배수 없음).
     누적 적용 없이 최고 Tier 1개만 사용.
     """
-    text = report_name + " " + ai_summary
+    text = report_name + " " + (ai_summary or "")
     if any(kw in text for kw in _KEYWORD_TIER1):
         return 2.0
     if any(kw in text for kw in _KEYWORD_TIER2):
