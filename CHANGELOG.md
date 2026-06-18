@@ -4,6 +4,31 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Hotfix — 앙상블 가중치 재정규화 & None 방어 (2026-06-18)
+
+#### `a6ea9e8` — 앙상블 가중치 재정규화 오류 수정
+
+- **문제**: SPEC-AI-051의 `weekend_gap_up` 탐지기 추가 시 정규화 대상 리스트(5개)에 해당 탐지기가 포함 → 가중치 합계 1.1 → `run_surge_signal_generation` assert 실패 → auto-improve 잡 Jun 17 19:00 KST부터 crash
+- **수정**: `surge_auto_improver.py` `_normalize_ensemble_weights()` — `weekend_gap_up` 제외 후 나머지 5개만 `_NORMALIZED_WEIGHT_TOTAL = 0.90` 기준 재정규화
+- **영향**: auto-improve 잡 정상화, ensemble weight 조정 기능 복구
+
+#### `8c1d021` — `_get_keyword_tier_multiplier` ai_summary None 방어
+
+- **문제**: `disclosure_impact_scorer.py`에서 `ai_summary=None` 공시 처리 시 문자열 연결 중 TypeError 발생 가능
+- **수정**: 함수 서명 `ai_summary: str → str | None`, 내부 `(ai_summary or "")` 적용으로 계약 명시화
+
+### Fix — 테스트 lint 정리 (2026-06-17)
+
+#### `7013f1f` — ruff F401 미사용 import 제거
+
+- `test_surge_evaluation_service.py`, `test_surge_auto_improver.py`, `test_surge_eval_endpoints.py` — 미사용 import 제거
+
+#### `a775530` — 테스트 lint 에러 및 auto.yaml 격리 수정
+
+- `conftest.py` 격리 패치 추가 — 테스트 실행 시 `surge_detection.auto.yaml`이 프로덕션 파일에 영향 미치지 않도록 경로 격리
+
+---
+
 ### Featured — SPEC-AI-051: 급등주 탐지 커버리지 확장 3종 (2026-06-17)
 
 볼린저 밴드 스퀴즈 탐지기, 공시 키워드 Tier 배수, 14:30 갭상승 런너 파이프라인 — 3개 독립 기능으로 기존 파이프라인이 놓치던 탐지 공백을 구조적으로 보완했습니다.
