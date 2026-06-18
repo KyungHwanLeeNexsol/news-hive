@@ -726,7 +726,10 @@ def _run_bollinger_squeeze_detect():
         logger.error("볼린저 스퀴즈 탐지 잡 실패: %s", e)
     finally:
         _record_job_duration("surge_bollinger_squeeze", _time.monotonic() - _start)
-        db.close()
+        try:
+            db.close()
+        except Exception:
+            pass
 
 
 def _run_gap_up_runner_detect():
