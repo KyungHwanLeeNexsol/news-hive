@@ -24,15 +24,16 @@ echo ">>> alembic upgrade..."
 alembic upgrade head
 
 echo ">>> 서비스 재시작..."
-# 급등 시그널 생성 시간대(15:15~15:45 KST) 배포 guard — 재시작 시 신호 생성 중단 방지
+# 급등 시그널 생성 시간대(15:15~16:10 KST) 배포 guard — 재시작 시 신호 생성 중단 방지
+# 15:20 잡 최대 소요 ~18분 + 커버리지 확장 ~5분 버퍼 → 16:10까지 차단
 _KST_H=$(TZ="Asia/Seoul" date '+%H')
 _KST_M=$(TZ="Asia/Seoul" date '+%M')
 _NOW_MIN=$(( _KST_H * 60 + _KST_M ))
 _GUARD_START=$(( 15 * 60 + 15 ))
-_GUARD_END=$(( 15 * 60 + 45 ))
+_GUARD_END=$(( 16 * 60 + 10 ))
 if [ "$_NOW_MIN" -ge "$_GUARD_START" ] && [ "$_NOW_MIN" -le "$_GUARD_END" ]; then
     _WAIT_SECS=$(( (_GUARD_END - _NOW_MIN) * 60 ))
-    echo ">>> 급등 시그널 생성 시간대 (15:15~15:45 KST) — ${_WAIT_SECS}초 대기 후 재시작..."
+    echo ">>> 급등 시그널 생성 시간대 (15:15~16:10 KST) — ${_WAIT_SECS}초 대기 후 재시작..."
     sleep "$_WAIT_SECS"
 fi
 sudo systemctl restart newshive
