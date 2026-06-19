@@ -13,13 +13,15 @@ engine = create_engine(
     pool_pre_ping=True,
     pool_size=10,
     max_overflow=20,
-    pool_recycle=1800,
+    pool_recycle=600,
     connect_args={
         "connect_timeout": 10,
         "keepalives": 1,
         "keepalives_idle": 30,
         "keepalives_interval": 10,
         "keepalives_count": 5,
+        # idle in transaction 연결 30초 후 자동 종료 — SSL 끊김 방지
+        "options": "-c idle_in_transaction_session_timeout=30000",
     },
 )
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
