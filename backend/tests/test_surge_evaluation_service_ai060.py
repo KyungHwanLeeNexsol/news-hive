@@ -8,8 +8,8 @@ analyze_misses_with_llm 함수를 검증한다.
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import date, datetime, timezone
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy.orm import Session
@@ -583,7 +583,7 @@ class TestSchedulerExceptionIsolation:
 
         # 예측 종목 + 실제 급등 종목 시드
         stock1 = _make_stock(db, "SC0001", "종목1")
-        stock2 = _make_stock(db, "SC0002", "종목2")
+        _make_stock(db, "SC0002", "종목2")
 
         from app.services.surge_trading_service import _get_prev_business_day
         prev_day = _get_prev_business_day(trading_date)
