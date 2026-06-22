@@ -653,6 +653,77 @@ def _run_surge_verify_predictions():
             evaluation.miss_analysis_json = analysis
             db.commit()
             logger.info("LLM 미스 분석 저장 완료")
+
+        # SPEC-AI-060: TP 분석 + 종목별 분석 결과 저장 (예외 격리 — precision/recall/f1 보존)
+        try:
+            from app.services.surge_evaluation_service import (
+                analyze_true_positives_with_llm,
+                _LLMBudgetGuard,
+            )
+            from app.surge_config.surge_settings import get_surge_config
+            import json as _json
+
+            cfg = get_surge_config().per_stock_analysis
+            if cfg.enabled:
+                # TP 종목 조회 (predicted_set ∩ actual_set)
+                from app.models.surge_actual_outcome import SurgeActualOutcome as _SAO2
+                from app.models.fund_signal import FundSignal as _FS2
+                from app.models.stock import Stock as _Stock2
+                from sqlalchemy import func as _func2
+
+                prev_day2 = _get_prev_business_day(today)
+                predicted_codes2 = {
+                    row.stock_code
+                    for row in db.query(_Stock2.stock_code)
+                    .join(_FS2, _FS2.stock_id == _Stock2.id)
+                    .filter(
+                        _FS2.surge_metadata.isnot(None),
+                        _func2.date(_FS2.created_at) == prev_day2,
+                    )
+                    .all()
+                }
+                actual_surge_rows2 = (
+                    db.query(_SAO2.stock_code, _SAO2.stock_name, _SAO2.change_rate)
+                    .filter(_SAO2.trading_date == today, _SAO2.was_surge.is_(True))
+                    .all()
+                )
+                tp_stocks = [
+                    {"stock_code": r.stock_code, "stock_name": r.stock_name, "change_rate": r.change_rate}
+                    for r in actual_surge_rows2
+                    if r.stock_code in predicted_codes2
+                ]
+
+                budget_guard = _LLMBudgetGuard(
+                    max_calls=cfg.max_calls_per_run,
+                    delay_sec=cfg.call_delay_sec,
+                )
+                tp_analyses = asyncio.run(
+                    analyze_true_positives_with_llm(tp_stocks, db, budget_guard)
+                )
+
+                # miss_analysis_json이 JSON인 경우 fn_analysis 추출, 아니면 원문 보존
+                fn_data: list = []
+                try:
+                    parsed_miss = _json.loads(evaluation.miss_analysis_json or "{}")
+                    fn_data = parsed_miss.get("per_stock", [])
+                except Exception:
+                    fn_data = []
+
+                per_stock_data = {
+                    "fn_analysis": fn_data,
+                    "tp_analysis": tp_analyses,
+                }
+                evaluation.per_stock_analysis_json = _json.dumps(
+                    per_stock_data, ensure_ascii=False
+                )
+                db.commit()
+                logger.info(
+                    "종목별 분석 저장 완료 (tp=%d, fn=%d)",
+                    len(tp_analyses), len(fn_data),
+                )
+        except Exception:
+            logger.warning("종목별 분석 실패 — 평가 결과는 보존됨", exc_info=True)
+            # raise 하지 않음: precision/recall/f1 결과가 이미 commit됨 (AC-13)
     except Exception:
         logger.exception("surge verify predictions 실패")
         raise

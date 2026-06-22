@@ -244,6 +244,16 @@ class AdaptiveThresholdConfig(BaseModel):
     combo_zero_theme_floor: float = 0.7
 
 
+class PerStockAnalysisConfig(BaseModel):
+    """SPEC-AI-060: 종목별 개별 원인 분석 설정."""
+
+    enabled: bool = True
+    max_calls_per_run: int = 8
+    call_delay_sec: float = 1.0
+    fn_priority_over_tp: bool = True
+    skip_if_no_context: bool = True
+
+
 class SurgeDetectionConfig(BaseModel):
     """급등 징후 탐지 전체 설정.
 
@@ -279,6 +289,8 @@ class SurgeDetectionConfig(BaseModel):
     carryover: CarryoverConfig = Field(default_factory=CarryoverConfig)
     # SPEC-AI-039 REQ-039-003: 고임팩트 뉴스 키워드 multiplier
     high_impact_news: HighImpactNewsConfig = Field(default_factory=HighImpactNewsConfig)
+    # SPEC-AI-060: 종목별 개별 원인 분석 설정
+    per_stock_analysis: PerStockAnalysisConfig = Field(default_factory=PerStockAnalysisConfig)
 
     # SPEC-AI-042 REQ-042-008: 장전 갭업 조기 진입 임계값 (하드코딩 금지)
     # 0 <= change_rate < gap_entry_threshold → 조기 진입

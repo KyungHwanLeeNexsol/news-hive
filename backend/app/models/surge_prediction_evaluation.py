@@ -45,6 +45,8 @@ class SurgePredictionEvaluation(Base):
     miss_analysis_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # 적용된 개선 사항 요약 (JSON string)
     improvements_applied_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # SPEC-AI-060: 종목별 개별 원인 분석 결과 (JSON string)
+    per_stock_analysis_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # 레코드 생성 시각
     created_at: Mapped[datetime] = mapped_column(
