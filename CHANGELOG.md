@@ -4,6 +4,56 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Hotfix — 배포 가드 이중화: 10:00 KST 잡 보호 (2026-06-22)
+
+#### `2caa4e6` — 배포 가드 이중화 — 10:00 KST 잡 보호 추가 (09:50~10:20)
+
+- **문제**: 6/17 시그널 0개 원인 분석 결과, 10:00 KST 잡(장중 재탐지)도 11:10 KST 배포로 kill → db.commit() 미실행 → rollback되어 0개 저장
+- **수정**: `scripts/deploy.sh` — 가드 1(09:50~10:20 KST) 신규 추가, 기존 가드 2(15:15~16:10 KST) 유지
+- **방식**: `elif` 분기로 이중 가드 구현. 가드 진입 시 해당 구간 종료까지 `sleep` 후 재시작
+- **영향**: 10:00 KST 장중 재탐지 잡과 15:20 KST 전일 탐지 잡 모두 배포 kill로부터 보호
+
+#### `d7d069d` — 배포 가드 시간 파싱 octal 버그 수정
+
+- **문제**: `date '+%H'`가 `08`, `09`처럼 leading zero 포함 시 bash가 octal로 파싱 → `08`, `09`는 octal 무효값 → 계산 오류
+- **수정**: `date '+%-H'`, `date '+%-M'` — leading zero 없는 정수 출력으로 변경
+
+---
+
+### Hotfix — DB 연결 SSL 끊김 연쇄 장애 수정 (2026-06-18 ~ 06-19)
+
+#### `f65c84e` — idle_in_transaction_timeout 30s + pool_recycle 600 — SSL 끊김 방지
+
+- **문제**: `idle in transaction` 연결 2개 상시 존재 → SSL 오류 14건/24h 발생. `pool_recycle=1800`은 stale 연결 30분 유지
+- **수정**: `backend/app/database.py`
+  - `idle_in_transaction_session_timeout=30000`: 트랜잭션 열린 채 방치된 연결 30초 후 자동 종료
+  - `pool_recycle=600`: 연결 수명 30분→10분 단축, stale 연결 조기 해제
+
+#### `d3abad6` — 커버리지 확장 탐지기 실패 시 savepoint로 격리
+
+- **문제**: `db.rollback()`이 SQLite 테스트의 외부 트랜잭션(conftest 패턴)을 전체 롤백 → 기존 시그널 삭제. `test_characterize_group_cascade_ac010_exception_in_coverage_expansion` 실패
+- **수정**: `db.rollback()` → `db.begin_nested()` (SAVEPOINT) 교체. 탐지기 실패 시 해당 savepoint만 롤백, 외부 트랜잭션 및 기존 surge_candidate 보존
+
+#### `4f704ec` — gather_surge_candidates 완료 즉시 커밋 + 커버리지 확장 새 세션 격리
+
+- **문제**: `gather_surge_candidates()`가 12~15분 실행되는 동안 DB 연결 idle → PostgreSQL SSL 연결 끊김
+- **수정**: `fund_manager.py`
+  - `gather_surge_candidates` 완료 직후 `db.commit()` → surge_candidates 즉시 저장
+  - `_run_coverage_expansion`을 새 `SessionLocal()`로 실행 → SSL 오염 격리
+  - 커버리지 확장 실패해도 surge_candidates는 이미 저장 완료 상태 유지
+
+#### `77ce44d` — DB 연결 SSL 오염 시 탐지기 연쇄 실패 방지
+
+- **문제**: `bollinger_squeeze` 잡 22분 실행 후 SSL 끊김 → `db.close()` 실패 → `surge_signal_generate` 잡 첫 탐지기(`near_limit_up`)에서 SSL 오류 → rollback 없이 `PendingRollbackError` 상태 → 5개 후속 탐지기 연쇄 실패 → 0개 저장
+- **수정**: `fund_manager.py` `_run_coverage_expansion()` 6개 탐지기 except에 `db.rollback()` 추가. `scheduler.py` `_run_bollinger_squeeze_detect()` finally의 `db.close()` SSL 예외 억제
+
+#### `edc96e0` — 배포 가드 15:45 → 16:10 KST 확장
+
+- **문제**: 기존 15:45 가드로는 6/17 16:04 KST 배포 시 시그널 손실 재발
+- **수정**: 15:20 KST 잡 최대 소요 ~18분(대폭등일) + 커버리지 확장 ~5분 버퍼 반영 → 16:10으로 확장
+
+---
+
 ### Hotfix — 앙상블 가중치 재정규화 & None 방어 (2026-06-18)
 
 #### `a6ea9e8` — 앙상블 가중치 재정규화 오류 수정
