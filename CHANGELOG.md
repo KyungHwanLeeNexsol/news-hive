@@ -4,6 +4,42 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Feature — SPEC-AI-060: 급등 종목 개별 원인 분석 및 탐지기 개선 피드백 강화 (2026-06-22)
+
+#### `1565d14` — 급등 종목 개별 원인 분석 (enrich_surge_stock_context + 인과 LLM 분석)
+
+**목적**: SPEC-AI-041 자동평가 루프의 FN 분석을 "종목코드+등락률 추정"에서 실제 컨텍스트 기반 인과 분석으로 전환.
+
+- **`enrich_surge_stock_context(stock_code, trading_date, db) -> dict`** 신규
+  - 당일 공시(`Disclosure.rcept_dt` YYYYMMDD 문자열 매칭), 뉴스 헤드라인(NewsStockRelation 조인), 5일 거래량 이상치, T-1 FundSignal(surge_metadata JSON) 수집
+  - 공시 없음·뉴스 없음·거래량 없음 각각 독립 fallback — 부분 데이터도 반환
+- **`analyze_surge_cause_with_llm(stock_code, context, our_signal, db, budget_guard) -> dict`** 신규
+  - 반환: `root_cause`(공시/테마/거래량/모멘텀/복합), `should_have_fired`(탐지기명), `improvement_suggestion`, `confidence_note`
+  - `skip_if_no_context=True`: 공시·뉴스·거래량 전부 없으면 LLM 호출 없이 "데이터 없음(원인 미상)" 반환
+  - JSON 파싱 실패 시 자유 텍스트 → 규칙 기반 fallback (예외 없이 구조화 dict 반환)
+- **`analyze_true_positives_with_llm(tp_stocks, db, budget_guard) -> list[dict]`** 신규
+  - TP(적중) 종목별 `winning_detector`, `pattern_summary`, `reinforce` 분석
+- **`generate_detector_improvement_suggestions(analysis_results) -> list[dict]`** 신규
+  - `should_have_fired` 기준 탐지기별 집계, 빈도 내림차순 정렬, `priority` 부여
+- **`_LLMBudgetGuard(max_calls=8, delay_sec=1.0)`** 클래스 신규
+  - `can_call() -> bool`, `record_call()` — 하루 LLM 예산 8회 상한 관리
+- **`analyze_misses_with_llm(missed_stocks, db) -> str`** 내부 강화 (시그니처 FROZEN)
+  - 기존 scheduler.py:652 호출부 무수정 유지
+  - 강화 실패 시 기존 동작으로 fallback (평가 결과 보존 AC-13)
+
+**영향 파일**:
+- `backend/app/services/surge_evaluation_service.py` (+525줄)
+- `backend/app/services/scheduler.py` (+71줄, `_run_surge_verify_predictions` 내 TP 분석 블록)
+- `backend/app/models/surge_prediction_evaluation.py` (+2줄, `per_stock_analysis_json` 컬럼)
+- `backend/app/surge_config/surge_settings.py` (+12줄, `PerStockAnalysisConfig`)
+- `backend/app/surge_config/surge_detection.yaml` (`per_stock_analysis` 섹션 추가)
+- `backend/alembic/versions/061_surge_per_stock_analysis.py` (신규, down_revision=060)
+- `backend/tests/test_surge_evaluation_service_ai060.py` (신규, 20 테스트)
+
+**배포 전 필수**: `cd backend && alembic upgrade head` (migration 061 포함)
+
+---
+
 ### Hotfix — 배포 가드 이중화: 10:00 KST 잡 보호 (2026-06-22)
 
 #### `2caa4e6` — 배포 가드 이중화 — 10:00 KST 잡 보호 추가 (09:50~10:20)
