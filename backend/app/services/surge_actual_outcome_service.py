@@ -237,10 +237,11 @@ def backfill_stock_names(db: Session) -> int:
     offset = 0
 
     while True:
-        # stock_name == stock_code 인 행 조회 (종목명이 코드값 그대로인 행)
+        # stock_name == stock_code 인 행의 distinct stock_code 조회
         rows = (
-            db.query(SurgeActualOutcome.id, SurgeActualOutcome.stock_code)
+            db.query(SurgeActualOutcome.stock_code)
             .filter(SurgeActualOutcome.stock_name == SurgeActualOutcome.stock_code)
+            .distinct()
             .limit(_BATCH_SIZE)
             .offset(offset)
             .all()
@@ -273,7 +274,7 @@ def backfill_stock_names(db: Session) -> int:
             real_name = name_map.get(row.stock_code)
             if real_name:
                 db.query(SurgeActualOutcome).filter(
-                    SurgeActualOutcome.id == row.id
+                    SurgeActualOutcome.stock_code == row.stock_code
                 ).update({"stock_name": real_name}, synchronize_session=False)
                 batch_updated += 1
 
