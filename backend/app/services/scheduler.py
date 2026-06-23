@@ -620,39 +620,52 @@ def _run_surge_verify_predictions():
             evaluation.f1_score or 0.0,
         )
 
-        if evaluation.false_negative > 0:
-            # FN 종목 조회
-            from app.models.surge_actual_outcome import SurgeActualOutcome as _SAO
-            from app.models.fund_signal import FundSignal as _FS
-            from app.models.stock import Stock as _Stock
-            from sqlalchemy import func as _func
+        # SPEC-AI-061 REQ-AI061-B01: 핵심 평가 결과(precision/recall/f1)를 FN 분석 블록 진입 전에
+        # 즉시 커밋하여 이후 선택적 보강 블록에서 SSL 오류/쿼리 실패가 발생해도 결과를 보존한다.
+        db.commit()
 
-            from app.services.surge_trading_service import _get_prev_business_day
-            prev_day = _get_prev_business_day(today)
+        # FN 분석 블록 — 예외 격리 (precision/recall/f1 결과는 위 commit으로 이미 보존)
+        # SPEC-AI-061 REQ-AI061-B02
+        try:
+            if evaluation.false_negative > 0:
+                # FN 종목 조회
+                from app.models.surge_actual_outcome import SurgeActualOutcome as _SAO
+                from app.models.fund_signal import FundSignal as _FS
+                from app.models.stock import Stock as _Stock
+                from sqlalchemy import func as _func
 
-            predicted_codes = {
-                row.stock_code
-                for row in db.query(_Stock.stock_code)
-                .join(_FS, _FS.stock_id == _Stock.id)
-                .filter(
-                    _FS.surge_metadata.isnot(None),
-                    _func.date(_FS.created_at) == prev_day,
-                )
-                .all()
-            }
+                from app.services.surge_trading_service import _get_prev_business_day
+                prev_day = _get_prev_business_day(today)
 
-            missed = [
-                {"stock_code": r.stock_code, "stock_name": r.stock_name, "change_rate": r.change_rate}
-                for r in db.query(_SAO.stock_code, _SAO.stock_name, _SAO.change_rate)
-                .filter(_SAO.trading_date == today, _SAO.was_surge.is_(True))
-                .all()
-                if r.stock_code not in predicted_codes
-            ]
+                predicted_codes = {
+                    row.stock_code
+                    for row in db.query(_Stock.stock_code)
+                    .join(_FS, _FS.stock_id == _Stock.id)
+                    .filter(
+                        _FS.surge_metadata.isnot(None),
+                        _func.date(_FS.created_at) == prev_day,
+                    )
+                    .all()
+                }
 
-            analysis = asyncio.run(analyze_misses_with_llm(missed, db))
-            evaluation.miss_analysis_json = analysis
-            db.commit()
-            logger.info("LLM 미스 분석 저장 완료")
+                missed = [
+                    {"stock_code": r.stock_code, "stock_name": r.stock_name, "change_rate": r.change_rate}
+                    for r in db.query(_SAO.stock_code, _SAO.stock_name, _SAO.change_rate)
+                    .filter(_SAO.trading_date == today, _SAO.was_surge.is_(True))
+                    .all()
+                    if r.stock_code not in predicted_codes
+                ]
+
+                analysis = asyncio.run(analyze_misses_with_llm(missed, db))
+                evaluation.miss_analysis_json = analysis
+                db.commit()
+                logger.info("LLM 미스 분석 저장 완료")
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.warning("FN 분석 실패 — 평가 결과는 보존됨", exc_info=True)
 
         # SPEC-AI-060: TP 분석 + 종목별 분석 결과 저장 (예외 격리 — precision/recall/f1 보존)
         try:
@@ -722,8 +735,13 @@ def _run_surge_verify_predictions():
                     len(tp_analyses), len(fn_data),
                 )
         except Exception:
+            # SPEC-AI-061 REQ-AI061-B03: TP 분석 블록 실패 시 세션을 clean 상태로 복원
+            try:
+                db.rollback()
+            except Exception:
+                pass
             logger.warning("종목별 분석 실패 — 평가 결과는 보존됨", exc_info=True)
-            # raise 하지 않음: precision/recall/f1 결과가 이미 commit됨 (AC-13)
+            # raise 하지 않음: precision/recall/f1 결과가 이미 commit됨 (AC-13, SPEC-AI-061 REQ-AI061-B04)
     except Exception:
         logger.exception("surge verify predictions 실패")
         raise
