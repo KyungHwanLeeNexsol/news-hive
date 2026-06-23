@@ -4,6 +4,67 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Feature — SPEC-AI-061: 급등 자동개선 루프 구조 강화 5종 (2026-06-23)
+
+#### `b6f5fcb` — 급등 자동개선 루프 구조 강화 5종 (Groups A-E)
+
+**목적**: 2026-06-22 실증 데이터 기반으로 진자현상 방지, 트랜잭션 안전성 확보, EV 가드, 섹터 하락 예방, stock_name 정합성 복구 5종 구조 강화.
+
+**Group A — 진자현상 방지 (`surge_auto_improver.py`)**
+
+- **`_compute_param_set_hash(param_updates: dict) -> str`** 신규
+  - SHA-256[:16] 해시로 파라미터 조합 동일성 판별
+- **`_check_rollback_guard(db, trading_date, rollback_updates, config) -> tuple[bool, str | None]`** 신규
+  - 최근 5일 내 동일 해시 롤백 발생 시 쿨다운 차단
+  - 연속 롤백 횟수 2회 초과 시 연속 차단 (freeze)
+  - `analyze_and_improve` Step 5에 통합, 차단 시 `rollback_suppressed_pendulum` / `rollback_frozen_escalation` 로그
+  - fail-open: DB 오류 시 가드 미작동, 개선 진행
+
+**Group B — FN/TP 분석 블록 격리 (`scheduler.py`)**
+
+- `_run_surge_verify_predictions`: 핵심 평가 결과 `db.commit()` 선행 후 FN/TP 분석 블록 개별 try-except 격리
+  - FN 블록 실패 → `db.rollback()` + WARNING 로그, 평가 결과는 보존
+  - TP 블록 실패 → 동일 패턴으로 격리
+  - 보존 우선순위: 평가 결과(정수) > 분석 품질(선택적)
+
+**Group C — EV 음수 가드 (`surge_auto_improver.py`)**
+
+- **`_compute_rolling_ev(db, ev_window_days=5) -> tuple[float | None, int]`** 신규
+  - `ImprovementLog` failure_aggregation에서 accuracy_rate, avg_return 계산
+  - EV = (accuracy × avg_return) + ((1 - accuracy) × −avg_return)
+- Step 4.5 EV 가드: EV < 0.0 → `min_score_for_signal += 0.02` (상한 0.65)
+  - 실증: accuracy=0.375, EV≈−6.58% (2026-06-23 기준)
+  - 데이터 부족(N < 5) 또는 DB 오류 시 skip (fail-open)
+
+**Group D — 섹터 하락 억제 게이트 (`surge_detector.py`)**
+
+- **`_compute_sector_decline_ratio(db, sector_id, prev_trading_date, sector_min_stocks=5) -> float | None`** 신규
+  - 전날 `SurgeActualOutcome` 섹터 내 하락 비율 계산
+- `gather_surge_candidates` 말미 게이트: 섹터 하락비율 > 60% → 해당 섹터 종목 제거
+  - fail-open: 데이터 부족(섹터 < 5종목) 또는 DB 오류 시 억제 생략
+
+**Group E — stock_name 정합성 (`surge_actual_outcome_service.py`)**
+
+- upsert `ON CONFLICT`: `stock_name` 조건부 업데이트 — `case(stock_name != stock_code, new_name, else_=existing_name)`
+  - 기존 정식 종목명 덮어쓰기 방지
+- **`backfill_stock_names(db: Session) -> int`** 신규
+  - `stock_name == stock_code` 행을 `Stock` 테이블 실명으로 일괄 업데이트
+  - 수동 실행 함수 (배포 자동 실행 없음)
+
+**영향 파일**:
+- `backend/app/services/surge_auto_improver.py` (Group A + C: 신규 함수 4개)
+- `backend/app/services/scheduler.py` (Group B: commit 선행 + 블록 격리)
+- `backend/app/services/surge_detector.py` (Group D: 섹터 게이트)
+- `backend/app/services/surge_actual_outcome_service.py` (Group E: upsert + backfill)
+- `backend/tests/test_surge_auto_improver_ai061.py` (신규, 25 테스트)
+- `backend/tests/test_surge_detector_ai061.py` (신규, 18 테스트)
+- `backend/tests/test_scheduler_ai061.py` (신규, 9 테스트)
+- `backend/tests/test_surge_actual_outcome_ai061.py` (신규, 13 테스트)
+
+**배포 메모**: migration 없음. 배포 직후 `backfill_stock_names()` 수동 실행 권장. 첫 `_check_rollback_guard` 동작 확인: 다음 자동개선 잡 실행 시.
+
+---
+
 ### Feature — SPEC-AI-060: 급등 종목 개별 원인 분석 및 탐지기 개선 피드백 강화 (2026-06-22)
 
 #### `1565d14` — 급등 종목 개별 원인 분석 (enrich_surge_stock_context + 인과 LLM 분석)
