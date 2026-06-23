@@ -11,6 +11,7 @@ from __future__ import annotations
 # @MX:NOTE: [AUTO] SPEC-AI-041 — 탐지기별 5거래일 롤링 적중률 기반 앙상블 가중치 자동 조정
 # @MX:SPEC: SPEC-AI-041 REQ-AI041-003
 
+import hashlib
 import json
 import logging
 import os
@@ -24,6 +25,7 @@ from sqlalchemy import func as sqlfunc
 from sqlalchemy.orm import Session
 
 from app.models.fund_signal import FundSignal
+from app.models.improvement_log import ImprovementLog
 from app.models.stock import Stock
 from app.models.surge_actual_outcome import SurgeActualOutcome
 from app.models.surge_auto_improvement_log import SurgeAutoImprovementLog
@@ -188,6 +190,162 @@ def _write_auto_yaml(updates: dict[str, float]) -> None:
     logger.info("auto.yaml 업데이트: %s", list(updates.keys()))
 
 
+def _compute_param_set_hash(param_updates: dict[str, float]) -> str:
+    """파라미터 업데이트 딕셔너리를 정렬된 JSON으로 직렬화하여 sha256 해시 앞 16자를 반환한다.
+
+    # @MX:NOTE: [AUTO] SPEC-AI-061 — 롤백 진자현상 방지용 파라미터 집합 동일성 검사 함수
+    # @MX:SPEC: SPEC-AI-061 REQ-AI061-A01
+    """
+    serialized = json.dumps(param_updates, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(serialized.encode()).hexdigest()[:16]
+
+
+def _check_rollback_guard(
+    db: Session,
+    trading_date: date,
+    rollback_updates: dict[str, float],
+    config: Any,
+) -> tuple[bool, str | None]:
+    """롤백 허용 여부를 검사한다. 진자현상 방지 가드.
+
+    # @MX:WARN: [AUTO] SPEC-AI-061 — 롤백 가드: 두 가지 조건 중 하나라도 걸리면 롤백 차단
+    # @MX:REASON: 진자현상(A→B→A 무한 반복) 방지. cooldown 및 연속 횟수 제한이 없으면
+    #             recall≈0 상태에서 두 파라미터 집합 간 무한 진동이 발생함 (2026-06-19/22 실증)
+    # @MX:SPEC: SPEC-AI-061 REQ-AI061-A02
+
+    Returns:
+        (allowed, suppression_reason) — allowed=False 시 suppression_reason이 설정됨.
+    """
+    # config 객체에서 설정값 추출 (없으면 안전 기본값 사용)
+    rollback_cooldown_days: int = getattr(config, "rollback_cooldown_days", None) or 5
+    consecutive_rollback_limit: int = getattr(config, "consecutive_rollback_limit", None) or 2
+
+    incoming_hash = _compute_param_set_hash(rollback_updates)
+
+    # 검사 1 (해시): 최근 rollback_cooldown_days 평가일에서 auto_rollback으로 적용된 파라미터 집합이
+    # 입력 rollback_updates와 동일한지 확인
+    from sqlalchemy import desc as _desc
+
+    # 최근 N일치 auto_rollback 로그 조회 (날짜 기준 내림차순)
+    recent_rollback_logs = (
+        db.query(SurgeAutoImprovementLog)
+        .filter(SurgeAutoImprovementLog.rationale == "auto_rollback")
+        .order_by(_desc(SurgeAutoImprovementLog.evaluation_date))
+        .limit(rollback_cooldown_days * 10)  # 넉넉하게 조회 후 날짜 필터링
+        .all()
+    )
+
+    # 평가 날짜별 롤백 적용값 집합 계산 후 해시 비교
+    from collections import defaultdict
+    date_to_updates: dict[date, dict[str, float]] = defaultdict(dict)
+    for log in recent_rollback_logs:
+        date_to_updates[log.evaluation_date][log.parameter_path] = log.new_value
+
+    # 최근 rollback_cooldown_days 개 평가일만 검사
+    distinct_dates = sorted(date_to_updates.keys(), reverse=True)[:rollback_cooldown_days]
+    for prev_date in distinct_dates:
+        prev_hash = _compute_param_set_hash(date_to_updates[prev_date])
+        if prev_hash == incoming_hash:
+            logger.warning(
+                "롤백 가드(해시): 최근 %d일 내 동일 파라미터 집합 롤백 시도 감지 (prev_date=%s). 차단.",
+                rollback_cooldown_days,
+                prev_date,
+            )
+            return False, "rollback_suppressed_pendulum"
+
+    # 검사 2 (연속 횟수): 최근 평가일에서 연속으로 롤백 관련 rationale이 발생했는지 확인
+    consecutive_rationales = {
+        "auto_rollback",
+        "rollback_suppressed_pendulum",
+        "rollback_frozen_escalation",
+    }
+    # 가장 최근 평가 날짜들을 내림차순 조회
+    all_recent = (
+        db.query(SurgeAutoImprovementLog.evaluation_date)
+        .filter(SurgeAutoImprovementLog.rationale.in_(list(consecutive_rationales)))
+        .distinct()
+        .order_by(_desc(SurgeAutoImprovementLog.evaluation_date))
+        .limit(consecutive_rollback_limit + 1)
+        .all()
+    )
+    # trading_date보다 이전인 날짜만 카운트
+    consecutive_count = sum(
+        1 for row in all_recent if row.evaluation_date < trading_date
+    )
+    if consecutive_count >= consecutive_rollback_limit:
+        logger.warning(
+            "롤백 가드(연속): %d일 연속 롤백/억제 감지 (limit=%d). 롤백 동결.",
+            consecutive_count,
+            consecutive_rollback_limit,
+        )
+        return False, "rollback_frozen_escalation"
+
+    return True, None
+
+
+# @MX:ANCHOR: [AUTO] SPEC-AI-061 — analyze_and_improve: 자동 개선 메인 진입점. scheduler, 복구 스크립트, 테스트 등 3곳 이상에서 호출됨
+# @MX:NOTE: [AUTO] SPEC-AI-061 — EV가드: 기대값 음수 시 min_score 상향
+def _compute_rolling_ev(
+    db: Session, ev_window_days: int = 5
+) -> tuple[float | None, int]:
+    """최근 N개 failure_aggregation 로그에서 롤링 기대값(EV)을 계산한다.
+
+    각 행의 details JSON에서 accuracy_rate, avg_return_correct,
+    avg_return_incorrect를 파싱하여 EV를 계산한다:
+        ev = accuracy_rate * avg_return_correct + (1 - accuracy_rate) * avg_return_incorrect
+
+    Args:
+        db: SQLAlchemy 세션
+        ev_window_days: 조회할 최근 행 수 (기본값: 5)
+
+    Returns:
+        (mean_ev, n_samples) 튜플.
+        - mean_ev: 파싱 성공한 행들의 EV 평균. 유효 행 없으면 None.
+        - n_samples: details의 total_verified 합계 (없으면 파싱 성공 행 수).
+    """
+    import json as _json  # noqa: PLC0415 — 로컬 임포트로 최상위 네임스페이스 오염 방지
+
+    rows = (
+        db.query(ImprovementLog)
+        .filter(ImprovementLog.action_type == "failure_aggregation")
+        .order_by(ImprovementLog.id.desc())
+        .limit(ev_window_days)
+        .all()
+    )
+
+    ev_list: list[float] = []
+    n_samples = 0
+
+    for row in rows:
+        if not row.details:
+            continue
+        try:
+            d = _json.loads(row.details)
+            accuracy_rate = float(d["accuracy_rate"])
+            avg_return_correct = float(d["avg_return_correct"])
+            avg_return_incorrect = float(d["avg_return_incorrect"])
+        except (KeyError, TypeError, ValueError) as exc:
+            # 파싱 실패 행은 조용히 건너뜀
+            logger.debug("EV 계산 행 파싱 실패 (id=%s): %s", row.id, exc)
+            continue
+
+        ev_i = accuracy_rate * avg_return_correct + (1 - accuracy_rate) * avg_return_incorrect
+        ev_list.append(ev_i)
+
+        # total_verified 키가 있으면 신호 수로 집계, 없으면 행 1개로 카운트
+        n_samples += int(d.get("total_verified", 1))
+
+    if not ev_list:
+        return None, 0
+
+    mean_ev = sum(ev_list) / len(ev_list)
+    return mean_ev, n_samples
+
+
+# @MX:ANCHOR: [AUTO] analyze_and_improve — 파라미터 변경·DB 커밋·YAML 기록을 단일 트랜잭션으로 수행
+# @MX:REASON: 파라미터 변경 + DB 커밋 + YAML 기록 + config 리로드를 단일 트랜잭션 내에서 수행.
+#             시그니처 또는 반환 타입 변경 시 모든 호출자 동시 업데이트 필수
+# @MX:SPEC: SPEC-AI-041 REQ-AI041-003
 def analyze_and_improve(
     db: Session, trading_date: date
 ) -> list[SurgeAutoImprovementLog]:
@@ -392,6 +550,67 @@ def analyze_and_improve(
         )
 
     # ---------------------------------------------------------------------------
+    # Step 4.5 — SPEC-AI-061 REQ-AI061-C01~C04: EV 가드
+    # 롤링 기대값(EV)이 음수이면 min_score_for_signal을 상향하여 저품질 신호 필터링
+    # ---------------------------------------------------------------------------
+    _ev_window_days: int = int(getattr(cfg, "ev_window_days", None) or 5)
+    _ev_min_samples: int = int(getattr(cfg, "ev_min_samples", None) or 20)
+    _ev_floor: float = float(getattr(cfg, "ev_floor", None) or 0.0)
+    _ev_penalty_step: float = float(getattr(cfg, "ev_penalty_step", None) or 0.02)
+
+    _mean_ev, _n_samples = _compute_rolling_ev(db, ev_window_days=_ev_window_days)
+
+    if _mean_ev is None:
+        logger.debug(
+            "EV 가드: failure_aggregation 데이터 없음 — 가드 스킵 (window=%d)",
+            _ev_window_days,
+        )
+    elif _n_samples < _ev_min_samples:
+        logger.debug(
+            "EV 가드: 샘플 수 부족 (%d < %d) — 가드 스킵 (mean_ev=%.3f)",
+            _n_samples,
+            _ev_min_samples,
+            _mean_ev,
+        )
+    elif _mean_ev < _ev_floor:
+        # EV가 floor 미만 → min_score 상향
+        _ev_current_score = get_surge_config().ensemble.min_score_for_signal
+        _ev_new_score = min(0.65, _ev_current_score + _ev_penalty_step)
+        _write_auto_yaml({"ensemble.min_score_for_signal": _ev_new_score})
+        reload_surge_config()
+
+        _ev_log = SurgeAutoImprovementLog(
+            evaluation_date=trading_date,
+            parameter_path="ensemble.min_score_for_signal",
+            old_value=round(_ev_current_score, 6),
+            new_value=round(_ev_new_score, 6),
+            rationale=f"ev_guard: EV={_mean_ev:.3f}<{_ev_floor:.3f}",
+            rolling_window_days=_ev_window_days,
+        )
+        db.add(_ev_log)
+        db.commit()
+        logs.append(_ev_log)
+
+        # 이후 min_score 변경 비교에도 반영
+        new_min_score = _ev_new_score
+
+        logger.info(
+            "EV 가드 발동: EV=%.3f < floor=%.3f → min_score %.3f → %.3f (n_samples=%d)",
+            _mean_ev,
+            _ev_floor,
+            _ev_current_score,
+            _ev_new_score,
+            _n_samples,
+        )
+    else:
+        logger.debug(
+            "EV 가드: EV=%.3f >= floor=%.3f (n_samples=%d) — 가드 불필요",
+            _mean_ev,
+            _ev_floor,
+            _n_samples,
+        )
+
+    # ---------------------------------------------------------------------------
     # Step 5 — R12 자동 롤백 검사
     # ---------------------------------------------------------------------------
     recall_values = [e.recall or 0.0 for e in last_5_evals]
@@ -419,6 +638,39 @@ def analyze_and_improve(
                 prev_eval.recall, rolling_avg_recall * 0.80,
             )
 
+            # ---------------------------------------------------------------------------
+            # SPEC-AI-061 REQ-AI061-A03: 롤백 실행 전 진자현상 가드 검사
+            # ---------------------------------------------------------------------------
+            # 롤백 대상 파라미터 값 미리 계산 (가드 검사용)
+            rollback_updates: dict[str, float] = {
+                prev_log.parameter_path: prev_log.old_value
+                for prev_log in prev_logs
+            }
+            _guard_cfg = get_surge_config()
+            _allowed, _suppression_reason = _check_rollback_guard(
+                db, trading_date, rollback_updates, _guard_cfg
+            )
+
+            if not _allowed:
+                # 가드에 의해 롤백 차단: 억제 로그만 기록하고 반환
+                logger.warning(
+                    "롤백 가드 작동으로 롤백 차단 (reason=%s). auto.yaml 변경 없음.",
+                    _suppression_reason,
+                )
+                for prev_log in prev_logs:
+                    _suppressed_log = SurgeAutoImprovementLog(
+                        evaluation_date=trading_date,
+                        parameter_path=prev_log.parameter_path,
+                        old_value=prev_log.new_value,
+                        new_value=prev_log.old_value,
+                        rationale=_suppression_reason,
+                        rolling_window_days=5,
+                    )
+                    db.add(_suppressed_log)
+                    logs.append(_suppressed_log)
+                db.commit()
+                return logs
+
             for prev_log in prev_logs:
                 rollback_log = SurgeAutoImprovementLog(
                     evaluation_date=trading_date,
@@ -434,10 +686,6 @@ def analyze_and_improve(
             db.commit()
 
             # 롤백 값을 auto.yaml에 적용 (메인 YAML은 수정하지 않음)
-            rollback_updates: dict[str, float] = {}
-            for prev_log in prev_logs:
-                rollback_updates[prev_log.parameter_path] = prev_log.old_value
-
             _write_auto_yaml(rollback_updates)
             reload_surge_config()
 

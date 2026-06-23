@@ -10,7 +10,7 @@ import logging
 import math
 import statistics
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Callable
 
 from sqlalchemy import and_, or_
@@ -1248,6 +1248,48 @@ def detect_news_delayed_response(
         return []
 
 
+# @MX:NOTE: [AUTO] SPEC-AI-061 — sector_contagion 예방 게이트: 섹터 하락 비율 > threshold 종목 억제
+# @MX:SPEC: SPEC-AI-061 REQ-AI061-D01
+def _compute_sector_decline_ratio(
+    db: Session,
+    sector_id: int,
+    prev_trading_date: date,
+    sector_min_stocks: int = 5,
+) -> float | None:
+    """전날 섹터 하락 비율을 계산한다.
+
+    Args:
+        db: SQLAlchemy 동기 세션
+        sector_id: 섹터 ID
+        prev_trading_date: 조회 기준 전일 날짜
+        sector_min_stocks: 통계 유효성 최소 종목 수 (미만이면 None 반환)
+
+    Returns:
+        하락 비율 (0.0 ~ 1.0), 데이터 부족 또는 오류 시 None (fail-open)
+    """
+    try:
+        from app.models.surge_actual_outcome import SurgeActualOutcome
+
+        rows = (
+            db.query(SurgeActualOutcome.change_rate)
+            .join(Stock, Stock.stock_code == SurgeActualOutcome.stock_code)
+            .filter(
+                Stock.sector_id == sector_id,
+                SurgeActualOutcome.trading_date == prev_trading_date,
+            )
+            .all()
+        )
+        total_count = len(rows)
+        # 섹터 내 종목 수 부족 — 통계적으로 유의미하지 않으므로 fail-open
+        if total_count < sector_min_stocks:
+            return None
+        decline_count = sum(1 for r in rows if r.change_rate is not None and r.change_rate < 0)
+        return decline_count / total_count
+    except Exception as e:
+        logger.warning("[sector_contagion] 섹터 하락 비율 조회 실패 (fail-open): %s", e)
+        return None
+
+
 # @MX:NOTE: [AUTO] SPEC-AI-012 앙상블 파이프라인 진입점 — fund_manager._gather_surge_candidates에서 호출
 # @MX:SPEC: SPEC-AI-012
 def gather_surge_candidates(
@@ -1484,6 +1526,56 @@ def gather_surge_candidates(
             "[앙상블] 최종 급등 후보 %d개 (레짐=%s, 유효임계=%.2f)",
             len(qualified), market_regime, effective_threshold,
         )
+
+    # SPEC-AI-061 REQ-AI061-D01: sector_contagion 예방 게이트
+    # 전날 섹터 하락 비율 초과 후보 제거
+    _sector_decline_threshold: float = (
+        getattr(config, "sector_contagion_decline_ratio", None) or 0.60
+    )
+    _sector_min_stocks: int = int(getattr(config, "sector_min_stocks", None) or 5)
+    # 전날 영업일 계산 — 간단히 역일 기준 -1일 사용 (주말/공휴일 처리는 fail-open으로 커버)
+    _prev_date: date = datetime.now(timezone.utc).date() - timedelta(days=1)
+
+    if qualified:
+        # 성능 최적화: 종목코드 → sector_id 일괄 조회 (N+1 쿼리 방지)
+        _stock_sector_map: dict[str, int | None] = {
+            row.stock_code: row.sector_id
+            for row in db.query(Stock.stock_code, Stock.sector_id)
+            .filter(Stock.stock_code.in_([c.stock_code for c in qualified]))
+            .all()
+        }
+
+        _sector_filtered: list[SurgeCandidate] = []
+        for _cand in qualified:
+            _sid = _stock_sector_map.get(_cand.stock_code)
+            if _sid is None:
+                # 섹터 정보 없음 — fail-open (통과)
+                _sector_filtered.append(_cand)
+                continue
+            _ratio = _compute_sector_decline_ratio(db, _sid, _prev_date, _sector_min_stocks)
+            if _ratio is None:
+                # 데이터 부족 또는 오류 — fail-open (통과)
+                _sector_filtered.append(_cand)
+                continue
+            if _ratio > _sector_decline_threshold:
+                # 섹터 하락 비율 초과 — 억제
+                logger.info(
+                    "sector_contagion 게이트: %s 제거 (섹터 하락비율=%.2f)",
+                    _cand.stock_code,
+                    _ratio,
+                )
+            else:
+                _sector_filtered.append(_cand)
+
+        if len(_sector_filtered) < len(qualified):
+            logger.info(
+                "[sector_contagion] 게이트 적용: %d개 → %d개 (임계=%.2f)",
+                len(qualified),
+                len(_sector_filtered),
+                _sector_decline_threshold,
+            )
+        qualified = _sector_filtered
+
     return qualified
 
 
