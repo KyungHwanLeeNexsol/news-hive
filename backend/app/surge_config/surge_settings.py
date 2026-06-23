@@ -108,6 +108,24 @@ class HighImpactNewsConfig(BaseModel):
         return 1.0
 
 
+class VolumeBreakoutConfig(BaseModel):
+    """뉴스/공시 없이 거래량 폭발만으로 소형주를 탐지하는 커버리지 확장 탐지기.
+
+    Naver 거래량 순위 상위 종목 중 최근 20일 평균 대비 급증 종목을 후보로 반환.
+    """
+
+    enabled: bool = True
+    # KOSPI + KOSDAQ 각 max_candidates/2개 조회
+    max_candidates: int = 100
+    # 평균 대비 최소 배율 (3배 = 비정상 거래 시작)
+    volume_ratio_threshold: float = 3.0
+    baseline_days: int = 20
+    min_history_days: int = 10
+    # volume_breakout_score = min(ratio / denominator, max_score)
+    confidence_denominator: float = 8.0
+    max_score: float = 0.50
+
+
 class EnsembleWeightsConfig(BaseModel):
     """앙상블 스코어 가중치."""
 
@@ -121,6 +139,8 @@ class EnsembleWeightsConfig(BaseModel):
     # @MX:NOTE: [AUTO] SPEC-AI-050 REQ-5 — weekend_gap_up은 coverage-expansion 탐지기. 가중치 필드는 합산 검증용
     # @MX:SPEC: SPEC-AI-050 REQ-5
     weekend_gap_up: float = 0.10
+    # 거래량 폭발 탐지기 가중치 (소형주 커버리지 확장, 뉴스 없이 거래량만으로 탐지)
+    volume_breakout: float = 0.0
 
 
 class EnsembleConfig(BaseModel):
@@ -291,6 +311,8 @@ class SurgeDetectionConfig(BaseModel):
     high_impact_news: HighImpactNewsConfig = Field(default_factory=HighImpactNewsConfig)
     # SPEC-AI-060: 종목별 개별 원인 분석 설정
     per_stock_analysis: PerStockAnalysisConfig = Field(default_factory=PerStockAnalysisConfig)
+    # 거래량 폭발 소형주 탐지기 설정
+    volume_breakout: VolumeBreakoutConfig = Field(default_factory=VolumeBreakoutConfig)
 
     # SPEC-AI-042 REQ-042-008: 장전 갭업 조기 진입 임계값 (하드코딩 금지)
     # 0 <= change_rate < gap_entry_threshold → 조기 진입
@@ -302,7 +324,7 @@ class SurgeDetectionConfig(BaseModel):
     # @MX:REASON: 가중치 합산 != 1.0 이면 앙상블 스코어 범위가 0~1을 벗어나 시그널 임계값 판정이 왜곡됨
     @model_validator(mode="after")
     def validate_ensemble_weights(self) -> "SurgeDetectionConfig":
-        """앙상블 가중치 합산이 1.0이어야 한다 (SPEC-AI-050: weekend_gap_up 포함 6개)."""
+        """앙상블 가중치 합산이 1.0이어야 한다 (7개 탐지기 가중치 합산)."""
         w = self.ensemble.weights
         total = (
             w.theme_cluster
@@ -311,6 +333,7 @@ class SurgeDetectionConfig(BaseModel):
             + w.legacy_detectors
             + w.news_delayed
             + w.weekend_gap_up
+            + w.volume_breakout
         )
         if abs(total - 1.0) > 0.001:
             raise ValueError(

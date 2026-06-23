@@ -807,6 +807,43 @@ def fetch_stock_price_history_sync(stock_code: str, pages: int = 3) -> list[Pric
     return results
 
 
+def fetch_volume_leaders_sync(limit: int = 50) -> list[str]:
+    """Naver 거래량 순위 페이지에서 당일 거래량 상위 종목 코드를 동기적으로 반환한다.
+
+    KOSPI + KOSDAQ 각 limit개씩 조회하여 중복 없이 합산 반환.
+    탐지기 실행 시점(장 중 또는 장 마감 후)에 따라 당일 누적 거래량 기준.
+    """
+    from bs4 import BeautifulSoup
+
+    codes: list[str] = []
+    seen: set[str] = set()
+
+    for sosok in (0, 1):  # 0=KOSPI, 1=KOSDAQ
+        url = f"https://finance.naver.com/sise/sise_quant.naver?sosok={sosok}"
+        try:
+            with httpx.Client(timeout=10, follow_redirects=True) as client:
+                resp = client.get(url, headers=HEADERS)
+                resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "html.parser")
+            count = 0
+            for a_tag in soup.select("a.tltle[href*='code=']"):
+                import re as _re
+                m = _re.search(r"code=(\d{6})", a_tag.get("href", ""))
+                if not m:
+                    continue
+                code = m.group(1)
+                if code not in seen:
+                    seen.add(code)
+                    codes.append(code)
+                    count += 1
+                if count >= limit:
+                    break
+        except Exception as e:
+            logger.warning("거래량 순위 조회 실패 (sosok=%d): %s", sosok, e)
+
+    return codes
+
+
 def fetch_current_price_with_change_sync(stock_code: str) -> dict | None:
     """특정 종목의 현재가 + 등락률을 동기적으로 반환 (Naver 모바일 API).
 

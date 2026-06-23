@@ -43,8 +43,9 @@ _AUTO_YAML_PATH = Path(__file__).parent.parent / "surge_config" / "surge_detecti
 # @MX:NOTE: [AUTO] SPEC-AI-050 REQ-5 — weekend_gap_up은 커버리지 확장 탐지기로 자동 개선(가중치 조정) 제외
 _DETECTORS = ["theme_cluster", "volume_news_combo", "disclosure_pattern", "legacy_detectors", "news_delayed"]
 
-# 가중치 합산 검증 시 포함할 전체 탐지기 목록 (weekend_gap_up 포함)
-_ALL_WEIGHT_KEYS = [*_DETECTORS, "weekend_gap_up"]
+# 가중치 합산 검증 시 포함할 전체 탐지기 목록 (weekend_gap_up + volume_breakout 포함)
+# volume_breakout은 자동 개선 대상 외 고정 가중치 — weekend_gap_up과 동일하게 취급
+_ALL_WEIGHT_KEYS = [*_DETECTORS, "weekend_gap_up", "volume_breakout"]
 
 
 def _parse_detector_contributions(surge_metadata: dict[str, Any]) -> set[str]:
@@ -507,15 +508,22 @@ def analyze_and_improve(
             }
 
             # 마지막 재정규화: weekend_gap_up(고정) 제외 비율로 스케일링
-            # _DETECTORS 5개 합산 목표 = 1.0 - weekend_gap_up (예: 0.90)
-            _wgu_target = 1.0 - cfg.ensemble.weights.weekend_gap_up
+            # _DETECTORS 5개 합산 목표 = 1.0 - weekend_gap_up - volume_breakout (고정 가중치 제외)
+            _fixed_weight = (
+                cfg.ensemble.weights.weekend_gap_up
+                + cfg.ensemble.weights.volume_breakout
+            )
+            _wgu_target = 1.0 - _fixed_weight
             cap_total = sum(daily_capped.values())
             final_weight = {d: daily_capped[d] / cap_total * _wgu_target for d in _DETECTORS}
 
-    # 사전 검증 (CRITICAL): _DETECTORS + weekend_gap_up(고정) 합산 = 1.0
-    # weekend_gap_up은 커버리지 확장 탐지기로 자동 개선 대상 외 → 현재 YAML 값 유지
-    _wgu_weight = cfg.ensemble.weights.weekend_gap_up
-    weight_sum = sum(final_weight.values()) + _wgu_weight
+    # 사전 검증 (CRITICAL): _DETECTORS + weekend_gap_up + volume_breakout(고정) 합산 = 1.0
+    # weekend_gap_up, volume_breakout은 자동 개선 대상 외 → 현재 YAML 값 유지
+    _fixed_total = (
+        cfg.ensemble.weights.weekend_gap_up
+        + cfg.ensemble.weights.volume_breakout
+    )
+    weight_sum = sum(final_weight.values()) + _fixed_total
     assert abs(weight_sum - 1.0) <= 0.001, (
         f"앙상블 가중치 합산 오류: {weight_sum:.6f} (1.0이어야 함)"
     )

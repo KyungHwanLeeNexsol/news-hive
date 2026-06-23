@@ -56,12 +56,16 @@ surge_detection:
       # theme_cluster: 0.28→0.25, volume_news_combo: 0.35→0.32
       # disclosure_pattern: 0.20→0.18, legacy_detectors: 0.17→0.10, news_delayed: 0.00→0.15
       # SPEC-AI-050 REQ-5: legacy_detectors 0.10→0.00, weekend_gap_up 0.10 신규 추가 (합계 유지 1.0)
-      theme_cluster: 0.25
-      volume_news_combo: 0.32
-      disclosure_pattern: 0.18
+      # volume_breakout 0.12 신규 추가 — 소형주 커버리지 확장 (가중치 재배분, 합계 유지 1.0)
+      # theme_cluster: 0.25→0.22, volume_news_combo: 0.32→0.28
+      # disclosure_pattern: 0.18→0.16, news_delayed: 0.15→0.13, weekend_gap_up: 0.10→0.09
+      theme_cluster: 0.22
+      volume_news_combo: 0.28
+      disclosure_pattern: 0.16
       legacy_detectors: 0.00
-      news_delayed: 0.15
-      weekend_gap_up: 0.10
+      news_delayed: 0.13
+      weekend_gap_up: 0.09
+      volume_breakout: 0.12
     min_score_for_signal: 0.45
     # 레짐별 앙상블 임계값 (SPEC-AI-017 REQ-001): 시장 레짐에 따라 차등 적용
     # BULL 장에서는 진입 문턱 낮춰 더 많은 시그널 허용 (0.38), SIDEWAYS/BEAR는 높임
@@ -178,3 +182,13 @@ surge_detection:
     call_delay_sec: 1.0
     fn_priority_over_tp: true
     skip_if_no_context: true
+  # 거래량 폭발 소형주 탐지기 — 뉴스/공시 없이 거래량만으로 소형주 급등 포착
+  # Naver 거래량 순위 상위 100개 종목 대상, 20일 평균 대비 3배 이상 거래량 폭발 탐지
+  volume_breakout:
+    enabled: true
+    max_candidates: 100
+    volume_ratio_threshold: 3.0
+    baseline_days: 20
+    min_history_days: 10
+    confidence_denominator: 8.0
+    max_score: 0.50

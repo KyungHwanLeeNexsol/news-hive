@@ -197,7 +197,7 @@ class TestAC037005NonThemeFastPath:
 class TestAC037006Regression:
     def test_ensemble_weights_sum_to_one(self, cfg: SurgeDetectionConfig) -> None:
         """앙상블 가중치 합산이 1.0 (±0.001) 이어야 한다.
-        SPEC-AI-050: weekend_gap_up(0.10) 추가 → 6개 탐지기 합산.
+        volume_breakout(0.12) 추가 → 7개 탐지기 합산.
         """
         w = cfg.ensemble.weights
         total = (
@@ -207,6 +207,7 @@ class TestAC037006Regression:
             + w.legacy_detectors
             + w.news_delayed
             + w.weekend_gap_up
+            + w.volume_breakout
         )
         assert abs(total - 1.0) < 0.001, f"가중치 합산 오류: {total:.4f}"
 

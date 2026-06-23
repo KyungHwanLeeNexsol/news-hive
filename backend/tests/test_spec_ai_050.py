@@ -174,12 +174,13 @@ class TestAC3WindowExpansion:
 
         # get_surge_config mock: current_window=36 (< 48) 이면 패치 발생
         mock_cfg = MagicMock()
-        mock_cfg.ensemble.weights.theme_cluster = 0.25
-        mock_cfg.ensemble.weights.volume_news_combo = 0.32
-        mock_cfg.ensemble.weights.disclosure_pattern = 0.18
+        mock_cfg.ensemble.weights.theme_cluster = 0.22
+        mock_cfg.ensemble.weights.volume_news_combo = 0.28
+        mock_cfg.ensemble.weights.disclosure_pattern = 0.16
         mock_cfg.ensemble.weights.legacy_detectors = 0.0
-        mock_cfg.ensemble.weights.news_delayed = 0.15
-        mock_cfg.ensemble.weights.weekend_gap_up = 0.10
+        mock_cfg.ensemble.weights.news_delayed = 0.13
+        mock_cfg.ensemble.weights.weekend_gap_up = 0.09
+        mock_cfg.ensemble.weights.volume_breakout = 0.12
         mock_cfg.ensemble.min_score_for_signal = 0.45
 
         bear_params = MagicMock()
@@ -229,12 +230,13 @@ class TestAC3WindowExpansion:
         db.commit()
 
         mock_cfg = MagicMock()
-        mock_cfg.ensemble.weights.theme_cluster = 0.25
-        mock_cfg.ensemble.weights.volume_news_combo = 0.32
-        mock_cfg.ensemble.weights.disclosure_pattern = 0.18
+        mock_cfg.ensemble.weights.theme_cluster = 0.22
+        mock_cfg.ensemble.weights.volume_news_combo = 0.28
+        mock_cfg.ensemble.weights.disclosure_pattern = 0.16
         mock_cfg.ensemble.weights.legacy_detectors = 0.0
-        mock_cfg.ensemble.weights.news_delayed = 0.15
-        mock_cfg.ensemble.weights.weekend_gap_up = 0.10
+        mock_cfg.ensemble.weights.news_delayed = 0.13
+        mock_cfg.ensemble.weights.weekend_gap_up = 0.09
+        mock_cfg.ensemble.weights.volume_breakout = 0.12
         mock_cfg.ensemble.min_score_for_signal = 0.45
 
         bear_params = MagicMock()
@@ -523,7 +525,7 @@ class TestAC5WeekendGapUp:
         assert result == [], f"일반 거래일은 빈 목록 기대, 실제: {result}"
 
     def test_ac_5_5_ensemble_weights_sum(self):
-        """AC-5-5: 앙상블 가중치 합계 = 1.0 (weekend_gap_up 포함)."""
+        """AC-5-5: 앙상블 가중치 합계 = 1.0 (volume_breakout 포함 7개 탐지기)."""
         from app.surge_config.surge_settings import reload_surge_config
 
         cfg = reload_surge_config()
@@ -535,6 +537,7 @@ class TestAC5WeekendGapUp:
             + w.legacy_detectors
             + w.news_delayed
             + w.weekend_gap_up
+            + w.volume_breakout
         )
         assert abs(total - 1.0) <= 0.001, f"가중치 합계 1.0 기대, 실제: {total:.4f}"
 
@@ -624,12 +627,13 @@ class TestPreserveExistingBehavior:
         db.commit()
 
         mock_cfg = MagicMock()
-        mock_cfg.ensemble.weights.theme_cluster = 0.25
-        mock_cfg.ensemble.weights.volume_news_combo = 0.32
-        mock_cfg.ensemble.weights.disclosure_pattern = 0.18
+        mock_cfg.ensemble.weights.theme_cluster = 0.22
+        mock_cfg.ensemble.weights.volume_news_combo = 0.28
+        mock_cfg.ensemble.weights.disclosure_pattern = 0.16
         mock_cfg.ensemble.weights.legacy_detectors = 0.0
-        mock_cfg.ensemble.weights.news_delayed = 0.15
-        mock_cfg.ensemble.weights.weekend_gap_up = 0.10
+        mock_cfg.ensemble.weights.news_delayed = 0.13
+        mock_cfg.ensemble.weights.weekend_gap_up = 0.09
+        mock_cfg.ensemble.weights.volume_breakout = 0.12
         mock_cfg.ensemble.min_score_for_signal = 0.45
         bear_params = MagicMock()
         bear_params.news_window_hours = 48  # >= 48 → 확장 없음
@@ -649,11 +653,12 @@ class TestPreserveExistingBehavior:
         from app.surge_config.surge_settings import reload_surge_config
 
         cfg = reload_surge_config()
-        assert cfg.ensemble.weights.theme_cluster == 0.25
-        assert cfg.ensemble.weights.volume_news_combo == 0.32
-        assert cfg.ensemble.weights.disclosure_pattern == 0.18
-        assert cfg.ensemble.weights.news_delayed == 0.15
+        assert cfg.ensemble.weights.theme_cluster == 0.22
+        assert cfg.ensemble.weights.volume_news_combo == 0.28
+        assert cfg.ensemble.weights.disclosure_pattern == 0.16
+        assert cfg.ensemble.weights.news_delayed == 0.13
         assert cfg.ensemble.weights.legacy_detectors == 0.0
-        assert cfg.ensemble.weights.weekend_gap_up == 0.10
+        assert cfg.ensemble.weights.weekend_gap_up == 0.09
+        assert cfg.ensemble.weights.volume_breakout == 0.12
         # BEAR 24h 확인
         assert cfg.regime_detector_params["BEAR"].news_window_hours == 24

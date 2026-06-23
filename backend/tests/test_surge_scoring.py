@@ -742,7 +742,7 @@ class TestYamlWeightSum:
 
     def test_t011_yaml_weights_sum_to_one(self, surge_config: SurgeDetectionConfig):
         """T-011: YAML 설정 파일 로드 후 앙상블 가중치 합산이 1.00 ± 0.001이다.
-        SPEC-AI-050: weekend_gap_up(0.10) 추가 → 6개 탐지기 합산.
+        volume_breakout(0.12) 추가 → 7개 탐지기 합산.
         """
         w = surge_config.ensemble.weights
         total = (
@@ -752,23 +752,26 @@ class TestYamlWeightSum:
             + w.legacy_detectors
             + w.news_delayed
             + w.weekend_gap_up
+            + w.volume_breakout
         )
         assert abs(total - 1.0) < 0.001, (
             f"앙상블 가중치 합산이 1.0이 아닙니다: {total}"
         )
 
     def test_t011_new_weights_values(self, surge_config: SurgeDetectionConfig):
-        """T-011: SPEC-AI-050 가중치 값 검증.
-        legacy_detectors 0.10→0.00, weekend_gap_up 0.10 신규 추가.
+        """T-011: 가중치 값 검증 — volume_breakout 0.12 추가, 기존 가중치 재조정.
+        theme_cluster: 0.25→0.22, volume_news_combo: 0.32→0.28
+        disclosure_pattern: 0.18→0.16, news_delayed: 0.15→0.13, weekend_gap_up: 0.10→0.09
+        volume_breakout: 0.12 신규 추가
         """
         w = surge_config.ensemble.weights
-        assert abs(w.theme_cluster - 0.25) < 0.001, f"theme_cluster 가중치 오류: {w.theme_cluster}"
-        assert abs(w.volume_news_combo - 0.32) < 0.001, f"volume_news_combo 가중치 오류: {w.volume_news_combo}"
-        assert abs(w.disclosure_pattern - 0.18) < 0.001, f"disclosure_pattern 가중치 오류: {w.disclosure_pattern}"
-        # SPEC-AI-050: legacy_detectors 0.10→0.00
+        assert abs(w.theme_cluster - 0.22) < 0.001, f"theme_cluster 가중치 오류: {w.theme_cluster}"
+        assert abs(w.volume_news_combo - 0.28) < 0.001, f"volume_news_combo 가중치 오류: {w.volume_news_combo}"
+        assert abs(w.disclosure_pattern - 0.16) < 0.001, f"disclosure_pattern 가중치 오류: {w.disclosure_pattern}"
         assert abs(w.legacy_detectors - 0.00) < 0.001, f"legacy_detectors 가중치 오류: {w.legacy_detectors}"
-        assert abs(w.news_delayed - 0.15) < 0.001, f"news_delayed 가중치 오류: {w.news_delayed}"
-        assert abs(w.weekend_gap_up - 0.10) < 0.001, f"weekend_gap_up 가중치 오류: {w.weekend_gap_up}"
+        assert abs(w.news_delayed - 0.13) < 0.001, f"news_delayed 가중치 오류: {w.news_delayed}"
+        assert abs(w.weekend_gap_up - 0.09) < 0.001, f"weekend_gap_up 가중치 오류: {w.weekend_gap_up}"
+        assert abs(w.volume_breakout - 0.12) < 0.001, f"volume_breakout 가중치 오류: {w.volume_breakout}"
 
 
 # ---------------------------------------------------------------------------

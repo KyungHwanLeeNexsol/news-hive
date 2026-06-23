@@ -81,6 +81,8 @@ class SurgeCandidate:
     news_delayed_score: float = 0.0
     # SPEC-AI-051 REQ-AI051-001: 볼린저 밴드 스퀴즈 점수 (0.0~1.0)
     squeeze_score: float = 0.0
+    # 거래량 폭발 소형주 탐지기 점수 — 뉴스 없이 거래량 비율로만 계산
+    volume_breakout_score: float = 0.0
 
 
 def _sigmoid(x: float) -> float:
@@ -1058,18 +1060,20 @@ def compute_ensemble_score(candidate: SurgeCandidate, config: SurgeDetectionConf
         + w.volume_news_combo * candidate.combo_score
         + w.disclosure_pattern * best_disclosure_score
         + w.legacy_detectors * candidate.legacy_score
-        # SPEC-AI-039 REQ-039-002: 뉴스 지연 반응 점수 추가 (가중치 0.15)
+        # SPEC-AI-039 REQ-039-002: 뉴스 지연 반응 점수 추가 (가중치 0.13)
         + w.news_delayed * candidate.news_delayed_score
+        # 거래량 폭발 탐지기 점수 추가 (가중치 0.12)
+        + w.volume_breakout * candidate.volume_breakout_score
     )
 
     # SPEC-AI-018 REQ-009: 탐지기 그룹 단위 컨센서스 배율 (동일 이벤트 중복 보상 방지)
     # news 그룹(theme+combo)은 모두 뉴스 이벤트에 반응 → 동일 그룹으로 묶음
     # disclosure 그룹: best_disclosure_score (공시 이벤트)
-    # technical 그룹: legacy_score (선행 기술적 신호)
+    # technical 그룹: legacy_score + volume_breakout (기술적 신호)
     detector_groups = {
         "news": [candidate.theme_cluster_score, candidate.combo_score],
         "disclosure": [best_disclosure_score],
-        "technical": [candidate.legacy_score],
+        "technical": [candidate.legacy_score, candidate.volume_breakout_score],
     }
     active_groups = sum(
         1 for scores in detector_groups.values() if any(s > 0 for s in scores)
@@ -1363,6 +1367,17 @@ def gather_surge_candidates(
             existing.news_delayed_score = candidate.news_delayed_score
             if "news_delayed" not in existing.active_detectors:
                 existing.active_detectors.append("news_delayed")
+        else:
+            merged[candidate.stock_code] = candidate
+
+    # 거래량 폭발 탐지기 결과 병합 (뉴스 없이 거래량만으로 소형주 탐지)
+    breakout_results = detect_volume_breakout(db, config)
+    for candidate in breakout_results:
+        if candidate.stock_code in merged:
+            existing = merged[candidate.stock_code]
+            existing.volume_breakout_score = candidate.volume_breakout_score
+            if "volume_breakout" not in existing.active_detectors:
+                existing.active_detectors.append("volume_breakout")
         else:
             merged[candidate.stock_code] = candidate
 
@@ -2985,3 +3000,76 @@ def detect_gap_up_runners(
         return []
 
     return signals
+
+
+def detect_volume_breakout(
+    db: Session,
+    config: SurgeDetectionConfig,
+) -> list[SurgeCandidate]:
+    """뉴스/공시 없이 거래량 폭발만으로 소형주 급등 후보를 탐지한다.
+
+    Naver 거래량 순위 상위 종목에서 최근 20일 평균 대비 volume_ratio_threshold 배 이상
+    거래량이 폭발한 종목을 SurgeCandidate로 반환한다. 시총/뉴스 필터 없음.
+    """
+    cfg = config.volume_breakout
+    if not cfg.enabled:
+        return []
+
+    from app.models.stock import Stock
+    from app.services.naver_finance import fetch_volume_leaders_sync, fetch_stock_price_history_sync
+
+    try:
+        leader_codes = fetch_volume_leaders_sync(limit=cfg.max_candidates // 2)
+    except Exception as e:
+        logger.warning("[거래량폭발] 순위 조회 실패: %s", e)
+        return []
+
+    candidates: list[SurgeCandidate] = []
+    for code in leader_codes:
+        try:
+            stock = db.query(Stock).filter(Stock.stock_code == code).first()
+            if not stock:
+                continue
+
+            history = fetch_stock_price_history_sync(code, pages=2)
+            if len(history) < cfg.min_history_days + 1:
+                continue
+
+            today_vol = history[0].volume
+            if today_vol <= 0:
+                continue
+
+            baseline_vols = [r.volume for r in history[1:cfg.baseline_days + 1] if r.volume > 0]
+            if len(baseline_vols) < 10:
+                continue
+
+            mean_vol = statistics.mean(baseline_vols)
+            if mean_vol <= 0:
+                continue
+
+            ratio = today_vol / mean_vol
+            if ratio < cfg.volume_ratio_threshold:
+                continue
+
+            breakout_score = min(ratio / cfg.confidence_denominator, cfg.max_score)
+            candidates.append(
+                SurgeCandidate(
+                    stock_code=code,
+                    stock_name=stock.name,
+                    volume_breakout_score=breakout_score,
+                    active_detectors=["volume_breakout"],
+                )
+            )
+            logger.debug(
+                "[거래량폭발] %s %s ratio=%.1f score=%.3f",
+                code,
+                stock.name,
+                ratio,
+                breakout_score,
+            )
+        except Exception as e:
+            logger.debug("[거래량폭발] %s 처리 중 오류: %s", code, e)
+            continue
+
+    logger.info("[거래량폭발] %d개 후보 탐지", len(candidates))
+    return candidates

@@ -33,7 +33,7 @@ class TestCharacterizeCurrentWeights:
 
     def test_current_ensemble_weights_sum(self):
         """현재 가중치 합산 = 1.0 (±0.001). Pydantic 검증이 이를 보장한다.
-        SPEC-AI-050: weekend_gap_up(0.10) 추가 → 6개 탐지기 합산.
+        volume_breakout(0.12) 추가 → 7개 탐지기 합산.
         """
         config = get_surge_config()
         w = config.ensemble.weights
@@ -44,6 +44,7 @@ class TestCharacterizeCurrentWeights:
             + w.legacy_detectors
             + w.news_delayed
             + w.weekend_gap_up
+            + w.volume_breakout
         )
         assert abs(total - 1.0) < 0.001
 
@@ -108,9 +109,7 @@ class TestPhase1ConfigChanges:
     """Phase 1: 설정 조정 검증 (REQ-AI018-001~004)."""
 
     def test_new_weights_sum_to_one(self):
-        """새 가중치 합계 = 1.00 (REQ-AI018-004, SPEC-AI-050 재조정 포함).
-        SPEC-AI-050: weekend_gap_up(0.10) 추가, legacy_detectors 0.10→0.00 → 6개 탐지기 합산.
-        """
+        """새 가중치 합계 = 1.00 (volume_breakout 0.12 신규 추가 → 7개 탐지기 합산)."""
         config = get_surge_config()
         w = config.ensemble.weights
         total = (
@@ -120,28 +119,29 @@ class TestPhase1ConfigChanges:
             + w.legacy_detectors
             + w.news_delayed
             + w.weekend_gap_up
+            + w.volume_breakout
         )
         assert abs(total - 1.0) < 0.001
 
-    def test_theme_cluster_weight_is_025(self):
-        """theme_cluster 가중치 = 0.25 (SPEC-AI-039: 0.28→0.25, news_delayed 추가로 재조정)."""
+    def test_theme_cluster_weight_is_022(self):
+        """theme_cluster 가중치 = 0.22 (volume_breakout 0.12 추가로 재조정: 0.25→0.22)."""
         config = get_surge_config()
-        assert config.ensemble.weights.theme_cluster == pytest.approx(0.25)
+        assert config.ensemble.weights.theme_cluster == pytest.approx(0.22)
 
-    def test_legacy_detectors_weight_is_010(self):
-        """legacy_detectors 가중치 = 0.00 (SPEC-AI-050: 0.10→0.00, weekend_gap_up 0.10 신규 추가)."""
+    def test_legacy_detectors_weight_is_zero(self):
+        """legacy_detectors 가중치 = 0.00 (SPEC-AI-050: 0.10→0.00)."""
         config = get_surge_config()
         assert config.ensemble.weights.legacy_detectors == pytest.approx(0.00)
 
-    def test_volume_news_combo_weight_is_032(self):
-        """volume_news_combo 가중치 = 0.32 (SPEC-AI-039: 0.35→0.32)."""
+    def test_volume_news_combo_weight_is_028(self):
+        """volume_news_combo 가중치 = 0.28 (volume_breakout 추가로 재조정: 0.32→0.28)."""
         config = get_surge_config()
-        assert config.ensemble.weights.volume_news_combo == pytest.approx(0.32)
+        assert config.ensemble.weights.volume_news_combo == pytest.approx(0.28)
 
-    def test_disclosure_pattern_weight_is_018(self):
-        """disclosure_pattern 가중치 = 0.18 (SPEC-AI-039: 0.20→0.18)."""
+    def test_disclosure_pattern_weight_is_016(self):
+        """disclosure_pattern 가중치 = 0.16 (volume_breakout 추가로 재조정: 0.18→0.16)."""
         config = get_surge_config()
-        assert config.ensemble.weights.disclosure_pattern == pytest.approx(0.18)
+        assert config.ensemble.weights.disclosure_pattern == pytest.approx(0.16)
 
     def test_bypass_thresholds_raised_to_085(self):
         """bypass 임계값 모두 0.85로 상향 (REQ-AI018-001, 002)."""
@@ -332,8 +332,8 @@ class TestPhase4ConsensusIndependence:
         score = compute_ensemble_score(candidate, config)
 
         # news 그룹만 활성 → 1.00x multiplier
-        # SPEC-AI-039: (0.25*0.60 + 0.32*0.60) * 1.00 = (0.150 + 0.192) = 0.342
-        assert score == pytest.approx(0.342, abs=0.01)
+        # (0.22*0.60 + 0.28*0.60) * 1.00 = (0.132 + 0.168) = 0.300
+        assert score == pytest.approx(0.300, abs=0.01)
 
     def test_consensus_news_plus_disclosure_two_groups(self):
         """theme(news) + disclosure 활성 → 2개 그룹 → 1.30x (REQ-AI018-009)."""
@@ -349,8 +349,8 @@ class TestPhase4ConsensusIndependence:
         config = get_surge_config()
         score = compute_ensemble_score(candidate, config)
 
-        # SPEC-AI-039: news(0.25*0.60) + disclosure(0.18*0.60) = 0.150 + 0.108 = 0.258 → * 1.30 = 0.335
-        assert score == pytest.approx(0.258 * 1.30, abs=0.01)
+        # news(0.22*0.60) + disclosure(0.16*0.60) = 0.132 + 0.096 = 0.228 → * 1.30 = 0.2964
+        assert score == pytest.approx(0.228 * 1.30, abs=0.01)
 
     def test_consensus_all_three_groups(self):
         """news + disclosure + technical 3개 그룹 활성 → 1.55x (REQ-AI018-009)."""
@@ -366,9 +366,9 @@ class TestPhase4ConsensusIndependence:
         config = get_surge_config()
         score = compute_ensemble_score(candidate, config)
 
-        # SPEC-AI-050: legacy_detectors=0.00 → technical 그룹 score=0
-        # news(theme+combo) + disclosure(pattern) = 2그룹 활성 → 1.30x
-        assert score == pytest.approx(0.33325, abs=0.01)
+        # legacy_score=0.50 > 0 → technical 그룹 활성 → 3그룹 → 1.55x
+        # news(0.22*0.50) + disclosure(0.16*0.50) + technical(0.00*0.50) = 0.110+0.080=0.190 → *1.55=0.2945
+        assert score == pytest.approx(0.2945, abs=0.01)
 
     def test_consensus_combo_only_in_news_group(self):
         """combo만 활성(theme=0) → news 그룹 1개 활성 → 1.00x."""
@@ -385,8 +385,8 @@ class TestPhase4ConsensusIndependence:
         score = compute_ensemble_score(candidate, config)
 
         # combo만 활성 → news 그룹 1개 → 1.00x
-        # SPEC-AI-039: (0.32*0.70) * 1.00 = 0.224
-        assert score == pytest.approx(0.224, abs=0.01)
+        # (0.28*0.70) * 1.00 = 0.196
+        assert score == pytest.approx(0.196, abs=0.01)
 
     def test_consensus_immediate_disclosure_in_disclosure_group(self):
         """immediate_disclosure만 활성 → disclosure 그룹 1개 → 1.00x."""
@@ -404,8 +404,8 @@ class TestPhase4ConsensusIndependence:
 
         # best_disclosure = max(0, 0.80) = 0.80
         # disclosure 그룹만 활성 → 1.00x
-        # SPEC-AI-039: (0.18*0.80) * 1.00 = 0.144
-        assert score == pytest.approx(0.144, abs=0.01)
+        # (0.16*0.80) * 1.00 = 0.128
+        assert score == pytest.approx(0.128, abs=0.01)
 
     def test_consensus_technical_plus_news_two_groups(self):
         """legacy(technical) + theme(news) → 2개 그룹 → 1.30x."""
@@ -421,6 +421,6 @@ class TestPhase4ConsensusIndependence:
         config = get_surge_config()
         score = compute_ensemble_score(candidate, config)
 
-        # SPEC-AI-050: legacy_detectors=0.00 → technical score=0 → news 그룹만 1개 활성 → 1.00x
-        # news(0.25*0.50) = 0.125 → * 1.00 = 0.1625
-        assert score == pytest.approx(0.1625, abs=0.01)
+        # legacy_score=0.50 > 0 → technical 그룹 활성 → news + technical 2개 그룹 → 1.30x
+        # news(0.22*0.50) + technical(0.00*0.50) = 0.110 → * 1.30 = 0.143
+        assert score == pytest.approx(0.143, abs=0.01)
