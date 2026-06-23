@@ -4,6 +4,74 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Feature — SPEC-AI-062: 거래량 폭발 탐지기 (volume_breakout) 추가 (2026-06-23)
+
+#### `f6dfdea` — 7-탐지기 앙상블 전환 + volume_breakout 신규
+
+**목적**: Naver 거래량 순위 상위 100개 종목에서 20일 평균 대비 3배 이상 거래량 급증 종목을 탐지하는 volume_breakout 탐지기 추가. 6-탐지기 → 7-탐지기 앙상블 체계로 전환.
+
+- **`fetch_volume_leaders_sync(limit=100)`** 신규 (`naver_finance.py`)
+  - Naver 금융 거래량 순위 API 스크래핑 (KOSPI + KOSDAQ 합산)
+  - 실패 시 빈 리스트 반환 (fail-open)
+- **`detect_volume_breakout(db, config)`** 신규 (`surge_detector.py`)
+  - `volume_ratio >= 3.0` 필터 (20일 평균 대비 3배)
+  - `volume_breakout_score = min(volume_ratio / 5.0, 1.0)` 정규화
+- **`VolumeBreakoutConfig`** 신규 (`surge_settings.py`)
+  - `enabled: bool`, `weight: float = 0.12`, `volume_ratio_threshold: float = 3.0`
+- **`SurgeCandidate.volume_breakout_score`** 필드 추가
+
+**앙상블 가중치 변경 (6 → 7탐지기, 합계 1.00 유지)**:
+- theme_cluster: 0.25 → **0.22**, volume_news_combo: 0.32 → **0.28**
+- disclosure_pattern: 0.18 → **0.16**, news_delayed: 0.15 → **0.13**
+- weekend_gap_up: 0.10 → **0.09**, volume_breakout: — → **0.12 (신규)**
+
+**`surge_auto_improver` 수정**:
+- `_fixed_weight = weekend_gap_up + volume_breakout = 0.21`
+- `_wgu_target = 1.0 - _fixed_weight = 0.79` — 5탐지기 합산 목표
+
+**영향 파일**:
+- `backend/app/services/naver_finance.py` (+37줄, 거래량 순위 스크래핑)
+- `backend/app/services/surge_detector.py` (+94/-26줄, detect_volume_breakout)
+- `backend/app/surge_config/surge_settings.py` (+25줄, VolumeBreakoutConfig)
+- `backend/app/surge_config/surge_detection.yaml` (+24/-7줄, 가중치 재배분)
+- `backend/app/services/surge_auto_improver.py` (+24/-7줄, _wgu_target 조정)
+- `backend/tests/` 6개 파일 수정 (1546개 테스트 전체 통과)
+
+**배포 메모**: migration 없음. 배포 후 서버 `surge_detection.auto.yaml` 5탐지기 합계를 0.90→0.79로 비율 유지 스케일다운 필요 (gitignore 보호 파일, 수동 조치).
+
+---
+
+### Fix — 배포/인프라 개선 (2026-06-23)
+
+#### `6faee64` — 배포 가드: sleep → nohup 백그라운드 재시작
+
+**문제**: 가드 시간대(15:15~15:45 KST) 내 배포 시 `sleep $_WAIT_SECS`가 SSH 세션 command_timeout(10분)을 초과(최대 52분)하여 CI 배포 실패 유발.
+
+**수정**:
+- `nohup` + `disown`으로 재시작 스크립트를 백그라운드 예약 후 SSH 세션 즉시 종료
+- 지연 재시작 로그: `/tmp/newshive-deploy-delayed.log`
+- `ci.yml`: `command_timeout: 15m` 추가 (안전망)
+
+**영향 파일**: `.github/workflows/ci.yml`, `scripts/deploy.sh`
+
+#### `5c2662c` — APScheduler 잡: SSL 연결 끊김 예외 swallow
+
+**문제**: `finally` 블록의 `db.close()`가 SSL 끊김 에러를 APScheduler로 전파 → 10:00 KST 잡 실패로 기록.
+
+**수정**: `db.rollback()` + `db.close()` 모두 `try-except` 감싸 swallow 처리. 내부 로직 완료 후 발생하는 SSL 끊김은 안전 무시.
+
+**영향 파일**: `backend/app/services/scheduler.py`, `backend/app/services/disclosure_impact_scorer.py`
+
+#### `687a398` — backfill_stock_names: composite PK 버그 수정
+
+**문제**: `SurgeActualOutcome`이 composite PK(`trading_date, stock_code`) 구조인데 `.id` 컬럼 참조 → AttributeError.
+
+**수정**: `stock_code` distinct 조회로 변경, UPDATE 조건을 `.stock_code == row.stock_code`로 수정.
+
+**영향 파일**: `backend/app/services/surge_actual_outcome_service.py`
+
+---
+
 ### Feature — SPEC-AI-061: 급등 자동개선 루프 구조 강화 5종 (2026-06-23)
 
 #### `b6f5fcb` — 급등 자동개선 루프 구조 강화 5종 (Groups A-E)
