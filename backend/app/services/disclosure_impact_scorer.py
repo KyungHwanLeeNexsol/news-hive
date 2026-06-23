@@ -690,7 +690,15 @@ def _run_gap_pullback_check_sync() -> None:
     except Exception as e:
         logger.error("[갭풀백] 스케줄 실행 오류: %s", e)
     finally:
-        db.close()
+        # SSL 연결 끊김 시 rollback/close 자체가 에러를 던져 APScheduler로 전파되므로 방어
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        try:
+            db.close()
+        except Exception:
+            pass
 
 
 async def _create_gap_pullback_signal(

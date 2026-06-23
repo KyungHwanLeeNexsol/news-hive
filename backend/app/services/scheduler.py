@@ -869,7 +869,15 @@ def _run_surge_signal_generate():
         logger.error("급등시그널 생성 잡 실패: %s", e)
     finally:
         _record_job_duration("surge_signal_generate", _time.monotonic() - _start)
-        db.close()
+        # SSL 연결 끊김 시 close() 자체가 에러를 던져 APScheduler로 전파되므로 방어
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        try:
+            db.close()
+        except Exception:
+            pass
 
 
 def _run_surge_execute_buys():
