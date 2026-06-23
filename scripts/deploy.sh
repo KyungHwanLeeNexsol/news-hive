@@ -34,14 +34,24 @@ _GUARD1_START=$(( 9 * 60 + 50 ))
 _GUARD1_END=$(( 10 * 60 + 20 ))
 _GUARD2_START=$(( 15 * 60 + 15 ))
 _GUARD2_END=$(( 16 * 60 + 10 ))
+_schedule_restart() {
+    local wait_secs=$1
+    local label=$2
+    # CI SSH 세션 타임아웃 방지: sleep 대신 nohup 백그라운드 예약 후 즉시 exit 0
+    # SSH 세션 종료 후에도 프로세스 유지를 위해 disown 사용
+    nohup bash -c "sleep ${wait_secs} && sudo systemctl restart newshive && sudo systemctl is-active newshive && echo '[$(date)] 지연 재시작 완료' || echo '[$(date)] 지연 재시작 실패'" \
+        >> /tmp/newshive-deploy-delayed.log 2>&1 &
+    disown $!
+    echo ">>> 배포 가드 (${label}) — ${wait_secs}초 후 자동 재시작 예약됨. 로그: /tmp/newshive-deploy-delayed.log"
+    exit 0
+}
+
 if [ "$_NOW_MIN" -ge "$_GUARD1_START" ] && [ "$_NOW_MIN" -le "$_GUARD1_END" ]; then
     _WAIT_SECS=$(( (_GUARD1_END - _NOW_MIN) * 60 ))
-    echo ">>> 10:00 KST 급등 시그널 생성 시간대 (09:50~10:20 KST) — ${_WAIT_SECS}초 대기 후 재시작..."
-    sleep "$_WAIT_SECS"
+    _schedule_restart "$_WAIT_SECS" "10:00 KST 잡 09:50~10:20"
 elif [ "$_NOW_MIN" -ge "$_GUARD2_START" ] && [ "$_NOW_MIN" -le "$_GUARD2_END" ]; then
     _WAIT_SECS=$(( (_GUARD2_END - _NOW_MIN) * 60 ))
-    echo ">>> 15:20 KST 급등 시그널 생성 시간대 (15:15~16:10 KST) — ${_WAIT_SECS}초 대기 후 재시작..."
-    sleep "$_WAIT_SECS"
+    _schedule_restart "$_WAIT_SECS" "15:20 KST 잡 15:15~16:10"
 fi
 sudo systemctl restart newshive
 sleep 3

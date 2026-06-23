@@ -154,5 +154,6 @@ jobs:
           host: ${{ secrets.OCI_HOST }}
           username: ubuntu
           key: ${{ secrets.OCI_SSH_KEY }}
+          command_timeout: 15m
           script: |
             bash /home/ubuntu/news-hive/scripts/deploy.sh
