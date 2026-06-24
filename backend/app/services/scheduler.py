@@ -1568,6 +1568,59 @@ def _run_market_regime_update():
         db.close()
 
 
+# SPEC-AI-064: 코스피 대폭락 조기 경보 래퍼 함수 3개
+def _run_us_close_crash_scan():
+    """미국 장마감 후 S&P 500 전일 종가 스캔 (06:30 KST, SPEC-AI-064 그룹 D)."""
+    _start = _time.monotonic()
+    from app.services.crash_guard_service import run_us_close_crash_scan
+
+    db = SessionLocal()
+    try:
+        asyncio.run(run_us_close_crash_scan(db))
+    except Exception:
+        logger.exception("crash_us_close_scan 실패")
+        raise
+    finally:
+        _record_job_duration("crash_us_close_scan", _time.monotonic() - _start)
+        db.close()
+
+
+def _run_premarket_crash_scan():
+    """장전 글로벌 선물·VIX·환율 + 코스피200 야간 선물 스캔 (08:30 KST, SPEC-AI-064 그룹 A+E)."""
+    _start = _time.monotonic()
+    from app.services.crash_guard_service import run_premarket_crash_scan
+
+    db = SessionLocal()
+    try:
+        asyncio.run(run_premarket_crash_scan(db))
+    except Exception:
+        logger.exception("crash_premarket_scan 실패")
+        raise
+    finally:
+        _record_job_duration("crash_premarket_scan", _time.monotonic() - _start)
+        db.close()
+
+
+def _run_intraday_crash_check():
+    """장중 코스피 낙폭 체크 (09:05 KST, SPEC-AI-064 그룹 B).
+
+    fund_morning_execute(09:05), surge_preday_early_entry(09:05)와 id가 다르므로
+    replace_existing이 기존 잡을 덮어쓰지 않는다.
+    """
+    _start = _time.monotonic()
+    from app.services.crash_guard_service import run_intraday_crash_check
+
+    db = SessionLocal()
+    try:
+        asyncio.run(run_intraday_crash_check(db))
+    except Exception:
+        logger.exception("crash_intraday_check 실패")
+        raise
+    finally:
+        _record_job_duration("crash_intraday_check", _time.monotonic() - _start)
+        db.close()
+
+
 def start_scheduler():
     """Start the background news crawl scheduler."""
     # scheduler.start()을 add_job() 이전에 호출해야 SQLAlchemyJobStore가
@@ -2128,6 +2181,49 @@ def start_scheduler():
         minute=5,
         timezone="Asia/Seoul",
         id="surge_preday_early_entry",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+
+    # SPEC-AI-064: 코스피 대폭락 조기 경보 잡 3개
+    # 06:30 KST — 미국 장마감 후 S&P 500 전일 종가 스캔 (그룹 D, 2.5시간 선행 경보)
+    scheduler.add_job(
+        _run_us_close_crash_scan,
+        "cron",
+        day_of_week="mon-fri",
+        hour=6,
+        minute=30,
+        timezone="Asia/Seoul",
+        id="crash_us_close_scan",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    # 08:30 KST — 장전 글로벌 선물·VIX·환율 + 코스피200 야간 선물 스캔 (그룹 A+E)
+    scheduler.add_job(
+        _run_premarket_crash_scan,
+        "cron",
+        day_of_week="mon-fri",
+        hour=8,
+        minute=30,
+        timezone="Asia/Seoul",
+        id="crash_premarket_scan",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    # 09:05 KST — 장중 코스피 낙폭 체크 (그룹 B)
+    # 주의: fund_morning_execute(id="fund_morning_execute"), surge_preday_early_entry와
+    # 동일 시각이나 id가 다르므로 replace_existing으로 기존 잡 덮어쓰지 않음.
+    scheduler.add_job(
+        _run_intraday_crash_check,
+        "cron",
+        day_of_week="mon-fri",
+        hour=9,
+        minute=5,
+        timezone="Asia/Seoul",
+        id="crash_intraday_check",
         max_instances=1,
         coalesce=True,
         replace_existing=True,

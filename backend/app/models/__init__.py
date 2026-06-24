@@ -33,6 +33,7 @@ from app.models.theme_group import ThemeGroup, StockThemeGroup
 from app.models.surge_actual_outcome import SurgeActualOutcome
 from app.models.surge_prediction_evaluation import SurgePredictionEvaluation
 from app.models.surge_auto_improvement_log import SurgeAutoImprovementLog
+from app.models.crash_risk_alert import CrashRiskAlert
 
 __all__ = [
     "Sector", "Stock", "NewsArticle", "NewsStockRelation",
@@ -52,4 +53,5 @@ __all__ = [
     "SurgeActualOutcome",
     "SurgePredictionEvaluation",
     "SurgeAutoImprovementLog",
+    "CrashRiskAlert",
 ]
