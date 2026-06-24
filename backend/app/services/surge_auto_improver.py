@@ -47,6 +47,11 @@ _DETECTORS = ["theme_cluster", "volume_news_combo", "disclosure_pattern", "legac
 # volume_breakout은 자동 개선 대상 외 고정 가중치 — weekend_gap_up과 동일하게 취급
 _ALL_WEIGHT_KEYS = [*_DETECTORS, "weekend_gap_up", "volume_breakout"]
 
+# SPEC-AI-063 REQ-063-005: volume_breakout_bypass_threshold 자동 조정 클램프 범위
+# max_score=0.50이므로 상한 0.45 이하, 하한 0.20 이상으로 제한
+_VB_BYPASS_CLAMP_MIN: float = 0.20
+_VB_BYPASS_CLAMP_MAX: float = 0.45
+
 
 def _parse_detector_contributions(surge_metadata: dict[str, Any]) -> set[str]:
     """surge_metadata에서 기여한 탐지기 집합을 반환한다.
@@ -558,6 +563,37 @@ def analyze_and_improve(
         )
 
     # ---------------------------------------------------------------------------
+    # Step 4.3 — SPEC-AI-063 REQ-063-005: volume_breakout_bypass_threshold 자동 조정
+    # recall 기반으로 threshold를 [0.20, 0.45] 범위 내에서 조정
+    # recall 낮음 → threshold 하향(더 많은 bypass 허용), 높고 precision 낮음 → threshold 상향
+    # @MX:NOTE: [AUTO] SPEC-AI-063 — [0.20, 0.45] 클램프 근거: max_score=0.50이므로 상한 0.45 이하
+    # @MX:SPEC: SPEC-AI-063 REQ-063-005
+    # ---------------------------------------------------------------------------
+    _VB_BYPASS_DELTA: float = 0.02
+    current_vb_bypass: float = float(
+        getattr(cfg.volume_breakout, "volume_breakout_bypass_threshold", 0.30) or 0.30
+    )
+    new_vb_bypass = current_vb_bypass
+
+    if today_eval is not None:
+        recall_vb = today_eval.recall or 0.0
+        precision_vb = today_eval.precision or 0.0
+
+        if recall_vb < 0.30:
+            # recall 낮음 → threshold 낮춰 더 많은 거래량 폭발 종목 bypass 허용
+            new_vb_bypass = max(_VB_BYPASS_CLAMP_MIN, current_vb_bypass - _VB_BYPASS_DELTA)
+        elif recall_vb > 0.60 or precision_vb < 0.20:
+            # recall 과다 또는 precision 낮음 → threshold 높여 bypass 제한
+            new_vb_bypass = min(_VB_BYPASS_CLAMP_MAX, current_vb_bypass + _VB_BYPASS_DELTA)
+
+        if abs(new_vb_bypass - current_vb_bypass) > 1e-6:
+            logger.info(
+                "volume_breakout_bypass_threshold 조정: %.3f → %.3f "
+                "(recall=%.3f, precision=%.3f)",
+                current_vb_bypass, new_vb_bypass, recall_vb, precision_vb,
+            )
+
+    # ---------------------------------------------------------------------------
     # Step 4.5 — SPEC-AI-061 REQ-AI061-C01~C04: EV 가드
     # 롤링 기대값(EV)이 음수이면 min_score_for_signal을 상향하여 저품질 신호 필터링
     # ---------------------------------------------------------------------------
@@ -762,6 +798,11 @@ def analyze_and_improve(
     if abs(new_min_score - current_min_score) > 1e-6:
         yaml_updates["ensemble.min_score_for_signal"] = new_min_score
 
+    # SPEC-AI-063 REQ-063-005: volume_breakout_bypass_threshold 변경분
+    # dot-path: volume_breakout.volume_breakout_bypass_threshold (surge_detection 아래)
+    if abs(new_vb_bypass - current_vb_bypass) > 1e-6:
+        yaml_updates["volume_breakout.volume_breakout_bypass_threshold"] = new_vb_bypass
+
     # SPEC-AI-050 REQ-2 클램프: BEAR.news_window_hours < 24이면 24로 강제 조정
     for key, val in list(yaml_updates.items()):
         if "BEAR.news_window_hours" in key and val < 24:
@@ -814,6 +855,24 @@ def analyze_and_improve(
         )
         db.add(log)
         logs.append(log)
+
+    # SPEC-AI-063 REQ-063-005: volume_breakout_bypass_threshold 변경 로그
+    if abs(new_vb_bypass - current_vb_bypass) > 1e-6:
+        _vb_log = SurgeAutoImprovementLog(
+            evaluation_date=trading_date,
+            parameter_path="volume_breakout.volume_breakout_bypass_threshold",
+            old_value=round(current_vb_bypass, 6),
+            new_value=round(new_vb_bypass, 6),
+            rationale=(
+                f"recall/precision 기반 volume_breakout bypass threshold 조정: "
+                f"recall={today_eval.recall if today_eval else 'N/A'}"
+                if today_eval and today_eval.recall is not None
+                else "recall/precision 기반 조정"
+            ),
+            rolling_window_days=5,
+        )
+        db.add(_vb_log)
+        logs.append(_vb_log)
 
     if logs:
         db.commit()

@@ -192,3 +192,7 @@ surge_detection:
     min_history_days: 10
     confidence_denominator: 8.0
     max_score: 0.50
+    # SPEC-AI-063 REQ-063-002: volume_breakout 단독 bypass 임계값
+    # volume_breakout_score >= 이 값이면 앙상블 임계값 우회 허용 (standalone 소형주 시그널)
+    # auto-improver 조정 범위: [0.20, 0.45] (REQ-063-005)
+    volume_breakout_bypass_threshold: 0.30

@@ -124,6 +124,11 @@ class VolumeBreakoutConfig(BaseModel):
     # volume_breakout_score = min(ratio / denominator, max_score)
     confidence_denominator: float = 8.0
     max_score: float = 0.50
+    # SPEC-AI-063 REQ-063-002: volume_breakout 단독 bypass 임계값 (앙상블 임계 우회)
+    # max_score=0.50 이므로 범위는 [0.20, 0.45] 내에서 자동 조정 (REQ-063-005)
+    # @MX:NOTE: [AUTO] SPEC-AI-063 — detector-specific 설정. EnsembleConfig가 아닌 여기에 위치 (의도적)
+    # @MX:SPEC: SPEC-AI-063 REQ-063-002
+    volume_breakout_bypass_threshold: float = 0.30
 
 
 class EnsembleWeightsConfig(BaseModel):

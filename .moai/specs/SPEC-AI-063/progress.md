@@ -1,0 +1,26 @@
+## SPEC-AI-063 Progress
+
+- Started: 2026-06-24
+- Scale: Focused Mode (5 files modified + 1 new test file, 1 domain, Python/backend)
+- Dev mode: DDD (ANALYZE-PRESERVE-IMPROVE)
+- Phase 0.9 complete: Python detected → moai-lang-python
+- Phase 0.95 complete: Focused Mode selected (4 files, 1 domain)
+- Phase 1 complete: plan.md used directly (detailed plan already exists from SPEC creation)
+- Decision Point 1: User APPROVED 2026-06-24
+- Phase 1.6 start: Registering acceptance criteria as tasks
+- ANALYZE complete: Identified bypass path pattern, ensemble scoring, MagicMock guard risk
+- PRESERVE complete: 4 characterization tests written (VB max ensemble ~0.06, default threshold, config field, bypass_composite_score field)
+- IMPROVE complete: All 8 REQs implemented, 26 tests passing
+  - REQ-063-001: Bypass Path 3 in surge_detector.py (before qualified.sort())
+  - REQ-063-002: volume_breakout_bypass_threshold: float = 0.30 in VolumeBreakoutConfig
+  - REQ-063-003: bypass_composite_score field on SurgeCandidate, injected at fund_manager.py
+  - REQ-063-004: qualified_codes guard prevents duplicate additions
+  - REQ-063-005: Auto-tuner in surge_auto_improver.py, clamp [0.20, 0.45], getattr defense
+  - REQ-063-006: INFO log at bypass fire point
+  - REQ-063-007: SurgeAutoImprovementLog entry for VB bypass threshold changes
+  - REQ-063-008: yaml_updates key "volume_breakout.volume_breakout_bypass_threshold"
+- Drift check: 5 files modified vs 4 planned (5th: fund_manager.py for bypass_composite_score injection — required by REQ-063-003 design). Drift <= 30%, acceptable.
+- Bug fix: test_spec_ai_050.py MagicMock TypeError — fixed by getattr defense in auto_improver (float() cast)
+- Status: COMPLETE (2026-06-24)
+- Acceptance criteria: 8/8 scenarios + 4 edge cases (EC1-EC4) all pass
+- Test count: 26 new tests in tests/test_surge_ai063.py

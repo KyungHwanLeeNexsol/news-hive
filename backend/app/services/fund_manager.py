@@ -1359,11 +1359,17 @@ async def _gather_surge_candidates(
         _factor_json: str | None = None
         _composite: float | None = None
         try:
-            from app.services.factor_scoring import build_surge_factor_scores
-            _factor_json, _composite = build_surge_factor_scores(candidate, surge_config)
-            if not _factor_json:
-                _factor_json = None
-                _composite = None
+            # SPEC-AI-063 REQ-063-003: volume_breakout bypass 경로는 앙상블 점수(~0.06) 대신
+            # volume_breakout_score를 composite_score로 주입 (bypass_composite_score 필드 활용)
+            if candidate.bypass_composite_score is not None:
+                _composite = candidate.bypass_composite_score
+                _factor_json = None  # factor_scores는 None으로 처리 (bypass 경로)
+            else:
+                from app.services.factor_scoring import build_surge_factor_scores
+                _factor_json, _composite = build_surge_factor_scores(candidate, surge_config)
+                if not _factor_json:
+                    _factor_json = None
+                    _composite = None
         except Exception as _e:
             logger.warning("[급등탐지] %s composite_score 계산 실패: %s", candidate.stock_code, _e)
 
@@ -1377,9 +1383,11 @@ async def _gather_surge_candidates(
 
         # SPEC-AI-036 M3: 품질 floor 게이트 (예외 격리)
         # bypass 종목(theme >= strong_single_bypass_threshold)은 이미 강한 단일 신호로 검증됨 → 면제
+        # SPEC-AI-063: volume_breakout bypass 종목(bypass_composite_score 있음)도 품질 floor 면제
         # calibrated_confidence >= min OR composite_score >= min 중 하나면 통과
         _is_bypass = (
             candidate.theme_cluster_score >= surge_config.ensemble.strong_single_bypass_threshold
+            or candidate.bypass_composite_score is not None
         )
         try:
             _min_conf = surge_config.min_calibrated_confidence

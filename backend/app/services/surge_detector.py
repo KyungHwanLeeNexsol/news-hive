@@ -83,6 +83,10 @@ class SurgeCandidate:
     squeeze_score: float = 0.0
     # 거래량 폭발 소형주 탐지기 점수 — 뉴스 없이 거래량 비율로만 계산
     volume_breakout_score: float = 0.0
+    # SPEC-AI-063 REQ-063-003: bypass 경로에서 주입된 composite_score 대체값
+    # None이면 일반 앙상블 경로 (fund_manager가 build_surge_factor_scores 결과 사용)
+    # 값이 있으면 bypass 경로: composite_score = volume_breakout_score
+    bypass_composite_score: float | None = None
 
 
 def _sigmoid(x: float) -> float:
@@ -1527,6 +1531,29 @@ def gather_surge_candidates(
                 candidate.theme_cluster_score,
                 candidate.combo_score,
             )
+
+    # SPEC-AI-063 REQ-063-001: 거래량 폭발 단독 bypass 경로 (Bypass Path 3)
+    # volume_breakout_score >= threshold이면 앙상블 임계값 우회 → 소형주 standalone 시그널 허용
+    # REQ-063-004: qualified_codes 가드로 중복 추가 방지 (앙상블 통과 / 다른 bypass 경로 이미 포함 종목 제외)
+    # @MX:NOTE: [AUTO] SPEC-AI-063 — 거래량 폭발 단독 bypass. volume_breakout.volume_breakout_bypass_threshold로 제어
+    # @MX:SPEC: SPEC-AI-063 REQ-063-001 REQ-063-004
+    _vb_bypass_threshold = config.volume_breakout.volume_breakout_bypass_threshold
+    for candidate in merged.values():
+        if candidate.stock_code not in qualified_codes:
+            if candidate.volume_breakout_score >= _vb_bypass_threshold:
+                # REQ-063-003: composite_score는 앙상블 점수(~0.06)가 아닌 volume_breakout_score로 주입
+                # @MX:WARN: [AUTO] SPEC-AI-063 — volume_breakout_score 직접 주입. max_score=0.50으로 스케일 상이
+                # @MX:REASON: 앙상블 점수 사용 시 최대 0.06으로 min_score_for_signal(0.45) 미달 → composite_score 왜곡
+                # @MX:SPEC: SPEC-AI-063 REQ-063-003
+                candidate.bypass_composite_score = candidate.volume_breakout_score
+                qualified.append(candidate)
+                qualified_codes.add(candidate.stock_code)
+                logger.info(
+                    "[거래량폭발] 앙상블 임계 우회: %s (vb_score=%.3f >= threshold=%.3f)",
+                    candidate.stock_code,
+                    candidate.volume_breakout_score,
+                    _vb_bypass_threshold,
+                )
 
     # 앙상블 점수 내림차순 정렬
     qualified.sort(key=lambda c: compute_ensemble_score(c, config), reverse=True)
