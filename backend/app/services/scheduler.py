@@ -176,8 +176,11 @@ def _check_dart_health() -> None:
     장 시간(07:00~18:00 KST)에만 동작한다. 수집 지연 2시간 초과 시:
       1. CRITICAL 로그 출력
       2. Telegram 관리자 알림 (TELEGRAM_ADMIN_CHAT_ID 설정 시)
-      3. APScheduler dart_crawl 잡을 즉시 재실행 예약
+      3. 별도 스레드에서 _run_dart_crawl() 직접 실행
+         (job.modify()는 APScheduler executor 문제로 실제 실행이 보장되지 않음)
     """
+    import threading
+
     from sqlalchemy import func as sqlfunc
     from app.models.disclosure import Disclosure
 
@@ -204,13 +207,10 @@ def _check_dart_health() -> None:
                 elapsed_hours,
             )
             _send_dart_stale_alert(elapsed_hours)
-            job = scheduler.get_job("dart_crawl")
-            if job:
-                job.modify(next_run_time=now_utc)
-                logger.info("DART HEALTH: dart_crawl 즉시 실행 예약 완료")
-            else:
-                logger.error("DART HEALTH: dart_crawl 잡을 찾을 수 없음, 직접 실행")
-                _run_dart_crawl()
+            # job.modify()는 APScheduler executor 문제로 실제 함수 실행이 보장 안 됨.
+            # threading.Thread로 직접 실행해 즉시 크롤이 보장되도록 함.
+            threading.Thread(target=_run_dart_crawl, daemon=True, name="dart_health_recovery").start()
+            logger.info("DART HEALTH: dart_crawl 복구 스레드 시작")
         else:
             logger.debug("DART HEALTH: OK (%.1fh 전 수집)", elapsed_hours)
     except Exception as e:
