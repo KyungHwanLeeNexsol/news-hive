@@ -145,7 +145,16 @@ def _run_dart_crawl():
         raise
     finally:
         _record_job_duration("dart_crawl", _time.monotonic() - _start)
-        db.close()
+        # SSL 연결 끊김 시 close() 자체가 에러를 던져 APScheduler jobstore 업데이트를
+        # 실패시켜 잡이 "실행 중" 상태로 stuck되는 버그 방어 (cf. 5c2662c)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        try:
+            db.close()
+        except Exception:
+            pass
 
     # DART 공시 크롤링 후 키워드 매칭 실행 (SPEC-FOLLOW-001)
     _run_keyword_matching()
