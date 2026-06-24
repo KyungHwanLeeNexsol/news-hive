@@ -532,6 +532,28 @@ def _save_alert_record(
 
 
 # ---------------------------------------------------------------------------
+# 거래일 판별 유틸
+# ---------------------------------------------------------------------------
+
+
+def _is_krx_trading_day() -> bool:
+    """오늘이 한국 거래일(공휴일·주말 제외)인지 확인한다.
+
+    holidays 패키지 미설치 시 fail-open(거래일로 간주) 처리.
+    """
+    today = datetime.now(tz=timezone(timedelta(hours=9))).date()
+    if today.weekday() >= 5:  # 토요일=5, 일요일=6
+        return False
+    try:
+        import holidays as holidays_lib
+
+        return today not in holidays_lib.country_holidays("KR", years=today.year)
+    except ImportError:
+        logger.warning("holidays 패키지 미설치 — 공휴일 체크 스킵, 거래일로 간주")
+        return True
+
+
+# ---------------------------------------------------------------------------
 # 스캔 진입점 (스케줄러 래퍼에서 호출)
 # ---------------------------------------------------------------------------
 
@@ -543,6 +565,9 @@ async def run_us_close_crash_scan(db) -> None:
 
     코스피 개장 약 2.5시간 전, 가장 선행적인 경보를 제공한다.
     """
+    if not _is_krx_trading_day():
+        logger.info("run_us_close_crash_scan: 오늘은 한국 공휴일 — 스킵")
+        return
     logger.info("run_us_close_crash_scan 시작 (06:30 KST)")
     signals = fetch_us_close_signal()
     risk_level, triggered = compute_crash_risk_score(
@@ -577,6 +602,9 @@ async def run_us_close_crash_scan(db) -> None:
 # @MX:SPEC: SPEC-AI-064 REQ-AI-064-003, REQ-AI-064-015
 async def run_premarket_crash_scan(db) -> None:
     """그룹 A + E: 장전 글로벌 선물·VIX·환율 + 코스피200 야간 선물 스캔 (08:30 KST)."""
+    if not _is_krx_trading_day():
+        logger.info("run_premarket_crash_scan: 오늘은 한국 공휴일 — 스킵")
+        return
     logger.info("run_premarket_crash_scan 시작 (08:30 KST)")
 
     # 그룹 A: 글로벌 장전 신호
@@ -622,6 +650,9 @@ async def run_intraday_crash_check(db) -> None:
 
     코스피 낙폭이 -2% 이상이면 DANGER 긴급 경보를 발송한다.
     """
+    if not _is_krx_trading_day():
+        logger.info("run_intraday_crash_check: 오늘은 한국 공휴일 — 스킵")
+        return
     logger.info("run_intraday_crash_check 시작 (09:05 KST)")
 
     kospi_change = await check_intraday_kospi_drop()

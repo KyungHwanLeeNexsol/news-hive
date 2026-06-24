@@ -30,6 +30,9 @@ yfinance>=1.2.0
 # KRX 공매도 잔고 수집 (pykrx 내부 JSESSIONID monkey-patching 방식)
 pykrx>=1.0.39
 
+# 한국 공휴일 판별 (crash_guard_service.py 거래일 필터)
+holidays>=0.55
+
 # Redis 캐시
 redis[hiredis]>=5.0.0
 
