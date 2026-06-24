@@ -1,0 +1,29 @@
+## SPEC-AI-064 Progress
+
+- Started: 2026-06-24
+- Scale: Full Mode (8 files created/modified, 2 domains: monitoring+scheduler, Python/backend)
+- Dev mode: DDD (ANALYZE-PRESERVE-IMPROVE)
+- Run phase complete: DDD implementation done (commit 299c042)
+- Tests: 1605 passed, 0 failed (2026-06-24)
+- Status: DONE — /moai sync complete
+- ANALYZE complete: Studied scheduler pattern (add_job wrappers), yfinance pattern (macro_rates.py), telegram pattern (telegram_service.py), SQLAlchemy 2.0 model pattern (macro_alert.py)
+- PRESERVE complete: Existing scheduler jobs (fund_morning_execute, etc.) untouched — distinct IDs confirmed
+- IMPROVE complete: All 15 REQs implemented, 33 tests passing
+  - REQ-AI-064-001: compute_crash_risk_score() pure function (SAFE/CAUTION/WARNING/DANGER)
+  - REQ-AI-064-002: fetch_global_premarket_signals() — SP500F/VIX/NQF/USDKRW via yfinance
+  - REQ-AI-064-003: run_premarket_crash_scan(db) — 08:30 KST entry point
+  - REQ-AI-064-004: run_intraday_crash_check(db) — 09:05 KST, DANGER when KOSPI <= -2.0%
+  - REQ-AI-064-005/006: Telegram alert with signal list + cooldown (2h)
+  - REQ-AI-064-007: Graceful degradation — per-symbol try/except, None on failure
+  - REQ-AI-064-008: _should_send_alert() — escalation override overrides cooldown
+  - REQ-AI-064-009: HARD invariant — no buy/sell import (verified via test)
+  - REQ-AI-064-010: Telegram env var missing → skip silently, DB record still written
+  - REQ-AI-064-011: Naver Finance + yfinance only (no data.krx.co.kr)
+  - REQ-AI-064-012: CrashRiskAlert model + migration 062 (down_revision="061")
+  - REQ-AI-064-013: GET /api/crash-guard/alerts endpoint
+  - REQ-AI-064-014: run_us_close_crash_scan(db) — 06:30 KST, S&P 500 actual close (^GSPC)
+  - REQ-AI-064-015: fetch_kospi200_night_futures() — KOSPI200 night session via Naver Finance
+- Deployment: alembic upgrade head (migration 062) — CI/CD handles automatically
+- Status: COMPLETE (2026-06-24)
+- Acceptance criteria: 12/12 scenarios all pass (including S11 us_close, S12 night futures)
+- Test count: 33 new tests in tests/test_crash_guard_service.py

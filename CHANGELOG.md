@@ -4,6 +4,35 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Feature — SPEC-AI-064: 코스피 대폭락 조기 경보 텔레그램 알림 시스템 (2026-06-24)
+
+#### `299c042` — 3-스캔 조기 경보 시스템 (06:30 / 08:30 / 09:05 KST)
+
+**목적**: 코스피 대폭락을 사전에 감지하여 텔레그램 경보를 발송하는 순수 모니터링 시스템. 매수/매도 로직 변경 없음(REQ-AI-064-009). 위험도 4단계(SAFE/CAUTION/WARNING/DANGER) 분류 + 2시간 쿨다운(에스컬레이션 시 즉시 발송).
+
+- **스캔 1 — 06:30 KST** (`run_us_close_crash_scan`): S&P 500 전일 종가 yfinance `^GSPC` 조회 → 코스피 개장 2.5시간 전 선행 경보
+- **스캔 2 — 08:30 KST** (`run_premarket_crash_scan`): 글로벌 선물(S&P 500F/VIX/NasdaqF/USD-KRW) + 코스피200 야간 선물(Naver Finance, 03:30~08:55 KST)
+- **스캔 3 — 09:05 KST** (`run_intraday_crash_check`): 장중 코스피 낙폭 실시간 체크 → KOSPI <= -2.0% 시 DANGER 강제
+- **`compute_crash_risk_score()`** 순수 함수: 트리거 신호 0개=SAFE, 1=CAUTION, 2+=WARNING, 3+ OR KOSPI<=-2%=DANGER
+- **`CrashRiskAlert`** 모델 신규 + 마이그레이션 062 (`crash_risk_alerts` 테이블)
+- **`GET /api/crash-guard/alerts`** 엔드포인트 (`?days=7&limit=50`)
+- **쿨다운 로직**: 2시간 내 동일 위험도 중복 발송 차단. 위험도 상승(에스컬레이션) 시 쿨다운 무시 즉시 발송.
+
+**배포 필수**: `alembic upgrade head` (migration 062) — CI/CD 자동 처리.
+
+**새 환경변수**:
+- `TELEGRAM_ADMIN_CHAT_ID`: 관리자 채팅 ID (미설정 시 경보 스킵, DB 기록은 유지)
+
+**영향 파일**:
+- `backend/app/services/crash_guard_service.py` (신규, 657줄)
+- `backend/app/models/crash_risk_alert.py` (신규, 29줄)
+- `backend/alembic/versions/062_crash_risk_alerts.py` (신규)
+- `backend/app/routers/crash_guard.py` (신규, 59줄)
+- `backend/app/services/scheduler.py` (+96줄, 3 래퍼 + 3 add_job)
+- `backend/tests/test_crash_guard_service.py` (신규, 33 테스트)
+
+---
+
 ### Feature — SPEC-AI-063: volume_breakout 소형주 독립 시그널 우회 경로 추가 (2026-06-24)
 
 #### `9d31bdf` — Bypass Path 3 추가 (앙상블 임계 우회 경로)
