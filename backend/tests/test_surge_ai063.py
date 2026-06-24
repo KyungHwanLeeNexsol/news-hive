@@ -5,10 +5,7 @@
 
 from __future__ import annotations
 
-import tempfile
 from datetime import date
-from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -18,7 +15,6 @@ from app.surge_config.surge_settings import (
     SurgeDetectionConfig,
     VolumeBreakoutConfig,
     get_surge_config,
-    reload_surge_config,
 )
 from app.services.surge_detector import SurgeCandidate, compute_ensemble_score
 
@@ -377,7 +373,7 @@ class TestScenario7AutoTuning:
     def test_threshold_lower_when_recall_low(self, db):
         """recall < 0.30 → threshold 하향 조정."""
         from app.models.surge_prediction_evaluation import SurgePredictionEvaluation
-        from app.services.surge_auto_improver import _write_auto_yaml, _VB_BYPASS_CLAMP_MIN
+        from app.services.surge_auto_improver import _VB_BYPASS_CLAMP_MIN
 
         # recall 낮은 평가 데이터 생성
         eval_date = date(2026, 6, 24)
