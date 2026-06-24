@@ -4,6 +4,30 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Feature — SPEC-AI-063: volume_breakout 소형주 독립 시그널 우회 경로 추가 (2026-06-24)
+
+#### `9d31bdf` — Bypass Path 3 추가 (앙상블 임계 우회 경로)
+
+**목적**: `volume_breakout` 탐지기가 단독 시그널을 생성하지 못하는 수학적 한계(최대 기여 0.06 < 임계 0.43)를 해결하기 위한 우회 경로 추가. `volume_breakout_score >= 0.30`인 후보를 앙상블 임계 없이 독립 FundSignal로 저장.
+
+- **`VolumeBreakoutConfig.volume_breakout_bypass_threshold`** 추가 (`surge_settings.py`)
+  - 기본값: `0.30`. `volume_breakout` 블록에 co-locate (EnsembleConfig와 분리 — 의도적 설계)
+- **Bypass Path 3** 삽입 (`surge_detector.py`, strong_single bypass 직후)
+  - `candidate.stock_code not in qualified_codes` 가드 → 중복/인플레이션 방지 (REQ-063-004/008)
+  - `candidate.volume_breakout_score >= bypass_threshold` → `qualified` 추가
+  - `bypass_composite_score = volume_breakout_score` 주입 → 신뢰도 정확 반영 (REQ-063-003)
+- **`fund_manager.py`**: `bypass_composite_score` 분기 처리
+- **`surge_auto_improver.py`**: Step 4.3 — `volume_breakout_bypass_threshold` 자동 추적, 클램프 `[0.20, 0.45]`
+  - dot-path: `volume_breakout.volume_breakout_bypass_threshold` → `surge_detection.auto.yaml`
+- **`surge_detection.yaml`**: `volume_breakout_bypass_threshold: 0.30` 추가
+- **테스트**: `tests/test_surge_ai063.py` 신규 — 26개 (시나리오 1-8 + EC1-EC4 + 설정 검증)
+
+**`surge_basis` 자동 충족**: `detect_volume_breakout()`가 `active_detectors=["volume_breakout"]` 부여 → `surge_candidate_to_signal_metadata()`가 자동으로 `surge_basis=["volume_breakout"]` 파생.
+
+**가중치 무변경**: 우회 경로는 탐지기 가중치와 독립적. `surge_detection.auto.yaml` 5탐지기 합산 0.79 유지.
+
+---
+
 ### Feature — SPEC-AI-062: 거래량 폭발 탐지기 (volume_breakout) 추가 (2026-06-23)
 
 #### `f6dfdea` — 7-탐지기 앙상블 전환 + volume_breakout 신규
