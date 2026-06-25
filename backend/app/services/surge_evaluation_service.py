@@ -524,12 +524,28 @@ def evaluate_surge_predictions(
         "T-1 surge_candidate 시그널: %d건 (T-1=%s)", len(predicted_set), prev_business_day
     )
 
-    # 3. T당일 실제 급등주 조회
+    # 3. T당일 실제 급등주 조회 — 최근 30일 스캔 유니버스로 제한
+    # 전체 시장 급등주가 아닌 우리가 최근 surge_candidate로 선정한 종목 중 급등한 것만 평가
+    # 전체 시장과 비교하면 recall이 구조적으로 0에 수렴하여 auto-improver가 오동작함
+    _scan_universe_days = 30
+    recent_scan_universe_q = (
+        db.query(Stock.stock_code)
+        .join(FundSignal, FundSignal.stock_id == Stock.id)
+        .filter(
+            FundSignal.signal_type == "surge_candidate",
+            FundSignal.created_at >= datetime.combine(
+                trading_date - timedelta(days=_scan_universe_days),
+                datetime.min.time(),
+            ),
+        )
+        .distinct()
+    )
     actual_rows = (
         db.query(SurgeActualOutcome.stock_code)
         .filter(
             SurgeActualOutcome.trading_date == trading_date,
             SurgeActualOutcome.was_surge.is_(True),
+            SurgeActualOutcome.stock_code.in_(recent_scan_universe_q),
         )
         .all()
     )

@@ -115,7 +115,11 @@ class TestTPFPFNCalculation:
         db.commit()
 
     def test_tp_fp_fn_calculation(self, db):
-        """예측=A,B,C 실제급등=B,C,D → TP=2, FP=1, FN=1."""
+        """예측=A,B,C 실제급등=B,C,D → TP=2, FP=1, FN=0.
+        
+        D(444444)는 T-1에 surge_candidate로 등장한 적 없으므로 스캔 유니버스 외부.
+        스캔 유니버스 밖 종목의 급등은 FN으로 집계하지 않음 — recall 지표를 의미있게 유지.
+        """
         trading_date = date(2026, 6, 9)
         predicted = ["111111", "222222", "333333"]
         actual_surge = ["222222", "333333", "444444"]
@@ -127,7 +131,7 @@ class TestTPFPFNCalculation:
 
         assert eval_result.true_positive == 2
         assert eval_result.false_positive == 1
-        assert eval_result.false_negative == 1
+        assert eval_result.false_negative == 0  # 444444는 스캔 유니버스 외부 → FN 제외
 
     def test_zero_denominator_precision(self, db):
         """TP=0, FP=0 일 때 precision=0.0 (ZeroDivisionError 방지)."""

@@ -548,8 +548,14 @@ def analyze_and_improve(
     if today_eval is not None:
         recall = today_eval.recall or 0.0
         precision = today_eval.precision or 0.0
+        _actual_surge_count = today_eval.actual_surge_count or 0
 
-        if recall < 0.30:
+        if _actual_surge_count == 0:
+            # 스캔 유니버스에 오늘 급등 종목이 없음 → recall=0은 예측 실패가 아님
+            # min_score 낮추면 노이즈 시그널 증가 → 조정 스킵
+            logger.info("min_score 조정 스킵: 우리 스캔 유니버스 급등 없음 (actual_surge_count=0)")
+            delta = 0.0
+        elif recall < 0.30:
             delta = -0.02
         elif recall > 0.60 or precision < 0.20:
             delta = +0.02
@@ -578,11 +584,12 @@ def analyze_and_improve(
     if today_eval is not None:
         recall_vb = today_eval.recall or 0.0
         precision_vb = today_eval.precision or 0.0
+        _actual_surge_count_vb = today_eval.actual_surge_count or 0
 
-        if recall_vb < 0.30:
+        if _actual_surge_count_vb > 0 and recall_vb < 0.30:
             # recall 낮음 → threshold 낮춰 더 많은 거래량 폭발 종목 bypass 허용
             new_vb_bypass = max(_VB_BYPASS_CLAMP_MIN, current_vb_bypass - _VB_BYPASS_DELTA)
-        elif recall_vb > 0.60 or precision_vb < 0.20:
+        elif _actual_surge_count_vb > 0 and (recall_vb > 0.60 or precision_vb < 0.20):
             # recall 과다 또는 precision 낮음 → threshold 높여 bypass 제한
             new_vb_bypass = min(_VB_BYPASS_CLAMP_MAX, current_vb_bypass + _VB_BYPASS_DELTA)
 
