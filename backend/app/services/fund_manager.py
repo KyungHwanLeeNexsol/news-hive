@@ -1382,11 +1382,18 @@ async def _gather_surge_candidates(
             logger.warning("[급등탐지] %s 캘리브레이션 실패: %s", candidate.stock_code, _e)
 
         # SPEC-AI-036 M3: 품질 floor 게이트 (예외 격리)
-        # bypass 종목(theme >= strong_single_bypass_threshold)은 이미 강한 단일 신호로 검증됨 → 면제
+        # theme bypass는 companion detector(combo/disclosure/volume_breakout > 0.1) 동반 시에만 허용.
+        # theme 단독 0.85+는 대형주 섹터 테마에서 자주 발생하나 품질 floor 면제 불가.
         # SPEC-AI-063: volume_breakout bypass 종목(bypass_composite_score 있음)도 품질 floor 면제
         # calibrated_confidence >= min OR composite_score >= min 중 하나면 통과
+        _has_companion_bypass = (
+            candidate.combo_score > 0.1
+            or candidate.immediate_disclosure_score > 0.1
+            or getattr(candidate, "volume_breakout_score", 0.0) > 0.1
+        )
         _is_bypass = (
-            candidate.theme_cluster_score >= surge_config.ensemble.strong_single_bypass_threshold
+            (candidate.theme_cluster_score >= surge_config.ensemble.strong_single_bypass_threshold
+             and _has_companion_bypass)
             or candidate.bypass_composite_score is not None
         )
         try:

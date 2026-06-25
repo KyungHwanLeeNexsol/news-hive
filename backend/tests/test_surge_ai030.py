@@ -727,3 +727,136 @@ class TestMasterSwitch:
         assert any(r.stock_code == "950002" for r in results2), (
             "enabled=False → 과열(7%) + z-score 충분 → 제외 없음"
         )
+
+
+# ---------------------------------------------------------------------------
+# theme_cluster 단독 bypass companion 요구사항
+# ---------------------------------------------------------------------------
+
+class TestThemeClusterBypassCompanionRequirement:
+    """theme_cluster 단독 0.9+ 신호는 companion detector 없으면 앙상블 임계 우회 불허.
+
+    SPEC-AI-030 Gate 4(combo 단독 차단)와 동일 원칙.
+    theme 단독 bypass는 대형주 섹터 테마에서 자주 발생하나 10%+ 급등 예측력이 없음.
+    companion(combo/disclosure/volume_breakout > 0.1) 동반 시에만 bypass 허용.
+    """
+
+    def _make_theme_only(self, code: str) -> SurgeCandidate:
+        """theme_cluster 단독 0.90 신호 — 다른 탐지기 모두 0."""
+        return SurgeCandidate(
+            stock_code=code,
+            stock_name=f"{code}종목",
+            theme_cluster_score=0.90,  # strong_single_bypass(0.85) 초과
+            combo_score=0.0,
+            immediate_disclosure_score=0.0,
+            pattern_score=0.0,
+            volume_breakout_score=0.0,
+            active_detectors=["theme_cluster"],
+        )
+
+    def _make_theme_with_combo(self, code: str) -> SurgeCandidate:
+        """theme_cluster 0.90 + combo 0.15 동반."""
+        return SurgeCandidate(
+            stock_code=code,
+            stock_name=f"{code}종목",
+            theme_cluster_score=0.90,
+            combo_score=0.15,  # companion threshold(0.1) 초과
+            immediate_disclosure_score=0.0,
+            pattern_score=0.0,
+            volume_breakout_score=0.0,
+            active_detectors=["theme_cluster", "volume_news_combo"],
+        )
+
+    def _make_theme_with_volume_breakout(self, code: str) -> SurgeCandidate:
+        """theme_cluster 0.90 + volume_breakout 0.20 동반."""
+        return SurgeCandidate(
+            stock_code=code,
+            stock_name=f"{code}종목",
+            theme_cluster_score=0.90,
+            combo_score=0.0,
+            immediate_disclosure_score=0.0,
+            pattern_score=0.0,
+            volume_breakout_score=0.20,  # companion
+            active_detectors=["theme_cluster", "volume_breakout"],
+        )
+
+    def test_theme_only_blocked(self, db):
+        """theme_cluster 단독 0.90 → companion 없음 → 앙상블 임계 우회 차단."""
+        config = _make_config()
+
+        theme_only = self._make_theme_only("960001")
+
+        with patch(
+            "app.services.surge_detector.detect_theme_news_cluster",
+            return_value=[theme_only],
+        ), patch(
+            "app.services.surge_detector.detect_volume_surge_news_combo",
+            return_value=[],
+        ), patch(
+            "app.services.surge_detector.detect_disclosure_surge_pattern",
+            return_value=[],
+        ), patch(
+            "app.services.surge_detector.detect_immediate_disclosure_signal",
+            return_value=[],
+        ), patch(
+            "app.services.naver_finance.fetch_stock_price_history_sync",
+            return_value=[],
+        ):
+            results = gather_surge_candidates(db, [], config, [])
+
+        codes = [r.stock_code for r in results]
+        assert "960001" not in codes, "theme 단독 0.90 → companion 없음 → bypass 차단"
+
+    def test_theme_with_combo_allowed(self, db):
+        """theme_cluster 0.90 + combo 0.15 → companion 있음 → bypass 허용."""
+        config = _make_config()
+
+        theme_combo = self._make_theme_with_combo("960002")
+
+        with patch(
+            "app.services.surge_detector.detect_theme_news_cluster",
+            return_value=[theme_combo],
+        ), patch(
+            "app.services.surge_detector.detect_volume_surge_news_combo",
+            return_value=[],
+        ), patch(
+            "app.services.surge_detector.detect_disclosure_surge_pattern",
+            return_value=[],
+        ), patch(
+            "app.services.surge_detector.detect_immediate_disclosure_signal",
+            return_value=[],
+        ), patch(
+            "app.services.naver_finance.fetch_stock_price_history_sync",
+            return_value=[],
+        ):
+            results = gather_surge_candidates(db, [], config, [])
+
+        codes = [r.stock_code for r in results]
+        assert "960002" in codes, "theme 0.90 + combo 0.15 → bypass 허용"
+
+    def test_theme_with_volume_breakout_allowed(self, db):
+        """theme_cluster 0.90 + volume_breakout 0.20 → companion 있음 → bypass 허용."""
+        config = _make_config()
+
+        theme_vb = self._make_theme_with_volume_breakout("960003")
+
+        with patch(
+            "app.services.surge_detector.detect_theme_news_cluster",
+            return_value=[theme_vb],
+        ), patch(
+            "app.services.surge_detector.detect_volume_surge_news_combo",
+            return_value=[],
+        ), patch(
+            "app.services.surge_detector.detect_disclosure_surge_pattern",
+            return_value=[],
+        ), patch(
+            "app.services.surge_detector.detect_immediate_disclosure_signal",
+            return_value=[],
+        ), patch(
+            "app.services.naver_finance.fetch_stock_price_history_sync",
+            return_value=[],
+        ):
+            results = gather_surge_candidates(db, [], config, [])
+
+        codes = [r.stock_code for r in results]
+        assert "960003" in codes, "theme 0.90 + volume_breakout 0.20 → bypass 허용"

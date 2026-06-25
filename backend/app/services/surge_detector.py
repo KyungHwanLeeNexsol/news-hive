@@ -1508,10 +1508,20 @@ def gather_surge_candidates(
 
     # SPEC-AI-017 REQ-003: 강한 단일 신호 우회 (theme/combo >= bypass 임계값)
     # 즉각 공시 bypass(0.85)와 대칭 — 강한 테마/거래량 신호 구제
+    # @MX:NOTE: [AUTO] theme_cluster 단독 bypass는 SPEC-AI-030 combo 단독 차단과 동일한 원칙으로
+    # companion detector(combo/disclosure/volume_breakout > 0.1) 없으면 우회 불허.
+    # 이유: theme 단독 0.9+는 대형주 섹터 테마에서 자주 발생하나 10%+ 급등 예측력 없음.
+    # combo/volume_breakout과 동반 시에만 유효한 신호.
     _bypass = config.ensemble.strong_single_bypass_threshold
+    _companion_threshold = 0.1
     for candidate in merged.values():
+        _has_companion = (
+            candidate.combo_score > _companion_threshold
+            or candidate.immediate_disclosure_score > _companion_threshold
+            or candidate.volume_breakout_score > _companion_threshold
+        )
         if candidate.stock_code not in qualified_codes and (
-            candidate.theme_cluster_score >= _bypass
+            (candidate.theme_cluster_score >= _bypass and _has_companion)
             or candidate.combo_score >= _bypass
         ):
             # SPEC-AI-018 REQ-005: 강한 단일 신호 우회 경로에도 급등 페널티 적용
