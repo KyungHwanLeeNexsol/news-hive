@@ -1422,6 +1422,10 @@ def gather_surge_candidates(
         # (surge_metadata에 기록되도록 아래 시그널 생성 단계에서 활용)
     except Exception as _ue:
         logger.warning("[스캔유니버스] 유니버스 빌드 실패 (무시): %s", _ue)
+        try:
+            db.rollback()
+        except Exception:
+            pass
         _pool_counts = {"pool_a": 0, "pool_b": 0, "pool_c": 0}
 
     # 레거시 탐지기 점수 계산
@@ -3372,6 +3376,10 @@ def build_scan_universe(
         logger.info("[스캔유니버스] Pool A(DART공시): %d개 (날짜=%s)", len(pool_a_codes), today_str)
     except Exception as e:
         logger.warning("[스캔유니버스] Pool A 조회 실패: %s", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
     # Pool B: 거래량 200%+ 당일 종목
     # SurgeActualOutcome에서 오늘 데이터를 활용하거나 naver_finance에서 직접 조회
@@ -3432,6 +3440,10 @@ def build_scan_universe(
         logger.info("[스캔유니버스] Pool C(등락률5~15%%): %d개", len(pool_c_codes))
     except Exception as e:
         logger.warning("[스캔유니버스] Pool C 조회 실패: %s", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
     # 기존 탐지기 결과 추가 (우선순위 최하)
     for code in existing_codes:
