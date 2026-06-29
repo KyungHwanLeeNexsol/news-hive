@@ -1509,12 +1509,15 @@ def gather_surge_candidates(
     if len(merged) > _MAX_PRICE_FETCH_CANDIDATES:
         _original_count = len(merged)
         def _pre_score(c: SurgeCandidate) -> float:
+            # 앙상블 가중치 기준으로 모든 탐지기 반영 (SPEC-AI-065: volume_breakout/momentum_continuation 추가)
             return (
-                c.theme_cluster_score * 0.45
-                + c.combo_score * 0.30
-                + c.pattern_score * 0.15
-                + c.immediate_disclosure_score * 0.05
-                + c.news_delayed_score * 0.05
+                c.theme_cluster_score * 0.19
+                + c.combo_score * 0.25
+                + c.pattern_score * 0.14
+                + c.news_delayed_score * 0.11
+                + c.volume_breakout_score * 0.11
+                + c.momentum_continuation_score * 0.12
+                + c.immediate_disclosure_score * 0.08
             )
         _sorted_codes = sorted(merged.keys(), key=lambda code: _pre_score(merged[code]), reverse=True)
         merged = {code: merged[code] for code in _sorted_codes[:_MAX_PRICE_FETCH_CANDIDATES]}
