@@ -39,6 +39,7 @@ from app.models.virtual_portfolio import VirtualPortfolio
 from app.models.factor_weight import FactorWeightHistory  # noqa: F401
 from app.models.improvement_log import ImprovementLog  # noqa: F401
 from app.models.securities_report import SecuritiesReport  # noqa: F401 — SPEC-FOLLOW-002
+from app.models.stock_signal_baseline import StockSignalBaseline  # noqa: F401 — SPEC-AI-065
 
 
 # 테스트 DB URL: 기본 SQLite 인메모리, 환경변수로 PostgreSQL 오버라이드 가능
@@ -146,6 +147,8 @@ def test_engine():
     from app.models.surge_actual_outcome import SurgeActualOutcome  # noqa: F401 — SPEC-AI-041
     from app.models.surge_prediction_evaluation import SurgePredictionEvaluation  # noqa: F401 — SPEC-AI-041
     from app.models.surge_auto_improvement_log import SurgeAutoImprovementLog  # noqa: F401 — SPEC-AI-041
+    from app.models.crash_risk_alert import CrashRiskAlert  # noqa: F401 — SPEC-AI-064
+    from app.models.stock_signal_baseline import StockSignalBaseline  # noqa: F401, F811 — SPEC-AI-065
 
     Base.metadata.create_all(bind=engine)
     yield engine

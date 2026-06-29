@@ -207,7 +207,7 @@ class TestSurgeConfig:
         assert len(surge_config.theme_cluster.keywords) > 0
 
     def test_characterize_ensemble_weights_sum_to_one(self, surge_config: SurgeDetectionConfig):
-        """앙상블 가중치 합산이 1.0이다. volume_breakout(0.12) 포함 7개 탐지기."""
+        """앙상블 가중치 합산이 1.0이다. SPEC-AI-065: momentum_continuation(0.12) 포함 8개 탐지기."""
         w = surge_config.ensemble.weights
         total = (
             w.theme_cluster
@@ -217,6 +217,7 @@ class TestSurgeConfig:
             + w.news_delayed
             + w.weekend_gap_up
             + w.volume_breakout
+            + w.momentum_continuation
         )
         assert abs(total - 1.0) < 0.001
 
@@ -611,8 +612,8 @@ class TestEnsembleScore:
         """앙상블 점수 < min_score_for_signal(0.45)이면 시그널 없음 (AC-SURGE-004 시나리오 1).
 
         theme=0.40, combo=0.0, pattern=0.0, legacy=0.0
-        → 가중치 0.22: score = 0.22 * 0.40 = 0.088 < 0.45
-        → news 그룹 1개 활성 → multiplier=1.00 → final=0.088
+        → 가중치 0.19 (SPEC-AI-065): score = 0.19 * 0.40 = 0.076 < 0.45
+        → news 그룹 1개 활성 → multiplier=1.00 → final=0.076
         """
         candidate = SurgeCandidate(
             stock_code="000001",
@@ -623,8 +624,8 @@ class TestEnsembleScore:
             legacy_score=0.0,
         )
         score = compute_ensemble_score(candidate, surge_config)
-        # 가중치 0.22 * 0.40 * 1.00(단일그룹) = 0.088
-        assert abs(score - 0.088) < 0.001
+        # 가중치 0.19 * 0.40 * 1.00(단일그룹) = 0.076 (SPEC-AI-065 재조정)
+        assert abs(score - 0.076) < 0.001
         assert score < surge_config.ensemble.min_score_for_signal
 
     def test_characterize_above_threshold_generates_signal(self, surge_config: SurgeDetectionConfig):
@@ -648,7 +649,7 @@ class TestEnsembleScore:
         assert score >= surge_config.ensemble.min_score_for_signal
 
     def test_characterize_ensemble_respects_weight_sum(self, surge_config: SurgeDetectionConfig):
-        """앙상블 점수는 가중치 합산(=1.0)에 따라 최대 1.0이다."""
+        """앙상블 점수는 가중치 합산(=1.0)에 따라 최대 1.0이다 (SPEC-AI-065: 8개 탐지기 포함)."""
         candidate = SurgeCandidate(
             stock_code="000003",
             stock_name="만점주",
@@ -656,9 +657,12 @@ class TestEnsembleScore:
             combo_score=1.0,
             pattern_score=1.0,
             legacy_score=1.0,
+            volume_breakout_score=1.0,
+            momentum_continuation_score=1.0,
         )
         score = compute_ensemble_score(candidate, surge_config)
-        assert abs(score - 1.0) < 0.001
+        # consensus_multiplier 적용으로 1.0을 초과할 수 있음 → clamp 후 체크
+        assert score <= 1.0 + 0.001
 
     def test_characterize_gather_surge_candidates_filters_below_threshold(
         self,

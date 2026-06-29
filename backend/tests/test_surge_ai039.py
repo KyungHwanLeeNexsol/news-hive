@@ -8,6 +8,7 @@ AC-039-004: 앙상블 가중치 합산 = 1.0
 
 from __future__ import annotations
 
+import pytest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
@@ -312,8 +313,8 @@ class TestEnsembleWeights:
     """AC-039-004: 앙상블 가중치 합산이 1.0이어야 한다."""
 
     def test_ensemble_weights_sum_to_1(self) -> None:
-        """theme(0.22) + combo(0.28) + disclosure(0.16) + legacy(0.00) + delayed(0.13) + wgu(0.09) + vb(0.12) = 1.0.
-        volume_breakout(0.12) 추가, 기존 5개 가중치 재조정.
+        """SPEC-AI-065: theme(0.19)+combo(0.25)+disclosure(0.14)+legacy(0.00)+delayed(0.11)+wgu(0.08)+vb(0.11)+mc(0.12)=1.0.
+        momentum_continuation(0.12) 추가, 기존 7개 가중치 재조정 (비율 0.88 스케일링).
         """
         cfg = get_surge_config()
         w = cfg.ensemble.weights
@@ -325,21 +326,23 @@ class TestEnsembleWeights:
             + w.news_delayed
             + w.weekend_gap_up
             + w.volume_breakout
+            + w.momentum_continuation
         )
         assert abs(total - 1.0) <= 0.001, f"가중치 합산 1.0 기대, 실제: {total:.4f}"
 
     def test_individual_weights_match_spec(self) -> None:
-        """각 탐지기 가중치가 volume_breakout 추가 후 재조정 값과 일치해야 한다."""
+        """각 탐지기 가중치가 SPEC-AI-065 (momentum_continuation 추가) 재조정 값과 일치해야 한다."""
         cfg = get_surge_config()
         w = cfg.ensemble.weights
-        assert w.theme_cluster == 0.22, f"theme_cluster 0.22 기대, 실제: {w.theme_cluster}"
-        assert w.volume_news_combo == 0.28, f"volume_news_combo 0.28 기대, 실제: {w.volume_news_combo}"
-        assert w.disclosure_pattern == 0.16, f"disclosure_pattern 0.16 기대, 실제: {w.disclosure_pattern}"
+        assert w.theme_cluster == pytest.approx(0.19), f"theme_cluster 0.19 기대, 실제: {w.theme_cluster}"
+        assert w.volume_news_combo == pytest.approx(0.25), f"volume_news_combo 0.25 기대, 실제: {w.volume_news_combo}"
+        assert w.disclosure_pattern == pytest.approx(0.14), f"disclosure_pattern 0.14 기대, 실제: {w.disclosure_pattern}"
         # legacy_detectors: SPEC-AI-050에서 0.10→0.00으로 변경
         assert w.legacy_detectors == 0.00, f"legacy_detectors 0.00 기대, 실제: {w.legacy_detectors}"
-        assert w.news_delayed == 0.13, f"news_delayed 0.13 기대, 실제: {w.news_delayed}"
-        assert w.weekend_gap_up == 0.09, f"weekend_gap_up 0.09 기대, 실제: {w.weekend_gap_up}"
-        assert w.volume_breakout == 0.12, f"volume_breakout 0.12 기대, 실제: {w.volume_breakout}"
+        assert w.news_delayed == pytest.approx(0.11), f"news_delayed 0.11 기대, 실제: {w.news_delayed}"
+        assert w.weekend_gap_up == pytest.approx(0.08), f"weekend_gap_up 0.08 기대, 실제: {w.weekend_gap_up}"
+        assert w.volume_breakout == pytest.approx(0.11), f"volume_breakout 0.11 기대, 실제: {w.volume_breakout}"
+        assert w.momentum_continuation == pytest.approx(0.12), f"momentum_continuation 0.12 기대, 실제: {w.momentum_continuation}"
 
     def test_validate_ensemble_weights_passes(self) -> None:
         """validate_ensemble_weights 모델 검증자가 통과해야 한다 (예외 없음)."""

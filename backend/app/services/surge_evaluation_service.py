@@ -480,7 +480,9 @@ def generate_detector_improvement_suggestions(
 
 
 def evaluate_surge_predictions(
-    db: Session, trading_date: date
+    db: Session,
+    trading_date: date,
+    pool_counts: dict[str, int] | None = None,
 ) -> SurgePredictionEvaluation:
     # @MX:NOTE: [AUTO] SPEC-AI-041 — T-1 급등 시그널 적중 평가. surge_metadata IS NOT NULL 필터로 시그널 식별
     # @MX:SPEC: SPEC-AI-041 REQ-AI041-002
@@ -496,6 +498,8 @@ def evaluate_surge_predictions(
     Args:
         db: SQLAlchemy 동기 세션
         trading_date: 평가 기준 날짜 (T당일)
+        pool_counts: SPEC-AI-065 REQ-5 — 스캔 유니버스 pool 집계
+                     {"pool_a": int, "pool_b": int, "pool_c": int, "scan_universe_size": int}
 
     Returns:
         저장된 SurgePredictionEvaluation 인스턴스
@@ -561,6 +565,12 @@ def evaluate_surge_predictions(
         tp, fp, fn, precision, recall, f1,
     )
 
+    # SPEC-AI-065 REQ-5: pool_counts 정규화
+    _pool_a = (pool_counts or {}).get("pool_a", 0)
+    _pool_b = (pool_counts or {}).get("pool_b", 0)
+    _pool_c = (pool_counts or {}).get("pool_c", 0)
+    _scan_universe_size = (pool_counts or {}).get("scan_universe_size", 0)
+
     # 5. SurgePredictionEvaluation upsert (evaluation_date PK 기준)
     existing = (
         db.query(SurgePredictionEvaluation)
@@ -577,6 +587,12 @@ def evaluate_surge_predictions(
         existing.precision = precision
         existing.recall = recall
         existing.f1_score = f1
+        # SPEC-AI-065 REQ-5: pool_counts 업데이트
+        if pool_counts is not None:
+            existing.scan_universe_size = _scan_universe_size
+            existing.pool_a_count = _pool_a
+            existing.pool_b_count = _pool_b
+            existing.pool_c_count = _pool_c
         db.flush()
         evaluation = existing
     else:
@@ -590,6 +606,11 @@ def evaluate_surge_predictions(
             precision=precision,
             recall=recall,
             f1_score=f1,
+            # SPEC-AI-065 REQ-5: pool_counts 초기화
+            scan_universe_size=_scan_universe_size,
+            pool_a_count=_pool_a,
+            pool_b_count=_pool_b,
+            pool_c_count=_pool_c,
         )
         db.add(evaluation)
         db.flush()

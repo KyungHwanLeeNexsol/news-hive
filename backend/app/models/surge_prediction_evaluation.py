@@ -48,6 +48,16 @@ class SurgePredictionEvaluation(Base):
     # SPEC-AI-060: 종목별 개별 원인 분석 결과 (JSON string)
     per_stock_analysis_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # SPEC-AI-065 REQ-5: 스캔 유니버스 크기 및 풀별 집계 컬럼
+    # 당일 평가 대상 총 스캔 유니버스 크기 (Pool A+B+C+기존 합산)
+    scan_universe_size: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+    # Pool A: DART 공시 당일 종목 수
+    pool_a_count: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+    # Pool B: 거래량 200%+ 당일 종목 수
+    pool_b_count: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+    # Pool C: 등락률 5~15% 당일 종목 수
+    pool_c_count: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+
     # 레코드 생성 시각
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

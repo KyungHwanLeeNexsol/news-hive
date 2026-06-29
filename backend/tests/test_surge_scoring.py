@@ -573,8 +573,8 @@ class TestEnsembleClamp:
     """T-007: 앙상블 점수가 1.0을 초과하면 1.0으로 클램핑된다."""
 
     def test_t007_score_clamped_at_1_0(self, surge_config: SurgeDetectionConfig):
-        """T-007: weighted_sum=0.9 * multiplier=1.30 = 1.17 → clamped to 1.0."""
-        # 4개 탐지기 모두 높은 점수 → weighted_sum > 0.9 보장
+        """T-007: 모든 탐지기 1.0 + consensus_multiplier → clamped to 1.0."""
+        # SPEC-AI-065: 8개 탐지기 모두 높은 점수 → weighted_sum > 0.9 보장
         candidate = SurgeCandidate(
             stock_code="T007",
             stock_name="클램프테스트",
@@ -582,9 +582,11 @@ class TestEnsembleClamp:
             combo_score=1.0,
             pattern_score=1.0,
             legacy_score=1.0,
+            volume_breakout_score=1.0,
+            momentum_continuation_score=1.0,
         )
         score = compute_ensemble_score(candidate, surge_config)
-        # weighted_sum = 0.35+0.35+0.20+0.10 = 1.0, multiplier=1.30 → 1.30 → clamped to 1.0
+        # weighted_sum*multiplier > 1.0 → clamped to 1.0
         assert score == 1.0
 
     def test_t007_exact_clamp_scenario(self, surge_config: SurgeDetectionConfig):
@@ -742,7 +744,7 @@ class TestYamlWeightSum:
 
     def test_t011_yaml_weights_sum_to_one(self, surge_config: SurgeDetectionConfig):
         """T-011: YAML 설정 파일 로드 후 앙상블 가중치 합산이 1.00 ± 0.001이다.
-        volume_breakout(0.12) 추가 → 7개 탐지기 합산.
+        SPEC-AI-065: momentum_continuation(0.12) 추가 → 8개 탐지기 합산.
         """
         w = surge_config.ensemble.weights
         total = (
@@ -753,25 +755,27 @@ class TestYamlWeightSum:
             + w.news_delayed
             + w.weekend_gap_up
             + w.volume_breakout
+            + w.momentum_continuation
         )
         assert abs(total - 1.0) < 0.001, (
             f"앙상블 가중치 합산이 1.0이 아닙니다: {total}"
         )
 
     def test_t011_new_weights_values(self, surge_config: SurgeDetectionConfig):
-        """T-011: 가중치 값 검증 — volume_breakout 0.12 추가, 기존 가중치 재조정.
-        theme_cluster: 0.25→0.22, volume_news_combo: 0.32→0.28
-        disclosure_pattern: 0.18→0.16, news_delayed: 0.15→0.13, weekend_gap_up: 0.10→0.09
-        volume_breakout: 0.12 신규 추가
+        """T-011: 가중치 값 검증 — SPEC-AI-065 momentum_continuation(0.12) 추가, 기존 가중치 재조정.
+        theme_cluster: 0.22→0.19, volume_news_combo: 0.28→0.25
+        disclosure_pattern: 0.16→0.14, news_delayed: 0.13→0.11, weekend_gap_up: 0.09→0.08
+        volume_breakout: 0.12→0.11, momentum_continuation: 0.12 신규 추가
         """
         w = surge_config.ensemble.weights
-        assert abs(w.theme_cluster - 0.22) < 0.001, f"theme_cluster 가중치 오류: {w.theme_cluster}"
-        assert abs(w.volume_news_combo - 0.28) < 0.001, f"volume_news_combo 가중치 오류: {w.volume_news_combo}"
-        assert abs(w.disclosure_pattern - 0.16) < 0.001, f"disclosure_pattern 가중치 오류: {w.disclosure_pattern}"
+        assert abs(w.theme_cluster - 0.19) < 0.001, f"theme_cluster 가중치 오류: {w.theme_cluster}"
+        assert abs(w.volume_news_combo - 0.25) < 0.001, f"volume_news_combo 가중치 오류: {w.volume_news_combo}"
+        assert abs(w.disclosure_pattern - 0.14) < 0.001, f"disclosure_pattern 가중치 오류: {w.disclosure_pattern}"
         assert abs(w.legacy_detectors - 0.00) < 0.001, f"legacy_detectors 가중치 오류: {w.legacy_detectors}"
-        assert abs(w.news_delayed - 0.13) < 0.001, f"news_delayed 가중치 오류: {w.news_delayed}"
-        assert abs(w.weekend_gap_up - 0.09) < 0.001, f"weekend_gap_up 가중치 오류: {w.weekend_gap_up}"
-        assert abs(w.volume_breakout - 0.12) < 0.001, f"volume_breakout 가중치 오류: {w.volume_breakout}"
+        assert abs(w.news_delayed - 0.11) < 0.001, f"news_delayed 가중치 오류: {w.news_delayed}"
+        assert abs(w.weekend_gap_up - 0.08) < 0.001, f"weekend_gap_up 가중치 오류: {w.weekend_gap_up}"
+        assert abs(w.volume_breakout - 0.11) < 0.001, f"volume_breakout 가중치 오류: {w.volume_breakout}"
+        assert abs(w.momentum_continuation - 0.12) < 0.001, f"momentum_continuation 가중치 오류: {w.momentum_continuation}"
 
 
 # ---------------------------------------------------------------------------

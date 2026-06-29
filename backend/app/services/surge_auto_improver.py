@@ -513,20 +513,22 @@ def analyze_and_improve(
             }
 
             # 마지막 재정규화: weekend_gap_up(고정) 제외 비율로 스케일링
-            # _DETECTORS 5개 합산 목표 = 1.0 - weekend_gap_up - volume_breakout (고정 가중치 제외)
+            # _DETECTORS 5개 합산 목표 = 1.0 - weekend_gap_up - volume_breakout - momentum_continuation (고정 가중치 제외)
             _fixed_weight = (
                 cfg.ensemble.weights.weekend_gap_up
                 + cfg.ensemble.weights.volume_breakout
+                + cfg.ensemble.weights.momentum_continuation  # SPEC-AI-065 REQ-3: 자동 개선 제외
             )
             _wgu_target = 1.0 - _fixed_weight
             cap_total = sum(daily_capped.values())
             final_weight = {d: daily_capped[d] / cap_total * _wgu_target for d in _DETECTORS}
 
-    # 사전 검증 (CRITICAL): _DETECTORS + weekend_gap_up + volume_breakout(고정) 합산 = 1.0
-    # weekend_gap_up, volume_breakout은 자동 개선 대상 외 → 현재 YAML 값 유지
+    # 사전 검증 (CRITICAL): _DETECTORS + weekend_gap_up + volume_breakout + momentum_continuation(고정) 합산 = 1.0
+    # weekend_gap_up, volume_breakout, momentum_continuation은 자동 개선 대상 외 → 현재 YAML 값 유지
     _fixed_total = (
         cfg.ensemble.weights.weekend_gap_up
         + cfg.ensemble.weights.volume_breakout
+        + cfg.ensemble.weights.momentum_continuation  # SPEC-AI-065 REQ-3
     )
     weight_sum = sum(final_weight.values()) + _fixed_total
     assert abs(weight_sum - 1.0) <= 0.001, (

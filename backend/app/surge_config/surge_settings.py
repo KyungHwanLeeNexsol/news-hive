@@ -146,6 +146,11 @@ class EnsembleWeightsConfig(BaseModel):
     weekend_gap_up: float = 0.10
     # 거래량 폭발 탐지기 가중치 (소형주 커버리지 확장, 뉴스 없이 거래량만으로 탐지)
     volume_breakout: float = 0.0
+    # SPEC-AI-065 REQ-3: 모멘텀 연속 탐지기 가중치
+    # 전일 등락률 5~15% 종목의 익일 모멘텀 연속 패턴 탐지
+    # @MX:NOTE: [AUTO] SPEC-AI-065 REQ-3 — 8번째 탐지기. volume_breakout(당일 거래량)과 구분됨
+    # @MX:SPEC: SPEC-AI-065 REQ-3
+    momentum_continuation: float = 0.0
 
 
 class EnsembleConfig(BaseModel):
@@ -279,6 +284,28 @@ class PerStockAnalysisConfig(BaseModel):
     skip_if_no_context: bool = True
 
 
+class MomentumContinuationConfig(BaseModel):
+    """SPEC-AI-065 REQ-3: 모멘텀 연속 탐지기 설정.
+
+    전일 등락률 5~15% 종목의 익일 모멘텀 연속 패턴을 탐지한다.
+    15% 초과(추격매수 방지 REQ-3.4)와 BEAR 레짐에서는 점수를 감쇠한다.
+    """
+
+    enabled: bool = True
+    # 탐지 기준: 전일 등락률 하한 (%)
+    min_change_rate: float = 5.0
+    # 탐지 기준: 전일 등락률 상한 (%) — 이 이상이면 탐지 제외 (추격매수 방지)
+    max_change_rate: float = 15.0
+    # 기본 confidence
+    base_score: float = 0.40
+    # 등락률에 따른 선형 스케일 상한
+    max_score: float = 0.70
+    # BEAR 레짐 점수 감쇠율
+    bear_dampening: float = 0.7
+    # 가격 히스토리 최소 일수 (이하면 탐지 제외)
+    min_history_days: int = 5
+
+
 class SurgeDetectionConfig(BaseModel):
     """급등 징후 탐지 전체 설정.
 
@@ -318,6 +345,10 @@ class SurgeDetectionConfig(BaseModel):
     per_stock_analysis: PerStockAnalysisConfig = Field(default_factory=PerStockAnalysisConfig)
     # 거래량 폭발 소형주 탐지기 설정
     volume_breakout: VolumeBreakoutConfig = Field(default_factory=VolumeBreakoutConfig)
+    # SPEC-AI-065 REQ-3: 모멘텀 연속 탐지기 설정
+    momentum_continuation: MomentumContinuationConfig = Field(
+        default_factory=MomentumContinuationConfig
+    )
 
     # SPEC-AI-042 REQ-042-008: 장전 갭업 조기 진입 임계값 (하드코딩 금지)
     # 0 <= change_rate < gap_entry_threshold → 조기 진입
@@ -325,11 +356,23 @@ class SurgeDetectionConfig(BaseModel):
     # @MX:NOTE: [AUTO] SPEC-AI-042 — 갭 필터 임계값. 변경 시 surge_detection.yaml에서만 조정
     gap_entry_threshold: float = 0.05
 
-    # @MX:ANCHOR: [AUTO] 앙상블 가중치 합산 검증 — 6개 탐지기 가중치 합산 반드시 1.0
+    # SPEC-AI-065: z-score 기준선 최소 샘플 수 (cold-start 판단 기준)
+    # @MX:NOTE: [AUTO] SPEC-AI-065 REQ-1 — 10일 미만이면 z-score 대신 절대값 사용
+    # @MX:SPEC: SPEC-AI-065 REQ-1
+    zscore_min_baseline_samples: int = 10
+    # SPEC-AI-065: 스캔 유니버스 최대 크기 (Pool A+B+C+기존 합산 상한)
+    # @MX:NOTE: [AUTO] SPEC-AI-065 REQ-2 — 150 초과 시 A > B > C > existing 우선순위로 잘라냄
+    # @MX:SPEC: SPEC-AI-065 REQ-2
+    max_scan_universe: int = 150
+
+    # @MX:ANCHOR: [AUTO] 앙상블 가중치 합산 검증 — 8개 탐지기 가중치 합산 반드시 1.0
     # @MX:REASON: 가중치 합산 != 1.0 이면 앙상블 스코어 범위가 0~1을 벗어나 시그널 임계값 판정이 왜곡됨
     @model_validator(mode="after")
     def validate_ensemble_weights(self) -> "SurgeDetectionConfig":
-        """앙상블 가중치 합산이 1.0이어야 한다 (7개 탐지기 가중치 합산)."""
+        """앙상블 가중치 합산이 1.0이어야 한다 (8개 탐지기 가중치 합산).
+
+        SPEC-AI-065 REQ-3: momentum_continuation 추가로 8번째 탐지기 포함.
+        """
         w = self.ensemble.weights
         total = (
             w.theme_cluster
@@ -339,6 +382,7 @@ class SurgeDetectionConfig(BaseModel):
             + w.news_delayed
             + w.weekend_gap_up
             + w.volume_breakout
+            + w.momentum_continuation
         )
         if abs(total - 1.0) > 0.001:
             raise ValueError(

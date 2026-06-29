@@ -87,6 +87,10 @@ class SurgeCandidate:
     # None이면 일반 앙상블 경로 (fund_manager가 build_surge_factor_scores 결과 사용)
     # 값이 있으면 bypass 경로: composite_score = volume_breakout_score
     bypass_composite_score: float | None = None
+    # SPEC-AI-065 REQ-3: 모멘텀 연속 탐지기 점수 (전일 등락률 5~15% 기반)
+    momentum_continuation_score: float = 0.0
+    # SPEC-AI-065 REQ-2: 후보 유입 풀 태그 (pool_a/pool_b/pool_c/existing)
+    entry_pool: str = "existing"
 
 
 def _sigmoid(x: float) -> float:
@@ -1064,20 +1068,26 @@ def compute_ensemble_score(candidate: SurgeCandidate, config: SurgeDetectionConf
         + w.volume_news_combo * candidate.combo_score
         + w.disclosure_pattern * best_disclosure_score
         + w.legacy_detectors * candidate.legacy_score
-        # SPEC-AI-039 REQ-039-002: 뉴스 지연 반응 점수 추가 (가중치 0.13)
+        # SPEC-AI-039 REQ-039-002: 뉴스 지연 반응 점수 추가
         + w.news_delayed * candidate.news_delayed_score
-        # 거래량 폭발 탐지기 점수 추가 (가중치 0.12)
+        # 거래량 폭발 탐지기 점수 추가
         + w.volume_breakout * candidate.volume_breakout_score
+        # SPEC-AI-065 REQ-3: 모멘텀 연속 탐지기 점수 추가 (가중치 0.12)
+        + w.momentum_continuation * candidate.momentum_continuation_score
     )
 
     # SPEC-AI-018 REQ-009: 탐지기 그룹 단위 컨센서스 배율 (동일 이벤트 중복 보상 방지)
     # news 그룹(theme+combo)은 모두 뉴스 이벤트에 반응 → 동일 그룹으로 묶음
     # disclosure 그룹: best_disclosure_score (공시 이벤트)
-    # technical 그룹: legacy_score + volume_breakout (기술적 신호)
+    # technical 그룹: legacy_score + volume_breakout + momentum_continuation (기술적 신호)
     detector_groups = {
         "news": [candidate.theme_cluster_score, candidate.combo_score],
         "disclosure": [best_disclosure_score],
-        "technical": [candidate.legacy_score, candidate.volume_breakout_score],
+        "technical": [
+            candidate.legacy_score,
+            candidate.volume_breakout_score,
+            candidate.momentum_continuation_score,
+        ],
     }
     active_groups = sum(
         1 for scores in detector_groups.values() if any(s > 0 for s in scores)
@@ -1385,6 +1395,35 @@ def gather_surge_candidates(
         else:
             merged[candidate.stock_code] = candidate
 
+    # SPEC-AI-065 REQ-3: 모멘텀 연속 탐지기 결과 병합
+    momentum_results = detect_momentum_continuation(db, config, market_regime=market_regime)
+    for candidate in momentum_results:
+        if candidate.stock_code in merged:
+            existing = merged[candidate.stock_code]
+            existing.momentum_continuation_score = candidate.momentum_continuation_score
+            if "momentum_continuation" not in existing.active_detectors:
+                existing.active_detectors.append("momentum_continuation")
+        else:
+            merged[candidate.stock_code] = candidate
+
+    # SPEC-AI-065 REQ-2: 스캔 유니버스 entry_pool 태깅
+    # 기존 탐지기 결과로 entry_pool='existing' 설정, Pool A/B/C는 별도 탐지기에서 태깅됨
+    existing_codes = set(merged.keys())
+    try:
+        _universe_codes, _entry_pool_map, _pool_counts = build_scan_universe(
+            db, config, existing_codes=existing_codes
+        )
+        # 기존 merged 후보에 entry_pool 태깅 (Pool A/B/C 소속이면 갱신)
+        for code, candidate in merged.items():
+            pool_tag = _entry_pool_map.get(code, "existing")
+            if candidate.entry_pool == "existing":
+                candidate.entry_pool = pool_tag
+        # pool_counts를 gather_surge_candidates 반환값 메타데이터로 첨부
+        # (surge_metadata에 기록되도록 아래 시그널 생성 단계에서 활용)
+    except Exception as _ue:
+        logger.warning("[스캔유니버스] 유니버스 빌드 실패 (무시): %s", _ue)
+        _pool_counts = {"pool_a": 0, "pool_b": 0, "pool_c": 0}
+
     # 레거시 탐지기 점수 계산
     # @MX:NOTE: legacy_score = min(1.0, 레거시 탐지기 발동 수 / 4)
     #           leading_signals 키로 몇 개의 선행 탐지기가 발동했는지 확인
@@ -1405,6 +1444,59 @@ def gather_surge_candidates(
             candidate.legacy_score = legacy_score_map[code]
             if "legacy" not in candidate.active_detectors:
                 candidate.active_detectors.append("legacy")
+
+    # SPEC-AI-065 REQ-1: z-score 정규화 적용
+    # 기준선(rolling_mean, rolling_std)이 충분한 경우 절대값 대신 z-score로 정규화
+    _DETECTOR_SCORE_ATTRS = [
+        ("theme_cluster", "theme_cluster_score"),
+        ("volume_news_combo", "combo_score"),
+        ("disclosure_pattern", "pattern_score"),
+        ("news_delayed", "news_delayed_score"),
+        ("volume_breakout", "volume_breakout_score"),
+        ("momentum_continuation", "momentum_continuation_score"),
+    ]
+    try:
+        from app.services.surge_baseline_service import (
+            get_baselines,
+            compute_zscore,
+            zscore_to_score,
+            Observation,
+            update_baselines,
+        )
+
+        _all_codes = list(merged.keys())
+        _all_detectors = [d for d, _ in _DETECTOR_SCORE_ATTRS]
+        _baselines = get_baselines(db, _all_codes, _all_detectors)
+
+        _observations: list[Observation] = []
+        _min_samples = config.zscore_min_baseline_samples
+
+        for code, candidate in merged.items():
+            _zscore_meta: dict[str, str] = {}
+            for det_name, score_attr in _DETECTOR_SCORE_ATTRS:
+                raw = getattr(candidate, score_attr)
+                baseline = _baselines.get((code, det_name))
+                _observations.append(Observation(code, det_name, raw))
+
+                if baseline and raw > 0:
+                    z = compute_zscore(raw, baseline, min_samples=_min_samples)
+                    if z is not None:
+                        normalized = zscore_to_score(z)
+                        setattr(candidate, score_attr, normalized)
+                        _zscore_meta[det_name] = f"z={z:.2f}→{normalized:.3f}"
+                    else:
+                        _zscore_meta[det_name] = "cold_start"
+                elif raw > 0:
+                    _zscore_meta[det_name] = "no_baseline"
+
+            if _zscore_meta:
+                logger.debug("[z-score] %s %s", code, _zscore_meta)
+
+        # 오늘 관측값으로 기준선 업데이트 (비동기 없이 동기 flush)
+        update_baselines(db, _observations)
+
+    except Exception as _ze:
+        logger.debug("[z-score] 기준선 적용 실패 (무시): %s", _ze)
 
     # SPEC-AI-038 성능 패치 3단계: price_5d_trend 조회(HTTP) 전 상위 N개로 사전 필터
     # 이유: 테마클러스터가 수백 개 후보 반환 시 모든 종목 HTTP 호출 → 300s 타임아웃 초과
@@ -3110,3 +3202,272 @@ def detect_volume_breakout(
 
     logger.info("[거래량폭발] %d개 후보 탐지", len(candidates))
     return candidates
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-065 REQ-3: 모멘텀 연속 탐지기
+# ---------------------------------------------------------------------------
+
+def detect_momentum_continuation(
+    db: "Session",
+    config: "SurgeDetectionConfig",
+    market_regime: str = "NEUTRAL",
+) -> list[SurgeCandidate]:
+    """전일 등락률 5~15% 종목의 익일 모멘텀 연속 패턴을 탐지한다.
+
+    SPEC-AI-065 REQ-3:
+    - 전일 change_rate in [5%, 15%] 범위인 종목 탐지
+    - 15% 초과는 추격매수 방지(REQ-3.4)로 제외
+    - BEAR 레짐에서는 bear_dampening 비율로 점수 감쇠
+    - volume_breakout(당일 거래량 이상)과 구별: 이 탐지기는 전일 등락률 기반
+
+    Args:
+        db: SQLAlchemy 동기 세션
+        config: SurgeDetectionConfig 설정
+        market_regime: 시장 레짐 (BEAR/SIDEWAYS/BULL/NEUTRAL)
+
+    Returns:
+        momentum_continuation_score가 채워진 SurgeCandidate 목록
+    """
+    cfg = config.momentum_continuation
+    if not cfg.enabled:
+        return []
+
+    from app.models.surge_actual_outcome import SurgeActualOutcome
+
+    try:
+        from datetime import date as _date
+
+        today = _date.today()
+
+        # SurgeActualOutcome에서 오늘 날짜(= 전일 종가 기준) 등락률 조회
+        # trading_date=today이면 오늘 시장에서의 결과 → 내일 시그널용
+        # 단, 장 마감 후(15:20 KST) 실행되므로 today의 결과 사용
+        rows = (
+            db.query(
+                SurgeActualOutcome.stock_code,
+                SurgeActualOutcome.change_rate,
+            )
+            .filter(
+                SurgeActualOutcome.trading_date == today,
+                SurgeActualOutcome.change_rate.isnot(None),
+                SurgeActualOutcome.change_rate >= cfg.min_change_rate,
+                SurgeActualOutcome.change_rate < cfg.max_change_rate,
+            )
+            .all()
+        )
+
+        if not rows:
+            logger.debug("[모멘텀연속] 오늘 %s 해당 종목 없음 (range=%s~%s%%)",
+                         today, cfg.min_change_rate, cfg.max_change_rate)
+            return []
+
+        candidates: list[SurgeCandidate] = []
+        for row in rows:
+            try:
+                stock_code = row.stock_code
+                change_rate = float(row.change_rate)
+
+                # 점수 계산: 등락률 비례 선형 스케일
+                # change_rate=5% → base_score, change_rate=15% → max_score
+                range_pct = cfg.max_change_rate - cfg.min_change_rate
+                rate_ratio = (change_rate - cfg.min_change_rate) / range_pct
+                score = cfg.base_score + (cfg.max_score - cfg.base_score) * rate_ratio
+                score = max(cfg.base_score, min(cfg.max_score, score))
+
+                # BEAR 레짐 감쇠
+                if market_regime == "BEAR":
+                    score *= cfg.bear_dampening
+
+                # stock_name 조회
+                stock = db.query(Stock).filter(Stock.stock_code == stock_code).first()
+                if stock is None:
+                    continue
+
+                candidates.append(
+                    SurgeCandidate(
+                        stock_code=stock_code,
+                        stock_name=stock.name,
+                        momentum_continuation_score=round(score, 4),
+                        active_detectors=["momentum_continuation"],
+                        entry_pool="pool_c",  # Pool C와 동일 소스
+                    )
+                )
+                logger.debug(
+                    "[모멘텀연속] %s %s change_rate=%.2f%% score=%.4f",
+                    stock_code,
+                    stock.name,
+                    change_rate,
+                    score,
+                )
+            except Exception as e:
+                logger.debug("[모멘텀연속] %s 처리 중 오류: %s", row.stock_code, e)
+                continue
+
+        logger.info("[모멘텀연속] %d개 후보 탐지 (레짐=%s)", len(candidates), market_regime)
+        return candidates
+
+    except Exception as e:
+        logger.warning("[모멘텀연속] 탐지 실패 (fail-open): %s", e)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-065 REQ-2: 스캔 유니버스 확장 — Pool A/B/C 빌드
+# ---------------------------------------------------------------------------
+
+def build_scan_universe(
+    db: "Session",
+    config: "SurgeDetectionConfig",
+    existing_codes: set[str] | None = None,
+) -> tuple[list[str], dict[str, str], dict[str, int]]:
+    """Pool A/B/C를 조합하여 스캔 유니버스를 구성한다.
+
+    SPEC-AI-065 REQ-2:
+    - Pool A: 오늘 DART 공시 종목 (rcept_dt == today YYYYMMDD)
+    - Pool B: 거래량 200%+ 당일 종목 (PriceRecord 히스토리 기반)
+    - Pool C: 오늘 change_rate in [5%, 15%] 종목 (SurgeActualOutcome)
+    - 최대 max_scan_universe 종목, 우선순위: A > B > C > existing
+
+    Args:
+        db: SQLAlchemy 동기 세션
+        config: SurgeDetectionConfig 설정
+        existing_codes: 기존 탐지기 결과 종목 코드 집합
+
+    Returns:
+        (universe_codes, entry_pool_map, pool_counts)
+        - universe_codes: 최종 스캔 유니버스 코드 목록
+        - entry_pool_map: {stock_code: entry_pool} 딕셔너리
+        - pool_counts: {"pool_a": N, "pool_b": N, "pool_c": N} 집계
+    """
+    from datetime import date as _date
+
+    existing_codes = existing_codes or set()
+    today = _date.today()
+    today_str = today.strftime("%Y%m%d")
+    max_universe = config.max_scan_universe
+
+    entry_pool_map: dict[str, str] = {}
+    pool_a_codes: list[str] = []
+    pool_b_codes: list[str] = []
+    pool_c_codes: list[str] = []
+
+    # Pool A: 오늘 DART 공시 종목
+    try:
+        disclosure_rows = (
+            db.query(Disclosure.stock_code)
+            .filter(
+                Disclosure.rcept_dt == today_str,
+                Disclosure.stock_code.isnot(None),
+            )
+            .distinct()
+            .all()
+        )
+        pool_a_raw = [r.stock_code for r in disclosure_rows if r.stock_code]
+        # DB에 등록된 종목만 포함
+        for code in pool_a_raw:
+            if code not in entry_pool_map:
+                pool_a_codes.append(code)
+                entry_pool_map[code] = "pool_a"
+        logger.info("[스캔유니버스] Pool A(DART공시): %d개 (날짜=%s)", len(pool_a_codes), today_str)
+    except Exception as e:
+        logger.warning("[스캔유니버스] Pool A 조회 실패: %s", e)
+
+    # Pool B: 거래량 200%+ 당일 종목
+    # SurgeActualOutcome에서 오늘 데이터를 활용하거나 naver_finance에서 직접 조회
+    try:
+        from app.services.naver_finance import fetch_volume_leaders_sync, fetch_stock_price_history_sync
+
+        volume_leader_codes = fetch_volume_leaders_sync(limit=100)
+        _baseline_days = 20
+        _min_ratio = 2.0  # 200% = 2배
+
+        for code in volume_leader_codes:
+            if code in entry_pool_map:
+                continue
+            try:
+                history = fetch_stock_price_history_sync(code, pages=2)
+                if len(history) < _baseline_days + 1:
+                    continue
+                today_vol = history[0].volume
+                if today_vol <= 0:
+                    continue
+                baseline_vols = [r.volume for r in history[1:_baseline_days + 1] if r.volume > 0]
+                if len(baseline_vols) < 5:
+                    continue
+                mean_vol = sum(baseline_vols) / len(baseline_vols)
+                if mean_vol <= 0:
+                    continue
+                ratio = today_vol / mean_vol
+                if ratio >= _min_ratio:
+                    pool_b_codes.append(code)
+                    entry_pool_map[code] = "pool_b"
+            except Exception:
+                continue
+
+        logger.info("[스캔유니버스] Pool B(거래량200%%+): %d개", len(pool_b_codes))
+    except Exception as e:
+        logger.warning("[스캔유니버스] Pool B 조회 실패: %s", e)
+
+    # Pool C: 오늘 change_rate in [5%, 15%] 종목
+    try:
+        from app.models.surge_actual_outcome import SurgeActualOutcome
+
+        pool_c_raw = (
+            db.query(SurgeActualOutcome.stock_code)
+            .filter(
+                SurgeActualOutcome.trading_date == today,
+                SurgeActualOutcome.change_rate.isnot(None),
+                SurgeActualOutcome.change_rate >= 5.0,
+                SurgeActualOutcome.change_rate < 15.0,
+            )
+            .all()
+        )
+        for r in pool_c_raw:
+            code = r.stock_code
+            if code and code not in entry_pool_map:
+                pool_c_codes.append(code)
+                entry_pool_map[code] = "pool_c"
+
+        logger.info("[스캔유니버스] Pool C(등락률5~15%%): %d개", len(pool_c_codes))
+    except Exception as e:
+        logger.warning("[스캔유니버스] Pool C 조회 실패: %s", e)
+
+    # 기존 탐지기 결과 추가 (우선순위 최하)
+    for code in existing_codes:
+        if code not in entry_pool_map:
+            entry_pool_map[code] = "existing"
+
+    pool_counts = {
+        "pool_a": len(pool_a_codes),
+        "pool_b": len(pool_b_codes),
+        "pool_c": len(pool_c_codes),
+    }
+
+    # 우선순위: A > B > C > existing — max_universe 초과 시 잘라냄
+    universe_ordered = (
+        pool_a_codes
+        + pool_b_codes
+        + pool_c_codes
+        + [c for c in existing_codes if c not in entry_pool_map]
+    )
+    # 중복 제거 (순서 유지)
+    seen: set[str] = set()
+    universe_dedup: list[str] = []
+    for code in universe_ordered:
+        if code not in seen:
+            seen.add(code)
+            universe_dedup.append(code)
+
+    final_universe = universe_dedup[:max_universe]
+    logger.info(
+        "[스캔유니버스] 최종 유니버스: %d개 (상한=%d, A=%d B=%d C=%d existing=%d)",
+        len(final_universe),
+        max_universe,
+        pool_counts["pool_a"],
+        pool_counts["pool_b"],
+        pool_counts["pool_c"],
+        len(existing_codes),
+    )
+
+    return final_universe, entry_pool_map, pool_counts

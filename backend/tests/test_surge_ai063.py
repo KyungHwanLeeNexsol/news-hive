@@ -601,7 +601,7 @@ class TestConfigValidation:
         assert config.volume_breakout.volume_breakout_bypass_threshold > 0.0
 
     def test_ensemble_weights_sum_still_one(self):
-        """volume_breakout_bypass_threshold 추가 후에도 앙상블 가중치 합산 = 1.0."""
+        """SPEC-AI-065: momentum_continuation 추가 후에도 앙상블 가중치 합산 = 1.0 (8개 탐지기)."""
         config = get_surge_config()
         w = config.ensemble.weights
         total = (
@@ -612,6 +612,7 @@ class TestConfigValidation:
             + w.news_delayed
             + w.weekend_gap_up
             + w.volume_breakout
+            + w.momentum_continuation
         )
         assert abs(total - 1.0) < 0.001, f"가중치 합산 오류: {total:.6f}"
 

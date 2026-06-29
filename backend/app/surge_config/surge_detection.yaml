@@ -59,13 +59,19 @@ surge_detection:
       # volume_breakout 0.12 신규 추가 — 소형주 커버리지 확장 (가중치 재배분, 합계 유지 1.0)
       # theme_cluster: 0.25→0.22, volume_news_combo: 0.32→0.28
       # disclosure_pattern: 0.18→0.16, news_delayed: 0.15→0.13, weekend_gap_up: 0.10→0.09
-      theme_cluster: 0.22
-      volume_news_combo: 0.28
-      disclosure_pattern: 0.16
+      # SPEC-AI-065 REQ-3: momentum_continuation 0.12 신규 추가 — 8번째 탐지기
+      # 기존 7개 가중치를 0.88 비율로 축소하여 합계 1.0 유지
+      # theme_cluster: 0.22→0.19, volume_news_combo: 0.28→0.25
+      # disclosure_pattern: 0.16→0.14, news_delayed: 0.13→0.11
+      # weekend_gap_up: 0.09→0.08, volume_breakout: 0.12→0.11
+      theme_cluster: 0.19
+      volume_news_combo: 0.25
+      disclosure_pattern: 0.14
       legacy_detectors: 0.00
-      news_delayed: 0.13
-      weekend_gap_up: 0.09
-      volume_breakout: 0.12
+      news_delayed: 0.11
+      weekend_gap_up: 0.08
+      volume_breakout: 0.11
+      momentum_continuation: 0.12
     min_score_for_signal: 0.45
     # 레짐별 앙상블 임계값 (SPEC-AI-017 REQ-001): 시장 레짐에 따라 차등 적용
     # BULL 장에서는 진입 문턱 낮춰 더 많은 시그널 허용 (0.38), SIDEWAYS/BEAR는 높임
@@ -196,3 +202,19 @@ surge_detection:
     # volume_breakout_score >= 이 값이면 앙상블 임계값 우회 허용 (standalone 소형주 시그널)
     # auto-improver 조정 범위: [0.20, 0.45] (REQ-063-005)
     volume_breakout_bypass_threshold: 0.30
+  # SPEC-AI-065 REQ-3: 모멘텀 연속 탐지기 — 전일 등락률 5~15% 종목 익일 모멘텀 연속 패턴
+  momentum_continuation:
+    enabled: true
+    # 탐지 기준: 전일 등락률 [5%, 15%] 범위
+    min_change_rate: 5.0
+    max_change_rate: 15.0
+    # 기본/최대 confidence
+    base_score: 0.40
+    max_score: 0.70
+    # BEAR 레짐 점수 감쇠율
+    bear_dampening: 0.7
+    min_history_days: 5
+  # SPEC-AI-065 REQ-1: z-score 기준선 설정
+  zscore_min_baseline_samples: 10
+  # SPEC-AI-065 REQ-2: 스캔 유니버스 최대 크기
+  max_scan_universe: 150

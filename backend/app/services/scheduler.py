@@ -889,6 +889,48 @@ def _run_surge_signal_generate():
             pass
 
 
+def _run_surge_universe_build():
+    """SPEC-AI-065 REQ-2: 스캔 유니버스 사전 빌드 (평일 16:00 KST, 시장 마감 후).
+
+    Pool A(DART 공시)/Pool B(거래량 200%+)/Pool C(등락률 5~15%) 종목을 수집하여
+    다음 날 시그널 생성(15:20 KST)에서 활용할 수 있도록 기준선 업데이트를 준비한다.
+    실패해도 당일 시그널 생성에 영향 없음 (fail-open).
+    """
+    if not _is_kr_market_open():
+        logger.debug("주말 — 스캔유니버스 빌드 스킵")
+        return
+
+    _start = _time.monotonic()
+    from app.services.surge_detector import build_scan_universe
+    from app.surge_config.surge_settings import get_surge_config
+
+    db = SessionLocal()
+    try:
+        cfg = get_surge_config()
+        universe_codes, entry_pool_map, pool_counts = build_scan_universe(
+            db, cfg, existing_codes=set()
+        )
+        logger.info(
+            "스캔유니버스 빌드 완료: 총=%d개 (A=%d B=%d C=%d)",
+            len(universe_codes),
+            pool_counts.get("pool_a", 0),
+            pool_counts.get("pool_b", 0),
+            pool_counts.get("pool_c", 0),
+        )
+    except Exception as e:
+        logger.warning("스캔유니버스 빌드 실패 (무시): %s", e)
+    finally:
+        _record_job_duration("surge_universe_build", _time.monotonic() - _start)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
 def _run_surge_execute_buys():
     """급등예측 시그널 기반 매수 실행 (평일 09:00~15:30 KST, 30분 간격).
 
@@ -2233,6 +2275,19 @@ def start_scheduler():
         minute=5,
         timezone="Asia/Seoul",
         id="crash_intraday_check",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    # SPEC-AI-065 REQ-2: 스캔 유니버스 사전 빌드 (평일 16:00 KST, 장 마감 30분 후)
+    scheduler.add_job(
+        _run_surge_universe_build,
+        "cron",
+        day_of_week="mon-fri",
+        hour=16,
+        minute=0,
+        timezone="Asia/Seoul",
+        id="surge_universe_build",
         max_instances=1,
         coalesce=True,
         replace_existing=True,
