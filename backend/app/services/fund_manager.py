@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from statistics import mean, median
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.daily_briefing import DailyBriefing
@@ -3054,9 +3055,12 @@ async def run_surge_signal_generation(db: Session) -> int:
         return count
     except Exception as e:
         try:
-            db.rollback()
+            db.execute(text("SELECT 1"))
         except Exception:
-            pass
+            try:
+                db.rollback()
+            except Exception:
+                pass
         logger.error("[급등시그널] 독립 생성 실패: %s", e)
         return 0
 
@@ -3888,9 +3892,12 @@ def _run_coverage_expansion(db: Session, surge_results: list[dict]) -> None:
     except Exception as e:
         logger.warning("[커버리지확장] 거래량 이상 탐지 실패 (surge_candidate 결과 보존됨): %s", e)
         try:
-            db.rollback()
+            db.execute(text("SELECT 1"))
         except Exception:
-            pass
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
     # 3. 상한가 근접 carry-forward
     # @MX:WARN: db.begin_nested() 세이브포인트로 탐지기 격리 — rollback 대신 savepoint를 사용해야
@@ -3905,9 +3912,12 @@ def _run_coverage_expansion(db: Session, surge_results: list[dict]) -> None:
     except Exception as e:
         logger.error("[near_limit_up] 예외 발생: %s", e, exc_info=True)
         try:
-            db.rollback()
+            db.execute(text("SELECT 1"))
         except Exception:
-            pass
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
     # 4. 임원 자사주 매수 공시 (SPEC-AI-024)
     try:
@@ -3920,9 +3930,12 @@ def _run_coverage_expansion(db: Session, surge_results: list[dict]) -> None:
     except Exception as e:
         logger.error("[insider_purchase] 예외 발생: %s", e, exc_info=True)
         try:
-            db.rollback()
+            db.execute(text("SELECT 1"))
         except Exception:
-            pass
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
     # 5. 테마 그룹 강세 carry-forward (SPEC-AI-025)
     try:
@@ -3935,9 +3948,12 @@ def _run_coverage_expansion(db: Session, surge_results: list[dict]) -> None:
     except Exception as e:
         logger.error("[theme_group_carry] 예외 발생: %s", e, exc_info=True)
         try:
-            db.rollback()
+            db.execute(text("SELECT 1"))
         except Exception:
-            pass
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
     # 6. 포럼 언급 급증 탐지 (SPEC-AI-026)
     try:
@@ -3950,9 +3966,12 @@ def _run_coverage_expansion(db: Session, surge_results: list[dict]) -> None:
     except Exception as e:
         logger.error("[forum_mention_surge] 예외 발생: %s", e, exc_info=True)
         try:
-            db.rollback()
+            db.execute(text("SELECT 1"))
         except Exception:
-            pass
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
     # 7. 대기업 그룹 계열사 테마캐리 (SPEC-AI-027)
     try:
@@ -3965,9 +3984,12 @@ def _run_coverage_expansion(db: Session, surge_results: list[dict]) -> None:
     except Exception as e:
         logger.error("[group_cascade] 예외 발생: %s", e, exc_info=True)
         try:
-            db.rollback()
+            db.execute(text("SELECT 1"))
         except Exception:
-            pass
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
     # 8. SPEC-AI-050 REQ-5: 주말 갭업 탐지기 (커버리지 확장)
     try:
@@ -3982,6 +4004,9 @@ def _run_coverage_expansion(db: Session, surge_results: list[dict]) -> None:
     except Exception as e:
         logger.error("[weekend_gap_up] 탐지기 실패 (무시): %s", e, exc_info=True)
         try:
-            db.rollback()
+            db.execute(text("SELECT 1"))
         except Exception:
-            pass
+            try:
+                db.rollback()
+            except Exception:
+                pass
