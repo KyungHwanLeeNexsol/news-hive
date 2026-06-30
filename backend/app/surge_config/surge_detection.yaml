@@ -72,7 +72,7 @@ surge_detection:
       weekend_gap_up: 0.08
       volume_breakout: 0.11
       momentum_continuation: 0.12
-    min_score_for_signal: 0.45
+    min_score_for_signal: 0.38  # 2026-06-30: EV guard 과잉조정 복구, BEAR threshold 0.42 이하로 복구
     # 레짐별 앙상블 임계값 (SPEC-AI-017 REQ-001): 시장 레짐에 따라 차등 적용
     # BULL 장에서는 진입 문턱 낮춰 더 많은 시그널 허용 (0.38), SIDEWAYS/BEAR는 높임
     # 2026-06-05: BEAR 0.52→0.42, SIDEWAYS 0.50→0.45 완화 — BEAR 4일째 탐지 0건 문제 해결
@@ -104,7 +104,7 @@ surge_detection:
       min_news_sentiment: 0.20
     BEAR:
       # SPEC-AI-038 REQ-038-001: 3.0→2.5으로 완화 — BEAR 시 과도한 combo 차단 방지
-      volume_zscore_threshold: 2.5
+      volume_zscore_threshold: 2.0  # P2 fix 2026-06-30: 2.5->2.0 BEAR regime too strict
       # 2026-06-05: 0.50→0.35 완화 — 대원제약 ADA 발표(neutral 뉴스 11건) 미탐지 분석 결과
       # neutral 뉴스도 포함해야 ADA/임상 류 이벤트 포착 가능
       # SPEC-AI-050 REQ-2: 12→24 상향 — BEAR 국면 주말 직후 뉴스 커버리지 부족 보완, 24h 클램프 하한

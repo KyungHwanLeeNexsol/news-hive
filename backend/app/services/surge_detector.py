@@ -3167,7 +3167,7 @@ def detect_volume_breakout(
             if not stock:
                 continue
 
-            history = fetch_stock_price_history_sync(code, pages=2)
+            history = fetch_stock_price_history_sync(code, pages=3)
             if len(history) < cfg.min_history_days + 1:
                 continue
 
@@ -3245,18 +3245,26 @@ def detect_momentum_continuation(
     try:
         from datetime import date as _date
 
-        today = _date.today()
+        # 15:20 KST scan: SurgeActualOutcome not yet populated (collect_outcomes 16:10 KST)
+        # Use most recent available trading day data (SPEC-AI-065 timing bug fix)
+        _latest_outcome = (
+            db.query(SurgeActualOutcome.trading_date)
+            .filter(SurgeActualOutcome.change_rate.isnot(None))
+            .order_by(SurgeActualOutcome.trading_date.desc())
+            .first()
+        )
+        if _latest_outcome is None:
+            logger.debug("[momentum_cont] SurgeActualOutcome no data -- skip")
+            return []
+        reference_date = _latest_outcome.trading_date
 
-        # SurgeActualOutcome에서 오늘 날짜(= 전일 종가 기준) 등락률 조회
-        # trading_date=today이면 오늘 시장에서의 결과 → 내일 시그널용
-        # 단, 장 마감 후(15:20 KST) 실행되므로 today의 결과 사용
         rows = (
             db.query(
                 SurgeActualOutcome.stock_code,
                 SurgeActualOutcome.change_rate,
             )
             .filter(
-                SurgeActualOutcome.trading_date == today,
+                SurgeActualOutcome.trading_date == reference_date,
                 SurgeActualOutcome.change_rate.isnot(None),
                 SurgeActualOutcome.change_rate >= cfg.min_change_rate,
                 SurgeActualOutcome.change_rate < cfg.max_change_rate,
@@ -3265,8 +3273,8 @@ def detect_momentum_continuation(
         )
 
         if not rows:
-            logger.debug("[모멘텀연속] 오늘 %s 해당 종목 없음 (range=%s~%s%%)",
-                         today, cfg.min_change_rate, cfg.max_change_rate)
+            logger.debug("[momentum_cont] %s no candidates (range=%s~%s%%)",
+                         reference_date, cfg.min_change_rate, cfg.max_change_rate)
             return []
 
         candidates: list[SurgeCandidate] = []
@@ -3397,7 +3405,7 @@ def build_scan_universe(
             if code in entry_pool_map:
                 continue
             try:
-                history = fetch_stock_price_history_sync(code, pages=2)
+                history = fetch_stock_price_history_sync(code, pages=3)
                 if len(history) < _baseline_days + 1:
                     continue
                 today_vol = history[0].volume
@@ -3424,10 +3432,17 @@ def build_scan_universe(
     try:
         from app.models.surge_actual_outcome import SurgeActualOutcome
 
+        _latest_pool_c = (
+            db.query(SurgeActualOutcome.trading_date)
+            .filter(SurgeActualOutcome.change_rate.isnot(None))
+            .order_by(SurgeActualOutcome.trading_date.desc())
+            .first()
+        )
+        _pool_c_date = _latest_pool_c.trading_date if _latest_pool_c else today
         pool_c_raw = (
             db.query(SurgeActualOutcome.stock_code)
             .filter(
-                SurgeActualOutcome.trading_date == today,
+                SurgeActualOutcome.trading_date == _pool_c_date,
                 SurgeActualOutcome.change_rate.isnot(None),
                 SurgeActualOutcome.change_rate >= 5.0,
                 SurgeActualOutcome.change_rate < 15.0,
