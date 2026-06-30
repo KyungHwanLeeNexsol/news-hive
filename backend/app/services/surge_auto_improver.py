@@ -613,7 +613,14 @@ def analyze_and_improve(
 
     _mean_ev, _n_samples = _compute_rolling_ev(db, ev_window_days=_ev_window_days)
 
-    if _mean_ev is None:
+    # recall=0 상태(예측 0건)에서 EV 가드 불필요 — 임계값 상향은 이미 recall=0인 상황을 악화시킴
+    _recent_predicted_total = sum(e.predicted_count or 0 for e in last_5_evals)
+    if _recent_predicted_total == 0:
+        logger.info(
+            'EV 가드: 최근 %d일 예측 0건 — recall=0 상태, min_score 추가 상향 불필요, 가드 스킵',
+            len(last_5_evals),
+        )
+    elif _mean_ev is None:
         logger.debug(
             "EV 가드: failure_aggregation 데이터 없음 — 가드 스킵 (window=%d)",
             _ev_window_days,
