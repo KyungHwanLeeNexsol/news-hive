@@ -907,13 +907,13 @@ class TestGetPortfolioStats:
 # ---------------------------------------------------------------------------
 
 class TestSurgeAI016ThresholdRaise:
-    """T-016-001~004: REQ-AI016-001 앙상블 점수 임계값 0.45 검증"""
+    """T-016-001~004: REQ-AI016-001 앙상블 점수 임계값 검증"""
 
-    def test_t016_001_yaml_loads_045_threshold(self):
-        """T-016-001: YAML 로드 후 min_score_for_signal == 0.45"""
+    def test_t016_001_yaml_loads_038_threshold(self):
+        """T-016-001: YAML 로드 후 min_score_for_signal == 0.38 (2026-06-30: EV guard 복구)"""
         from app.surge_config.surge_settings import get_surge_config
         cfg = get_surge_config()
-        assert cfg.ensemble.min_score_for_signal == 0.45
+        assert cfg.ensemble.min_score_for_signal == 0.38
 
     def test_t016_002_below_045_excluded(self):
         """T-016-002: 합성 후보(weighted_sum=0.40) → gather_surge_candidates 결과 미포함."""

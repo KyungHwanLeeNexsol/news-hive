@@ -29,13 +29,13 @@ class TestVolumeZscoreThreshold:
             f"기본값 2.0 기대, 실제: {cfg.volume_news_combo.volume_zscore_threshold}"
         )
 
-    def test_bear_regime_threshold_is_2_5(self) -> None:
-        """BEAR regime volume_zscore_threshold가 2.5이어야 한다."""
+    def test_bear_regime_threshold_is_2_0(self) -> None:
+        """BEAR regime volume_zscore_threshold가 2.0이어야 한다 (P2 fix 2026-06-30: 2.5→2.0)."""
         cfg = get_surge_config()
         bear_params = cfg.regime_detector_params.get("BEAR")
         assert bear_params is not None, "BEAR regime_detector_params 없음"
-        assert bear_params.volume_zscore_threshold == 2.5, (
-            f"BEAR threshold 2.5 기대, 실제: {bear_params.volume_zscore_threshold}"
+        assert bear_params.volume_zscore_threshold == 2.0, (
+            f"BEAR threshold 2.0 기대, 실제: {bear_params.volume_zscore_threshold}"
         )
 
     def test_bull_regime_threshold_is_2_0(self) -> None:

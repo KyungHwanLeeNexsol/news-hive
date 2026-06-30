@@ -8,9 +8,7 @@ AC-7: 기존 시그널 생성 파이프라인 테스트 통과
 
 from __future__ import annotations
 
-import math
-from datetime import date, datetime, timedelta, timezone
-from typing import Any
+from datetime import timedelta
 
 import pytest
 from sqlalchemy.orm import Session
@@ -18,10 +16,7 @@ from sqlalchemy.orm import Session
 from app.models.surge_prediction_evaluation import SurgePredictionEvaluation
 from app.models.stock_signal_baseline import StockSignalBaseline
 from app.surge_config.surge_settings import (
-    EnsembleWeightsConfig,
-    SurgeDetectionConfig,
     get_surge_config,
-    reload_surge_config,
 )
 from app.services.surge_baseline_service import (
     BaselineStats,
@@ -73,15 +68,10 @@ class TestCharacterizeValidateEnsembleWeights:
         with pytest.raises((ValueError, ValidationError)):
             from app.surge_config.surge_settings import (
                 EnsembleWeightsConfig,
-                EnsembleConfig,
                 SurgeDetectionConfig,
-                ThemeClusterConfig,
-                VolumeNewsComboConfig,
-                DisclosurePatternConfig,
-                BacktestConfig,
             )
             # 합산=1.2로 의도적으로 오류 유발
-            bad_weights = EnsembleWeightsConfig(
+            _ = EnsembleWeightsConfig(
                 theme_cluster=0.40,
                 volume_news_combo=0.40,
                 disclosure_pattern=0.40,  # 합산 = 1.2

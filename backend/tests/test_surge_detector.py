@@ -202,8 +202,8 @@ class TestSurgeConfig:
     def test_characterize_config_loads_from_yaml(self, surge_config: SurgeDetectionConfig):
         """기본 YAML 설정 파일이 정상적으로 로드된다."""
         assert surge_config.theme_cluster.min_article_count == 2
-        # SPEC-AI-016: 임계값 0.20 → 0.45 상향 (정밀도 강화)
-        assert surge_config.ensemble.min_score_for_signal == 0.45
+        # 2026-06-30: 0.45→0.38 (EV guard 과잉조정 복구)
+        assert surge_config.ensemble.min_score_for_signal == 0.38
         assert len(surge_config.theme_cluster.keywords) > 0
 
     def test_characterize_ensemble_weights_sum_to_one(self, surge_config: SurgeDetectionConfig):

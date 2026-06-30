@@ -3243,7 +3243,6 @@ def detect_momentum_continuation(
     from app.models.surge_actual_outcome import SurgeActualOutcome
 
     try:
-        from datetime import date as _date
 
         # 15:20 KST scan: SurgeActualOutcome not yet populated (collect_outcomes 16:10 KST)
         # Use most recent available trading day data (SPEC-AI-065 timing bug fix)
