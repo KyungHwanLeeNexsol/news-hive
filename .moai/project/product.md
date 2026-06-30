@@ -16,13 +16,15 @@ NewsHive는 한국 주식시장(KOSPI/KOSDAQ) 급등주를 AI로 사전 탐지�
 - AI 감성 분석 + 종목 매칭 + 중요도 분류 (breaking/important/routine)
 
 ### 2. 급등 탐지 앙상블 (10:00 KST)
-6종 탐지기를 결합한 앙상블:
-- volume_news_combo: 거래량 이상 + 뉴스 콤보
-- immediate_disclosure: 자사주 소각·공급계약·합병 등 공시 즉시 시그널
-- group_cascade: 대기업 계열사 테마캐리 (SPEC-AI-027)
-- theme_cluster: 뉴스 토픽 클러스터링
-- forum_mention_surge: 주식 포럼 언급 급증
-- weekend_gap_up: 주말 갭상승 (SPEC-AI-050)
+8종 탐지기를 결합한 앙상블 (7종 활성, 1종 비활성):
+- volume_news_combo (0.25): 거래량 이상 + 뉴스 콤보
+- theme_cluster (0.19): 뉴스 토픽 클러스터링
+- disclosure_pattern (0.14): 자사주 소각·공급계약·합병 등 공시 즉시 시그널
+- momentum_continuation (0.12): 전일 상승 모멘텀 연속 패턴 (SPEC-AI-065)
+- volume_breakout (0.11): 거래량 폭발 탐지 — Naver 3x+ (SPEC-AI-062)
+- news_delayed (0.11): 뉴스 지연 반응 패턴 탐지 (SPEC-AI-039)
+- weekend_gap_up (0.08): 주말·공휴일 갭상승 (SPEC-AI-050)
+- legacy_detectors (0.00): 비활성 — group_cascade, forum_mention_surge 포함
 
 ### 3. 자동 매매 (Surge Portfolio)
 - 초기 자본: 500만 KRW, 포지션당 14% (최대 7개 동시)
