@@ -638,7 +638,7 @@ async def _scan_market_stocks(db: Session) -> list[dict]:
     """KOSPI/KOSDAQ 전종목 스캔 후 1차 필터링.
 
     REQ-AI-030: +3% 초과 / -5% 미만 종목 제외 (후행 추격 방지).
-    시가총액 1,000억 미만 제외 (유동성 리스크).
+    시가총액 하한: KOSPI 1,000억, KOSDAQ 300억 (소형주 급등 커버리지 확대).
 
     Args:
         db: SQLAlchemy 세션 (현재 미사용, 향후 DB 필터링 확장 대비)
@@ -650,11 +650,13 @@ async def _scan_market_stocks(db: Session) -> list[dict]:
 
     all_items = []
 
-    # KOSPI 1-2페이지 + KOSDAQ 1페이지 (총 약 150종목, 타임아웃 방지)
+    # KOSPI 1-2페이지 + KOSDAQ 1-2페이지 (총 약 200종목)
+    # KOSDAQ 2페이지 추가: 실제 급등은 KOSPI:KOSDAQ=1:1이나 스캔은 2:1로 편향됐던 문제 수정
     fetch_tasks = [
         fetch_naver_stock_list("KOSPI", 1),
         fetch_naver_stock_list("KOSPI", 2),
         fetch_naver_stock_list("KOSDAQ", 1),
+        fetch_naver_stock_list("KOSDAQ", 2),
     ]
 
     results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
@@ -666,13 +668,16 @@ async def _scan_market_stocks(db: Session) -> list[dict]:
         all_items.extend(items)
 
     # 1차 필터링
+    # 시총 하한: KOSPI 1,000억, KOSDAQ 300억 (소형주 급등 커버리지 확대)
+    MARKET_CAP_THRESHOLD = {"KOSPI": 1000, "KOSDAQ": 300}
     scanned = []
     for item in all_items:
         # REQ-AI-030: 등락률 필터 (+3% 초과 OR -5% 미만 제외)
         if item.change_rate > 3.0 or item.change_rate < -5.0:
             continue
-        # 시가총액 하한: 1,000억 미만 제외
-        if item.market_cap < 1000:
+        # 시가총액 하한: 시장별 차등 적용
+        cap_threshold = MARKET_CAP_THRESHOLD.get(item.market, 1000)
+        if item.market_cap < cap_threshold:
             continue
 
         scanned.append({
