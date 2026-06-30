@@ -1504,8 +1504,9 @@ def gather_surge_candidates(
 
     # SPEC-AI-038 성능 패치 3단계: price_5d_trend 조회(HTTP) 전 상위 N개로 사전 필터
     # 이유: 테마클러스터가 수백 개 후보 반환 시 모든 종목 HTTP 호출 → 300s 타임아웃 초과
-    # 수정: 기존 점수(HTTP 없음) 기준으로 상위 30개만 남기고 나머지 제거
-    _MAX_PRICE_FETCH_CANDIDATES = 30
+    # 수정: 기존 점수(HTTP 없음) 기준으로 상위 N개만 남기고 나머지 제거
+    # 2026-06-30: 30→50으로 확대 — KOSDAQ 2페이지 추가로 후보 증가, idle_in_transaction 타임아웃 제거로 여유 생김
+    _MAX_PRICE_FETCH_CANDIDATES = 50
     if len(merged) > _MAX_PRICE_FETCH_CANDIDATES:
         _original_count = len(merged)
         def _pre_score(c: SurgeCandidate) -> float:
