@@ -20,8 +20,10 @@ engine = create_engine(
         "keepalives_idle": 30,
         "keepalives_interval": 10,
         "keepalives_count": 5,
-        # idle in transaction 연결 30초 후 자동 종료 — SSL 끊김 방지
-        "options": "-c idle_in_transaction_session_timeout=30000",
+        # idle_in_transaction_session_timeout=0: 비활성화
+        # 30000(30s) 설정 시 크롤링 등 장기 실행 프로세스에서 SSL 연결이 끊김.
+        # 스케줄러/시그널 생성이 10분+ 소요되므로 제한 없음으로 설정.
+        "options": "-c idle_in_transaction_session_timeout=0",
     },
 )
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
