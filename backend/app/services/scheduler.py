@@ -33,6 +33,137 @@ scheduler = BackgroundScheduler(
 )
 
 
+# ---------------------------------------------------------------------------
+# SPEC-AI-066 REQ-AI066-007: 고임팩트 뉴스 이벤트 구동 재스캔
+# ---------------------------------------------------------------------------
+
+# @MX:WARN: [AUTO] SPEC-AI-066 REQ-007 — 모듈 수준 가변 상태 (쿨다운 맵 + 일일 카운터)
+# @MX:REASON: Redis 없는 베어메탈 환경. 스레드 안전성은 GIL 의존. 프로세스 재시작 시 리셋(허용 — 정기 스캔이 백업)
+_event_rescan_state: dict = {"date": None, "count": 0, "cooldown": {}}
+
+
+def _reset_event_rescan_state() -> None:
+    """이벤트 재스캔 상태 초기화 (테스트/운영 리셋용)."""
+    _event_rescan_state["date"] = None
+    _event_rescan_state["count"] = 0
+    _event_rescan_state["cooldown"] = {}
+
+
+def _run_event_surge_generation(db) -> int:
+    """이벤트 경로에서 급등 시그널 생성을 비동기 1회 실행한다 (테스트에서 패치 가능).
+
+    정기 스캔(_run_surge_signal_generate)과 동일한 run_surge_signal_generation을 재사용하되,
+    정기 잡 스케줄/등록에는 전혀 관여하지 않는다 (REQ-007: 정기 스캔 불변).
+    """
+    from app.services.fund_manager import run_surge_signal_generation
+
+    return asyncio.run(run_surge_signal_generation(db))
+
+
+def _find_high_conviction_event_stocks(db, config) -> list[str]:
+    """SPEC-AI-066 REQ-007: 최근 저장된 기사 중 HIGH-conviction 촉매 바를 만족하는 종목 코드.
+
+    바(bar): 기사 텍스트(title+ai_summary)에 인수/합병/경영권·고임팩트 키워드가 있고,
+    감성이 요구 강도(min_sentiment_high) 이상.
+    """
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+    from app.models.news import NewsArticle
+    from app.models.news_relation import NewsStockRelation
+    from app.models.stock import Stock
+    from app.services.surge_detector import _has_catalyst_keyword, _positive_sentiment_score
+
+    catalyst = config.catalyst_conviction
+    _cutoff = (_dt.now(_tz.utc) - _td(hours=config.volume_news_combo.news_window_hours)).replace(tzinfo=None)
+
+    rows = (
+        db.query(
+            Stock.stock_code,
+            NewsArticle.title,
+            NewsArticle.ai_summary,
+            NewsArticle.sentiment,
+        )
+        .join(NewsStockRelation, NewsStockRelation.news_id == NewsArticle.id)
+        .join(Stock, Stock.id == NewsStockRelation.stock_id)
+        .filter(NewsArticle.collected_at >= _cutoff)
+        .all()
+    )
+
+    qualifying: list[str] = []
+    _seen: set[str] = set()
+    for code, title, ai_summary, sentiment in rows:
+        if code in _seen:
+            continue
+        _text = (title or "") + " " + (ai_summary or "")
+        if not _has_catalyst_keyword(_text, config):
+            continue
+        if _positive_sentiment_score(sentiment) < catalyst.min_sentiment_high:
+            continue
+        _seen.add(code)
+        qualifying.append(code)
+    return qualifying
+
+
+def _maybe_trigger_event_rescan(db, config, now=None) -> bool:
+    """SPEC-AI-066 REQ-007: 신규 HIGH-conviction 기사가 있으면 급등 재스캔을 1회 트리거한다.
+
+    가드: event_rescan_enabled 스위치, 종목당 쿨다운(event_rescan_cooldown_minutes),
+    일일 상한(max_daily_event_triggers, LLM 예산 보호). 상한/쿨다운 도달 시 스킵하고
+    정기 스캔에 위임한다. 정기 스캔은 이 경로와 무관하게 그대로 동작한다.
+
+    Returns:
+        트리거가 실행되었으면 True.
+    """
+    catalyst = config.catalyst_conviction
+    if not catalyst.event_rescan_enabled:
+        return False
+
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    # 날짜 변경 시 일일 카운터 리셋
+    _today = now.date()
+    if _event_rescan_state["date"] != _today:
+        _event_rescan_state["date"] = _today
+        _event_rescan_state["count"] = 0
+        _event_rescan_state["cooldown"] = {}
+
+    qualifying = _find_high_conviction_event_stocks(db, config)
+    if not qualifying:
+        return False
+
+    # 일일 상한 체크 (LLM 예산 보호)
+    if _event_rescan_state["count"] >= catalyst.max_daily_event_triggers:
+        logger.info("[이벤트재스캔] 일일 상한(%d) 도달 — 정기 스캔에 위임", catalyst.max_daily_event_triggers)
+        return False
+
+    # 종목당 쿨다운 필터
+    _cooldown = timedelta(minutes=catalyst.event_rescan_cooldown_minutes)
+    fresh: list[str] = []
+    for code in qualifying:
+        _last = _event_rescan_state["cooldown"].get(code)
+        if _last is not None and (now - _last) < _cooldown:
+            continue
+        fresh.append(code)
+
+    if not fresh:
+        logger.debug("[이벤트재스캔] 모든 HIGH 종목이 쿨다운 내 — 스킵")
+        return False
+
+    # 트리거 1회 실행
+    try:
+        _count = _run_event_surge_generation(db)
+        logger.info("[이벤트재스캔] 트리거 완료: 종목=%s 시그널=%s", fresh, _count)
+    except Exception as e:
+        logger.error("[이벤트재스캔] 트리거 실패: %s", e)
+        return False
+
+    for code in fresh:
+        _event_rescan_state["cooldown"][code] = now
+    _event_rescan_state["count"] += 1
+    return True
+
+
 @retry_with_backoff(max_attempts=3)
 def _run_crawl_job():
     """Sync wrapper that runs the async crawl job.
@@ -79,6 +210,24 @@ def _run_crawl_job():
 
     # 뉴스 크롤링 후 키워드 매칭 실행 (SPEC-FOLLOW-001)
     _run_keyword_matching()
+
+    # SPEC-AI-066 REQ-007: 뉴스 저장 완료 훅 — HIGH-conviction 촉매 기사가 저장되면
+    # 다음 정기 스캔을 기다리지 않고 급등 재스캔을 1회 트리거한다 (기본 비활성, staged rollout).
+    # 정기 스캔(08:00/09:05/10:00/15:20 KST)은 이 훅과 무관하게 그대로 동작한다.
+    try:
+        from app.surge_config.surge_settings import get_surge_config
+        _sc = get_surge_config()
+        if _sc.catalyst_conviction.event_rescan_enabled:
+            _erdb = SessionLocal()
+            try:
+                _maybe_trigger_event_rescan(_erdb, _sc)
+            finally:
+                try:
+                    _erdb.close()
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.error(f"이벤트 재스캔 훅 실패 (정기 스캔에 영향 없음): {e}")
 
 
 def _cleanup_old_articles(db):

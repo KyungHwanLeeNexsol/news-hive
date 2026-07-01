@@ -129,6 +129,11 @@ class VolumeBreakoutConfig(BaseModel):
     # @MX:NOTE: [AUTO] SPEC-AI-063 — detector-specific 설정. EnsembleConfig가 아닌 여기에 위치 (의도적)
     # @MX:SPEC: SPEC-AI-063 REQ-063-002
     volume_breakout_bypass_threshold: float = 0.30
+    # SPEC-AI-066 REQ-AI066-005: 종목별 상대(z-score) 임계 + 촉매 종목 유니버스 확장 경로.
+    # False이면 기존 고정 3.0x 배율/상위 50 유니버스만 사용 (레거시 동작 보존, staged rollout).
+    # @MX:NOTE: [AUTO] SPEC-AI-066 REQ-005 — 기본값 False로 하위 호환 유지. surge_baseline_service 재사용
+    # @MX:SPEC: SPEC-AI-066 REQ-AI066-005
+    relative_threshold_enabled: bool = False
 
 
 class EnsembleWeightsConfig(BaseModel):
@@ -222,6 +227,13 @@ class DisclosureTypeFilterConfig(BaseModel):
     penalty_patterns: list[str] = ["최대주주변경", "손실", "영업손실"]
     penalty_factor: float = 0.3
     skip_bearish_in_today_signals: bool = True
+    # SPEC-AI-066 REQ-AI066-003: 전략적 인수/경영권 프리미엄 공시 페널티 예외.
+    # 페널티 대상 공시("최대주주변경" 등)가 인수 호재 맥락이면 penalty_factor 대신
+    # acquisition_penalty_factor(0.7)로 부분 완화한다 (완전 면제 아님 — 잔여 리스크 반영).
+    # @MX:NOTE: [AUTO] SPEC-AI-066 REQ-003 — 부분 완화(0.3→0.7). exemption_enabled=False이면 레거시 전면 페널티
+    # @MX:SPEC: SPEC-AI-066 REQ-AI066-003
+    acquisition_exemption_enabled: bool = True
+    acquisition_penalty_factor: float = 0.7
 
 
 class ComboChaseGuardConfig(BaseModel):
@@ -235,6 +247,12 @@ class ComboChaseGuardConfig(BaseModel):
     enabled: bool = True
     # Gate 1 (REQ-AI030-001): 당일 과열 필터 — change_rate >= 이 값이면 제외
     overheat_change_pct: float = 5.0
+    # SPEC-AI-066 REQ-AI066-002: 확신도 HIGH일 때만 적용되는 상향 과열 상한.
+    # 확정 강한 촉매(M&A·지속 다출처 뉴스)에 개장 갭업하는 종목은 초기 진입이므로 추격매수가 아니다.
+    # 신선도(Gate2)·분산(Gate3)·companion(Gate4) 게이트는 확신도와 무관하게 항상 유지된다.
+    # @MX:NOTE: [AUTO] SPEC-AI-066 REQ-002 — HIGH 확신도 전용 상한. non-HIGH는 overheat_change_pct(5.0) 유지
+    # @MX:SPEC: SPEC-AI-066 REQ-AI066-002
+    overheat_change_pct_high_conviction: float = 15.0
     # Gate 2 (REQ-AI030-002): 거래량 신선도 — volumes[-1]/volumes[-2] < 이 값이면 제외
     min_freshness_ratio: float = 1.5
     # Gate 3 (REQ-AI030-003): 분산 패턴 거부 — change_rate < 이 값이면 제외 (0.0=음수만 제외)
@@ -306,6 +324,38 @@ class MomentumContinuationConfig(BaseModel):
     min_history_days: int = 5
 
 
+class CatalystConvictionConfig(BaseModel):
+    """SPEC-AI-066 REQ-AI066-001/006: 촉매 확신도(catalyst conviction) 설정.
+
+    확정 강한 촉매(M&A·경영권 매각·지속 다출처 뉴스·공시 뒷받침)를 애매한 거래량 급증과
+    구분하는 판별 신호. 확신도가 HIGH일 때만 명시된 완화 경로(과열 상한 상향/공시 페널티
+    부분완화)를 조건부로 연다. enabled=False이면 모든 완화가 꺼지고 SPEC-AI-030/028 레거시
+    동작이 그대로 복원된다.
+    """
+
+    # @MX:NOTE: [AUTO] SPEC-AI-066 REQ-001 — 확신도 완화 마스터 스위치. False이면 REQ-002/003 완화 전면 비활성
+    # @MX:SPEC: SPEC-AI-066 REQ-AI066-001
+    enabled: bool = True
+    # HIGH 확신도 승격 임계: 커버리지 기사 수 / 지속시간(시간) / 감성 강도
+    min_article_count_high: int = 5
+    min_coverage_hours_high: float = 6.0
+    min_sentiment_high: float = 0.5
+    # 고임팩트 인수/합병 촉매 키워드 (기존 high_impact_news 키워드에 더해 확신도·페널티 예외 판정에 사용)
+    # "최대주주변경"은 페널티 패턴 자체이므로 제외 — 인수 호재 증거는 별도 키워드로 판별한다.
+    acquisition_keywords: list[str] = Field(
+        default_factory=lambda: ["인수", "합병", "경영권", "M&A", "지분인수", "지분취득"]
+    )
+    # REQ-004: 뉴스 공동언급 테마 자동 확장 (기본 False — staged rollout)
+    comention_theme_enabled: bool = False
+    comention_min_pairs: int = 3
+    # REQ-007: 고임팩트 뉴스 이벤트 구동 재스캔 (기본 False — staged rollout)
+    event_rescan_enabled: bool = False
+    # 종목당 재트리거 쿨다운(분) — 동일 종목 반복 트리거 방지
+    event_rescan_cooldown_minutes: int = 30
+    # 일일 이벤트 트리거 상한 — LLM(Gemini 무료 tier) 예산 보호
+    max_daily_event_triggers: int = 20
+
+
 class SurgeDetectionConfig(BaseModel):
     """급등 징후 탐지 전체 설정.
 
@@ -328,6 +378,8 @@ class SurgeDetectionConfig(BaseModel):
     adaptive_threshold: AdaptiveThresholdConfig = Field(default_factory=AdaptiveThresholdConfig)
     # SPEC-AI-030: volume_news_combo 추격매수 방지 게이트 설정
     combo_chase_guard: ComboChaseGuardConfig = Field(default_factory=ComboChaseGuardConfig)
+    # SPEC-AI-066: 촉매 확신도 기반 조건부 완화 설정
+    catalyst_conviction: CatalystConvictionConfig = Field(default_factory=CatalystConvictionConfig)
 
     # SPEC-AI-036: 품질 floor 게이트 — 보정 confidence / composite_score 최소값
     # # @MX:NOTE: [AUTO] SPEC-AI-036 — 두 조건 중 하나만 충족해도 시그널 통과 (OR 게이트)

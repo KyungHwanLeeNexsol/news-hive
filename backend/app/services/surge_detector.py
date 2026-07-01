@@ -185,6 +185,93 @@ def _positive_sentiment_score(sentiment: str | None) -> float:
 
 
 # ---------------------------------------------------------------------------
+# SPEC-AI-066: 촉매 확신도(Catalyst Conviction) 산출
+# ---------------------------------------------------------------------------
+
+# 확신도 tier 상수 — 두 개의 운영 tier(HIGH vs 그 외). NONE은 촉매 근거 전무를 명시적으로 표기.
+CONVICTION_HIGH = "HIGH"
+CONVICTION_LOW = "LOW"
+CONVICTION_NONE = "NONE"
+
+
+@dataclass
+class ConvictionEvidence:
+    """SPEC-AI-066 REQ-AI066-001: 종목별 확신도 산출 근거.
+
+    combo 탐지기가 이미 조회한 NewsStockRelation 행 집합의 인메모리 집계로 채워진다
+    (신규 쿼리 없음). 필드는 REQ-001 (a)~(e)에 대응한다.
+    """
+
+    article_count: int = 0            # (a) 커버리지 기사 수
+    coverage_hours: float = 0.0       # (b) 첫~마지막 기사 시간 span (시간)
+    sentiment_score: float = 0.0      # (c) 감성 강도 집계 (최대)
+    has_high_impact_keyword: bool = False  # (d) 고임팩트 촉매 키워드 존재
+    has_backing_disclosure: bool = False   # (e) 당일/밤새 공시 뒷받침
+
+
+def _has_catalyst_keyword(text: str, config: SurgeDetectionConfig) -> bool:
+    """텍스트에 고임팩트 촉매 키워드(인수/합병/경영권 + 기술이전/임상/수주)가 있는지 판정한다.
+
+    SPEC-AI-066 REQ-001 (d): 기존 SPEC-AI-039 high_impact_news 키워드 집합을 재사용·확장한다.
+    """
+    if not text:
+        return False
+    catalyst = config.catalyst_conviction
+    for kw in catalyst.acquisition_keywords:
+        if kw in text:
+            return True
+    hi = config.high_impact_news
+    for kw in (*hi.tech_transfer, *hi.clinical, *hi.contract):
+        if kw in text:
+            return True
+    return False
+
+
+# @MX:ANCHOR: [AUTO] SPEC-AI-066 REQ-001 — 확신도 판별 순수 함수. combo/disclosure/event 재스캔 3경로가 공유
+# @MX:REASON: 확신도 HIGH만이 REQ-002 과열완화·REQ-003 페널티완화·REQ-007 이벤트트리거를 여는 단일 판별점. 경계 변경 시 3경로 동시 영향
+# @MX:SPEC: SPEC-AI-066 REQ-AI066-001
+def compute_catalyst_conviction(
+    evidence: ConvictionEvidence,
+    config: SurgeDetectionConfig,
+) -> str:
+    """확신도 근거로부터 tier(HIGH/LOW/NONE)를 산출한다 (Option A: 2단 이산).
+
+    - 촉매 근거 전무(기사 0 + 공시 없음) → NONE (결코 HIGH가 되지 않음, AC-1.3)
+    - HIGH 조건: 지속적 다출처 뉴스 커버리지 + 고임팩트 촉매 키워드 (뉴스 경로)
+                또는 공시 뒷받침 + 고임팩트 키워드 + 감성 요건 (공시 경로)
+    - 그 외 → LOW (비HIGH, 레거시 게이트 그대로)
+
+    Args:
+        evidence: 확신도 산출 근거 (기사 수/지속시간/감성/키워드/공시)
+        config: SurgeDetectionConfig (catalyst_conviction 임계값)
+
+    Returns:
+        CONVICTION_HIGH / CONVICTION_LOW / CONVICTION_NONE 중 하나
+    """
+    cfg = config.catalyst_conviction
+
+    if evidence.article_count <= 0 and not evidence.has_backing_disclosure:
+        return CONVICTION_NONE
+
+    # 뉴스 경로: 기사 수 + 지속시간 + 감성 강도 + 고임팩트 키워드 모두 충족
+    news_qualifies = (
+        evidence.article_count >= cfg.min_article_count_high
+        and evidence.coverage_hours >= cfg.min_coverage_hours_high
+        and evidence.sentiment_score >= cfg.min_sentiment_high
+        and evidence.has_high_impact_keyword
+    )
+    # 공시 경로: 공시 뒷받침 + 고임팩트 키워드 + 감성 요건 (Option B 장점 흡수)
+    disclosure_qualifies = (
+        evidence.has_backing_disclosure
+        and evidence.has_high_impact_keyword
+        and evidence.sentiment_score >= cfg.min_sentiment_high
+    )
+    if news_qualifies or disclosure_qualifies:
+        return CONVICTION_HIGH
+    return CONVICTION_LOW
+
+
+# ---------------------------------------------------------------------------
 # 탐지기 1: 테마 뉴스 클러스터링
 # ---------------------------------------------------------------------------
 
@@ -242,7 +329,7 @@ def detect_theme_news_cluster(
 
     if not active_themes:
         logger.debug("[테마클러스터] 활성 테마 없음 (min=%d)", cfg.min_article_count)
-        return []
+        return _comention_supplement(db, window_news, config)
 
     logger.info("[테마클러스터] 활성 테마 %d개: %s", len(active_themes), list(active_themes.keys()))
 
@@ -254,7 +341,7 @@ def detect_theme_news_cluster(
             theme_to_sectors[theme] = sectors
 
     if not theme_to_sectors:
-        return []
+        return _comention_supplement(db, window_news, config)
 
     all_sector_names: set[str] = set()
     for sectors in theme_to_sectors.values():
@@ -270,7 +357,7 @@ def detect_theme_news_cluster(
     sector_ids = [s.id for s in sectors_in_db]
     if not sector_ids:
         logger.debug("[테마클러스터] DB에서 관련 섹터를 찾지 못함: %s", all_sector_names)
-        return []
+        return _comention_supplement(db, window_news, config)
 
     # SPEC-AI-038 성능 패치: NULL 시총 종목을 무조건 포함하면 수천 건의 불필요한 가격 API 호출 발생.
     # 해결: 뉴스 창 내 언급된 종목코드를 먼저 수집 → NULL 시총 종목은 언급된 것만 포함.
@@ -300,7 +387,7 @@ def detect_theme_news_cluster(
 
     if not stocks:
         logger.debug("[테마클러스터] 시총 필터(%d억 이상) 통과 종목 없음", min_market_cap_eok)
-        return []
+        return _comention_supplement(db, window_news, config)
 
     # 6. 종목별 SurgeCandidate 생성
     # @MX:NOTE: [AUTO] 종목 수준 개인화: stock_article_score를 40%로 theme_base_score에 블렌딩
@@ -406,8 +493,163 @@ def detect_theme_news_cluster(
             )
         )
 
+    # SPEC-AI-066 REQ-004: 뉴스 공동언급 기반 임시 테마 자동 확장 (기본 비활성).
+    # 키워드→섹터 맵에 없는 이벤트 촉매(M&A 클러스터 등)를 co-mention으로 보강한다.
+    if config.catalyst_conviction.comention_theme_enabled:
+        try:
+            _existing_codes = {c.stock_code for c in results}
+            _comention_candidates = _derive_comention_theme_candidates(
+                db, window_news, config, _existing_codes
+            )
+            if _comention_candidates:
+                results.extend(_comention_candidates)
+                logger.info(
+                    "[테마클러스터] co-mention 보강 후보 %d개 추가", len(_comention_candidates)
+                )
+        except Exception as _ce:
+            logger.debug("[테마클러스터] co-mention 파생 실패 (무시): %s", _ce)
+
     logger.info("[테마클러스터] 후보 %d개 탐지", len(results))
     return results
+
+
+# @MX:NOTE: [AUTO] SPEC-AI-066 REQ-004 — group_cascade(AI-027/035) 접두사 매칭과 동일한 최소 접두사 길이
+# @MX:SPEC: SPEC-AI-066 REQ-AI066-004
+_COMENTION_GROUP_PREFIX_LEN = 2
+
+
+def _comention_supplement(
+    db: Session,
+    window_news: list[NewsArticle],
+    config: SurgeDetectionConfig,
+) -> list[SurgeCandidate]:
+    """SPEC-AI-066 REQ-004: 키워드→섹터 맵 경로가 조기 종료해도 co-mention 보강이 동작하도록
+    하는 래퍼. 기능 비활성(comention_theme_enabled=false)이면 빈 목록 반환 (레거시 동등).
+    """
+    if not config.catalyst_conviction.comention_theme_enabled:
+        return []
+    try:
+        return _derive_comention_theme_candidates(db, window_news, config, set())
+    except Exception as _ce:
+        logger.debug("[테마클러스터] co-mention 파생 실패 (무시): %s", _ce)
+        return []
+
+
+def _shares_group_prefix(name_a: str, name_b: str, min_prefix_len: int) -> bool:
+    """두 종목명이 공통 선행 접두사를 min_prefix_len 이상 공유하는지 판정한다.
+
+    SPEC-AI-027/035 group_cascade가 계열사 cascade를 소유하므로, co-mention 클러스터에서
+    동일 그룹 계열사 쌍은 제외해 이중 카운트를 방지한다.
+    """
+    if not name_a or not name_b:
+        return False
+    common = 0
+    for ca, cb in zip(name_a, name_b):
+        if ca == cb:
+            common += 1
+        else:
+            break
+    return common >= min_prefix_len
+
+
+def _derive_comention_theme_candidates(
+    db: Session,
+    window_news: list[NewsArticle],
+    config: SurgeDetectionConfig,
+    existing_codes: set[str],
+) -> list[SurgeCandidate]:
+    """SPEC-AI-066 REQ-004: 동일 기사에서 반복 공동언급되는 비계열 종목 클러스터를 파생한다.
+
+    - 기사별 NewsStockRelation 종목 집합에서 종목 쌍 co-occurrence를 카운트.
+    - comention_min_pairs 이상 동반 등장한 쌍만 클러스터 에지로 채택.
+    - 동일 그룹 계열사 쌍(접두사 공유)은 group_cascade 소관 → 제외 (이중 카운트 방지).
+    - 이미 키워드→섹터 맵으로 탐지된 종목(existing_codes)은 중복 추가하지 않음.
+
+    Returns:
+        비계열 co-mention 클러스터 구성원에 대한 theme_cluster_score 보강 후보 목록.
+    """
+    from collections import defaultdict
+
+    catalyst = config.catalyst_conviction
+    article_ids = [a.id for a in window_news if a.id is not None]
+    if not article_ids:
+        return []
+
+    from app.models.news_relation import NewsStockRelation
+
+    rows = (
+        db.query(NewsStockRelation.news_id, Stock.stock_code, Stock.name)
+        .join(Stock, Stock.id == NewsStockRelation.stock_id)
+        .filter(NewsStockRelation.news_id.in_(article_ids))
+        .all()
+    )
+    if not rows:
+        return []
+
+    article_stocks: dict[int, set[str]] = defaultdict(set)
+    name_map: dict[str, str] = {}
+    for news_id, code, name in rows:
+        article_stocks[news_id].add(code)
+        name_map[code] = name
+
+    # 종목 쌍 co-occurrence 카운트
+    pair_count: dict[tuple[str, str], int] = defaultdict(int)
+    for codes in article_stocks.values():
+        ordered = sorted(codes)
+        for i in range(len(ordered)):
+            for j in range(i + 1, len(ordered)):
+                pair_count[(ordered[i], ordered[j])] += 1
+
+    # 임계 이상 + 비계열 쌍만 채택 → union-find로 클러스터 구성
+    parent: dict[str, str] = {}
+
+    def _find(x: str) -> str:
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def _union(a: str, b: str) -> None:
+        ra, rb = _find(a), _find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    member_strength: dict[str, int] = defaultdict(int)
+    for (a, b), cnt in pair_count.items():
+        if cnt < catalyst.comention_min_pairs:
+            continue
+        if _shares_group_prefix(name_map.get(a, ""), name_map.get(b, ""), _COMENTION_GROUP_PREFIX_LEN):
+            continue  # 계열사 쌍 → group_cascade 소관, 제외
+        _union(a, b)
+        member_strength[a] = max(member_strength[a], cnt)
+        member_strength[b] = max(member_strength[b], cnt)
+
+    if not member_strength:
+        return []
+
+    # 클러스터 크기 >= 2 인 구성원만 채택
+    cluster_size: dict[str, int] = defaultdict(int)
+    for code in member_strength:
+        cluster_size[_find(code)] += 1
+
+    candidates: list[SurgeCandidate] = []
+    for code, strength in member_strength.items():
+        if cluster_size[_find(code)] < 2:
+            continue
+        if code in existing_codes:
+            continue  # 키워드 맵으로 이미 탐지됨 → 이중 카운트 방지
+        # 공동언급 강도에 비례한 modest theme 점수 (보강 근거)
+        score = min(0.5, 0.2 + 0.05 * strength)
+        candidates.append(
+            SurgeCandidate(
+                stock_code=code,
+                stock_name=name_map.get(code, code),
+                theme_cluster_score=round(score, 4),
+                active_detectors=["theme_cluster"],
+            )
+        )
+    return candidates
 
 
 def _fetch_price_change_sync(stock_code: str) -> dict | None:
@@ -539,10 +781,16 @@ def detect_volume_surge_news_combo(
     from app.models.news_relation import NewsStockRelation
 
     # N+1 해소: 단일 JOIN 쿼리로 뉴스→관계→종목 일괄 조회
+    # SPEC-AI-066 REQ-001: 확신도 산출을 위해 published_at/collected_at/title 컬럼을 함께 조회한다
+    # (동일 행 집합의 인메모리 집계 확장 — 종목당 신규 쿼리 없음).
     news_stock_rows = (
         db.query(
             NewsArticle.sentiment,
             Stock.stock_code,
+            NewsArticle.published_at,
+            NewsArticle.collected_at,
+            NewsArticle.title,
+            NewsArticle.ai_summary,
         )
         .join(NewsStockRelation, NewsStockRelation.news_id == NewsArticle.id)
         .join(Stock, Stock.id == NewsStockRelation.stock_id)
@@ -553,8 +801,31 @@ def detect_volume_surge_news_combo(
         .all()
     )
 
-    for sentiment, stock_code in news_stock_rows:
+    # SPEC-AI-066 REQ-001: 종목별 확신도 근거 집계 (기사 수/시간 span/최대 감성/키워드)
+    _conviction_agg: dict[str, dict] = {}
+
+    for sentiment, stock_code, published_at, collected_at, title, ai_summary in news_stock_rows:
         score = _positive_sentiment_score(sentiment)
+
+        # 확신도 집계는 min_news_sentiment 필터 이전의 전체 행에 대해 수행 (커버리지 정직성)
+        agg = _conviction_agg.get(stock_code)
+        if agg is None:
+            agg = {"count": 0, "min_ts": None, "max_ts": None, "max_sent": 0.0, "keyword": False}
+            _conviction_agg[stock_code] = agg
+        agg["count"] += 1
+        agg["max_sent"] = max(agg["max_sent"], score)
+        _ts = published_at or collected_at
+        if _ts is not None:
+            _ts_naive = _ts.replace(tzinfo=None) if _ts.tzinfo is not None else _ts
+            if agg["min_ts"] is None or _ts_naive < agg["min_ts"]:
+                agg["min_ts"] = _ts_naive
+            if agg["max_ts"] is None or _ts_naive > agg["max_ts"]:
+                agg["max_ts"] = _ts_naive
+        if not agg["keyword"]:
+            _text = (title or "") + " " + (ai_summary or "")
+            if _has_catalyst_keyword(_text, config):
+                agg["keyword"] = True
+
         if score < cfg.min_news_sentiment:
             continue
         existing = positive_news_stocks.get(stock_code, 0.0)
@@ -572,6 +843,43 @@ def detect_volume_surge_news_combo(
             sorted(positive_news_stocks.items(), key=lambda x: x[1], reverse=True)[:_MAX_COMBO_CANDIDATES]
         )
         logger.info("[거래량콤보] 감성점수 상위 %d개로 제한 (성능 패치)", _MAX_COMBO_CANDIDATES)
+
+    # SPEC-AI-066 REQ-001 (e): 후보 종목의 당일/밤새 공시 뒷받침 여부를 1회 배치 조회로 확인
+    # (종목당 신규 쿼리 없음 — 최종 후보 집합에 대한 단일 IN 쿼리).
+    _backing_disclosure_codes: set[str] = set()
+    if config.catalyst_conviction.enabled:
+        try:
+            from app.models.news_relation import NewsStockRelation as _NSR  # noqa: F401
+            _disc_cutoff = (datetime.now(timezone.utc) - timedelta(hours=cfg.news_window_hours)).strftime("%Y%m%d")
+            _disc_rows = (
+                db.query(Stock.stock_code)
+                .join(Disclosure, Disclosure.stock_id == Stock.id)
+                .filter(
+                    Stock.stock_code.in_(list(positive_news_stocks.keys())),
+                    Disclosure.rcept_dt >= _disc_cutoff,
+                )
+                .all()
+            )
+            _backing_disclosure_codes = {r.stock_code for r in _disc_rows}
+        except Exception as _de:
+            logger.debug("[거래량콤보] 공시 뒷받침 조회 실패 (무시): %s", _de)
+
+    # SPEC-AI-066 REQ-001/002: 종목별 확신도 tier 산출 (인메모리 집계 → 순수 함수)
+    _conviction_tiers: dict[str, str] = {}
+    for _code in positive_news_stocks:
+        _agg = _conviction_agg.get(_code, {})
+        _min_ts, _max_ts = _agg.get("min_ts"), _agg.get("max_ts")
+        _hours = 0.0
+        if _min_ts is not None and _max_ts is not None:
+            _hours = (_max_ts - _min_ts).total_seconds() / 3600.0
+        _evidence = ConvictionEvidence(
+            article_count=_agg.get("count", 0),
+            coverage_hours=_hours,
+            sentiment_score=_agg.get("max_sent", 0.0),
+            has_high_impact_keyword=_agg.get("keyword", False),
+            has_backing_disclosure=_code in _backing_disclosure_codes,
+        )
+        _conviction_tiers[_code] = compute_catalyst_conviction(_evidence, config)
 
     # 거래량 z-score 계산 — naver_finance 히스토리 사용
     # @MX:NOTE: 동기 컨텍스트에서 비동기 함수 호출 불가 → 캐시된 데이터 또는 스킵
@@ -635,13 +943,22 @@ def detect_volume_surge_news_combo(
                 change_rate = _vol_price_data.get("change_rate")
 
             # Gate 1 (REQ-AI030-001): 당일 과열 필터
+            # SPEC-AI-066 REQ-002: 확신도 HIGH일 때만 과열 상한을 상향한다 (non-HIGH는 기존 5% 유지).
+            # catalyst_conviction.enabled=False이면 tier 무관하게 기본 상한 사용 (SPEC-AI-030 레거시 복원).
+            _overheat_ceiling = cfg_guard.overheat_change_pct
+            if (
+                config.catalyst_conviction.enabled
+                and _conviction_tiers.get(stock_code) == CONVICTION_HIGH
+            ):
+                _overheat_ceiling = cfg_guard.overheat_change_pct_high_conviction
             if change_rate is None and cfg_guard.exclude_on_price_unavailable:
                 logger.debug("[거래량콤보] %s 가격 조회 실패 — 제외", stock_code)
                 continue
-            if change_rate is not None and change_rate >= cfg_guard.overheat_change_pct:
+            if change_rate is not None and change_rate >= _overheat_ceiling:
                 logger.debug(
-                    "[거래량콤보] %s 과열 제외 change_rate=%.2f%%",
-                    stock_code, change_rate,
+                    "[거래량콤보] %s 과열 제외 change_rate=%.2f%% (상한=%.1f, tier=%s)",
+                    stock_code, change_rate, _overheat_ceiling,
+                    _conviction_tiers.get(stock_code),
                 )
                 continue
 
@@ -924,6 +1241,66 @@ _IMMEDIATE_EVENT_PATTERNS: list[tuple[str, float]] = [
     ("자기주식 취득 결정", 0.70),
 ]
 
+# SPEC-AI-066 REQ-003: "positive-or-stronger" 감성 기준 (positive=0.7)
+_ACQUISITION_MIN_SENTIMENT = 0.7
+
+
+def _is_acquisition_exempt_disclosure(
+    db: Session,
+    stock_id: int,
+    combined: str,
+    config: SurgeDetectionConfig,
+) -> bool:
+    """SPEC-AI-066 REQ-003: 페널티 대상 공시가 전략적 인수 호재 맥락인지 판정한다.
+
+    3중 조건 동시 충족 시에만 예외(부분 완화) 적용:
+      (1) 인수/합병/경영권 키워드가 공시 텍스트(report_name+ai_summary)에 존재
+      (2) 종목의 최근 뉴스 감성이 positive 이상 (>= 0.7)
+      (3) 당일 change_rate >= 0 (하락 중 아님)
+
+    스위치(catalyst_conviction.enabled / acquisition_exemption_enabled)가 하나라도 off면 False.
+    하나라도 불충족이면 False → SPEC-AI-028 전면 페널티(0.3) 유지.
+
+    # @MX:NOTE: [AUTO] SPEC-AI-066 REQ-003 — 부실 매각형 최대주주변경은 페널티 유지, 인수 호재만 부분완화
+    # @MX:SPEC: SPEC-AI-066 REQ-AI066-003
+    """
+    disc_filter = config.disclosure_type_filter
+    catalyst = config.catalyst_conviction
+    if not (catalyst.enabled and disc_filter.acquisition_exemption_enabled):
+        return False
+    # (1) 인수 키워드
+    if not any(kw in combined for kw in catalyst.acquisition_keywords):
+        return False
+    stock = db.query(Stock).filter(Stock.id == stock_id).first()
+    if stock is None:
+        return False
+    # (3) change_rate >= 0
+    _price = None
+    try:
+        _price = _fetch_price_change_sync(stock.stock_code)
+    except Exception:
+        _price = None
+    _change_rate = _price.get("change_rate") if _price else None
+    if _change_rate is None or _change_rate < 0:
+        return False
+    # (2) positive 이상 뉴스 감성
+    from app.models.news_relation import NewsStockRelation as _NSR
+    _cfg = config.disclosure_pattern
+    _cutoff = (datetime.now(timezone.utc) - timedelta(hours=_cfg.disclosure_window_hours)).replace(tzinfo=None)
+    _sent_rows = (
+        db.query(NewsArticle.sentiment)
+        .join(_NSR, _NSR.news_id == NewsArticle.id)
+        .filter(
+            _NSR.stock_id == stock_id,
+            NewsArticle.collected_at >= _cutoff,
+        )
+        .all()
+    )
+    _max_sent = max((_positive_sentiment_score(r[0]) for r in _sent_rows), default=0.0)
+    if _max_sent < _ACQUISITION_MIN_SENTIMENT:
+        return False
+    return True
+
 
 def detect_immediate_disclosure_signal(
     db: Session,
@@ -983,9 +1360,19 @@ def detect_immediate_disclosure_signal(
             continue
 
         if penalty_applied:
-            best_score = round(best_score * disc_filter.penalty_factor, 4)
-            logger.debug("[즉각공시] %s 페널티 적용 (%.3f)", disc.stock_id, best_score)
-            if disc.stock_id is not None:
+            # SPEC-AI-066 REQ-003: 전략적 인수 호재 맥락이면 페널티 부분완화(0.3→0.7), bearish 표기도 해제.
+            # 부실 매각/경영권 분쟁성(호재 근거 없음)은 SPEC-AI-028 전면 페널티(0.3)+bearish 유지.
+            _exempt = (
+                disc.stock_id is not None
+                and _is_acquisition_exempt_disclosure(db, disc.stock_id, combined, config)
+            )
+            _factor = disc_filter.acquisition_penalty_factor if _exempt else disc_filter.penalty_factor
+            best_score = round(best_score * _factor, 4)
+            logger.debug(
+                "[즉각공시] %s 페널티 적용 factor=%.2f exempt=%s (%.3f)",
+                disc.stock_id, _factor, _exempt, best_score,
+            )
+            if disc.stock_id is not None and not _exempt:
                 penalized_stocks.add(disc.stock_id)
 
         if disc.stock_id not in stock_scores or stock_scores[disc.stock_id]["score"] < best_score:
@@ -3162,6 +3549,83 @@ def detect_gap_up_runners(
     return signals
 
 
+# SPEC-AI-066 REQ-005: 종목별 상대 임계 z-score 컷오프 (자체 롤링 대비 이상치 판정)
+_VB_RELATIVE_Z_THRESHOLD = 2.0
+
+
+def _build_volume_baseline_stats(baseline_vols: list[float]):
+    """거래량 히스토리로부터 SPEC-AI-065 BaselineStats를 인라인 구성한다 (순수 파이썬).
+
+    surge_baseline_service.compute_zscore를 재사용하기 위한 어댑터. 지속 baseline 테이블은
+    탐지기 점수(0~1)를 저장하므로 거래량 규모에는 부적합 → 종목 자체 히스토리로 구성한다.
+    """
+    from app.services.surge_baseline_service import BaselineStats
+
+    n = len(baseline_vols)
+    if n < 2:
+        return BaselineStats(rolling_mean=(baseline_vols[0] if baseline_vols else 0.0), rolling_m2=0.0, sample_count=n)
+    mean_v = statistics.mean(baseline_vols)
+    var = statistics.variance(baseline_vols)  # 표본 분산 (n-1)
+    return BaselineStats(rolling_mean=mean_v, rolling_m2=var * (n - 1), sample_count=n)
+
+
+def _baseline_compute_zscore(raw: float, stats, min_samples: int) -> float | None:
+    """surge_baseline_service.compute_zscore 재사용 래퍼 (SPEC-AI-065)."""
+    from app.services.surge_baseline_service import compute_zscore
+
+    return compute_zscore(raw, stats, min_samples=min_samples)
+
+
+def _fetch_volume_breakout_catalyst_universe(
+    db: Session,
+    config: SurgeDetectionConfig,
+    exclude: set[str],
+) -> list[str]:
+    """SPEC-AI-066 REQ-005: 당일/밤새 촉매(공시 또는 뉴스 커버리지) 보유 종목 코드를 수집한다.
+
+    거래량 순위 상위 50 밖의 촉매 중대형주를 volume_breakout 유니버스에 합류시키기 위함.
+    """
+    codes: list[str] = []
+    _seen: set[str] = set(exclude)
+
+    # 당일/최근 공시 종목
+    try:
+        _cutoff = (datetime.now(timezone.utc) - timedelta(hours=config.disclosure_pattern.disclosure_window_hours)).strftime("%Y%m%d")
+        _disc_rows = (
+            db.query(Stock.stock_code)
+            .join(Disclosure, Disclosure.stock_id == Stock.id)
+            .filter(Disclosure.rcept_dt >= _cutoff)
+            .all()
+        )
+        for r in _disc_rows:
+            if r.stock_code and r.stock_code not in _seen:
+                _seen.add(r.stock_code)
+                codes.append(r.stock_code)
+    except Exception as e:
+        logger.debug("[거래량폭발] 공시 촉매 조회 실패 (무시): %s", e)
+
+    # 최근 뉴스 커버리지 종목
+    try:
+        from app.models.news_relation import NewsStockRelation
+        _news_cutoff = (datetime.now(timezone.utc) - timedelta(hours=config.volume_news_combo.news_window_hours)).replace(tzinfo=None)
+        _news_rows = (
+            db.query(Stock.stock_code)
+            .join(NewsStockRelation, NewsStockRelation.stock_id == Stock.id)
+            .join(NewsArticle, NewsArticle.id == NewsStockRelation.news_id)
+            .filter(NewsArticle.collected_at >= _news_cutoff)
+            .distinct()
+            .all()
+        )
+        for r in _news_rows:
+            if r.stock_code and r.stock_code not in _seen:
+                _seen.add(r.stock_code)
+                codes.append(r.stock_code)
+    except Exception as e:
+        logger.debug("[거래량폭발] 뉴스 촉매 조회 실패 (무시): %s", e)
+
+    return codes
+
+
 def detect_volume_breakout(
     db: Session,
     config: SurgeDetectionConfig,
@@ -3170,6 +3634,9 @@ def detect_volume_breakout(
 
     Naver 거래량 순위 상위 종목에서 최근 20일 평균 대비 volume_ratio_threshold 배 이상
     거래량이 폭발한 종목을 SurgeCandidate로 반환한다. 시총/뉴스 필터 없음.
+
+    SPEC-AI-066 REQ-005: relative_threshold_enabled일 때 촉매 종목 유니버스 확장 +
+    종목별 상대(z-score) 임계를 추가한다. AI-062 가중치/AI-063 bypass 임계는 불변.
     """
     cfg = config.volume_breakout
     if not cfg.enabled:
@@ -3184,8 +3651,20 @@ def detect_volume_breakout(
         logger.warning("[거래량폭발] 순위 조회 실패: %s", e)
         return []
 
+    # SPEC-AI-066 REQ-005: relative_threshold_enabled일 때만 촉매 종목으로 유니버스를 확장한다.
+    # 비활성 시 기존 상위 거래량 리더 유니버스만 사용 (레거시 동작 보존, staged rollout).
+    universe: list[str] = list(dict.fromkeys(leader_codes))
+    if cfg.relative_threshold_enabled:
+        try:
+            _catalyst_codes = _fetch_volume_breakout_catalyst_universe(db, config, set(universe))
+            if _catalyst_codes:
+                universe = list(dict.fromkeys(universe + _catalyst_codes))[: cfg.max_candidates]
+                logger.info("[거래량폭발] 촉매 종목 %d개 유니버스 합류", len(_catalyst_codes))
+        except Exception as _ue:
+            logger.debug("[거래량폭발] 촉매 유니버스 확장 실패 (무시): %s", _ue)
+
     candidates: list[SurgeCandidate] = []
-    for code in leader_codes:
+    for code in universe:
         try:
             stock = db.query(Stock).filter(Stock.stock_code == code).first()
             if not stock:
@@ -3208,7 +3687,21 @@ def detect_volume_breakout(
                 continue
 
             ratio = today_vol / mean_vol
-            if ratio < cfg.volume_ratio_threshold:
+
+            # SPEC-AI-066 REQ-005: 고정 배율 + (선택적) 종목별 상대(z-score) 임계.
+            # relative 경로는 relative_threshold_enabled일 때만 활성. cold-start(표본 부족)이면
+            # compute_zscore가 None → 고정 3.0x 배율로 폴백 (회귀 없음).
+            qualifies_flat = ratio >= cfg.volume_ratio_threshold
+            qualifies_relative = False
+            if cfg.relative_threshold_enabled and not qualifies_flat:
+                _stats = _build_volume_baseline_stats(baseline_vols)
+                _z = _baseline_compute_zscore(
+                    float(today_vol), _stats, min_samples=config.zscore_min_baseline_samples
+                )
+                if _z is not None and _z >= _VB_RELATIVE_Z_THRESHOLD:
+                    qualifies_relative = True
+
+            if not (qualifies_flat or qualifies_relative):
                 continue
 
             breakout_score = min(ratio / cfg.confidence_denominator, cfg.max_score)
@@ -3221,11 +3714,12 @@ def detect_volume_breakout(
                 )
             )
             logger.debug(
-                "[거래량폭발] %s %s ratio=%.1f score=%.3f",
+                "[거래량폭발] %s %s ratio=%.1f score=%.3f rel=%s",
                 code,
                 stock.name,
                 ratio,
                 breakout_score,
+                qualifies_relative,
             )
         except Exception as e:
             logger.debug("[거래량폭발] %s 처리 중 오류: %s", code, e)
