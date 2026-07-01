@@ -425,12 +425,12 @@ class NearLimitUpConfig(BaseModel):
     """SPEC-AI-023: 상한가 근접 종목 익일 carry-forward 설정."""
 
     enabled: bool = True
-    # 상한가 근접 기준 최소 등락률 (%)
-    near_limit_up_min_pct: float = 25.0
+    # 상한가 근접 기준 최소 등락률 (%) — 15~24% 모멘텀 이월 종목 누락 방지로 25.0→15.0 완화
+    near_limit_up_min_pct: float = 15.0
     # 상한가 기준 최대 등락률 (%) — 상한가 도달 시 제외
     near_limit_up_max_pct: float = 29.99
-    # 시총 상위 N 종목만 평가
-    max_stocks_to_check: int = 500
+    # 시총 상위 N 종목만 평가 — NULL 시총 종목도 후보 풀에 포함되도록 500→1200 확대
+    max_stocks_to_check: int = 1200
     # 하루 최대 발행 시그널 수
     max_signals_per_day: int = 10
 

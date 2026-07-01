@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Callable
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, nullslast, or_
 from sqlalchemy.orm import Session
 
 from app.surge_config.surge_settings import SurgeDetectionConfig
@@ -1418,8 +1418,27 @@ def gather_surge_candidates(
             pool_tag = _entry_pool_map.get(code, "existing")
             if candidate.entry_pool == "existing":
                 candidate.entry_pool = pool_tag
-        # pool_counts를 gather_surge_candidates 반환값 메타데이터로 첨부
-        # (surge_metadata에 기록되도록 아래 시그널 생성 단계에서 활용)
+
+        # SPEC-AI-065 REQ-5 버그픽스: 라이브 시그널 생성(10:00/15:20 KST) 중 계산된
+        # 이 pool_counts가 실제 예측 시점의 스캔 유니버스 집계다. 별도 16:00 KST
+        # 사전 빌드 잡(_run_surge_universe_build)의 결과는 폐기되는 값이라 평가용으로
+        # 부적절하므로 사용하지 않는다. 날짜별로 저장해 두면 T+1의 18:30 평가 잡이
+        # T-1(예측일) 값을 읽어 evaluate_surge_predictions(pool_counts=...)에 전달한다.
+        try:
+            from app.services.surge_universe_pool_service import persist_pool_counts
+
+            persist_pool_counts(
+                db,
+                date.today(),
+                {
+                    "pool_a": _pool_counts.get("pool_a", 0),
+                    "pool_b": _pool_counts.get("pool_b", 0),
+                    "pool_c": _pool_counts.get("pool_c", 0),
+                    "scan_universe_size": len(_universe_codes),
+                },
+            )
+        except Exception as _pe:
+            logger.warning("[스캔유니버스] pool_counts 영속화 실패 (무시): %s", _pe)
     except Exception as _ue:
         logger.warning("[스캔유니버스] 유니버스 빌드 실패 (무시): %s", _ue)
         try:
@@ -2098,11 +2117,12 @@ def detect_near_limit_up_carries(
             )
         )
 
-        # 시총 상위 N 종목 (None 제외)
+        # 시총 상위 N 종목 — market_cap NULL 종목(전체의 60%+)도 후보 풀에 포함.
+        # 이전에는 NULL 제외로 남광토건 등 실제 상한가 근접 종목이 통째로 누락됐음.
+        # NULL은 nullslast()로 순위 뒤로 밀려 배치되며, max_stocks_to_check 확대로 도달 가능.
         candidates = (
             db.query(Stock)
-            .filter(Stock.market_cap.isnot(None))
-            .order_by(Stock.market_cap.desc())
+            .order_by(nullslast(Stock.market_cap.desc()))
             .limit(config.max_stocks_to_check)
             .all()
         )
@@ -3341,7 +3361,7 @@ def build_scan_universe(
     SPEC-AI-065 REQ-2:
     - Pool A: 오늘 DART 공시 종목 (rcept_dt == today YYYYMMDD)
     - Pool B: 거래량 200%+ 당일 종목 (PriceRecord 히스토리 기반)
-    - Pool C: 오늘 change_rate in [5%, 15%] 종목 (SurgeActualOutcome)
+    - Pool C: 오늘 change_rate 5% 이상 종목 (SurgeActualOutcome)
     - 최대 max_scan_universe 종목, 우선순위: A > B > C > existing
 
     Args:
@@ -3428,7 +3448,10 @@ def build_scan_universe(
     except Exception as e:
         logger.warning("[스캔유니버스] Pool B 조회 실패: %s", e)
 
-    # Pool C: 오늘 change_rate in [5%, 15%] 종목
+    # Pool C: 오늘 change_rate 5% 이상 종목
+    # SPEC-AI-065 REQ-2 버그픽스: 상한(15%) 제거 — 상한이 있으면 이미 15%+ 급등한
+    # 종목(예: 금호건설/002990, 위메이드/112040처럼 반복 상한가 종목)이 재진입을 통해
+    # 스캔 유니버스에 다시 포함될 기회를 구조적으로 차단하여 recall 손실을 유발했다.
     try:
         from app.models.surge_actual_outcome import SurgeActualOutcome
 
@@ -3445,7 +3468,6 @@ def build_scan_universe(
                 SurgeActualOutcome.trading_date == _pool_c_date,
                 SurgeActualOutcome.change_rate.isnot(None),
                 SurgeActualOutcome.change_rate >= 5.0,
-                SurgeActualOutcome.change_rate < 15.0,
             )
             .all()
         )
@@ -3455,7 +3477,7 @@ def build_scan_universe(
                 pool_c_codes.append(code)
                 entry_pool_map[code] = "pool_c"
 
-        logger.info("[스캔유니버스] Pool C(등락률5~15%%): %d개", len(pool_c_codes))
+        logger.info("[스캔유니버스] Pool C(등락률5%%+): %d개", len(pool_c_codes))
     except Exception as e:
         logger.warning("[스캔유니버스] Pool C 조회 실패: %s", e)
         try:

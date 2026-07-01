@@ -55,7 +55,7 @@ class SurgePredictionEvaluation(Base):
     pool_a_count: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
     # Pool B: 거래량 200%+ 당일 종목 수
     pool_b_count: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
-    # Pool C: 등락률 5~15% 당일 종목 수
+    # Pool C: 등락률 5%+ 당일 종목 수
     pool_c_count: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
 
     # 레코드 생성 시각

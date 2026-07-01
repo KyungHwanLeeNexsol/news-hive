@@ -217,11 +217,11 @@ def test_ac002_exact_30pct_no_signal(db):
 
 
 # ---------------------------------------------------------------------------
-# AC-003: +20% 종목 → 생성 안 함 (min_pct 미달)
+# AC-003: +10% 종목 → 생성 안 함 (min_pct 미달, 15.0→10.0 완화 후에도 미달)
 # ---------------------------------------------------------------------------
 
-def test_ac003_20pct_below_threshold_no_signal(db):
-    """AC-003: +20% 종목은 min_pct=25.0 미달로 생성 안 함."""
+def test_ac003_10pct_below_threshold_no_signal(db):
+    """AC-003: +10% 종목은 min_pct=15.0 미달로 생성 안 함."""
     from app.services.surge_detector import detect_near_limit_up_carries
 
     _make_stock(db, "000030", "약상승주")
@@ -229,7 +229,7 @@ def test_ac003_20pct_below_threshold_no_signal(db):
 
     with patch(
         "app.services.surge_detector._fetch_price_change_sync",
-        return_value=_mock_price(20.0),
+        return_value=_mock_price(10.0),
     ):
         signals = detect_near_limit_up_carries(db, cfg)
 
@@ -392,11 +392,11 @@ def test_ac010_boundary_29_99_creates_signal(db):
 
 
 # ---------------------------------------------------------------------------
-# AC-011: +25.0% 종목 → 생성됨 (최소 경계값)
+# AC-011: +15.0% 종목 → 생성됨 (최소 경계값, 15~24% 모멘텀 이월 대응으로 완화)
 # ---------------------------------------------------------------------------
 
-def test_ac011_boundary_25_0_creates_signal(db):
-    """AC-011: +25.0% 종목은 최소 경계값으로 시그널 생성됨."""
+def test_ac011_boundary_15_0_creates_signal(db):
+    """AC-011: +15.0% 종목은 완화된 최소 경계값으로 시그널 생성됨."""
     from app.services.surge_detector import detect_near_limit_up_carries
 
     _make_stock(db, "000110", "최소경계주")
@@ -404,11 +404,53 @@ def test_ac011_boundary_25_0_creates_signal(db):
 
     with patch(
         "app.services.surge_detector._fetch_price_change_sync",
-        return_value=_mock_price(25.0),
+        return_value=_mock_price(15.0),
     ):
         signals = detect_near_limit_up_carries(db, cfg)
 
     assert len(signals) == 1
+
+
+# ---------------------------------------------------------------------------
+# AC-013: +18% 종목 → 생성됨 (기존 25% 하한에서는 제외됐던 구간)
+# ---------------------------------------------------------------------------
+
+def test_ac013_18pct_now_qualifies_after_band_widening(db):
+    """AC-013: +18% 종목은 완화 전 min_pct=25.0 기준으로는 제외됐으나 완화 후 생성됨."""
+    from app.services.surge_detector import detect_near_limit_up_carries
+
+    _make_stock(db, "000130", "밴드확대주")
+    cfg = _make_config()
+
+    with patch(
+        "app.services.surge_detector._fetch_price_change_sync",
+        return_value=_mock_price(18.0),
+    ):
+        signals = detect_near_limit_up_carries(db, cfg)
+
+    assert len(signals) == 1
+
+
+# ---------------------------------------------------------------------------
+# AC-014: market_cap=NULL 종목도 후보 풀에 포함됨
+# ---------------------------------------------------------------------------
+
+def test_ac014_null_market_cap_stock_included_as_candidate(db):
+    """AC-014: market_cap이 NULL인 종목도 시총 필터에서 제외되지 않고 후보로 포함됨."""
+    from app.services.surge_detector import detect_near_limit_up_carries
+
+    stock = _make_stock(db, "000140", "시총누락주", market_cap=None)
+
+    cfg = _make_config()
+
+    with patch(
+        "app.services.surge_detector._fetch_price_change_sync",
+        return_value=_mock_price(27.0),
+    ):
+        signals = detect_near_limit_up_carries(db, cfg)
+
+    assert len(signals) == 1
+    assert signals[0].stock_id == stock.id
 
 
 # ---------------------------------------------------------------------------

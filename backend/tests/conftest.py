@@ -149,6 +149,7 @@ def test_engine():
     from app.models.surge_auto_improvement_log import SurgeAutoImprovementLog  # noqa: F401 — SPEC-AI-041
     from app.models.crash_risk_alert import CrashRiskAlert  # noqa: F401 — SPEC-AI-064
     from app.models.stock_signal_baseline import StockSignalBaseline  # noqa: F401, F811 — SPEC-AI-065
+    from app.models.surge_universe_pool_history import SurgeUniversePoolHistory  # noqa: F401 — SPEC-AI-065 REQ-5
 
     Base.metadata.create_all(bind=engine)
     yield engine

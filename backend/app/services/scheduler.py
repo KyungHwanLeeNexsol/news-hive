@@ -592,17 +592,51 @@ def _run_surge_collect_outcomes():
     _start = _time.monotonic()
     from app.services.surge_actual_outcome_service import collect_daily_surge_outcomes
     from datetime import date as _date
+    from sqlalchemy.exc import OperationalError
 
+    today = _date.today()
     db = SessionLocal()
     try:
-        count = asyncio.run(collect_daily_surge_outcomes(db, _date.today()))
+        try:
+            count = asyncio.run(collect_daily_surge_outcomes(db, today))
+        except OperationalError as e:
+            # 2026-06-30 16:00 KST 재현 사례: 15:20 시그널 생성 잡(12~15분 실행)이
+            # 끝난 직후 idle 상태였던 DB 연결이 SSL 끊김으로 죽어있어 이 잡이
+            # 재시도 없이 조용히 실패, surge_actual_outcome이 당일 0건으로 남았다.
+            # 오염된 세션을 버리고 새 세션으로 1회만 재시도한다.
+            logger.error("surge collect outcomes SSL 연결 오류 — 세션 재생성 후 재시도: %s", e)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            try:
+                db.close()
+            except Exception:
+                pass
+            db = SessionLocal()
+            try:
+                count = asyncio.run(collect_daily_surge_outcomes(db, today))
+            except Exception as retry_e:
+                logger.error(
+                    "surge collect outcomes 재시도 실패 — 당일(%s) 결과 수집 불가: %s",
+                    today, retry_e, exc_info=True,
+                )
+                return
         logger.info("surge 실제 결과 수집 완료: %d건", count)
     except Exception:
         logger.exception("surge collect outcomes 실패")
         raise
     finally:
         _record_job_duration("surge_collect_outcomes", _time.monotonic() - _start)
-        db.close()
+        # SSL 연결 끊김 시 close() 자체가 에러를 던져 APScheduler로 전파되므로 방어
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        try:
+            db.close()
+        except Exception:
+            pass
 
 
 def _run_surge_verify_predictions():
@@ -621,7 +655,21 @@ def _run_surge_verify_predictions():
     db = SessionLocal()
     try:
         today = _date.today()
-        evaluation = evaluate_surge_predictions(db, today)
+
+        # SPEC-AI-065 REQ-5 버그픽스: T-1(예측일)에 라이브 시그널 생성 중 저장된
+        # pool_counts를 조회하여 evaluate_surge_predictions에 전달한다.
+        # 레코드가 없으면(fail-open) None을 넘겨 기존과 동일하게 0으로 기록된다.
+        pool_counts = None
+        try:
+            from app.services.surge_trading_service import _get_prev_business_day
+            from app.services.surge_universe_pool_service import get_pool_counts_for_date
+
+            _prev_day_for_pool = _get_prev_business_day(today)
+            pool_counts = get_pool_counts_for_date(db, _prev_day_for_pool)
+        except Exception as _pce:
+            logger.warning("[급등평가] pool_counts 조회 실패 (0으로 기록됨): %s", _pce)
+
+        evaluation = evaluate_surge_predictions(db, today, pool_counts=pool_counts)
         logger.info(
             "surge 예측 평가 완료: precision=%.3f, recall=%.3f, f1=%.3f",
             evaluation.precision or 0.0,
@@ -892,7 +940,7 @@ def _run_surge_signal_generate():
 def _run_surge_universe_build():
     """SPEC-AI-065 REQ-2: 스캔 유니버스 사전 빌드 (평일 16:00 KST, 시장 마감 후).
 
-    Pool A(DART 공시)/Pool B(거래량 200%+)/Pool C(등락률 5~15%) 종목을 수집하여
+    Pool A(DART 공시)/Pool B(거래량 200%+)/Pool C(등락률 5%+) 종목을 수집하여
     다음 날 시그널 생성(15:20 KST)에서 활용할 수 있도록 기준선 업데이트를 준비한다.
     실패해도 당일 시그널 생성에 영향 없음 (fail-open).
     """
@@ -903,13 +951,35 @@ def _run_surge_universe_build():
     _start = _time.monotonic()
     from app.services.surge_detector import build_scan_universe
     from app.surge_config.surge_settings import get_surge_config
+    from sqlalchemy.exc import OperationalError
 
     db = SessionLocal()
     try:
         cfg = get_surge_config()
-        universe_codes, entry_pool_map, pool_counts = build_scan_universe(
-            db, cfg, existing_codes=set()
-        )
+        try:
+            universe_codes, entry_pool_map, pool_counts = build_scan_universe(
+                db, cfg, existing_codes=set()
+            )
+        except OperationalError as e:
+            # SSL 연결 끊김 시 오염된 세션을 버리고 새 세션으로 1회만 재시도한다
+            # (surge_collect_outcomes와 동일한 패턴, 2026-06-30 재현 사례 참고).
+            logger.error("스캔유니버스 빌드 SSL 연결 오류 — 세션 재생성 후 재시도: %s", e)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            try:
+                db.close()
+            except Exception:
+                pass
+            db = SessionLocal()
+            try:
+                universe_codes, entry_pool_map, pool_counts = build_scan_universe(
+                    db, cfg, existing_codes=set()
+                )
+            except Exception as retry_e:
+                logger.error("스캔유니버스 빌드 재시도 실패 (무시): %s", retry_e, exc_info=True)
+                return
         logger.info(
             "스캔유니버스 빌드 완료: 총=%d개 (A=%d B=%d C=%d)",
             len(universe_codes),
