@@ -2128,7 +2128,10 @@ def detect_near_limit_up_carries(
         )
 
         for stock in candidates:
-            if len(signals) >= config.max_signals_per_day:
+            if (
+                config.max_signals_per_day is not None
+                and len(signals) >= config.max_signals_per_day
+            ):
                 break
 
             if stock.id in existing_ids:

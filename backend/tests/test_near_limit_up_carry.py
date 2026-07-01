@@ -351,6 +351,28 @@ def test_ac008_max_signals_per_day_limits_output(db):
 
 
 # ---------------------------------------------------------------------------
+# AC-015: max_signals_per_day 기본값(None) → 상한 없이 전부 생성
+# ---------------------------------------------------------------------------
+
+def test_ac015_default_max_signals_per_day_is_unlimited(db):
+    """AC-015: max_signals_per_day 미지정(기본값 None) 시 10건 초과도 전부 생성."""
+    from app.services.surge_detector import detect_near_limit_up_carries
+
+    for i in range(15):
+        _make_stock(db, f"0002{i:02d}", f"종목{i}")
+
+    cfg = _make_config()  # max_signals_per_day 미지정 → 기본값 None
+
+    with patch(
+        "app.services.surge_detector._fetch_price_change_sync",
+        return_value=_mock_price(27.0),
+    ):
+        signals = detect_near_limit_up_carries(db, cfg)
+
+    assert len(signals) == 15
+
+
+# ---------------------------------------------------------------------------
 # AC-009: enabled=False → 빈 리스트 반환
 # ---------------------------------------------------------------------------
 

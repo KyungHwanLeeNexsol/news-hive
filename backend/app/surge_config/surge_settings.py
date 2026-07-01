@@ -431,8 +431,9 @@ class NearLimitUpConfig(BaseModel):
     near_limit_up_max_pct: float = 29.99
     # 시총 상위 N 종목만 평가 — NULL 시총 종목도 후보 풀에 포함되도록 500→1200 확대
     max_stocks_to_check: int = 1200
-    # 하루 최대 발행 시그널 수
-    max_signals_per_day: int = 10
+    # 하루 최대 발행 시그널 수 — None이면 무제한. 기존 10건 상한이 NULL 시총 종목을
+    # 순위상 뒤로 밀어내 확인조차 못 하게 막는 병목이라 기본값을 무제한으로 완화
+    max_signals_per_day: int | None = None
 
 
 class InsiderPurchaseConfig(BaseModel):
