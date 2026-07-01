@@ -249,3 +249,13 @@ surge_detection:
     event_rescan_enabled: false
     event_rescan_cooldown_minutes: 30
     max_daily_event_triggers: 20
+  # SPEC-AI-067 REQ-AI067-007: 장중 당일 거래량 실시간성 개선
+  # combo z-score / volume_breakout / Pool B의 "당일 거래량"을 장중에 한해 Naver 모바일 API
+  # accumulatedTradingVolume(실시간)로 교정. sise_day "오늘" 행은 장중 지연(최대 4.0x 과소).
+  # enabled=false → 세 호출부 모두 sise_day 당일값 사용 (레거시 동등).
+  intraday_live_volume:
+    enabled: true
+    # 장중에만 실시간 조회 (장외엔 완결된 sise_day 사용)
+    market_hours_only: true
+    # 스캔당 실시간 조회 상한 (초과분 sise_day 폴백, 레이트리밋 유계)
+    max_live_fetches_per_scan: 80

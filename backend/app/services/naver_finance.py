@@ -372,7 +372,11 @@ async def fetch_sector_stock_performances(naver_code: str) -> list[StockPerforma
 
 POLLING_API_URL = "https://polling.finance.naver.com/api/realtime?query=SERVICE_ITEM:{code}"
 SISE_DAY_URL = "https://finance.naver.com/item/sise_day.naver?code={code}&page={page}"
-PRICE_CACHE_TTL = 3600  # 1 hour for daily price data
+# SPEC-AI-067 REQ-008: _PriceHistoryCache의 인메모리 만료는 형제 캐시와 동일하게 _cache_ttl()
+# (장중 짧은 TTL / 장외 긴 TTL)을 사용한다. 아래 상수는 Redis write-through TTL로만 잔존.
+# [HARD] 이 TTL 변경만으로는 오늘(위메이드형) 장중 지연 재발이 방지되지 않는다 — 신선 fetch에서도
+# sise_day 페이지 자체가 stale. 재발 방지 핵심 수정은 REQ-001~005(실시간 모바일 소스 전환)다.
+PRICE_CACHE_TTL = 3600  # Redis write-through TTL (일봉 데이터 1시간)
 
 
 @dataclass
@@ -580,6 +584,29 @@ async def fetch_stock_fundamentals_batch(
     return result
 
 
+def _extract_accumulated_volume(entries) -> Optional[int]:
+    """모바일 price API 응답에서 당일 accumulatedTradingVolume(실시간 누적 거래량)을 추출한다.
+
+    entries[0]가 "오늘" 데이터. _fetch_fundamentals_mobile(async)와
+    fetch_live_today_volume_sync(sync, SPEC-AI-067)가 공유하는 파싱 로직 (중복 방지).
+    유효 값이 없으면 None (호출부 fail-open).
+    """
+    if not entries or not isinstance(entries, list):
+        return None
+    data = entries[0]  # 오늘 데이터
+    if not isinstance(data, dict):
+        return None
+    val = data.get("accumulatedTradingVolume")
+    if val is None:
+        return None
+    try:
+        if isinstance(val, (int, float)):
+            return int(val)
+        return int(str(val).replace(",", "").strip() or 0)
+    except (ValueError, TypeError):
+        return None
+
+
 async def _fetch_fundamentals_mobile(stock_code: str) -> Optional[StockFundamentals]:
     """Fallback: fetch stock fundamentals from Naver mobile price API.
 
@@ -617,7 +644,7 @@ async def _fetch_fundamentals_mobile(stock_code: str) -> Optional[StockFundament
             current_price=_parse_int(data.get("closePrice")),
             price_change=_parse_int(data.get("compareToPreviousClosePrice")),
             change_rate=_parse_float(data.get("fluctuationsRatio")),
-            volume=_parse_int(data.get("accumulatedTradingVolume")),
+            volume=_extract_accumulated_volume(entries) or 0,
             trading_value=0,
         )
     except Exception as e:
@@ -665,8 +692,9 @@ async def fetch_stock_price_history(stock_code: str, pages: int = 5) -> list[Pri
     pages=5 → ~50 trading days (~2.5 months). Cache TTL = 1 hour.
     """
     now = time.time()
+    # SPEC-AI-067 REQ-008: 장중 인지형 TTL (_cache_ttl) — 형제 캐시와 일관.
     if (stock_code in _price_cache.data
-            and (now - _price_cache.last_updated.get(stock_code, 0)) < PRICE_CACHE_TTL):
+            and (now - _price_cache.last_updated.get(stock_code, 0)) < _cache_ttl()):
         return _price_cache.data[stock_code]
 
     # 인메모리 미스 시 Redis 복구 시도
@@ -728,14 +756,15 @@ async def fetch_stock_price_history(stock_code: str, pages: int = 5) -> list[Pri
                     continue
 
         if results:
-            _price_cache.evict_expired(PRICE_CACHE_TTL, PRICE_CACHE_MAX_SIZE)
+            # SPEC-AI-067 REQ-008: 인메모리 eviction도 장중 인지형 TTL 사용 (max-size/의미 불변).
+            _price_cache.evict_expired(_cache_ttl(), PRICE_CACHE_MAX_SIZE)
             _price_cache.data[stock_code] = results
             _price_cache.last_updated[stock_code] = now
-            # Redis write-through (TTL=3600초)
+            # Redis write-through (TTL=PRICE_CACHE_TTL초, 인메모리 TTL과 독립)
             try:
                 from app.cache import cache_set
                 from dataclasses import asdict
-                await cache_set(f"stock:{stock_code}:prices", [asdict(r) for r in results], ttl=3600)
+                await cache_set(f"stock:{stock_code}:prices", [asdict(r) for r in results], ttl=PRICE_CACHE_TTL)
             except Exception:
                 pass
             logger.info(f"Fetched {len(results)} daily prices for {stock_code}")
@@ -785,7 +814,8 @@ def fetch_stock_price_history_sync(stock_code: str, pages: int = 3) -> list[Pric
     """
     now = time.time()
     cached = _price_cache.data.get(stock_code)
-    if cached and (now - _price_cache.last_updated.get(stock_code, 0)) < PRICE_CACHE_TTL:
+    # SPEC-AI-067 REQ-008: 장중 인지형 TTL (_cache_ttl) — 형제 캐시와 일관.
+    if cached and (now - _price_cache.last_updated.get(stock_code, 0)) < _cache_ttl():
         return cached
 
     results: list[PriceRecord] = []
@@ -878,6 +908,28 @@ def fetch_current_price_with_change_sync(stock_code: str) -> dict | None:
     except Exception as e:
         logger.debug("fetch_current_price_with_change_sync %s 실패: %s", stock_code, e)
     return None
+
+
+def fetch_live_today_volume_sync(stock_code: str) -> Optional[int]:
+    """당일 실시간 누적 거래량(accumulatedTradingVolume)을 동기적으로 반환 (SPEC-AI-067 REQ-001).
+
+    Naver 모바일 API /api/stock/{code}/price 엔드포인트(비동기 _fetch_fundamentals_mobile,
+    동기 fetch_current_price_with_change_sync가 이미 사용 중)의 accumulatedTradingVolume
+    필드를 동기 경로에서 추출한다. sise_day "오늘" 행이 장중에 지연(최대 4.0x 과소계상)되는
+    문제를 교정하기 위한 공유 소스.
+
+    실패/미존재/필드부재 시 None을 반환하여 호출부(surge_detector._resolve_today_volume)가
+    sise_day 값으로 fail-open 폴백하게 한다.
+    """
+    mobile_url = f"https://m.stock.naver.com/api/stock/{stock_code}/price"
+    try:
+        with httpx.Client(timeout=5, follow_redirects=True) as client:
+            resp = client.get(mobile_url, headers=HEADERS)
+            resp.raise_for_status()
+        return _extract_accumulated_volume(resp.json())
+    except Exception as e:
+        logger.debug("fetch_live_today_volume_sync %s 실패: %s", stock_code, e)
+        return None
 
 
 MARKET_CAP_URL = "https://finance.naver.com/sise/sise_market_sum.naver?sosok={sosok}&page={page}"

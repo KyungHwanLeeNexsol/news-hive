@@ -908,7 +908,13 @@ def detect_volume_surge_news_combo(
 
         mean_vol = statistics.mean(volumes[:-1])  # 마지막 제외한 baseline
         std_vol = statistics.stdev(volumes[:-1]) if len(volumes[:-1]) > 1 else 0.0
-        current_vol = volumes[-1]
+        # SPEC-AI-067 REQ-002: 당일(오늘) 원소를 장중 실시간 값으로 교정. baseline(volumes[:-1])은
+        # 위에서 이미 계산되어 sise_day 값 그대로 불변. 위메이드형 stale 64,418 → 실시간 258,945로
+        # z-score 부호 오류(-1.63 → +1.05)를 교정한다. 게이트 임계/구조는 불변(SPEC-AI-030 소유).
+        current_vol = _resolve_today_volume(stock_code, volumes[-1], config)
+        # Gate 2(신선도)가 동일한 교정된 당일값을 보도록 리스트 말단만 동기화 (baseline 원소 불변).
+        if current_vol != volumes[-1]:
+            volumes = [*volumes[:-1], current_vol]
 
         if std_vol == 0:
             logger.debug("[거래량콤보] %s 거래량 표준편차 0 — 스킵", stock_code)
@@ -1019,7 +1025,11 @@ def _get_volume_history(stock_code: str, baseline_days: int) -> list[float]:
             # SPEC-AI-038 성능 패치: pages=3→1로 축소 (20일 baseline에 1페이지 충분, 3→1 HTTP 절감)
             cached = fetch_stock_price_history_sync(stock_code, pages=1)
         if cached:
-            # Naver sise_day는 최신순(newest-first) → 역순으로 변환 후 최근 N일 슬라이스
+            # Naver sise_day는 최신순(newest-first) → 역순으로 변환 후 최근 N일 슬라이스.
+            # 반환 리스트의 마지막 원소(volumes[-1])가 "오늘"이며, SPEC-AI-067 REQ-002가 이 원소만
+            # 장중 실시간 값으로 교정한다. 그 앞 원소(baseline)는 이전 거래일 데이터로, 완결된 것으로
+            # 가정한다 — 오늘 실측한 것은 당일 행의 지연이며, 과거 행의 정확성은 별도로 검증되지 않았다
+            # (SPEC-AI-067 REQ-006 spot-check 대상). baseline은 계속 sise_day에서 온다.
             records = list(reversed(cached))[-baseline_days:]
             return [float(r.volume) for r in records]
     except Exception as e:
@@ -1032,6 +1042,96 @@ def _get_volume_history(stock_code: str, baseline_days: int) -> list[float]:
 # @MX:SPEC: SPEC-AI-012
 # 테스트 주입용 프로바이더 — None이면 운영 경로 사용
 _volume_provider: Callable[[str, int], list[float]] | None = None
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-067: 장중 실시간 당일 거래량 공유 메커니즘 (combo/breakout/PoolB 재사용)
+# ---------------------------------------------------------------------------
+
+# 스캔당 실시간 조회 예산 카운터 — gather_surge_candidates 진입 시 리셋 (REQ-005/007).
+# @MX:NOTE: [AUTO] SPEC-AI-067 REQ-007 — 모듈 레벨 인메모리 카운터. 스캔 사이클 경계에서 초기화.
+_live_volume_fetch_count: int = 0
+
+# 테스트 주입용 프로바이더 — None이면 운영 경로(naver_finance.fetch_live_today_volume_sync) 사용.
+_live_volume_provider: Callable[[str], int | None] | None = None
+
+
+def _reset_live_volume_budget() -> None:
+    """스캔 사이클 시작 시 실시간 거래량 조회 예산 카운터를 0으로 초기화한다 (SPEC-AI-067 REQ-005)."""
+    global _live_volume_fetch_count
+    _live_volume_fetch_count = 0
+
+
+# @MX:ANCHOR: [AUTO] SPEC-AI-067 당일 거래량 교정 단일 결정 지점 — combo/breakout/PoolB 3개 호출부 공유
+# @MX:REASON: fan_in=3. 장중 게이트·fail-open·예산 상한·단조 보정을 한 곳에 집중. 어느 한 경로라도
+#   폴백을 빠뜨리면 그 탐지기가 중단될 수 있으므로 이 계약(예외 미전파, sise_day 폴백)은 불변이어야 한다.
+# @MX:SPEC: SPEC-AI-067 REQ-AI067-001/005
+def _resolve_today_volume(
+    stock_code: str,
+    sise_day_today: float,
+    config: SurgeDetectionConfig,
+) -> float:
+    """당일(오늘) 거래량을 장중 실시간 모바일 값으로 교정한다 (SPEC-AI-067 공유 메커니즘).
+
+    REQ-001/005: 세 호출부(combo `volumes[-1]`, breakout/PoolB `history[0].volume`)가
+    재사용하는 단일 결정 지점. 장중 게이트·실시간 fetch·fail-open 폴백·예산 상한·단조
+    비감소 보정을 한 곳에 집중하여 3중 복제로 인한 드리프트(폴백 누락 → 탐지 중단)를 방지한다.
+
+    결정 규칙:
+    - enabled=false → sise_day 값 그대로 (레거시 동등, REQ-007)
+    - market_hours_only=true & 장외(_is_market_open()=false) → 모바일 미호출, sise_day 값
+    - 스캔당 상한(max_live_fetches_per_scan) 초과 → sise_day 폴백 (REQ-005)
+    - 모바일 실패/None/0 → sise_day 폴백 (fail-open, REQ-005)
+    - 성공 → max(live, sise_day) (누적 거래량 단조 비감소 원칙, REQ-005)
+
+    Args:
+        stock_code: 종목 코드
+        sise_day_today: sise_day에서 읽은 당일 거래량 (폴백 기준값)
+        config: SurgeDetectionConfig (intraday_live_volume 섹션 사용)
+
+    Returns:
+        교정된 당일 거래량 (float). 어떤 경우에도 예외를 던지지 않는다.
+    """
+    global _live_volume_fetch_count
+    cfg = config.intraday_live_volume
+
+    # 마스터 스위치 off → 레거시(sise_day) 값
+    if not cfg.enabled:
+        return sise_day_today
+
+    # 장중 게이팅: 장외에는 완결된 sise_day 값이 이미 정확하므로 모바일 호출 불필요
+    if cfg.market_hours_only:
+        try:
+            from app.services.naver_finance import _is_market_open
+
+            if not _is_market_open():
+                return sise_day_today
+        except Exception:
+            return sise_day_today
+
+    # 스캔당 예산 상한 초과 → sise_day 폴백 (레이트리밋 유계)
+    if _live_volume_fetch_count >= cfg.max_live_fetches_per_scan:
+        return sise_day_today
+
+    # 실시간 취득 (fail-open) — 시도 자체를 예산에 계상
+    _live_volume_fetch_count += 1
+    try:
+        if _live_volume_provider is not None:
+            live = _live_volume_provider(stock_code)
+        else:
+            from app.services.naver_finance import fetch_live_today_volume_sync
+
+            live = fetch_live_today_volume_sync(stock_code)
+    except Exception as e:
+        logger.debug("[실시간거래량] %s 조회 실패 — sise_day 폴백: %s", stock_code, e)
+        return sise_day_today
+
+    # None/0/음수는 무효 → sise_day 폴백
+    if not live or live <= 0:
+        return sise_day_today
+
+    # 누적 거래량 단조 비감소: 더 큰(더 정확한) 값 채택
+    return max(float(live), sise_day_today)
 
 
 # ---------------------------------------------------------------------------
@@ -1718,6 +1818,10 @@ def gather_surge_candidates(
     Returns:
         앙상블 점수 기준 정렬된 SurgeCandidate 목록
     """
+    # SPEC-AI-067 REQ-005: 스캔 사이클 시작 시 실시간 거래량 조회 예산 카운터 초기화.
+    # combo/breakout/PoolB가 이 스캔 안에서 소비하는 모바일 실시간 조회를 max_live_fetches_per_scan로 유계.
+    _reset_live_volume_budget()
+
     # 각 탐지기 실행
     theme_results = detect_theme_news_cluster(db, [], config)
     combo_results = detect_volume_surge_news_combo(db, config, market_regime=market_regime)
@@ -3674,10 +3778,15 @@ def detect_volume_breakout(
             if len(history) < cfg.min_history_days + 1:
                 continue
 
-            today_vol = history[0].volume
+            # SPEC-AI-067 REQ-003: 당일(history[0]) 거래량만 장중 실시간 값으로 교정.
+            # AI-062 가중치/AI-063 bypass/AI-066 상대임계·유니버스 경로는 입력값만 신선화될 뿐 불변.
+            today_vol = _resolve_today_volume(code, history[0].volume, config)
             if today_vol <= 0:
                 continue
 
+            # SPEC-AI-067 REQ-006 가정: 이전 거래일(history[1:]) 데이터는 완결된 것으로 가정 —
+            # 오늘 실측한 것은 당일(today) 행의 지연이며, 과거 행의 정확성은 별도로 검증되지 않았다.
+            # baseline은 모바일 교체 대상이 아니며 계속 sise_day에서 온다(모바일은 과거일 미제공).
             baseline_vols = [r.volume for r in history[1:cfg.baseline_days + 1] if r.volume > 0]
             if len(baseline_vols) < 10:
                 continue
@@ -3925,9 +4034,13 @@ def build_scan_universe(
                 history = fetch_stock_price_history_sync(code, pages=3)
                 if len(history) < _baseline_days + 1:
                     continue
-                today_vol = history[0].volume
+                # SPEC-AI-067 REQ-004: 당일(history[0]) 거래량만 장중 실시간 값으로 교정.
+                # Pool A/B/C 우선순위·max_scan_universe·_min_ratio=2.0은 불변(SPEC-AI-065 소유).
+                today_vol = _resolve_today_volume(code, history[0].volume, config)
                 if today_vol <= 0:
                     continue
+                # SPEC-AI-067 REQ-006 가정: 이전 거래일(history[1:]) 데이터는 완결된 것으로 가정 —
+                # baseline은 모바일 교체 대상이 아니며 계속 sise_day에서 온다(과거 행 정확성 미검증).
                 baseline_vols = [r.volume for r in history[1:_baseline_days + 1] if r.volume > 0]
                 if len(baseline_vols) < 5:
                     continue

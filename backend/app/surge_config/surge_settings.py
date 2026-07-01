@@ -356,6 +356,28 @@ class CatalystConvictionConfig(BaseModel):
     max_daily_event_triggers: int = 20
 
 
+class IntradayLiveVolumeConfig(BaseModel):
+    """SPEC-AI-067 REQ-AI067-007: 장중 실시간 당일 거래량 소스 설정.
+
+    3개 호출부(combo z-score / volume_breakout / Pool B)가 "당일 거래량"으로 사용하는
+    값을 장중에 한해 Naver 모바일 API accumulatedTradingVolume(실시간 정확)로 교정한다.
+    sise_day "오늘" 행은 장중에 트래픽 의존적으로 지연(최대 4.0x 과소계상)되므로, 그 값을
+    모바일 실시간 값으로 대체한다. enabled=false이면 전 호출부가 sise_day 당일값을 쓰는
+    레거시 동작으로 복원된다.
+
+    핵심 수정은 REQ-001~005(실시간 모바일 소스 전환)이며, 판별 로직(게이트/임계/가중치)은
+    일절 변경하지 않는다 — 오직 게이트에 입력되는 "당일 거래량" 값의 신선도만 높인다.
+    """
+
+    # @MX:NOTE: [AUTO] SPEC-AI-067 REQ-001 — 실시간 당일 거래량 마스터 스위치 (기본 활성, D1 확정)
+    # @MX:SPEC: SPEC-AI-067 REQ-AI067-007
+    enabled: bool = True
+    # 장중(_is_market_open())에만 모바일 실시간 조회. 장외엔 완결된 sise_day 당일값 사용.
+    market_hours_only: bool = True
+    # 스캔당 모바일 실시간 조회 상한 — 레이트리밋 노출 유계. 초과 시 sise_day 폴백. (기본 80, D2 확정)
+    max_live_fetches_per_scan: int = 80
+
+
 class SurgeDetectionConfig(BaseModel):
     """급등 징후 탐지 전체 설정.
 
@@ -380,6 +402,8 @@ class SurgeDetectionConfig(BaseModel):
     combo_chase_guard: ComboChaseGuardConfig = Field(default_factory=ComboChaseGuardConfig)
     # SPEC-AI-066: 촉매 확신도 기반 조건부 완화 설정
     catalyst_conviction: CatalystConvictionConfig = Field(default_factory=CatalystConvictionConfig)
+    # SPEC-AI-067: 장중 실시간 당일 거래량 소스 설정 (combo/breakout/PoolB 공유)
+    intraday_live_volume: IntradayLiveVolumeConfig = Field(default_factory=IntradayLiveVolumeConfig)
 
     # SPEC-AI-036: 품질 floor 게이트 — 보정 confidence / composite_score 최소값
     # # @MX:NOTE: [AUTO] SPEC-AI-036 — 두 조건 중 하나만 충족해도 시그널 통과 (OR 게이트)
