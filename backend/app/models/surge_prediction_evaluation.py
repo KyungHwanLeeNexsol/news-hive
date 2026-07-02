@@ -15,6 +15,11 @@ from app.database import Base
 class SurgePredictionEvaluation(Base):
     # @MX:NOTE: [AUTO] SPEC-AI-041 — T-1 시그널 vs T 실제 급등주 적중 평가 결과. evaluation_date 기준 upsert
     # @MX:SPEC: SPEC-AI-041 REQ-AI041-002
+    # @MX:NOTE: [AUTO] SPEC-AI-068 — scannable_recall/coverage 컬럼 추가. scannable_recall은
+    # T-1 스캔 유니버스 ∩ 실제급등주 기준 recall(알고리즘 품질), coverage는 실제급등주 중
+    # 스캔 유니버스 비율(유니버스 설계 품질)이다. 레거시 recall은 유니버스 존재 시 scannable_recall과
+    # 동일값으로 전환되고, 부재(과거 날짜)시 시장전체 기준 값을 유지한다(REQ-AI068-004).
+    # @MX:SPEC: SPEC-AI-068 REQ-AI068-002, REQ-AI068-003, REQ-AI068-004
     """일별 급등예측 정밀도/재현율 평가 테이블."""
 
     __tablename__ = "surge_prediction_evaluation"
@@ -57,6 +62,17 @@ class SurgePredictionEvaluation(Base):
     pool_b_count: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
     # Pool C: 등락률 5%+ 당일 종목 수
     pool_c_count: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+
+    # SPEC-AI-068 REQ-002: T-1 스캔 유니버스 교집합 기준 recall (알고리즘 품질 지표)
+    # 분모(scannable_actual)가 0이면 측정 불가로 간주하여 null
+    scannable_recall: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # SPEC-AI-068 REQ-003: 실제급등주 중 스캔 유니버스 비율 (유니버스 설계 품질 지표)
+    # total_actual_count가 0이면 null
+    coverage: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # SPEC-AI-068 REQ-002/003: 실제급등주 ∩ 스캔 유니버스 종목 수 (scannable_recall/coverage 분자)
+    scannable_actual_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=0)
+    # SPEC-AI-068 REQ-003: 전체 실제급등주 종목 수 (coverage 분모, actual_surge_count와 동일값)
+    total_actual_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=0)
 
     # 레코드 생성 시각
     created_at: Mapped[datetime] = mapped_column(

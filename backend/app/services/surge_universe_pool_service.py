@@ -17,6 +17,7 @@ from datetime import date
 
 from sqlalchemy.orm import Session
 
+from app.models.surge_universe_member import SurgeUniverseMember
 from app.models.surge_universe_pool_history import SurgeUniversePoolHistory
 
 logger = logging.getLogger(__name__)
@@ -98,3 +99,93 @@ def get_pool_counts_for_date(db: Session, target_date: date) -> dict | None:
         "pool_c": row.pool_c_count or 0,
         "scan_universe_size": row.scan_universe_size or 0,
     }
+
+
+def persist_universe_members(
+    db: Session,
+    trading_date: date,
+    universe_codes: list[str],
+    entry_pool_map: dict[str, str],
+) -> int:
+    # @MX:NOTE: [AUTO] SPEC-AI-068 REQ-001 — 스캔 유니버스 종목코드 영속화. 일자당
+    # replace(DELETE-then-insert) semantics — 단순 upsert가 아님에 유의.
+    # @MX:REASON: 동일 날짜 재실행(예: 10:00 → 15:20 유니버스 축소) 시 이전 실행의
+    # 스테일 종목코드가 잔존하면 Scannable Recall/Coverage 분모가 부풀려진다(EC-5).
+    # 따라서 매 실행마다 해당 trading_date의 기존 레코드를 전량 삭제한 뒤 재삽입한다.
+    # @MX:SPEC: SPEC-AI-068 REQ-AI068-001
+    """스캔 유니버스 종목코드를 surge_universe_members 테이블에 일자당 replace로 저장한다.
+
+    build_scan_universe()가 확정한 결과(universe_codes, entry_pool_map)를 호출부(fund_manager
+    gather_surge_candidates)와 동일 트랜잭션에서 기록한다. build_scan_universe의 우선순위·상한
+    로직 자체는 변경하지 않으며, 이 함수는 그 결과만 영속화한다.
+
+    Args:
+        db: SQLAlchemy 세션
+        trading_date: 유니버스 확정 기준 날짜
+        universe_codes: build_scan_universe가 반환한 최종 유니버스 종목코드 목록
+        entry_pool_map: {stock_code: entry_pool} — pool_a/pool_b/pool_c/existing
+
+    Returns:
+        저장된 레코드 수
+    """
+    # 일자당 replace: 기존 레코드 전량 삭제 후 재삽입 (EC-5 스테일 코드 방지)
+    db.query(SurgeUniverseMember).filter(
+        SurgeUniverseMember.trading_date == trading_date
+    ).delete(synchronize_session=False)
+
+    if not universe_codes:
+        db.flush()
+        logger.info(
+            "[스캔유니버스] 유니버스 멤버 영속화 완료(빈 유니버스) — date=%s, count=0",
+            trading_date,
+        )
+        return 0
+
+    # 중복 코드 제거(순서 보존)하며 entry_pool 태깅
+    seen: set[str] = set()
+    rows: list[SurgeUniverseMember] = []
+    for code in universe_codes:
+        if code in seen:
+            continue
+        seen.add(code)
+        rows.append(
+            SurgeUniverseMember(
+                trading_date=trading_date,
+                stock_code=code,
+                entry_pool=entry_pool_map.get(code, "existing"),
+            )
+        )
+
+    db.add_all(rows)
+    db.flush()
+
+    logger.info(
+        "[스캔유니버스] 유니버스 멤버 영속화 완료 — date=%s, count=%d",
+        trading_date,
+        len(rows),
+    )
+    return len(rows)
+
+
+def get_universe_members_for_date(db: Session, target_date: date) -> set[str]:
+    # @MX:NOTE: [AUTO] SPEC-AI-068 REQ-001/T-003 — 지정 거래일의 영속화된 스캔 유니버스
+    # 종목코드 집합을 조회한다. 레코드가 없으면(과거 날짜 미백필 등) 빈 집합을 반환하며,
+    # 호출부(evaluate_surge_predictions)는 이를 "유니버스 부재"로 간주해 scannable_recall을
+    # null 처리해야 한다(EC-2).
+    # @MX:SPEC: SPEC-AI-068 REQ-AI068-002
+    """지정 날짜에 영속화된 스캔 유니버스 종목코드 집합을 조회한다.
+
+    Args:
+        db: SQLAlchemy 세션
+        target_date: 조회 대상 날짜 (보통 T-1, 예측일)
+
+    Returns:
+        종목코드 집합. 레코드가 없으면 빈 집합(EC-2, 유니버스 부재와 구분 불가 —
+        호출부에서 별도로 레코드 존재 여부를 판단해야 하는 경우 COUNT 쿼리를 병행할 것)
+    """
+    rows = (
+        db.query(SurgeUniverseMember.stock_code)
+        .filter(SurgeUniverseMember.trading_date == target_date)
+        .all()
+    )
+    return {row.stock_code for row in rows}

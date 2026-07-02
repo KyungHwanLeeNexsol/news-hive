@@ -486,14 +486,24 @@ def evaluate_surge_predictions(
 ) -> SurgePredictionEvaluation:
     # @MX:NOTE: [AUTO] SPEC-AI-041 — T-1 급등 시그널 적중 평가. surge_metadata IS NOT NULL 필터로 시그널 식별
     # @MX:SPEC: SPEC-AI-041 REQ-AI041-002
+    # @MX:NOTE: [AUTO] SPEC-AI-068 — Scannable Recall/Coverage 진단지표 추가. T-1 영속화 스캔
+    # 유니버스(REQ-001)와 실제급등주의 교집합(scannable_actual)을 분모/분자로 사용해 알고리즘
+    # 품질(scannable_recall)과 유니버스 설계 품질(coverage)을 분리 산출한다. 유니버스가 부재한
+    # 과거 날짜는 둘 다 null(coverage-미상)이며, 레거시 recall 컬럼은 시장전체 기준 값을 유지한다
+    # (REQ-AI068-004). TP/FP/FN/precision과 pool_counts 패스스루 로직은 변경하지 않는다.
+    # @MX:SPEC: SPEC-AI-068 REQ-AI068-002, REQ-AI068-003, REQ-AI068-004, REQ-AI068-005
     """T-1 급등 시그널과 T 당일 실제 급등주를 비교하여 SurgePredictionEvaluation을 upsert한다.
 
     단계:
     1. trading_date의 직전 영업일(T-1) 산출
     2. T-1에 생성된 surge_candidate 시그널 집합(predicted_set) 조회
-    3. trading_date의 실제 급등주 집합(actual_set) 조회
-    4. TP/FP/FN/precision/recall/f1 계산
-    5. SurgePredictionEvaluation upsert
+    3. trading_date의 실제 급등주 집합(actual_set) 조회 (시장전체 기준, 변경 없음)
+    4. TP/FP/FN/precision/legacy_recall/f1 계산 (시장전체 기준, 변경 없음)
+    5. T-1 영속화 스캔 유니버스(REQ-001) 조회 → scannable_actual = actual_set ∩ universe_set
+       기준으로 scannable_recall/coverage 산출 (SPEC-AI-068 REQ-002/003/004)
+    6. SurgePredictionEvaluation upsert (핵심 평가 결과 — 별도 커밋으로 보존)
+    7. SurgeActualOutcome.surge_type 라벨링 (scannable/non_scannable, REQ-005,
+       실패해도 6단계 결과는 보존되도록 별도 트랜잭션으로 격리)
 
     Args:
         db: SQLAlchemy 동기 세션
@@ -528,11 +538,12 @@ def evaluate_surge_predictions(
         "T-1 surge_candidate 시그널: %d건 (T-1=%s)", len(predicted_set), prev_business_day
     )
 
-    # 3. T당일 실제 급등주 조회
-    # surge_actual_outcome이 이미 스캔 유니버스임:
-    # 시스템이 실제로 모니터링한 종목만 저장되므로 추가 필터 불필요.
-    # (FundSignal.surge_candidate로 필터링하면 예측 집합 자체로 actual을 제한하는
-    #  circular reference가 발생하여 actual_surge_count가 과소 계산됨)
+    # 3. T당일 실제 급등주 조회 (시장전체 기준)
+    # SPEC-AI-068 REQ-AI068-004: 과거 "surge_actual_outcome이 이미 스캔 유니버스"라는 전제는
+    # 거짓이었다 — 실제로는 KOSPI/KOSDAQ 상위 100개 무버 기준으로 수집되어 우리가 스캔한
+    # 유니버스와 무관하다(surge_actual_outcome_service.py 참조). 이 actual_set은 TP/FP/FN/
+    # precision/legacy recall(시장전체 기준, 하위호환)과 coverage(REQ-003)의 분모로만 쓰이고,
+    # Scannable Recall(REQ-002)의 분모는 아래 5단계에서 별도로 유니버스 교집합으로 산출한다.
     actual_rows = (
         db.query(SurgeActualOutcome.stock_code)
         .filter(
@@ -547,22 +558,73 @@ def evaluate_surge_predictions(
         "T당일 실제 급등주: %d건 (T=%s)", len(actual_set), trading_date
     )
 
-    # 4. TP/FP/FN 계산
+    # 4. TP/FP/FN 계산 (시장전체 기준, 변경 없음)
     tp = len(predicted_set & actual_set)
     fp = len(predicted_set - actual_set)
     fn = len(actual_set - predicted_set)
 
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    # 레거시(시장전체 기준) recall. Scannable Recall이 측정 가능(유니버스 존재)하면 아래에서
+    # 최종 recall 컬럼 값이 scannable_recall로 대체되고, 유니버스 부재 시에는 이 값을 유지한다.
+    legacy_recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
     f1 = (
-        2 * precision * recall / (precision + recall)
-        if (precision + recall) > 0
+        2 * precision * legacy_recall / (precision + legacy_recall)
+        if (precision + legacy_recall) > 0
         else 0.0
     )
 
     logger.info(
-        "평가 결과: TP=%d, FP=%d, FN=%d, precision=%.3f, recall=%.3f, f1=%.3f",
-        tp, fp, fn, precision, recall, f1,
+        "평가 결과: TP=%d, FP=%d, FN=%d, precision=%.3f, legacy_recall=%.3f, f1=%.3f",
+        tp, fp, fn, precision, legacy_recall, f1,
+    )
+
+    # 5. SPEC-AI-068 REQ-001/002/003/004: T-1 영속화 스캔 유니버스 조회 → Scannable Recall/Coverage
+    #    Scannable Recall = |universe ∩ actual ∩ predicted| / |universe ∩ actual|
+    #    Coverage         = |universe ∩ actual| / |actual|
+    scannable_recall: float | None = None
+    coverage: float | None = None
+    scannable_actual_count = 0
+    total_actual_count = len(actual_set)
+    final_recall = legacy_recall
+    # REQ-005 라벨링(하단)에서도 재사용 — 조회 실패 시 빈 집합으로 안전하게 폴백
+    universe_set: set[str] = set()
+
+    try:
+        from app.services.surge_universe_pool_service import get_universe_members_for_date
+
+        universe_set = get_universe_members_for_date(db, prev_business_day)
+        # EC-2: 유니버스 코드가 없는(과거 미백필 등) 날짜는 "유니버스 부재"로 간주 —
+        # scannable_recall/coverage 모두 null(coverage-미상), 레거시 recall만 유지.
+        universe_exists = len(universe_set) > 0
+
+        if universe_exists:
+            scannable_actual = actual_set & universe_set
+            scannable_actual_count = len(scannable_actual)
+
+            # EC-1: 유니버스 교집합(scannable_actual) 0 → scannable_recall=null(측정 불가)
+            if scannable_actual_count > 0:
+                scannable_recall = len(scannable_actual & predicted_set) / scannable_actual_count
+
+            # EC-3: 전체 실제급등주 0 → coverage=null
+            if total_actual_count > 0:
+                coverage = scannable_actual_count / total_actual_count
+
+            final_recall = scannable_recall
+    except Exception as _se:
+        # 지표 계산 실패는 평가 잡 전체를 죽이지 않는다 — 지표만 null 처리(REQ-004 리스크 완화)
+        logger.warning("[급등평가] Scannable Recall/Coverage 계산 실패 (지표 null 처리): %s", _se)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        scannable_recall = None
+        coverage = None
+        scannable_actual_count = 0
+        final_recall = legacy_recall
+
+    logger.info(
+        "Scannable 지표: scannable_actual=%d, total_actual=%d, scannable_recall=%s, coverage=%s",
+        scannable_actual_count, total_actual_count, scannable_recall, coverage,
     )
 
     # SPEC-AI-065 REQ-5: pool_counts 정규화
@@ -571,7 +633,7 @@ def evaluate_surge_predictions(
     _pool_c = (pool_counts or {}).get("pool_c", 0)
     _scan_universe_size = (pool_counts or {}).get("scan_universe_size", 0)
 
-    # 5. SurgePredictionEvaluation upsert (evaluation_date PK 기준)
+    # 6. SurgePredictionEvaluation upsert (evaluation_date PK 기준)
     existing = (
         db.query(SurgePredictionEvaluation)
         .filter(SurgePredictionEvaluation.evaluation_date == trading_date)
@@ -585,8 +647,12 @@ def evaluate_surge_predictions(
         existing.false_positive = fp
         existing.false_negative = fn
         existing.precision = precision
-        existing.recall = recall
+        existing.recall = final_recall
         existing.f1_score = f1
+        existing.scannable_recall = scannable_recall
+        existing.coverage = coverage
+        existing.scannable_actual_count = scannable_actual_count
+        existing.total_actual_count = total_actual_count
         # SPEC-AI-065 REQ-5: pool_counts 업데이트
         if pool_counts is not None:
             existing.scan_universe_size = _scan_universe_size
@@ -604,8 +670,12 @@ def evaluate_surge_predictions(
             false_positive=fp,
             false_negative=fn,
             precision=precision,
-            recall=recall,
+            recall=final_recall,
             f1_score=f1,
+            scannable_recall=scannable_recall,
+            coverage=coverage,
+            scannable_actual_count=scannable_actual_count,
+            total_actual_count=total_actual_count,
             # SPEC-AI-065 REQ-5: pool_counts 초기화
             scan_universe_size=_scan_universe_size,
             pool_a_count=_pool_a,
@@ -617,6 +687,36 @@ def evaluate_surge_predictions(
 
     db.commit()
     db.refresh(evaluation)
+
+    # 7. SPEC-AI-068 REQ-005: 급등 유형 라벨링 (scannable/non_scannable)
+    # AI-061 B01/B02 패턴과 동일하게 핵심 평가 결과(위 commit) 이후 별도 트랜잭션으로
+    # 격리한다 — 라벨링 실패가 이미 저장된 precision/recall/scannable_recall/coverage를
+    # 훼손하지 않도록 한다.
+    # @MX:NOTE: [AUTO] SPEC-AI-068 REQ-005 — 실제급등주를 T-1 유니버스 포함 여부로 라벨링.
+    # scannable(T-1 유니버스 포함, 선행형·공식 예측 목표) / non_scannable(미포함, 당일
+    # 뉴스·공시 촉매형). non_scannable 집단은 향후 별도 "장중 실시간 조기탐지 트랙"에
+    # 귀속될 경계만 정의하며, 그 실시간 파이프라인 자체는 본 SPEC 범위 밖이다
+    # (Exclusions #1 — 별도 후속 SPEC에서 구현).
+    # @MX:SPEC: SPEC-AI-068 REQ-AI068-005
+    try:
+        outcome_rows = (
+            db.query(SurgeActualOutcome)
+            .filter(
+                SurgeActualOutcome.trading_date == trading_date,
+                SurgeActualOutcome.was_surge.is_(True),
+            )
+            .all()
+        )
+        for row in outcome_rows:
+            row.surge_type = "scannable" if row.stock_code in universe_set else "non_scannable"
+        db.commit()
+    except Exception as _le:
+        logger.warning("[급등평가] surge_type 라벨링 실패 (무시, 핵심 평가 결과는 보존됨): %s", _le)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
     return evaluation
 
 

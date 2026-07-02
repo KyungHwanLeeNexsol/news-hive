@@ -1916,7 +1916,10 @@ def gather_surge_candidates(
         # 부적절하므로 사용하지 않는다. 날짜별로 저장해 두면 T+1의 18:30 평가 잡이
         # T-1(예측일) 값을 읽어 evaluate_surge_predictions(pool_counts=...)에 전달한다.
         try:
-            from app.services.surge_universe_pool_service import persist_pool_counts
+            from app.services.surge_universe_pool_service import (
+                persist_pool_counts,
+                persist_universe_members,
+            )
 
             persist_pool_counts(
                 db,
@@ -1928,8 +1931,21 @@ def gather_surge_candidates(
                     "scan_universe_size": len(_universe_codes),
                 },
             )
+
+            # @MX:NOTE: [AUTO] SPEC-AI-068 REQ-001 — 유니버스 멤버 영속화 훅. 위
+            # persist_pool_counts와 동일 트랜잭션(동일 try 블록, 커밋 시점 공유)에서
+            # 종목코드+entry_pool을 일자당 replace로 기록한다. build_scan_universe 자체의
+            # 우선순위/상한 로직은 변경하지 않으며, 이미 확정된 _universe_codes/_entry_pool_map
+            # 결과만 저장한다(Scannable Recall/Coverage 계산용, SPEC-AI-068).
+            # @MX:SPEC: SPEC-AI-068 REQ-AI068-001
+            persist_universe_members(
+                db,
+                date.today(),
+                _universe_codes,
+                _entry_pool_map,
+            )
         except Exception as _pe:
-            logger.warning("[스캔유니버스] pool_counts 영속화 실패 (무시): %s", _pe)
+            logger.warning("[스캔유니버스] pool_counts/유니버스멤버 영속화 실패 (무시): %s", _pe)
     except Exception as _ue:
         logger.warning("[스캔유니버스] 유니버스 빌드 실패 (무시): %s", _ue)
         try:
