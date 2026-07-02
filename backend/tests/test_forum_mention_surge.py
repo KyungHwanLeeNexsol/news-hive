@@ -329,3 +329,32 @@ def test_characterize_forum_mention_surge_ac006_zero_baseline_skip_no_error(db):
 
     assert isinstance(signals, list)
     assert len(signals) == 0
+
+
+# ---------------------------------------------------------------------------
+# BUGFIX 재현 테스트 (SPEC-AI-026 spec.md 대비 구현 불일치)
+# ---------------------------------------------------------------------------
+
+def test_bugfix_ai026_surge_metadata_uses_spec_key_names(db):
+    """BUG: surge_metadata 키명이 SPEC 요구(mentions_recent/baseline_avg_daily/
+    mention_ratio)와 다르게 recent_count/baseline_avg/ratio로 되어 있음.
+    """
+    import json
+
+    from app.services.surge_detector import detect_forum_mention_surge
+
+    stock = _make_stock(db, "000060", "키명검증주")
+    _make_posts(db, stock.id, "000060", recent_count=50, old_count_per_day=5)
+
+    cfg = _make_config()
+    signals = detect_forum_mention_surge(db, cfg)
+
+    assert len(signals) == 1
+    metadata = json.loads(signals[0].surge_metadata or "{}")
+    assert metadata.get("mentions_recent") == 50
+    assert isinstance(metadata.get("baseline_avg_daily"), (int, float))
+    assert isinstance(metadata.get("mention_ratio"), (int, float))
+    # 기존(잘못된) 키명은 더 이상 존재하지 않아야 함
+    assert "recent_count" not in metadata
+    assert "baseline_avg" not in metadata
+    assert "ratio" not in metadata

@@ -2658,8 +2658,15 @@ def detect_near_limit_up_carries(
         # 시총 상위 N 종목 — market_cap NULL 종목(전체의 60%+)도 후보 풀에 포함.
         # 이전에는 NULL 제외로 남광토건 등 실제 상한가 근접 종목이 통째로 누락됐음.
         # NULL은 nullslast()로 순위 뒤로 밀려 배치되며, max_stocks_to_check 확대로 도달 가능.
+        # min_market_cap_eok 미만인 종목은 제외하되, NULL 시총은 허용(REQ-AI023-001 a).
         candidates = (
             db.query(Stock)
+            .filter(
+                or_(
+                    Stock.market_cap.is_(None),
+                    Stock.market_cap >= config.min_market_cap_eok,
+                )
+            )
             .order_by(nullslast(Stock.market_cap.desc()))
             .limit(config.max_stocks_to_check)
             .all()
@@ -2696,6 +2703,7 @@ def detect_near_limit_up_carries(
                 "surge_basis": ["near_limit_up_carry"],
                 "yesterday_change_pct": round(change_rate, 2),
                 "surge_probability_score": confidence,
+                "near_limit_up_carry": True,
             }
 
             signal = FundSignal(
@@ -2728,6 +2736,21 @@ def detect_near_limit_up_carries(
 # ---------------------------------------------------------------------------
 # SPEC-AI-024: 임원 자사주 직접 매수 공시 강화 탐지기
 # ---------------------------------------------------------------------------
+
+# 임원 보고서 표준명 — DART는 ㆍ(U+318D) 사용, 중간점 · 변형도 등록
+# @MX:NOTE: [AUTO] SPEC-AI-024 — DART 표기 변형 ㆍ(U+318D) vs ·(중간점) 양쪽 등록
+_INSIDER_PURCHASE_REPORT_TITLES: list[str] = [
+    "임원ㆍ주요주주특정증권등소유상황보고서",
+    "임원·주요주주특정증권등소유상황보고서",
+]
+
+# 매수 거래 키워드 (report_name에 함께 포함되어야 함)
+_INSIDER_PURCHASE_ACTION_KEYWORDS: list[str] = ["취득", "매수"]
+
+# 음성 키워드 — 매도/처분/장외양도/지분감소성 거래는 제외
+# @MX:NOTE: [AUTO] SPEC-AI-024 — 임원 보고서가 매수/매도/장외처분/지분감소를 모두 포괄하므로 매도성 키워드 차단 필요
+_INSIDER_PURCHASE_NEGATIVE_KEYWORDS: list[str] = ["처분", "매도", "매각", "양도", "감소"]
+
 
 # @MX:ANCHOR: [AUTO] detect_insider_purchase_signals — fund_manager._run_coverage_expansion()에서 호출
 # @MX:REASON: 커버리지 확장 파이프라인(fan_in >= 3)에 추가된 공시 기반 탐지기. 예외 격리 필수.
@@ -2776,21 +2799,28 @@ def detect_insider_purchase_signals(
             )
         )
 
-        # 음성 키워드 (매도 계열)
-        _NEGATIVE_KEYWORDS = ["처분", "매도", "양도"]
-        # 양성 키워드 (취득 계열): OR 조건
-        _POSITIVE_KEYWORDS = ["%임원%취득%", "%임원%매수%"]
-
         from sqlalchemy import or_
+
+        # 후보 공시 조회: report_name에 "임원" 포함 또는 report_type/report_name에
+        # 임원 보고서 표준명(ㆍ/· 변형) 포함 — REQ-AI024-001 (c-1)/(c-2)
+        title_filter = or_(
+            *[Disclosure.report_name.contains(t) for t in _INSIDER_PURCHASE_REPORT_TITLES]
+        )
+        type_filter = or_(
+            *[Disclosure.report_type.contains(t) for t in _INSIDER_PURCHASE_REPORT_TITLES]
+        )
+        title_or_type = or_(
+            title_filter, type_filter, Disclosure.report_name.contains("임원")
+        )
+
         candidates = (
             db.query(Disclosure)
             .filter(
                 Disclosure.rcept_dt >= cutoff_str,
                 Disclosure.stock_id.isnot(None),
-                or_(
-                    *[Disclosure.report_name.ilike(kw) for kw in _POSITIVE_KEYWORDS]
-                ),
+                title_or_type,
             )
+            .order_by(Disclosure.created_at.desc())
             .all()
         )
 
@@ -2803,9 +2833,24 @@ def detect_insider_purchase_signals(
             if disc.stock_id in emitted:
                 continue
 
-            # 음성 키워드 차단
             rname = disc.report_name or ""
-            if any(neg in rname for neg in _NEGATIVE_KEYWORDS):
+            rtype = disc.report_type or ""
+
+            # 매수 거래 키워드(취득/매수)가 report_name에 있어야 함
+            if not any(kw in rname for kw in _INSIDER_PURCHASE_ACTION_KEYWORDS):
+                continue
+
+            # (c-1) report_name에 "임원" 포함 또는 (c-2) report_type/report_name에
+            # 임원 보고서 표준명(ㆍ/· 변형) 포함 — 순서 무관 AND 조건
+            is_officer_report = "임원" in rname
+            is_title_variant = any(
+                t in rname or t in rtype for t in _INSIDER_PURCHASE_REPORT_TITLES
+            )
+            if not (is_officer_report or is_title_variant):
+                continue
+
+            # 음성 키워드 차단 (매도/처분/매각/양도/감소)
+            if any(neg in rname for neg in _INSIDER_PURCHASE_NEGATIVE_KEYWORDS):
                 continue
 
             metadata = {
@@ -2818,7 +2863,8 @@ def detect_insider_purchase_signals(
                 signal="buy",
                 signal_type="surge_candidate",
                 confidence=config.base_confidence,
-                reasoning=f"임원 자사주 매수 공시 — {rname}",
+                reasoning=f"[SPEC-AI-024 임원자사주매수] {rname}",
+                disclosure_id=disc.id,
                 surge_metadata=_json.dumps(metadata, ensure_ascii=False),
                 paper_executed=True,
             )
@@ -2896,6 +2942,7 @@ def detect_theme_group_carry_forward(
         )
 
         emitted_codes: set[int] = set()
+        groups_evaluated = 0
 
         for group in groups:
             if group.anchor_stock_id is None:
@@ -2905,6 +2952,8 @@ def detect_theme_group_carry_forward(
             anchor_stock = db.query(Stock).filter(Stock.id == group.anchor_stock_id).first()
             if anchor_stock is None:
                 continue
+
+            groups_evaluated += 1
 
             price_data = _fetch_price_change_sync(anchor_stock.stock_code)
             if price_data is None:
@@ -2937,9 +2986,10 @@ def detect_theme_group_carry_forward(
                 confidence = round(change_rate / 30.0 * 0.4, 4)
                 metadata = {
                     "surge_basis": ["theme_group_carry"],
-                    "anchor_stock_id": group.anchor_stock_id,
-                    "anchor_change_rate": round(change_rate, 2),
-                    "theme_group": group.name,
+                    "anchor_stock_code": anchor_stock.stock_code,
+                    "anchor_change_pct": round(change_rate, 2),
+                    "theme_group_id": group.id,
+                    "theme_group_name": group.name,
                     "surge_probability_score": confidence,
                 }
                 signal = FundSignal(
@@ -2960,7 +3010,12 @@ def detect_theme_group_carry_forward(
 
         if signals:
             db.commit()
-            logger.info("[theme_group_carry] 시그널 %d건 생성", len(signals))
+
+        logger.info(
+            "[테마그룹강세] 평가 %d개 그룹, 시그널 %d건 생성",
+            groups_evaluated,
+            len(signals),
+        )
 
     except Exception as e:
         logger.error("[theme_group_carry] 예외 발생: %s", e, exc_info=True)
@@ -3086,9 +3141,9 @@ def detect_forum_mention_surge(
             )
             metadata = {
                 "surge_basis": ["forum_mention_surge"],
-                "recent_count": recent_count,
-                "baseline_avg": round(baseline_avg, 2),
-                "ratio": round(recent_count / baseline_avg, 2),
+                "mentions_recent": recent_count,
+                "baseline_avg_daily": round(baseline_avg, 2),
+                "mention_ratio": round(recent_count / baseline_avg, 2),
                 "surge_probability_score": confidence,
             }
             signal = FundSignal(

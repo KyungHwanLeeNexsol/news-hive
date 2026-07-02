@@ -1,9 +1,9 @@
 ---
 id: SPEC-AI-023
-version: 0.1.0
-status: planned
+version: 0.2.0
+status: implemented
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-07-02
 author: MoAI
 priority: High
 issue_number: 0
@@ -15,6 +15,7 @@ title: 상한가 근접 종목 익일 carry-forward 시그널 (Near-Limit-Up Car
 ## HISTORY
 
 - 2026-05-29 (v0.1.0): 초안 작성. 2026-05-29 KST 라이브 사례 — LG씨엔에스(064400, +29.91%)와 같이 상한가(+30%)에 1tick 미달한 강한 모멘텀 종목이 익일 시그널을 받지 못하는 사각지대를 보완하기 위한 backend-only SPEC. 기존 carry-over(전일 시그널 decay 재발행) 메커니즘과 직교(orthogonal)하며, 시그널 이력과 무관하게 **종가 등락률 그 자체**로 익일 후보를 식별한다.
+- 2026-07-02 (v0.2.0, DDD 버그픽스): `detect_near_limit_up_carries()` 구현이 본 SPEC 요구사항과 불일치하던 2건 수정 — (1) `NearLimitUpConfig.min_market_cap_eok`(기본 300억원) 필드 신설 및 후보 쿼리에 시총 하한 필터(NULL 허용) 추가, (2) `surge_metadata`에 `"near_limit_up_carry": true` 키 추가(기존 `yesterday_change_pct`/`surge_probability_score` 키는 유지). 아래 항목은 검토 후 의도적 튜닝으로 판단하여 **변경하지 않음**(근거는 progress.md 참조): `near_limit_up_min_pct` 기본값 15.0(spec 25.0) — 15~24% 모멘텀 이월 종목 커버리지 확장을 위한 후속 튜닝(surge_settings.py 주석에 명시); `max_stocks_to_check`(코드) vs `max_candidates_per_day`(spec) 명칭·값(1200 vs 500) — 시총 NULL 종목 포함을 위한 의도적 확장; 중복 방지 범위가 spec의 3개 signal_type이 아닌 "오늘 존재하는 모든 signal_type"으로 넓게 구현된 것 — 이후 추가된 5개 탐지기(SPEC-AI-024/025/026/027 등)와의 교차 중복 방지를 위해 더 안전한 설계로 판단, 유지. status: planned → implemented.
 
 ---
 

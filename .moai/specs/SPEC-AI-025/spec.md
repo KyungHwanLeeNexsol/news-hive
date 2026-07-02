@@ -1,9 +1,9 @@
 ---
 id: SPEC-AI-025
-version: 0.1.0
-status: planned
+version: 0.2.0
+status: implemented
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-07-02
 author: MoAI
 priority: High
 issue_number: 0
@@ -15,6 +15,7 @@ title: 테마 그룹 강세 carry-forward 시그널 (Theme Group Strength Carry-
 ## HISTORY
 
 - 2026-05-29 (v0.1.0): 초안 작성. SPEC-AI-022가 도입한 `theme_propagation` 시그널은 surge_detector 앙상블이 **anchor 종목을 surge_candidate로 식별한 경우에만** 전파를 트리거한다. 그러나 2026-05-29 KST 라이브에서 LG전자(+29.93%), LG이노텍(+28.57%), LG(+26.60%) 3종이 동시에 +25% 이상 급등했음에도 같은 LG그룹 멤버인 LG씨엔에스(064400, +29.91%)와 솔루스첨단소재(336370, +25.70%)에 시그널이 발행되지 않았다. 원인은 (a) 앵커 자체의 `theme_cluster_score`가 `0.80` 임계값 미달로 propagation 트리거 조건을 충족하지 못했거나, (b) 앵커가 surge_candidate에 잡혔으나 propagation 단계의 `theme_cluster_score < 0.80` 조건에서 탈락한 경우다. 본 SPEC은 **앙상블 결과와 독립적으로 종가 강세를 기반으로 그룹 carry-forward를 트리거하는 end-of-day 보강 계층**을 추가한다. SPEC-AI-022는 intraday 앙상블 기반 전파, SPEC-AI-025는 EOD 종가 기반 carry-forward로 양자가 상호 보완한다.
+- 2026-07-02 (v0.2.0, DDD 버그픽스): `detect_theme_group_carry_forward()` 구현이 본 SPEC 요구사항과 불일치하던 2건 수정 — (1) `surge_metadata` 키명을 `anchor_stock_id`/`anchor_change_rate`/`theme_group`에서 SPEC 요구 키명 `anchor_stock_code`/`anchor_change_pct`/`theme_group_id`/`theme_group_name`으로 정정(누락됐던 `theme_group_id` 신설 포함), (2) 완료 로그 포맷을 `"[theme_group_carry] 시그널 %d건 생성"`에서 SPEC 요구 포맷 `"[테마그룹강세] 평가 %d개 그룹, 시그널 %d건 생성"`(groups_evaluated 포함)으로 정정. 다운스트림 소비자는 테스트 파일 외 없음을 grep으로 확인 후 전면 교체(하위호환 키 병기 불필요). confidence 공식·max_signals_per_group·anchor 제외·크로스그룹 중복방지 로직은 이미 SPEC과 일치하여 무변경. status: planned → implemented.
 
 ---
 

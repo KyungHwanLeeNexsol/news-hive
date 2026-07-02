@@ -494,3 +494,54 @@ def test_ac012_paper_executed_is_true(db):
 
     assert len(signals) == 1
     assert signals[0].paper_executed is True
+
+
+# ---------------------------------------------------------------------------
+# BUGFIX 재현 테스트 (SPEC-AI-023 spec.md 대비 구현 불일치)
+# ---------------------------------------------------------------------------
+
+def test_bugfix_ai023_min_market_cap_eok_field_exists_with_default_300(db):
+    """BUG: NearLimitUpConfig에 시총 하한 필터 필드(min_market_cap_eok)가 없음."""
+    cfg = _make_config()
+    assert hasattr(cfg, "min_market_cap_eok")
+    assert cfg.min_market_cap_eok == 300
+
+
+def test_bugfix_ai023_min_market_cap_eok_filters_small_cap_stock(db):
+    """BUG: 쿼리에 시총 하한 조건이 없어 min_market_cap_eok 미만 종목도 후보로 평가됨.
+
+    market_cap=100(억원) < min_market_cap_eok=300 인 종목은 후보에서 제외되어야 한다.
+    """
+    from app.services.surge_detector import detect_near_limit_up_carries
+
+    small_cap = _make_stock(db, "000150", "소형주", market_cap=100)
+    cfg = _make_config(min_market_cap_eok=300)
+
+    with patch(
+        "app.services.surge_detector._fetch_price_change_sync",
+        return_value=_mock_price(27.0),
+    ) as mock_fetch:
+        signals = detect_near_limit_up_carries(db, cfg)
+
+    assert len(signals) == 0
+    assert all(call.args[0] != small_cap.stock_code for call in mock_fetch.call_args_list)
+
+
+def test_bugfix_ai023_surge_metadata_has_near_limit_up_carry_true_key(db):
+    """BUG: surge_metadata에 SPEC이 요구하는 "near_limit_up_carry": true 키가 없음."""
+    from app.services.surge_detector import detect_near_limit_up_carries
+
+    _make_stock(db, "000160", "메타데이터주")
+    cfg = _make_config()
+
+    with patch(
+        "app.services.surge_detector._fetch_price_change_sync",
+        return_value=_mock_price(27.0),
+    ):
+        signals = detect_near_limit_up_carries(db, cfg)
+
+    assert len(signals) == 1
+    metadata = json.loads(signals[0].surge_metadata)
+    assert metadata.get("near_limit_up_carry") is True
+    # 기존 키(yerday_change_pct 등)는 유지되어야 함
+    assert "yesterday_change_pct" in metadata

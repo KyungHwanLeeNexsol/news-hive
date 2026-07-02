@@ -324,3 +324,63 @@ def test_characterize_theme_group_carry_ac005_exception_pipeline_intact(db):
         signals = detect_theme_group_carry_forward(db, cfg)
 
     assert isinstance(signals, list)
+
+
+# ---------------------------------------------------------------------------
+# BUGFIX 재현 테스트 (SPEC-AI-025 spec.md 대비 구현 불일치)
+# ---------------------------------------------------------------------------
+
+def test_bugfix_ai025_surge_metadata_uses_spec_key_names(db, caplog):
+    """BUG: surge_metadata 키명이 SPEC 요구(anchor_stock_code/anchor_change_pct/
+    theme_group_id/theme_group_name)와 다름. theme_group_id는 아예 누락되어 있음.
+    """
+    import logging
+
+    from app.services.surge_detector import detect_theme_group_carry_forward
+
+    anchor = _make_stock(db, "066570", "앵커주")
+    peer = _make_stock(db, "064400", "피어주")
+    group = _make_theme_group(db, "LG그룹", anchor.id, [anchor.id, peer.id])
+
+    cfg = _make_config()
+
+    with caplog.at_level(logging.INFO):
+        with patch(
+            "app.services.surge_detector._fetch_price_change_sync",
+            return_value=_mock_price(8.0),
+        ):
+            signals = detect_theme_group_carry_forward(db, cfg)
+
+    assert len(signals) == 1
+
+    import json
+    metadata = json.loads(signals[0].surge_metadata or "{}")
+    assert metadata.get("anchor_stock_code") == "066570"
+    assert metadata.get("anchor_change_pct") == 8.0
+    assert metadata.get("theme_group_id") == group.id
+    assert metadata.get("theme_group_name") == "LG그룹"
+
+
+def test_bugfix_ai025_log_format_matches_spec(db, caplog):
+    """BUG: 로그 포맷이 SPEC 요구("[테마그룹강세] 평가 %d개 그룹, 시그널 %d건 생성")와 다름."""
+    import logging
+
+    from app.services.surge_detector import detect_theme_group_carry_forward
+
+    anchor = _make_stock(db, "066570", "앵커주")
+    peer = _make_stock(db, "064400", "피어주")
+    _make_theme_group(db, "LG그룹", anchor.id, [anchor.id, peer.id])
+
+    cfg = _make_config()
+
+    with caplog.at_level(logging.INFO, logger="app.services.surge_detector"):
+        with patch(
+            "app.services.surge_detector._fetch_price_change_sync",
+            return_value=_mock_price(8.0),
+        ):
+            detect_theme_group_carry_forward(db, cfg)
+
+    assert any(
+        "[테마그룹강세] 평가 1개 그룹, 시그널 1건 생성" in record.getMessage()
+        for record in caplog.records
+    )

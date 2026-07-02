@@ -1,9 +1,9 @@
 ---
 id: SPEC-AI-026
-version: 0.1.0
-status: planned
+version: 0.2.0
+status: implemented
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-07-02
 author: MoAI
 priority: Medium
 issue_number: 0
@@ -15,6 +15,7 @@ title: 종목 포럼 언급 급증 시그널 (Forum Mention Surge Detection)
 ## HISTORY
 
 - 2026-05-29 (v0.1.0): 초안 작성. 스케줄러가 이미 30분마다 `forum_crawler.crawl_and_aggregate`를 호출하여 `stock_forum_posts` 테이블에 게시글을 적재하고 있으나, 이 데이터가 surge_candidate 시그널 생성에는 연결되지 않은 사각지대를 해소한다. 포럼 언급 급증(직전 평소 대비 5배 이상)은 거래량 급등을 1 ~ 4시간 선행하는 패턴이 관찰되며, 본 SPEC은 이를 surge_candidate 시그널로 자동 발행한다. backend-only SPEC.
+- 2026-07-02 (v0.2.0, DDD 버그픽스): `detect_forum_mention_surge()`의 `surge_metadata` 키명을 SPEC 요구(`mentions_recent`/`baseline_avg_daily`/`mention_ratio`)와 다르게 `recent_count`/`baseline_avg`/`ratio`로 구현했던 불일치를 수정. 다운스트림 소비자는 테스트 파일 외 없음을 grep으로 확인 후 전면 교체. 중복 방지 범위가 spec의 3개 signal_type이 아닌 "오늘 발행된 모든 signal_type"으로 넓게 구현된 것은 SPEC-AI-023과 동일한 근거(교차 탐지기 중복 방지에 더 안전)로 검토 후 유지(근거는 progress.md 참조). config 필드/기본값, confidence 공식, baseline=0 스킵 로직은 이미 SPEC과 일치하여 무변경. status: planned → implemented.
 
 ---
 

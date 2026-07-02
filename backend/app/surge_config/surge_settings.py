@@ -548,6 +548,8 @@ class NearLimitUpConfig(BaseModel):
     # 하루 최대 발행 시그널 수 — None이면 무제한. 기존 10건 상한이 NULL 시총 종목을
     # 순위상 뒤로 밀어내 확인조차 못 하게 막는 병목이라 기본값을 무제한으로 완화
     max_signals_per_day: int | None = None
+    # 시총 하한 필터 (억원) — REQ-AI023-001(a). NULL 시총 종목은 필터 대상에서 제외(허용)
+    min_market_cap_eok: int = 300
 
 
 class InsiderPurchaseConfig(BaseModel):

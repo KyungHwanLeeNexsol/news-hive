@@ -1,9 +1,9 @@
 ---
 id: SPEC-AI-024
-version: 0.1.0
-status: planned
+version: 0.2.0
+status: implemented
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-07-02
 author: MoAI
 priority: High
 issue_number: 0
@@ -15,6 +15,7 @@ title: 임원 자사주 직접 매수 공시 강화 탐지 (Insider Direct Purch
 ## HISTORY
 
 - 2026-05-29 (v0.1.0): 초안 작성. 기존 `detect_immediate_disclosure_signal()`이 처리하는 일반 DART 공시(회사 단위 자기주식 취득/소각/계약/합병)와는 별개로, **임원 개인이 자사주를 매수**한 보고서를 별도 신호로 분리 가중치화. backend-only SPEC. `_run_coverage_expansion()`의 4번째 try/except 블록으로 추가하며 SPEC-AI-023과 동일한 격리·신호 패턴을 따른다.
+- 2026-07-02 (v0.2.0, DDD 버그픽스): `detect_insider_purchase_signals()` 구현이 본 SPEC 요구사항과 불일치하던 6건 수정 — (1) `surge_metadata`/`FundSignal.disclosure_id` 추적성 필드 미설정 수정, (2) `reasoning` 접두사 `"[SPEC-AI-024 임원자사주매수]"` 추가, (3) 음성 키워드에 `"매각"`,`"감소"` 추가, (4) `report_type`/`report_name`의 ㆍ(U+318D)·중간점(·) 표기 변형(c-2) 매칭 로직 신설, (5) 양성 매칭을 `ilike("%임원%취득%")` 순서 고정 조건에서 "임원" AND ("취득" OR "매수") 순서 무관 조건으로 정정, (6) 종목당 1건 dedup 기준을 `Disclosure.created_at.desc()` 정렬 기반 "가장 최근 공시" 우선으로 정정. 함수명(`detect_insider_purchase_signals`, 복수형)은 호출부 breaking change 방지를 위해 변경하지 않음(spec.md 표기 오차로 간주). status: planned → implemented.
 
 ---
 
