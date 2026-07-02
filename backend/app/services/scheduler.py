@@ -1023,6 +1023,61 @@ def _run_surge_backtest_gate():
         db.close()
 
 
+def _run_surge_detector_contribution():
+    """SPEC-AI-070 REQ-001~004: 탐지기별 기여도 집계 + 은퇴 제안 리포트 발송.
+
+    평일 19:05 KST (verify_predictions 18:30, backtest_gate 18:45 이후,
+    auto_improve 19:00 이전 — 은퇴 제안이 그날의 최신 backtest 결과를 참조하도록 선행 실행).
+    측정·리포트 전용 잡 — surge_detection.yaml/auto.yaml을 쓰지 않으며 탐지기를
+    자동으로 추가/제거/비활성화하지 않는다(REQ-004 [HARD]).
+    """
+    if not _is_kr_market_open():
+        logger.debug("주말 — 탐지기 기여도 계산 스킵")
+        return
+
+    _start = _time.monotonic()
+    from datetime import date as _date
+
+    from app.services.surge_contribution_service import (
+        apply_retirement_candidates,
+        assess_retirement_candidates,
+        build_contribution_report,
+        evaluate_detector_contribution,
+    )
+
+    db = SessionLocal()
+    try:
+        trading_date = _date.today()
+        rows = evaluate_detector_contribution(db, trading_date)
+        assessments = assess_retirement_candidates(db, trading_date)
+        apply_retirement_candidates(db, trading_date, assessments)
+        report_text = build_contribution_report(
+            db, trading_date, contribution_rows=rows, retirement_assessments=assessments
+        )
+        logger.info("[탐지기기여도] 리포트 생성 완료 (run_date=%s)\n%s", trading_date, report_text)
+
+        # REQ-002: 텔레그램 리포트 발송 — 미설정 시 graceful skip(EC-7), 로그로만 남김
+        import os
+
+        chat_id = os.environ.get("TELEGRAM_ADMIN_CHAT_ID")
+        if not chat_id:
+            logger.info("TELEGRAM_ADMIN_CHAT_ID 미설정 — 탐지기 기여도 리포트 텔레그램 발송 스킵")
+        else:
+            from app.services.telegram_service import send_telegram_message
+
+            success = asyncio.run(send_telegram_message(chat_id, report_text))
+            if success:
+                logger.info("탐지기 기여도 리포트 발송 완료 (run_date=%s)", trading_date)
+            else:
+                logger.warning("탐지기 기여도 리포트 발송 실패 (run_date=%s)", trading_date)
+    except Exception:
+        logger.exception("surge detector contribution 실패")
+        raise
+    finally:
+        _record_job_duration("surge_detector_contribution", _time.monotonic() - _start)
+        db.close()
+
+
 def _run_surge_daily_report():
     """SPEC-AI-041: 텔레그램 일일 리포트 발송 (평일 17:05 KST)."""
     if not _is_kr_market_open():
@@ -2415,6 +2470,21 @@ def start_scheduler():
         minute=45,
         timezone="Asia/Seoul",
         id="surge_backtest_gate",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    # 19:05 — SPEC-AI-070 REQ-001~004: 탐지기별 기여도 집계 + 은퇴 제안 리포트
+    # (verify_predictions 18:30, backtest_gate 18:45, auto_improve 19:00 이후 실행 —
+    # 자동개선 잡과 서로 독립적인 별도 측정·리포트 전용 잡이며 config를 쓰지 않는다)
+    scheduler.add_job(
+        _run_surge_detector_contribution,
+        "cron",
+        day_of_week="mon-fri",
+        hour=19,
+        minute=5,
+        timezone="Asia/Seoul",
+        id="surge_detector_contribution",
         max_instances=1,
         coalesce=True,
         replace_existing=True,

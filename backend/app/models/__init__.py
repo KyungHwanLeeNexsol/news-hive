@@ -37,6 +37,7 @@ from app.models.crash_risk_alert import CrashRiskAlert
 from app.models.surge_universe_pool_history import SurgeUniversePoolHistory
 from app.models.surge_universe_member import SurgeUniverseMember
 from app.models.surge_backtest_result import SurgeBacktestResult
+from app.models.surge_detector_contribution import SurgeDetectorContribution
 
 __all__ = [
     "Sector", "Stock", "NewsArticle", "NewsStockRelation",
@@ -60,4 +61,5 @@ __all__ = [
     "SurgeUniversePoolHistory",
     "SurgeUniverseMember",
     "SurgeBacktestResult",
+    "SurgeDetectorContribution",
 ]
