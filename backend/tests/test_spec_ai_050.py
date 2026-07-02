@@ -158,6 +158,7 @@ class TestAC3WindowExpansion:
 
     def test_ac_3_1_recall_zero_3days_window_expansion(self, db: Session, tmp_path: Path):
         """AC-3-1: 3일 연속 recall=0 + 모든 탐지기 기여=0 → news_window_hours +12."""
+        from app.models.surge_backtest_result import SurgeBacktestResult
         from app.services.surge_auto_improver import analyze_and_improve
 
         today = date(2026, 6, 17)
@@ -165,6 +166,21 @@ class TestAC3WindowExpansion:
         # 5개 평가 레코드 (모두 recall=0, precision=0)
         for i in range(5):
             _make_eval(db, today - timedelta(days=i), recall=0.0, precision=0.0)
+
+        # SPEC-AI-069 REQ-AI069-003: backtest 게이트가 쓰기를 가드하므로 통과(pass) 판정을 시딩
+        db.add(
+            SurgeBacktestResult(
+                run_date=today,
+                total_signals=30,
+                directional_accuracy=0.60,
+                average_return_pct=3.0,
+                verdict="pass",
+                config_hash="0" * 16,
+                min_signals=20,
+                min_directional_accuracy=0.50,
+                lookback_days=30,
+            )
+        )
         db.commit()
 
         # YAML 복사

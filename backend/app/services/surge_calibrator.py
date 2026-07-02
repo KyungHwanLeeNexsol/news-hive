@@ -240,6 +240,27 @@ def get_calibrator() -> IsotonicModel:
     return _calibrator
 
 
+def get_calibrator_status() -> dict:
+    """캘리브레이터의 현재 유효성 상태를 반환한다 (SPEC-AI-069 REQ-AI069-005).
+
+    # @MX:NOTE: [AUTO] SPEC-AI-069 REQ-005 — pkl 부재로 인한 identity fallback(무효 보정) 상태를
+    # 조용히 방치하지 않고 일일 리포트/로그에 표면화하기 위한 조회 함수.
+    # 표면화만 구현(surfacing-only): 학습 스케줄 잡을 추가하지 않고, calibrate_confidence 연결도
+    # 끊지 않는다 — 무효 상태 자체만 가시화한다(REQ-005 최소 요건 충족).
+    # (fund_manager.py:1382-1387 calibrate_confidence 호출부 주석 참조).
+    # @MX:SPEC: SPEC-AI-069 REQ-AI069-005
+
+    Returns:
+        {"is_identity": bool, "trained_at": str, "sample_count": int}
+    """
+    model = get_calibrator()
+    return {
+        "is_identity": model.is_identity,
+        "trained_at": model.trained_at,
+        "sample_count": model.sample_count,
+    }
+
+
 def calibrate_confidence(raw: float) -> float:
     """raw confidence를 캘리브레이션 모델로 보정한다.
 

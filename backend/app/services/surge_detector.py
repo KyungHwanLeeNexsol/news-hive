@@ -11,7 +11,7 @@ import math
 import statistics
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
-from typing import Callable
+from typing import Any, Callable
 
 from sqlalchemy import and_, nullslast, or_
 from sqlalchemy.orm import Session
@@ -1795,6 +1795,35 @@ def _compute_sector_decline_ratio(
         return None
 
 
+# @MX:NOTE: [AUTO] SPEC-AI-069 REQ-AI069-004 — z-score 정규화(AI-065)를 config flag로 게이팅.
+# zscore_enabled=false(기본)이면 raw 절대점수를 유지한다. AI-065 소유 로직(zscore_to_score 등)은
+# 재작성하지 않고 순수 함수로 최소 추출해 게이팅 지점만 테스트 가능하게 분리했다.
+# @MX:SPEC: SPEC-AI-069 REQ-AI069-004
+def _apply_relative_scoring(
+    raw: float,
+    baseline: Any,
+    *,
+    min_samples: int,
+    zscore_enabled: bool,
+) -> tuple[float, str, bool]:
+    """z-score 정규화 여부를 flag로 게이팅해 (점수, 메타문자열, 적용여부)를 반환한다.
+
+    호출자는 baseline이 존재하고 raw>0일 때만 이 함수를 호출해야 한다(cold-start 판단은
+    compute_zscore 내부에서 처리). applied=True이면 호출자가 candidate 속성을 정규화된
+    값으로 setattr해야 함을 의미한다. applied=False(zscore_enabled=false 또는 cold-start)면
+    raw 그대로 유지한다(SPEC-AI-065 이전 절대채점 동작 보존).
+    """
+    from app.services.surge_baseline_service import compute_zscore, zscore_to_score
+
+    z = compute_zscore(raw, baseline, min_samples=min_samples)
+    if z is None:
+        return raw, "cold_start", False
+    if zscore_enabled:
+        normalized = zscore_to_score(z)
+        return normalized, f"z={z:.2f}→{normalized:.3f}", True
+    return raw, f"z={z:.2f} (disabled, raw={raw:.3f} 유지)", False
+
+
 # @MX:NOTE: [AUTO] SPEC-AI-012 앙상블 파이프라인 진입점 — fund_manager._gather_surge_candidates에서 호출
 # @MX:SPEC: SPEC-AI-012
 def gather_surge_candidates(
@@ -1988,8 +2017,6 @@ def gather_surge_candidates(
     try:
         from app.services.surge_baseline_service import (
             get_baselines,
-            compute_zscore,
-            zscore_to_score,
             Observation,
             update_baselines,
         )
@@ -2009,13 +2036,17 @@ def gather_surge_candidates(
                 _observations.append(Observation(code, det_name, raw))
 
                 if baseline and raw > 0:
-                    z = compute_zscore(raw, baseline, min_samples=_min_samples)
-                    if z is not None:
-                        normalized = zscore_to_score(z)
+                    # SPEC-AI-069 REQ-AI069-004: relative_scoring.zscore_enabled=false(기본)면
+                    # z-score 정규화를 우회하고 AI-065 이전 절대 점수(raw)를 유지한다.
+                    normalized, _zs_meta, _zs_applied = _apply_relative_scoring(
+                        raw,
+                        baseline,
+                        min_samples=_min_samples,
+                        zscore_enabled=config.relative_scoring.zscore_enabled,
+                    )
+                    if _zs_applied:
                         setattr(candidate, score_attr, normalized)
-                        _zscore_meta[det_name] = f"z={z:.2f}→{normalized:.3f}"
-                    else:
-                        _zscore_meta[det_name] = "cold_start"
+                    _zscore_meta[det_name] = _zs_meta
                 elif raw > 0:
                     _zscore_meta[det_name] = "no_baseline"
 

@@ -117,6 +117,11 @@ surge_detection:
   backtest:
     enabled: true
     evaluation_horizon_days: 5
+    # SPEC-AI-069 REQ-AI069-001: 운영 게이트 floor — 초기 보수적 값, Phase 2 데이터 축적 후 조정
+    gate:
+      min_signals: 20
+      min_directional_accuracy: 0.50
+      lookback_days: 30
   # SPEC-AI-028 REQ-001/002: 공시 유형별 역신호 필터링 설정
   # 제외 키워드(exclusion_patterns): 해당 공시는 시그널 생성 자체를 차단
   # 페널티 키워드(penalty_patterns): 즉시 시그널 점수에 penalty_factor 배율 적용
@@ -259,3 +264,10 @@ surge_detection:
     market_hours_only: true
     # 스캔당 실시간 조회 상한 (초과분 sise_day 폴백, 레이트리밋 유계)
     max_live_fetches_per_scan: 80
+  # SPEC-AI-069 REQ-AI069-004: z-score 상대채점 회귀 격리 — false(기본)이면 AI-065 이전
+  # 절대채점(raw score)으로 폴백. 재활성(true)은 backtest 재도출·통과 이후에만.
+  relative_scoring:
+    zscore_enabled: false
+  # SPEC-AI-069 REQ-AI069-002: 자동개선 전면 중단 스위치 — 기본 false(REQ-002 확정 상태).
+  # true 재활성은 REQ-003(backtest 가드 + Scannable Recall) 충족 이후에만.
+  auto_improve_enabled: false

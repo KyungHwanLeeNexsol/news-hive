@@ -65,6 +65,17 @@ async def lifespan(app: FastAPI):
     # Startup: run migrations synchronously (fast, required before serving)
     _run_migrations()
 
+    # SPEC-AI-069 REQ-AI069-002 (D4): auto.yaml을 base yaml 기준으로 리셋(idempotent).
+    # auto_improve_enabled=false(기본값)인 동안 매 startup마다 auto.yaml을 빈 오버라이드로
+    # 유지한다 — base surge_detection.yaml이 유일 authoritative 소스가 된다.
+    # _restore_auto_yaml()보다 먼저 실행되어야 한다: 리셋이 파일을 생성(빈 상태로)하면
+    # _restore_auto_yaml()의 "파일 없음" 조건이 성립하지 않아 DB 기반 복구를 건너뛴다.
+    try:
+        from app.services.surge_auto_improver import reset_auto_yaml_to_base
+        reset_auto_yaml_to_base()
+    except Exception as _reset_e:
+        logging.getLogger(__name__).warning("auto.yaml 리셋 실패 (비중요): %s", _reset_e)
+
     # auto.yaml 복구: 파일이 없으면 SurgeAutoImprovementLog에서 최신값 재생성
     def _restore_auto_yaml():
         """배포 후 surge_detection.auto.yaml이 사라진 경우 DB에서 복구한다.

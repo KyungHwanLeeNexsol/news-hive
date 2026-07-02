@@ -978,6 +978,51 @@ def _run_surge_auto_improve():
         db.close()
 
 
+def _run_surge_backtest_gate():
+    """SPEC-AI-069 REQ-AI069-001: backtest 운영 게이트 pass/fail/insufficient 판정 영속화.
+
+    평일 18:45 KST (verify_predictions 18:30 이후, auto_improve 19:00 이전).
+    """
+    if not _is_kr_market_open():
+        logger.debug("주말 — backtest 게이트 스킵")
+        return
+
+    _start = _time.monotonic()
+    import json as _json
+    from datetime import date as _date
+
+    from app.models.surge_backtest_result import SurgeBacktestResult
+    from app.services.surge_backtest import run_backtest_gate
+
+    db = SessionLocal()
+    try:
+        verdict = run_backtest_gate(db)
+        record = SurgeBacktestResult(
+            run_date=_date.today(),
+            total_signals=verdict.total_signals,
+            directional_accuracy=verdict.directional_accuracy,
+            average_return_pct=verdict.average_return_pct,
+            verdict=verdict.verdict,
+            config_hash=verdict.config_hash,
+            min_signals=verdict.min_signals,
+            min_directional_accuracy=verdict.min_directional_accuracy,
+            lookback_days=verdict.lookback_days,
+            by_combination_json=_json.dumps(verdict.by_combination, ensure_ascii=False),
+        )
+        db.add(record)
+        db.commit()
+        logger.info(
+            "backtest 게이트 판정 완료: verdict=%s 신호=%d 적중률=%.3f",
+            verdict.verdict, verdict.total_signals, verdict.directional_accuracy,
+        )
+    except Exception:
+        logger.exception("surge backtest gate 실패")
+        raise
+    finally:
+        _record_job_duration("surge_backtest_gate", _time.monotonic() - _start)
+        db.close()
+
+
 def _run_surge_daily_report():
     """SPEC-AI-041: 텔레그램 일일 리포트 발송 (평일 17:05 KST)."""
     if not _is_kr_market_open():
@@ -2356,6 +2401,20 @@ def start_scheduler():
         minute=30,
         timezone="Asia/Seoul",
         id="surge_verify_predictions",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    # 18:45 — SPEC-AI-069 REQ-001: backtest 운영 게이트 판정 (verify_predictions 18:30 이후,
+    # auto_improve 19:00 이전 — 자동개선 재활성 시 최신 verdict를 참조할 수 있도록 선행 실행)
+    scheduler.add_job(
+        _run_surge_backtest_gate,
+        "cron",
+        day_of_week="mon-fri",
+        hour=18,
+        minute=45,
+        timezone="Asia/Seoul",
+        id="surge_backtest_gate",
         max_instances=1,
         coalesce=True,
         replace_existing=True,

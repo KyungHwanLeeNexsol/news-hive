@@ -6,6 +6,7 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 
 from app.services.scheduler import (
     _cleanup_old_disclosures,
@@ -465,6 +466,69 @@ class TestUpdateMarketCaps:
         _update_market_caps()
 
         mock_db.close.assert_called()
+
+
+class TestRunSurgeBacktestGate:
+    """SPEC-AI-069 REQ-AI069-001: _run_surge_backtest_gate 래퍼 테스트."""
+
+    @patch("app.services.scheduler._is_kr_market_open", return_value=True)
+    @patch("app.services.surge_backtest.run_backtest_gate")
+    @patch("app.services.scheduler.SessionLocal")
+    def test_persists_verdict_record(
+        self, mock_session_cls, mock_gate, mock_market_open,
+    ) -> None:
+        from app.services.surge_backtest import BacktestGateVerdict
+        from app.services.scheduler import _run_surge_backtest_gate
+
+        mock_db = MagicMock()
+        mock_session_cls.return_value = mock_db
+        mock_gate.return_value = BacktestGateVerdict(
+            verdict="pass",
+            total_signals=25,
+            directional_accuracy=0.60,
+            average_return_pct=3.2,
+            by_combination={"theme_cluster": {"count": 10, "accuracy": 0.6, "avg_return": 2.0}},
+            min_signals=20,
+            min_directional_accuracy=0.50,
+            lookback_days=30,
+            config_hash="abcd1234abcd1234",
+        )
+
+        _run_surge_backtest_gate()
+
+        mock_gate.assert_called_once_with(mock_db)
+        assert mock_db.add.call_count == 1
+        added = mock_db.add.call_args[0][0]
+        assert added.verdict == "pass"
+        assert added.total_signals == 25
+        assert added.config_hash == "abcd1234abcd1234"
+        mock_db.commit.assert_called_once()
+        mock_db.close.assert_called_once()
+
+    @patch("app.services.scheduler._is_kr_market_open", return_value=False)
+    @patch("app.services.scheduler.SessionLocal")
+    def test_skips_on_weekend(self, mock_session_cls, mock_market_open) -> None:
+        from app.services.scheduler import _run_surge_backtest_gate
+
+        _run_surge_backtest_gate()
+
+        mock_session_cls.assert_not_called()
+
+    @patch("app.services.scheduler._is_kr_market_open", return_value=True)
+    @patch("app.services.surge_backtest.run_backtest_gate", side_effect=Exception("gate error"))
+    @patch("app.services.scheduler.SessionLocal")
+    def test_handles_exception_and_closes_db(
+        self, mock_session_cls, mock_gate, mock_market_open,
+    ) -> None:
+        from app.services.scheduler import _run_surge_backtest_gate
+
+        mock_db = MagicMock()
+        mock_session_cls.return_value = mock_db
+
+        with pytest.raises(Exception, match="gate error"):
+            _run_surge_backtest_gate()
+
+        mock_db.close.assert_called_once()
 
 
 class TestStartStopScheduler:

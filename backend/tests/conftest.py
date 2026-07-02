@@ -151,6 +151,7 @@ def test_engine():
     from app.models.stock_signal_baseline import StockSignalBaseline  # noqa: F401, F811 — SPEC-AI-065
     from app.models.surge_universe_pool_history import SurgeUniversePoolHistory  # noqa: F401 — SPEC-AI-065 REQ-5
     from app.models.surge_universe_member import SurgeUniverseMember  # noqa: F401 — SPEC-AI-068 REQ-001
+    from app.models.surge_backtest_result import SurgeBacktestResult  # noqa: F401 — SPEC-AI-069 REQ-001
 
     Base.metadata.create_all(bind=engine)
     yield engine

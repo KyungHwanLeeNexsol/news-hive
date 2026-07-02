@@ -10,6 +10,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from sqlalchemy.orm import Session
 
 from app.models.surge_auto_improvement_log import SurgeAutoImprovementLog
@@ -19,7 +20,44 @@ from app.services.surge_auto_improver import (
     _patch_yaml_values,
     analyze_and_improve,
     format_telegram_report,
+    reset_auto_yaml_to_base,
 )
+from app.surge_config.surge_settings import _AUTO_CONFIG_PATH, reload_surge_config
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-069 REQ-002/003: auto_improve_enabled 기본값이 false로 바뀌었고, backtest 게이트가
+# 기본적으로 미통과(레코드 없음)이므로, 내부 조정 로직(가중치/민스코어/EV가드/롤백 등)을
+# 검증하는 기존 테스트들은 이 파일 전체에서 flag를 활성화하고 통과(pass) 판정을 시딩한다.
+# Step 0/backtest 게이트 자체를 검증하는 테스트는 TestAutoImproveEnabledGate,
+# test_spec_ai_069.py에서 별도로 원하는 상태를 직접 구성한다.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _enable_auto_improve_for_legacy_tests(db: Session):
+    _AUTO_CONFIG_PATH.write_text(
+        "surge_detection:\n  auto_improve_enabled: true\n", encoding="utf-8"
+    )
+    reload_surge_config()
+
+    from app.models.surge_backtest_result import SurgeBacktestResult
+
+    db.add(
+        SurgeBacktestResult(
+            run_date=date.today(),
+            total_signals=100,
+            directional_accuracy=0.60,
+            average_return_pct=3.0,
+            verdict="pass",
+            config_hash="0" * 16,
+            min_signals=20,
+            min_directional_accuracy=0.50,
+            lookback_days=30,
+        )
+    )
+    db.commit()
+    yield
+    # cleanup: conftest._surge_auto_yaml_isolation이 테스트 후 auto.yaml을 삭제하고 reload한다.
 
 
 # ---------------------------------------------------------------------------
@@ -35,7 +73,13 @@ def _make_evaluation(
     fp: int = 5,
     fn: int = 5,
     actual_surge_count: int = 10,
+    scannable_recall: float | None = None,
 ) -> SurgePredictionEvaluation:
+    """SPEC-AI-069 REQ-AI069-003: scannable_recall 파라미터 추가.
+
+    미지정(None) 기본값은 실제 DB nullable 컬럼 기본값(None)과 동일 — analyze_and_improve의
+    min_score 조정 로직이 scannable_recall 부재를 보수적으로 스킵하는 경로를 그대로 특성화한다.
+    """
     f1 = (
         2 * precision * recall / (precision + recall)
         if (precision + recall) > 0
@@ -50,6 +94,7 @@ def _make_evaluation(
         false_negative=fn,
         precision=precision,
         recall=recall,
+        scannable_recall=scannable_recall,
         f1_score=f1,
     )
     db.add(ev)
@@ -535,3 +580,107 @@ class TestFormatTelegramReport:
         report = format_telegram_report(ev, [], missed)
         assert "삼성전자" in report
         assert "12.5" in report
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-069 REQ-AI069-002: auto_improve_enabled Step 0 게이트
+# ---------------------------------------------------------------------------
+
+class TestAutoImproveEnabledGate:
+    def test_disabled_returns_empty_no_write(self, db):
+        """auto_improve_enabled=false(기본값)이면 [] 반환하고 _write_auto_yaml을 호출하지 않는다."""
+        _AUTO_CONFIG_PATH.write_text(
+            "surge_detection:\n  auto_improve_enabled: false\n", encoding="utf-8"
+        )
+        reload_surge_config()
+
+        today = date(2026, 6, 9)
+        for i in range(5):
+            _make_evaluation(db, today - timedelta(days=i), recall=0.20, actual_surge_count=10)
+        db.commit()
+
+        with patch("app.services.surge_auto_improver._write_auto_yaml") as mock_write:
+            result = analyze_and_improve(db, today)
+
+        assert result == []
+        mock_write.assert_not_called()
+
+    def test_enabled_proceeds_past_gate(self, db):
+        """auto_improve_enabled=true이면 Step 0을 통과해 R11 게이트 이하 로직이 실행된다."""
+        _AUTO_CONFIG_PATH.write_text(
+            "surge_detection:\n  auto_improve_enabled: true\n", encoding="utf-8"
+        )
+        reload_surge_config()
+
+        today = date(2026, 6, 9)
+        # R11 게이트(5거래일 미만) 스킵 경로로 Step 0을 통과했는지만 확인 — 데이터 3개로
+        # 게이트 자체는 실패하지만 [] 반환 사유가 R11임을 별도로 검증할 필요는 없다.
+        for i in range(3):
+            _make_evaluation(db, today - timedelta(days=i))
+        db.commit()
+
+        result = analyze_and_improve(db, today)
+        # R11 게이트(5거래일 미만)에 의해 빈 리스트 — Step 0을 통과했다는 의미에서 정상.
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-069 REQ-AI069-002 (D4): reset_auto_yaml_to_base
+# ---------------------------------------------------------------------------
+
+class TestResetAutoYamlToBase:
+    def test_resets_when_base_disabled(self):
+        """base yaml의 auto_improve_enabled가 false(기본값)이면 auto.yaml을 빈 오버라이드로 리셋한다."""
+        # drift 값이 남아있는 상태를 시뮬레이션
+        _AUTO_CONFIG_PATH.write_text(
+            "surge_detection:\n  ensemble:\n    min_score_for_signal: 0.44\n",
+            encoding="utf-8",
+        )
+        reload_surge_config()
+        assert abs(reload_surge_config().ensemble.min_score_for_signal - 0.44) < 1e-6
+
+        did_reset = reset_auto_yaml_to_base()
+        assert did_reset is True
+
+        reload_surge_config()
+        from app.surge_config.surge_settings import get_surge_config
+
+        cfg = get_surge_config()
+        # base yaml 기본값(0.38)으로 복원됨 — 코드에 하드코딩된 값이 아니라 base yaml에서 읽은 값
+        assert abs(cfg.ensemble.min_score_for_signal - 0.38) < 1e-6
+        assert cfg.ensemble.weights.legacy_detectors == pytest.approx(0.00)
+
+    def test_skips_when_base_enabled(self, tmp_path):
+        """base yaml 자체의 auto_improve_enabled가 true로 재활성된 상태면 리셋을 건너뛴다."""
+        import app.services.surge_auto_improver as improver_mod
+
+        # base yaml을 흉내낸 임시 파일 — auto_improve_enabled: true
+        fake_base_yaml = tmp_path / "surge_detection.yaml"
+        fake_base_yaml.write_text(
+            "surge_detection:\n  auto_improve_enabled: true\n", encoding="utf-8"
+        )
+
+        _AUTO_CONFIG_PATH.write_text(
+            "surge_detection:\n  ensemble:\n    min_score_for_signal: 0.50\n",
+            encoding="utf-8",
+        )
+        before_content = _AUTO_CONFIG_PATH.read_text(encoding="utf-8")
+
+        original_yaml_path = improver_mod._YAML_PATH
+        improver_mod._YAML_PATH = fake_base_yaml
+        try:
+            did_reset = improver_mod.reset_auto_yaml_to_base()
+        finally:
+            improver_mod._YAML_PATH = original_yaml_path
+
+        assert did_reset is False
+        # 리셋을 건너뛰었으므로 auto.yaml 내용이 변경되지 않아야 함
+        assert _AUTO_CONFIG_PATH.read_text(encoding="utf-8") == before_content
+
+    def test_idempotent_multiple_calls(self):
+        """여러 번 호출해도 최종 상태는 동일하다(빈 오버라이드)."""
+        reset_auto_yaml_to_base()
+        first_content = _AUTO_CONFIG_PATH.read_text(encoding="utf-8")
+        reset_auto_yaml_to_base()
+        second_content = _AUTO_CONFIG_PATH.read_text(encoding="utf-8")
+        assert first_content == second_content

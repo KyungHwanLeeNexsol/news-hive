@@ -164,6 +164,39 @@ def _replace_yaml_value(lines: list[str], parts: list[str], new_val: float) -> l
     return result
 
 
+def reset_auto_yaml_to_base() -> bool:
+    """auto.yaml 오버라이드를 base yaml 기준으로 리셋한다 (SPEC-AI-069 REQ-AI069-002, D4).
+
+    # @MX:NOTE: [AUTO] SPEC-AI-069 REQ-002 — 파일 전체 비우기 방식 리셋. 특정 키/수치를
+    # 코드에 하드코딩하지 않는다 — base surge_detection.yaml이 유일 authoritative 소스가 된다.
+    # base yaml의 auto_improve_enabled가 false(기본값)인 동안에는 앱 startup마다 호출되어
+    # auto.yaml을 빈 오버라이드로 유지한다(idempotent). true로 재활성된 이후에는 리셋을
+    # 건너뛰어 REQ-003 backtest 가드를 통과한 자동개선 결과가 보존되게 한다.
+    # @MX:SPEC: SPEC-AI-069 REQ-AI069-002
+
+    Returns:
+        True — 리셋을 수행함(auto.yaml을 빈 오버라이드로 기록).
+        False — auto_improve_enabled=true(재활성 상태)라 리셋을 건너뜀.
+    """
+    with open(_YAML_PATH, encoding="utf-8") as f:
+        base_raw = yaml.safe_load(f) or {}
+    base_enabled = bool((base_raw.get("surge_detection", {}) or {}).get("auto_improve_enabled", False))
+
+    if base_enabled:
+        logger.info("auto_improve_enabled=true — auto.yaml 리셋 스킵(재활성 상태 보존)")
+        return False
+
+    _AUTO_YAML_PATH.write_text(
+        "# surge_detection.auto.yaml — SPEC-AI-069 REQ-002 리셋 완료 (auto_improve_enabled=false)\n"
+        "# base surge_detection.yaml이 유일 authoritative 소스. 특정 키 오버라이드 없음.\n",
+        encoding="utf-8",
+    )
+    # 리셋 후 활성 config 싱글턴에 즉시 반영 (호출자가 별도로 reload할 필요 없음)
+    reload_surge_config()
+    logger.info("auto.yaml 리셋 완료 — base yaml 기본값이 유일 소스로 동작")
+    return True
+
+
 def _write_auto_yaml(updates: dict[str, float]) -> None:
     """auto.yaml에 mutable 설정값을 누적 저장한다 (배포 후에도 유지됨).
 
@@ -289,6 +322,31 @@ def _check_rollback_guard(
     return True, None
 
 
+def _check_backtest_gate(db: Session) -> tuple[bool, str]:
+    """SPEC-AI-069 REQ-AI069-003: 최신 backtest 게이트 판정을 조회해 쓰기 허용 여부를 반환한다.
+
+    # @MX:NOTE: [AUTO] SPEC-AI-069 — REQ-001 backtest 게이트가 REQ-002 전면중단 이후 재활성된
+    # 자동개선 위에 얹는 상위 게이트. AI-061 pendulum/EV 가드와 병존한다(대체 아님).
+    # @MX:SPEC: SPEC-AI-069 REQ-AI069-003
+
+    Returns:
+        (allowed, verdict) — allowed=True는 verdict=="pass"인 경우에만.
+        레코드가 없으면 "no_record"로 취급하고 미통과(보수적, EC-2)로 판정한다.
+    """
+    from sqlalchemy import desc as _desc
+
+    from app.models.surge_backtest_result import SurgeBacktestResult
+
+    latest = (
+        db.query(SurgeBacktestResult)
+        .order_by(_desc(SurgeBacktestResult.run_date), _desc(SurgeBacktestResult.created_at))
+        .first()
+    )
+    if latest is None:
+        return False, "no_record"
+    return latest.verdict == "pass", latest.verdict
+
+
 # @MX:ANCHOR: [AUTO] SPEC-AI-061 — analyze_and_improve: 자동 개선 메인 진입점. scheduler, 복구 스크립트, 테스트 등 3곳 이상에서 호출됨
 # @MX:NOTE: [AUTO] SPEC-AI-061 — EV가드: 기대값 음수 시 min_score 상향
 def _compute_rolling_ev(
@@ -352,6 +410,8 @@ def _compute_rolling_ev(
 # @MX:REASON: 파라미터 변경 + DB 커밋 + YAML 기록 + config 리로드를 단일 트랜잭션 내에서 수행.
 #             시그니처 또는 반환 타입 변경 시 모든 호출자 동시 업데이트 필수
 # @MX:SPEC: SPEC-AI-041 REQ-AI041-003
+# @MX:SPEC: SPEC-AI-069 REQ-AI069-002 (Step 0 전면중단 게이트), REQ-AI069-003 (backtest 가드 +
+#           Scannable Recall 재타게팅). fan_in 여전히 유효 — ANCHOR 유지.
 def analyze_and_improve(
     db: Session, trading_date: date
 ) -> list[SurgeAutoImprovementLog]:
@@ -361,6 +421,14 @@ def analyze_and_improve(
         생성된 SurgeAutoImprovementLog 목록. 변경 없으면 [].
     """
     logs: list[SurgeAutoImprovementLog] = []
+
+    # ---------------------------------------------------------------------------
+    # Step 0 — SPEC-AI-069 REQ-AI069-002: 자동개선 전면 중단 스위치 (기본 false)
+    # flag=false이면 아래 로직 전체를 스킵한다(_write_auto_yaml 호출 없음, no-op).
+    # ---------------------------------------------------------------------------
+    if not get_surge_config().auto_improve_enabled:
+        logger.info("auto_improve_enabled=false — 자동 개선 스킵 (SPEC-AI-069 REQ-002)")
+        return []
 
     # ---------------------------------------------------------------------------
     # Step 1 — R11 Gate: 최소 5거래일 평가 필요
@@ -377,6 +445,17 @@ def analyze_and_improve(
             "R11 게이트: 평가 데이터 부족 (%d/5거래일) — 자동 개선 스킵", eval_count
         )
         return []
+
+    # ---------------------------------------------------------------------------
+    # Step 1.5 — SPEC-AI-069 REQ-AI069-003: 최신 backtest 게이트 판정 조회
+    # 이후 모든 _write_auto_yaml 호출 지점에서 이 판정을 가드로 사용한다.
+    # ---------------------------------------------------------------------------
+    _backtest_gate_allowed, _backtest_gate_verdict = _check_backtest_gate(db)
+    if not _backtest_gate_allowed:
+        logger.info(
+            "[백테스트게이트] verdict=%s — 이번 사이클의 auto.yaml 쓰기는 모두 가드됨(config 유지)",
+            _backtest_gate_verdict,
+        )
 
     # ---------------------------------------------------------------------------
     # Step 2 — 롤링 5거래일 탐지기별 적중률 계산 (R4)
@@ -547,27 +626,39 @@ def analyze_and_improve(
     current_min_score = cfg.ensemble.min_score_for_signal
     new_min_score = current_min_score
 
+    # SPEC-AI-069 REQ-AI069-003: 혼재된 recall 대신 Scannable Recall(SPEC-AI-068)을 목표지표로
+    # 사용한다. scannable_recall이 None(스캔 유니버스 미가용/구버전 데이터)이면 보수적으로 스킵.
+    _target_scannable_recall: float | None = None
+
     if today_eval is not None:
-        recall = today_eval.recall or 0.0
+        _target_scannable_recall = today_eval.scannable_recall
         precision = today_eval.precision or 0.0
         _actual_surge_count = today_eval.actual_surge_count or 0
 
-        if _actual_surge_count == 0:
+        if _target_scannable_recall is None:
+            logger.info(
+                "min_score 조정 스킵: scannable_recall 부재(스캔 유니버스 미가용) — 보수적 스킵 "
+                "(SPEC-AI-069 REQ-003)"
+            )
+            delta = 0.0
+        elif _actual_surge_count == 0:
             # 스캔 유니버스에 오늘 급등 종목이 없음 → recall=0은 예측 실패가 아님
             # min_score 낮추면 노이즈 시그널 증가 → 조정 스킵
             logger.info("min_score 조정 스킵: 우리 스캔 유니버스 급등 없음 (actual_surge_count=0)")
             delta = 0.0
-        elif recall < 0.30:
+        elif _target_scannable_recall < 0.30:
             delta = -0.02
-        elif recall > 0.60 or precision < 0.20:
+        elif _target_scannable_recall > 0.60 or precision < 0.20:
             delta = +0.02
         else:
             delta = 0.0
 
         new_min_score = max(0.35, min(0.65, current_min_score + delta))
         logger.info(
-            "min_score 조정: %.3f → %.3f (recall=%.3f, precision=%.3f, delta=%+.2f)",
-            current_min_score, new_min_score, recall, precision, delta,
+            "min_score 조정: %.3f → %.3f (scannable_recall=%s, precision=%.3f, delta=%+.2f)",
+            current_min_score, new_min_score,
+            f"{_target_scannable_recall:.3f}" if _target_scannable_recall is not None else "N/A",
+            precision, delta,
         )
 
     # ---------------------------------------------------------------------------
@@ -633,35 +724,42 @@ def analyze_and_improve(
             _mean_ev,
         )
     elif _mean_ev < _ev_floor:
-        # EV가 floor 미만 → min_score 상향
-        _ev_current_score = get_surge_config().ensemble.min_score_for_signal
-        _ev_new_score = min(0.65, _ev_current_score + _ev_penalty_step)
-        _write_auto_yaml({"ensemble.min_score_for_signal": _ev_new_score})
-        reload_surge_config()
+        if not _backtest_gate_allowed:
+            # SPEC-AI-069 REQ-AI069-003: backtest 게이트 미통과 — EV가드 발동 조건이나 쓰기 스킵(config 유지)
+            logger.warning(
+                "[백테스트게이트] verdict=%s — EV가드 발동 조건이나 auto.yaml 쓰기 스킵 (EV=%.3f<floor=%.3f)",
+                _backtest_gate_verdict, _mean_ev, _ev_floor,
+            )
+        else:
+            # EV가 floor 미만 → min_score 상향
+            _ev_current_score = get_surge_config().ensemble.min_score_for_signal
+            _ev_new_score = min(0.65, _ev_current_score + _ev_penalty_step)
+            _write_auto_yaml({"ensemble.min_score_for_signal": _ev_new_score})
+            reload_surge_config()
 
-        _ev_log = SurgeAutoImprovementLog(
-            evaluation_date=trading_date,
-            parameter_path="ensemble.min_score_for_signal",
-            old_value=round(_ev_current_score, 6),
-            new_value=round(_ev_new_score, 6),
-            rationale=f"ev_guard: EV={_mean_ev:.3f}<{_ev_floor:.3f}",
-            rolling_window_days=_ev_window_days,
-        )
-        db.add(_ev_log)
-        db.commit()
-        logs.append(_ev_log)
+            _ev_log = SurgeAutoImprovementLog(
+                evaluation_date=trading_date,
+                parameter_path="ensemble.min_score_for_signal",
+                old_value=round(_ev_current_score, 6),
+                new_value=round(_ev_new_score, 6),
+                rationale=f"ev_guard: EV={_mean_ev:.3f}<{_ev_floor:.3f}",
+                rolling_window_days=_ev_window_days,
+            )
+            db.add(_ev_log)
+            db.commit()
+            logs.append(_ev_log)
 
-        # 이후 min_score 변경 비교에도 반영
-        new_min_score = _ev_new_score
+            # 이후 min_score 변경 비교에도 반영
+            new_min_score = _ev_new_score
 
-        logger.info(
-            "EV 가드 발동: EV=%.3f < floor=%.3f → min_score %.3f → %.3f (n_samples=%d)",
-            _mean_ev,
-            _ev_floor,
-            _ev_current_score,
-            _ev_new_score,
-            _n_samples,
-        )
+            logger.info(
+                "EV 가드 발동: EV=%.3f < floor=%.3f → min_score %.3f → %.3f (n_samples=%d)",
+                _mean_ev,
+                _ev_floor,
+                _ev_current_score,
+                _ev_new_score,
+                _n_samples,
+            )
     else:
         logger.debug(
             "EV 가드: EV=%.3f >= floor=%.3f (n_samples=%d) — 가드 불필요",
@@ -731,6 +829,26 @@ def analyze_and_improve(
                 db.commit()
                 return logs
 
+            if not _backtest_gate_allowed:
+                # SPEC-AI-069 REQ-AI069-003: backtest 게이트 미통과 — 롤백 발동 조건이나 쓰기 스킵
+                logger.warning(
+                    "[백테스트게이트] verdict=%s — R12 롤백 발동 조건이나 auto.yaml 쓰기 스킵",
+                    _backtest_gate_verdict,
+                )
+                for prev_log in prev_logs:
+                    _blocked_log = SurgeAutoImprovementLog(
+                        evaluation_date=trading_date,
+                        parameter_path=prev_log.parameter_path,
+                        old_value=prev_log.new_value,
+                        new_value=prev_log.old_value,
+                        rationale=f"backtest_gate_blocked:{_backtest_gate_verdict}",
+                        rolling_window_days=5,
+                    )
+                    db.add(_blocked_log)
+                    logs.append(_blocked_log)
+                db.commit()
+                return logs
+
             for prev_log in prev_logs:
                 rollback_log = SurgeAutoImprovementLog(
                     evaluation_date=trading_date,
@@ -775,6 +893,12 @@ def analyze_and_improve(
                 logger.info(
                     "[REQ-3] 윈도우 상한 48h 도달 (%d) — 추가 확장 없음",
                     current_window,
+                )
+            elif not _backtest_gate_allowed:
+                # SPEC-AI-069 REQ-AI069-003: backtest 게이트 미통과 — 윈도우 확장 조건이나 쓰기 스킵
+                logger.warning(
+                    "[백테스트게이트] verdict=%s — [REQ-3] 윈도우 확장 조건이나 auto.yaml 쓰기 스킵",
+                    _backtest_gate_verdict,
                 )
             else:
                 new_window = min(48, current_window + 12)
@@ -829,9 +953,21 @@ def analyze_and_improve(
             yaml_updates[key] = 24
 
     if yaml_updates:
-        _write_auto_yaml(yaml_updates)
-        reload_surge_config()
-        logger.info("auto.yaml 업데이트 완료: %s", list(yaml_updates.keys()))
+        if _backtest_gate_allowed:
+            _write_auto_yaml(yaml_updates)
+            reload_surge_config()
+            logger.info("auto.yaml 업데이트 완료: %s", list(yaml_updates.keys()))
+        else:
+            # SPEC-AI-069 REQ-AI069-003: backtest 게이트 미통과 — 쓰기 스킵, 변경 후보 폐기
+            # (Step 7 로그가 실제 적용되지 않은 변경을 기록하지 않도록 new_* 변수를 원복)
+            logger.warning(
+                "[백테스트게이트] verdict=%s — auto.yaml 쓰기 스킵, 파라미터 변경 후보 폐기: %s",
+                _backtest_gate_verdict, list(yaml_updates.keys()),
+            )
+            final_weight = dict(current_weights)
+            new_min_score = current_min_score
+            new_vb_bypass = current_vb_bypass
+            yaml_updates = {}
 
     # ---------------------------------------------------------------------------
     # Step 7 — 로그 기록 (R7)
@@ -863,9 +999,10 @@ def analyze_and_improve(
             old_value=round(current_min_score, 6),
             new_value=round(new_min_score, 6),
             rationale=(
-                f"recall/precision 기반 조정: recall={today_eval.recall if today_eval else 'N/A':.3f}"
-                if today_eval and today_eval.recall is not None
-                else "recall/precision 기반 조정"
+                # SPEC-AI-069 REQ-AI069-003: Scannable Recall 기반 조정 (혼재된 recall 대신)
+                f"scannable_recall/precision 기반 조정: scannable_recall={_target_scannable_recall:.3f}"
+                if _target_scannable_recall is not None
+                else "scannable_recall/precision 기반 조정"
             ),
             rolling_window_days=5,
         )
@@ -903,6 +1040,7 @@ def format_telegram_report(
     evaluation: SurgePredictionEvaluation,
     improvements: list[SurgeAutoImprovementLog],
     missed_top3: list[dict],
+    calibrator_status: dict | None = None,
 ) -> str:
     """일일 급등 예측 평가 결과 텔레그램 리포트 문자열을 생성한다.
 
@@ -910,6 +1048,9 @@ def format_telegram_report(
         evaluation: SurgePredictionEvaluation 인스턴스
         improvements: 오늘 적용된 SurgeAutoImprovementLog 목록
         missed_top3: 놓친 종목 상위 3개 (dict with stock_name, change_rate)
+        calibrator_status: SPEC-AI-069 REQ-AI069-005 — surge_calibrator.get_calibrator_status()
+            결과. is_identity=True(무효 보정)이면 리포트에 명시적으로 표기한다.
+            미지정(None)이면 캘리브레이터 섹션을 생략한다(하위 호환).
 
     Returns:
         한국어 리포트 문자열
@@ -945,6 +1086,15 @@ def format_telegram_report(
             lines.append("⚠️ 자동 롤백 적용됨")
     else:
         lines.append("파라미터 변경 없음")
+
+    # SPEC-AI-069 REQ-AI069-005: calibrator identity fallback(무효 보정) 상태 표면화
+    if calibrator_status is not None and calibrator_status.get("is_identity"):
+        lines.append("")
+        lines.append(
+            "⚠️ 캘리브레이터 미보정 상태(identity fallback) — data/surge_calibrator.pkl 부재/무효. "
+            f"샘플={calibrator_status.get('sample_count', 0)}건. "
+            "confidence는 raw 앙상블 점수 그대로 사용됨."
+        )
 
     return "\n".join(lines)
 
@@ -1016,7 +1166,15 @@ async def run_daily_report(db: Session, trading_date: date) -> None:
     )[:3]
 
     # 4. 리포트 생성
-    report_text = format_telegram_report(evaluation, improvements, missed_top3)
+    # SPEC-AI-069 REQ-AI069-005: calibrator 무효 상태(identity fallback) 표면화 (예외 격리)
+    calibrator_status: dict | None = None
+    try:
+        from app.services.surge_calibrator import get_calibrator_status
+        calibrator_status = get_calibrator_status()
+    except Exception as _cal_e:
+        logger.debug("calibrator 상태 조회 실패 (리포트에서 생략): %s", _cal_e)
+
+    report_text = format_telegram_report(evaluation, improvements, missed_top3, calibrator_status)
 
     # 5. 텔레그램 발송
     chat_id = os.environ.get("TELEGRAM_ADMIN_CHAT_ID")

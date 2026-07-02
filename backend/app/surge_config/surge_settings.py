@@ -190,11 +190,28 @@ class PriceQueryConfig(BaseModel):
     retry_count: int = 1
 
 
+class BacktestGateConfig(BaseModel):
+    """SPEC-AI-069 REQ-AI069-001: backtest 운영 게이트 판정 floor 설정.
+
+    초기값은 보수적으로 설정하고 Phase 2(REQ-001 배포 후) 데이터 축적을 통해 조정한다.
+    """
+
+    # 최소 신호 수 — 미달 시 verdict="insufficient" (EC-2, 데이터 부족)
+    min_signals: int = 20
+    # 최소 방향성 적중률 — 미달 시 verdict="fail"
+    min_directional_accuracy: float = 0.50
+    # compute_surge_backtest 조회 기간(일)
+    lookback_days: int = 30
+
+
 class BacktestConfig(BaseModel):
     """백테스트 설정."""
 
     enabled: bool
     evaluation_horizon_days: int
+    # @MX:NOTE: [AUTO] SPEC-AI-069 REQ-001 — backtest 운영 게이트 floor. REQ-002/003 거버넌스가 참조
+    # @MX:SPEC: SPEC-AI-069 REQ-AI069-001
+    gate: BacktestGateConfig = Field(default_factory=BacktestGateConfig)
 
 
 class ValuationDisqualifiersConfig(BaseModel):
@@ -378,6 +395,20 @@ class IntradayLiveVolumeConfig(BaseModel):
     max_live_fetches_per_scan: int = 80
 
 
+class RelativeScoringConfig(BaseModel):
+    """SPEC-AI-069 REQ-AI069-004: z-score 상대채점 회귀 격리 설정.
+
+    zscore_enabled=false(기본값)이면 surge_detector.py의 z-score 정규화(sigmoid) 경로를
+    우회하고 SPEC-AI-065 이전의 절대 점수(raw score) 채점으로 폴백한다. AI-065 소유 코드
+    (surge_baseline_service.zscore_to_score 등)는 재작성하지 않고 게이팅만 추가한다.
+    재활성(true)은 backtest(REQ-001)가 z-score 기준 임계값·가중치를 재도출·통과한 이후에만.
+    """
+
+    # @MX:NOTE: [AUTO] SPEC-AI-069 REQ-004 — 기본값 false: AI-065 이전 절대채점으로 폴백
+    # @MX:SPEC: SPEC-AI-069 REQ-AI069-004
+    zscore_enabled: bool = False
+
+
 class SurgeDetectionConfig(BaseModel):
     """급등 징후 탐지 전체 설정.
 
@@ -404,6 +435,13 @@ class SurgeDetectionConfig(BaseModel):
     catalyst_conviction: CatalystConvictionConfig = Field(default_factory=CatalystConvictionConfig)
     # SPEC-AI-067: 장중 실시간 당일 거래량 소스 설정 (combo/breakout/PoolB 공유)
     intraday_live_volume: IntradayLiveVolumeConfig = Field(default_factory=IntradayLiveVolumeConfig)
+    # SPEC-AI-069 REQ-AI069-004: z-score 상대채점 회귀 격리 설정
+    relative_scoring: RelativeScoringConfig = Field(default_factory=RelativeScoringConfig)
+
+    # @MX:NOTE: [AUTO] SPEC-AI-069 REQ-002 — 자동개선 전면 중단 스위치. 기본 false(REQ-002 확정 상태).
+    # true로 재활성하려면 REQ-003(backtest 가드 + Scannable Recall)이 충족되어야 한다.
+    # @MX:SPEC: SPEC-AI-069 REQ-AI069-002
+    auto_improve_enabled: bool = False
 
     # SPEC-AI-036: 품질 floor 게이트 — 보정 confidence / composite_score 최소값
     # # @MX:NOTE: [AUTO] SPEC-AI-036 — 두 조건 중 하나만 충족해도 시그널 통과 (OR 게이트)

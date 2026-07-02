@@ -1380,6 +1380,12 @@ async def _gather_surge_candidates(
             logger.warning("[급등탐지] %s composite_score 계산 실패: %s", candidate.stock_code, _e)
 
         # SPEC-AI-036: 보정 confidence 산출 (예외 격리)
+        # SPEC-AI-069 REQ-AI069-005: 표면화만 구현(surfacing-only) — calibrate_confidence 연결
+        # 자체는 유지된다(제거하지 않음). retrain_calibrator()도 스케줄러에 연결하지 않는다
+        # (의도적 — data/surge_calibrator.pkl 미배포 운영 환경에서는 identity fallback으로 계속
+        # 동작). REQ-005의 최소 요건(무효 상태를 조용히 방치하지 않고 표면화)만 충족한다 —
+        # 이 무효 상태는 일일 리포트에 명시된다(surge_auto_improver.format_telegram_report의
+        # calibrator_status 섹션 참조). 학습 파이프라인 추가나 호출부 제거는 하지 않았다.
         _calibrated_conf = ensemble_score
         try:
             from app.services.surge_calibrator import calibrate_confidence

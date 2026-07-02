@@ -5,14 +5,19 @@ surge_candidate 시그널의 적중률, 평균 수익률, 탐지기 조합별 �
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
 
 from app.models.fund_signal import FundSignal
+
+if TYPE_CHECKING:
+    from app.surge_config.surge_settings import SurgeDetectionConfig
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +132,96 @@ def compute_surge_backtest(
         directional_accuracy=round(accuracy, 4),
         average_return_pct=round(avg_return, 4),
         by_combination=by_combination,
+    )
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-069 REQ-AI069-001: backtest 운영 게이트 판정
+# ---------------------------------------------------------------------------
+
+@dataclass
+class BacktestGateVerdict:
+    """REQ-AI069-001: backtest 게이트 판정 결과.
+
+    verdict:
+      - "insufficient": total_signals < min_signals (EC-2, 데이터 부족 — 보수적으로 미통과 취급)
+      - "pass": directional_accuracy >= min_directional_accuracy
+      - "fail": 그 외
+    """
+
+    verdict: str
+    total_signals: int
+    directional_accuracy: float
+    average_return_pct: float
+    by_combination: dict[str, dict]
+    min_signals: int
+    min_directional_accuracy: float
+    lookback_days: int
+    config_hash: str
+
+
+def _compute_config_snapshot_hash(surge_config: "SurgeDetectionConfig") -> str:
+    """현재 SurgeDetectionConfig 스냅샷의 sha256 해시 앞 16자를 반환한다.
+
+    # @MX:NOTE: [AUTO] SPEC-AI-069 REQ-001 — 판정 시점의 config 식별용(재현성 추적).
+    """
+    serialized = json.dumps(
+        surge_config.model_dump(mode="json"), sort_keys=True, ensure_ascii=False
+    )
+    return hashlib.sha256(serialized.encode()).hexdigest()[:16]
+
+
+# @MX:NOTE: [AUTO] SPEC-AI-069 REQ-001 — compute_surge_backtest(불변, 상단 @MX:ANCHOR API 계약)를
+# 내부에서 호출만 하고 config floor와 비교해 pass/fail/insufficient를 판정한다. 신규 함수이며
+# fan_in=1(스케줄러 래퍼 단일 호출)이라 ANCHOR 대상 아님.
+# @MX:SPEC: SPEC-AI-069 REQ-AI069-001
+def run_backtest_gate(
+    db: Session,
+    *,
+    surge_config: "SurgeDetectionConfig | None" = None,
+) -> BacktestGateVerdict:
+    """compute_surge_backtest 결과를 config의 backtest.gate floor와 비교해 판정한다.
+
+    Args:
+        db: SQLAlchemy 동기 세션
+        surge_config: 미지정 시 get_surge_config() 싱글턴 사용
+
+    Returns:
+        BacktestGateVerdict — REQ-002/003 거버넌스가 조회하는 판정 결과.
+    """
+    if surge_config is None:
+        from app.surge_config.surge_settings import get_surge_config
+        surge_config = get_surge_config()
+
+    gate_cfg = surge_config.backtest.gate
+    result = compute_surge_backtest(db, days=gate_cfg.lookback_days)
+
+    if result.total_signals < gate_cfg.min_signals:
+        verdict = "insufficient"
+    elif result.directional_accuracy >= gate_cfg.min_directional_accuracy:
+        verdict = "pass"
+    else:
+        verdict = "fail"
+
+    logger.info(
+        "[백테스트게이트] verdict=%s 신호=%d(최소=%d) 적중률=%.3f(최소=%.3f)",
+        verdict,
+        result.total_signals,
+        gate_cfg.min_signals,
+        result.directional_accuracy,
+        gate_cfg.min_directional_accuracy,
+    )
+
+    return BacktestGateVerdict(
+        verdict=verdict,
+        total_signals=result.total_signals,
+        directional_accuracy=result.directional_accuracy,
+        average_return_pct=result.average_return_pct,
+        by_combination=result.by_combination,
+        min_signals=gate_cfg.min_signals,
+        min_directional_accuracy=gate_cfg.min_directional_accuracy,
+        lookback_days=gate_cfg.lookback_days,
+        config_hash=_compute_config_snapshot_hash(surge_config),
     )
 
 
