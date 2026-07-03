@@ -419,12 +419,19 @@ class TestVolumeNewsCombo:
         random.seed(42)
         volumes = [1000.0 + random.gauss(0, 200) for _ in range(19)] + [1200.0]
 
+        # SPEC-AI-067 장중 실시간 거래량 블렌딩(_resolve_today_volume) 격리: 미mock 시 장중에는
+        # 실제 네이버 API로 오늘 실거래량을 조회해 mock된 베이스라인과 섞이면서 z-score가
+        # 비결정적으로 폭증(수천대)해 flaky해진다. None 반환으로 sise_day 폴백 경로만 타게 한다
+        # (test_surge_ai067.py의 기존 패턴과 일관).
         original_provider = det_module._volume_provider
+        original_live_provider = det_module._live_volume_provider
         try:
             det_module._volume_provider = lambda code, days: volumes
+            det_module._live_volume_provider = lambda code: None
             result = detect_volume_surge_news_combo(db, surge_config)
         finally:
             det_module._volume_provider = original_provider
+            det_module._live_volume_provider = original_live_provider
 
         codes = [c.stock_code for c in result]
         assert "035720" not in codes
