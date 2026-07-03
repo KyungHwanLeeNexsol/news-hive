@@ -37,15 +37,47 @@ async def _fetch_code_info(code: str) -> dict | None:
         return None
 
 
+def _fetch_tracked_stock_codes(db: Session, codes: list[str]) -> set[str] | None:
+    # @MX:NOTE: [AUTO] SPEC-AI-071 — 정답 모집단을 앱 stocks 테이블 존재 종목으로 제한하기
+    # 위한 교집합 조회. build_scan_universe(SPEC-AI-065)가 stocks에서만 후보를 구성하므로,
+    # stocks에 없는 코드(레버리지/인버스 ETN·미추적 기업)는 어떤 탐지기로도 잡을 수 없는
+    # 영구 false negative가 되어 recall/precision을 왜곡한다.
+    """결합 코드 집합 중 앱 `stocks` 테이블에 존재하는 코드 집합을 반환한다.
+
+    DB 조회 실패 시(SSL 끊김 등) None을 반환하여 호출부가 fail-open으로
+    미필터 진행하도록 위임한다(REQ-AI071-001 EC-1, 기존 종목명 조회 실패 처리 관례와 일관).
+
+    Args:
+        db: SQLAlchemy 동기 세션
+        codes: 교집합 대상 코드 목록
+
+    Returns:
+        stocks에 존재하는 코드 집합. 조회 실패 시 None.
+    """
+    from app.models.stock import Stock  # 순환 임포트 방지를 위해 지연 임포트
+
+    try:
+        rows = db.query(Stock.stock_code).filter(Stock.stock_code.in_(codes)).all()
+        return {row.stock_code for row in rows}
+    except Exception as e:
+        logger.warning("stocks 교집합 조회 실패 — 미필터 진행 (fail-open): %s", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return None
+
+
 async def collect_daily_surge_outcomes(db: Session, trading_date: date) -> int:
     # @MX:NOTE: [AUTO] SPEC-AI-041 — 장 마감 후 실제 급등주 수집. change_rate >= 10.0을 was_surge=True로 분류
     # @MX:SPEC: SPEC-AI-041 REQ-AI041-001
     """당일 KOSPI/KOSDAQ 상승률 상위 종목을 수집하여 SurgeActualOutcome에 upsert한다.
 
     1. KOSPI/KOSDAQ 각 상위 100개 종목 코드 조회
-    2. 중복 제거 후 종목별 change_rate 조회
-    3. change_rate >= 10.0 → was_surge=True
-    4. (trading_date, stock_code) composite PK upsert
+    2. 앱 stocks 테이블 존재 종목으로 교집합 필터 (SPEC-AI-071, ETN·미추적 기업 제외)
+    3. 중복 제거 후 종목별 change_rate 조회
+    4. change_rate >= 10.0 → was_surge=True
+    5. (trading_date, stock_code) composite PK upsert
 
     Args:
         db: SQLAlchemy 동기 세션
@@ -104,6 +136,20 @@ async def collect_daily_surge_outcomes(db: Session, trading_date: date) -> int:
         "급등 결과 수집 시작: trading_date=%s, KOSPI=%d, KOSDAQ=%d, 중복제거=%d",
         trading_date, len(kospi_codes), len(kosdaq_codes), len(unique_codes),
     )
+
+    # REQ-AI071-001/003: 앱 stocks 테이블 존재 종목으로 정답 모집단을 교집합한다.
+    # T-1 예측 보완 종목(:72-101)은 이미 stocks JOIN으로 소싱되므로 이 필터를 통과한다(REQ-AI071-002).
+    tracked_codes = _fetch_tracked_stock_codes(db, unique_codes)
+    if tracked_codes is not None:
+        excluded_codes = [c for c in unique_codes if c not in tracked_codes]
+        if excluded_codes:
+            # REQ-AI071-004: 제외 종목 수 관측 로깅
+            logger.info(
+                "stocks 미존재 종목 제외: trading_date=%s, 제외=%d건 (예: %s)",
+                trading_date, len(excluded_codes), excluded_codes[:5],
+            )
+        unique_codes = [c for c in unique_codes if c in tracked_codes]
+    # tracked_codes is None → stocks 조회 실패, fail-open으로 unique_codes 미필터 유지(EC-1)
 
     # 2단계: 종목별 change_rate 조회 (세마포어로 동시성 제한)
     semaphore = asyncio.Semaphore(_PRICE_CONCURRENCY)
