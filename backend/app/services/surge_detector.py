@@ -2608,16 +2608,53 @@ def _detect_volume_anomaly_internal(
 # 탐지기 5: 상한가 근접 종목 익일 carry-forward (SPEC-AI-023)
 # ---------------------------------------------------------------------------
 
+# @MX:NOTE: [AUTO] SPEC-AI-072 REQ-001/002 — 날짜 매칭 기반 T-1 종가-대-종가 change_rate 계산
+# @MX:SPEC: SPEC-AI-072
+def _compute_t1_change_from_history(
+    history: list["PriceRecord"],  # noqa: F821
+    expected_t1: date,
+) -> tuple[float, int] | None:
+    """일봉 이력(최신순)에서 예상 T-1 거래일과 date 매칭되는 레코드를 찾아 T-1 종가-대-종가
+    변화율을 계산한다.
+
+    배열 인덱스(records[1] 등)를 가정하지 않는다 — 장중에 당일 partial 행 존재 여부가 Naver
+    서버측 타이밍에 의존하므로, PriceRecord.date를 expected_t1과 정확히 매칭해 T-1을 선정하고
+    그 바로 다음(더 오래된) 레코드를 T-2로 삼는다.
+
+    Args:
+        history: fetch_stock_price_history_sync 반환값 (최신순 정렬)
+        expected_t1: _get_prev_business_day로 산출한 예상 T-1 KST 거래일
+
+    Returns:
+        (change_rate, t1_close) 튜플. T-1 날짜 부재/T-2 부재/T-2 종가<=0 이면 None
+        (호출부에서 해당 종목을 조용히 스킵).
+    """
+    expected_t1_str = expected_t1.strftime("%Y.%m.%d")
+    for idx, record in enumerate(history):
+        if record.date != expected_t1_str:
+            continue
+        if idx + 1 >= len(history):
+            return None  # T-2 레코드 없음
+        t2_close = history[idx + 1].close
+        if t2_close <= 0:
+            return None  # 0 나눗셈 방지
+        change_rate = round((record.close - t2_close) / t2_close * 100, 4)
+        return change_rate, record.close
+    return None  # 예상 T-1 날짜가 이력에 없음
+
+
 # @MX:ANCHOR: [AUTO] detect_near_limit_up_carries — 상한가 근접 carry-forward 진입점
-# @MX:REASON: fund_manager._run_coverage_expansion에서 호출. 전체 stocks 시총 상위 스캔 + 가격 API 호출 포함
-# @MX:SPEC: SPEC-AI-023
+# @MX:REASON: fund_manager._run_coverage_expansion에서 호출. 전체 stocks 시총 상위 스캔 + 가격 이력 API 호출 포함
+# @MX:SPEC: SPEC-AI-023, SPEC-AI-072
 def detect_near_limit_up_carries(
     db: Session,
     config: "NearLimitUpConfig",  # noqa: F821
 ) -> list[FundSignal]:
-    """SPEC-AI-023: 어제 상한가 근접 종목에 익일 surge_candidate 시그널 발행.
+    """SPEC-AI-023/SPEC-AI-072: 어제 상한가 근접 종목에 익일 surge_candidate 시그널 발행.
 
-    전일 near_limit_up_min_pct 이상 near_limit_up_max_pct 이하 등락률 종목 탐지.
+    전일(T-1) 종가-대-종가 change_rate가 near_limit_up_min_pct 이상 near_limit_up_max_pct
+    이하인 종목 탐지. change_rate는 fetch_stock_price_history_sync 일봉에서 date 매칭으로
+    산출한 T-1 종가-대-종가 변화율이며, 잡 실행 시점의 라이브 등락률이 아니다(SPEC-AI-072).
     paper_executed=True 로 생성하여 익일 매수 큐에 자동 포함.
     내부 예외는 suppress하여 상위 파이프라인에 영향을 주지 않는다.
 
@@ -2631,6 +2668,9 @@ def detect_near_limit_up_carries(
     import json as _json
     from zoneinfo import ZoneInfo
 
+    from app.services.naver_finance import fetch_stock_price_history_sync
+    from app.services.surge_trading_service import _get_prev_business_day
+
     if not config.enabled:
         return []
 
@@ -2643,6 +2683,9 @@ def detect_near_limit_up_carries(
         )
         # SQLite에서도 동작하도록 UTC 변환
         today_utc_start = today_kst_start.astimezone(timezone.utc)
+
+        # SPEC-AI-072 REQ-002: 예상 T-1 KST 거래일 (날짜 매칭의 기준)
+        expected_t1 = _get_prev_business_day(today_kst_start.date())
 
         # 오늘 이미 시그널 있는 stock_id 집합 (signal_type 불문)
         existing_ids: set[int] = set(
@@ -2682,11 +2725,17 @@ def detect_near_limit_up_carries(
             if stock.id in existing_ids:
                 continue
 
-            price_data = _fetch_price_change_sync(stock.stock_code)
-            if price_data is None:
+            # SPEC-AI-072 REQ-001/002: 라이브 _fetch_price_change_sync 대신 일봉 이력에서
+            # date 매칭으로 T-1 종가-대-종가 change_rate를 계산. 이력 부재/조회 실패는
+            # 해당 종목만 조용히 스킵(배치 미중단).
+            history = fetch_stock_price_history_sync(stock.stock_code)
+            if not history:
                 continue
 
-            change_rate: float = price_data.get("change_rate", 0.0)
+            result = _compute_t1_change_from_history(history, expected_t1)
+            if result is None:
+                continue
+            change_rate, t1_close = result
 
             if not (
                 config.near_limit_up_min_pct
@@ -2706,6 +2755,8 @@ def detect_near_limit_up_carries(
                 "near_limit_up_carry": True,
             }
 
+            # SPEC-AI-072 REQ-005 (옵션 A): price_at_signal은 T-1 종가(완전 이력 기반).
+            # 라이브 스냅샷을 "전일" 의미로 오라벨하지 않는다.
             signal = FundSignal(
                 stock_id=stock.id,
                 signal="buy",
@@ -2714,7 +2765,7 @@ def detect_near_limit_up_carries(
                 reasoning=reasoning,
                 surge_metadata=_json.dumps(metadata, ensure_ascii=False),
                 paper_executed=True,
-                price_at_signal=price_data.get("current_price"),
+                price_at_signal=t1_close,
             )
             db.add(signal)
             signals.append(signal)
