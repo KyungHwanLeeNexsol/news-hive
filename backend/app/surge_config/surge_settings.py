@@ -7,6 +7,7 @@ surge_detection.yaml 파일을 읽어 SurgeDetectionConfig Pydantic 모델로 �
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -17,8 +18,13 @@ logger = logging.getLogger(__name__)
 
 # 설정 파일 경로 (이 파일과 동일 디렉토리)
 _CONFIG_PATH = Path(__file__).parent / "surge_detection.yaml"
+# pytest-xdist 병렬 워커별 파일 분리 — 여러 워커 프로세스가 동일 auto.yaml을 동시에
+# 읽고/쓰고/삭제하며 서로의 상태를 덮어쓰는 레이스를 방지한다. PYTEST_XDIST_WORKER는
+# xdist가 각 워커 프로세스에 설정하는 환경변수(예: "gw0")로, 운영 환경에서는 절대
+# 설정되지 않으므로 프로덕션 동작에는 영향이 없다.
+_XDIST_SUFFIX = f".{os.environ['PYTEST_XDIST_WORKER']}" if "PYTEST_XDIST_WORKER" in os.environ else ""
 # 자동 개선 오버라이드 파일 (git reset --hard에서 보호됨, .gitignore에 추가됨)
-_AUTO_CONFIG_PATH = Path(__file__).parent / "surge_detection.auto.yaml"
+_AUTO_CONFIG_PATH = Path(__file__).parent / f"surge_detection.auto{_XDIST_SUFFIX}.yaml"
 
 
 class RegimeDetectorParams(BaseModel):

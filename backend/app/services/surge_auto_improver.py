@@ -36,8 +36,11 @@ logger = logging.getLogger(__name__)
 
 # surge_detection.yaml 경로 (참조용 — 직접 수정하지 않음)
 _YAML_PATH = Path(__file__).parent.parent / "surge_config" / "surge_detection.yaml"
+# pytest-xdist 병렬 워커별 파일 분리 (surge_settings.py의 _AUTO_CONFIG_PATH와 동일 근거) —
+# 여러 워커가 동일 auto.yaml을 동시에 쓰며 서로의 상태를 덮어쓰는 레이스를 방지한다.
+_XDIST_SUFFIX = f".{os.environ['PYTEST_XDIST_WORKER']}" if "PYTEST_XDIST_WORKER" in os.environ else ""
 # 자동 개선 오버라이드 파일 (git reset --hard에서 보호, .gitignore 등록됨)
-_AUTO_YAML_PATH = Path(__file__).parent.parent / "surge_config" / "surge_detection.auto.yaml"
+_AUTO_YAML_PATH = Path(__file__).parent.parent / "surge_config" / f"surge_detection.auto{_XDIST_SUFFIX}.yaml"
 
 # 탐지기 이름 목록 (YAML 가중치 키와 동일) — 자동 개선 대상 탐지기
 # @MX:NOTE: [AUTO] SPEC-AI-050 REQ-5 — weekend_gap_up은 커버리지 확장 탐지기로 자동 개선(가중치 조정) 제외

@@ -210,13 +210,12 @@ def _surge_auto_yaml_isolation():
     test_surge_auto_improver.py의 analyze_and_improve()가 auto.yaml을 생성·reload하면
     후속 테스트의 get_surge_config() 싱글턴이 오염될 수 있다.
     각 테스트 전후에 auto.yaml을 삭제하고 캐시를 리셋하여 기본 YAML 설정으로 복원한다.
-    """
-    from pathlib import Path
-    from app.surge_config.surge_settings import reload_surge_config
 
-    auto_path = (
-        Path(__file__).parent.parent / "app" / "surge_config" / "surge_detection.auto.yaml"
-    )
+    경로는 surge_settings._AUTO_CONFIG_PATH를 그대로 참조한다 — pytest-xdist 워커별로
+    분리된 파일명(예: surge_detection.auto.gw0.yaml)을 하드코딩 없이 그대로 따라간다.
+    """
+    from app.surge_config.surge_settings import _AUTO_CONFIG_PATH as auto_path
+    from app.surge_config.surge_settings import reload_surge_config
 
     # 테스트 전: 이전 테스트가 남긴 auto.yaml 정리
     if auto_path.exists():

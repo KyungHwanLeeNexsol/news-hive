@@ -224,4 +224,6 @@ CLAUDE.local.md
 # Surge Auto-Improvement Override
 # ===========================================
 # 배포 시 git reset --hard에서 보호 — 자동개선 누적 설정 유지
+# .gw* 변형은 pytest-xdist 워커별 격리 파일(테스트 크래시 시 정리 누락 대비 안전망)
 backend/app/surge_config/surge_detection.auto.yaml
+backend/app/surge_config/surge_detection.auto.gw*.yaml
