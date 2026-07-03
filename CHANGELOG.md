@@ -4,6 +4,62 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fix — SPEC-AI-072: near_limit_up_carry 탐지기 T-1 데이터 소스 교정 (2026-07-03)
+
+#### `ca1ad10` — 라이브 등락률 대신 T-1 종가-대-종가 change_rate 사용
+
+**목적**: `detect_near_limit_up_carries`가 "어제 상한가 근접 종목의 익일 모멘텀 이월"을 탐지한다고
+문서화돼 있었으나, 실제로는 잡 실행 시점(10:00/15:20 KST, 모두 장중)의 라이브 등락률을 읽어
+`yesterday_change_pct`/reasoning에 "전일 상승"으로 오라벨하고 있었다. 이미 당일 상한가에 근접해
+대부분 실현된 종목을 뒤늦게 추격 매수 신호로 잡는 정반대 동작이었다(실측: 034940 조아제약,
+2026-07-03 10:05 KST).
+
+- `fetch_stock_price_history_sync` 일봉 이력에서 `PriceRecord.date`를 예상 T-1 거래일과 매칭해
+  (배열 인덱스 가정 없이) T-1 종가-대-종가 change_rate 계산
+- `price_at_signal`도 라이브 스냅샷 대신 T-1 종가로 채움(라이브 호출 완전 제거)
+- 임계값(15.0~29.99)·confidence 공식·스케줄·다른 탐지기 무변경, 과거 시그널 재분류 없음
+
+**영향 파일**: `backend/app/services/surge_detector.py` (+52줄), `backend/tests/test_near_limit_up_carry.py` (전면 재작성, 29 테스트)
+
+---
+
+### Fix — SPEC-AI-071: 급등 결과 수집 유니버스를 stocks 존재 종목으로 필터링 (2026-07-03)
+
+#### `03ff8dd` — ETN/미추적 종목의 정답 모집단 유입 차단
+
+**목적**: `collect_daily_surge_outcomes()`가 Naver 상승률상위 원본을 종목 유형 구분 없이 그대로
+집계해, 레버리지/인버스 2X ETN 등 탐지기가 원천적으로 못 잡는 지수파생상품이 `was_surge`/
+`actual_surge_count` 분모를 왜곡하던 버그 수정(실측: 07-03 급등 37종목 중 11개=약 30%가 ETN).
+
+- 결합 코드 집합을 앱 `stocks` 테이블 존재 종목과 교집합한 뒤에만 가격 조회/upsert 수행
+- T-1 예측 보완 로직(기존)은 무변경, 제외 종목 수 로깅 추가
+- 과거 데이터 백필 없음(전진 적용), ETN을 `stocks`에 추가하지 않음
+
+**영향 파일**: `backend/app/services/surge_actual_outcome_service.py` (+52줄), `backend/tests/test_surge_actual_outcome_service.py` (신규 9테스트)
+
+---
+
+### Fix — 백엔드 테스트 인프라: pytest 병렬 실행 안정화 (2026-07-03)
+
+#### `a2f24cf` — pytest-xdist 워커 간 surge_detection.auto.yaml 공유 파일 레이스 수정
+
+CI(`pytest tests/ -n 4`)가 4개 워커 프로세스를 병렬 실행하는데, `surge_detection.auto.yaml`이 모든
+워커가 공유하는 실제 디스크 파일이라 동시 읽기/쓰기/삭제로 `test_spec_ai_069.py`/
+`test_surge_auto_improver.py`의 여러 테스트가 비결정적으로 실패했다. `PYTEST_XDIST_WORKER` 환경변수를
+파일명에 반영해 워커별 파일로 분리(운영 환경 영향 없음). `pytest tests/ -n 4` 로컬 재현으로 검증:
+1833 passed / 0 failed (수정 전 6 failed).
+
+**영향 파일**: `backend/app/surge_config/surge_settings.py`, `backend/app/services/surge_auto_improver.py`, `backend/tests/conftest.py`, `.gitignore`
+
+#### `69573f7` — test_characterize_low_zscore_no_candidate 장중 flaky 격리
+
+`_live_volume_provider`(SPEC-AI-067 실시간 거래량 블렌딩)를 mock하지 않아 장중 실행 시 실제 네이버
+API 응답이 mock된 베이스라인과 섞여 z-score가 비결정적으로 폭증하던 문제 수정. 프로덕션 코드 변경 없음.
+
+**영향 파일**: `backend/tests/test_surge_detector.py`
+
+---
+
 ### Feature — SPEC-AI-064: 코스피 대폭락 조기 경보 텔레그램 알림 시스템 (2026-06-24)
 
 #### `299c042` — 3-스캔 조기 경보 시스템 (06:30 / 08:30 / 09:05 KST)

@@ -1,7 +1,7 @@
 ---
 id: SPEC-AI-071
 version: 0.1.0
-status: draft
+status: completed
 created: 2026-07-03
 updated: 2026-07-03
 author: MoAI
@@ -147,3 +147,17 @@ SHALL** 그 종목을 계속 결과 수집에 포함해야 한다.
   확정한다(DDD ANALYZE-PRESERVE-IMPROVE).
 - 신규/변경 로직 테스트 커버리지 85%+, `ruff` 무경고, 전체 급등 스위트 회귀 없음.
 - DB 스키마 diff 0(신규 테이블/마이그레이션 없음), 신호 생성 경로 diff 0, 매수 로직 diff 0.
+
+---
+
+## Implementation Notes (2026-07-03)
+
+manager-ddd가 DDD(ANALYZE-PRESERVE-IMPROVE)로 계획대로 구현. `collect_daily_surge_outcomes()`에
+`_fetch_tracked_stock_codes()` 헬퍼 추가 후 `stocks` 교집합 필터를 가격 조회 이전에 삽입, 제외 종목
+수 로깅(REQ-004) 포함. DB 조회 실패 시 fail-open(미필터 진행) 확인 완료. 계획 대비 범위 이탈 없음
+(과거 백필 없음, ETN을 `stocks`에 추가하지 않음, 코드 대역 휴리스틱 미사용 — 모두 Exclusions 준수).
+
+- 테스트: `test_surge_actual_outcome_service.py` 14 passed, surge 전체 618 passed, 전체 스위트
+  1822 passed / 0 failed
+- 커밋: `03ff8dd`
+- 상태: completed

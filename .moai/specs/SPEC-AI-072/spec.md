@@ -1,7 +1,7 @@
 ---
 id: SPEC-AI-072
 version: 0.1.0
-status: draft
+status: completed
 created: 2026-07-03
 updated: 2026-07-03
 author: MoAI
@@ -168,3 +168,20 @@ SHALL** 그 종목의 `change_rate`를 라이브 `_fetch_price_change_sync`가 �
 - 신규/변경 로직 테스트 커버리지 85%+, `ruff` 무경고, 전체 급등 스위트(특히
   `test_near_limit_up_carry.py`) 회귀 없음.
 - DB 스키마 diff 0(신규 테이블/마이그레이션 없음), 타 탐지기/앙상블 diff 0, 매수 로직 diff 0.
+
+---
+
+## Implementation Notes (2026-07-03)
+
+manager-ddd가 DDD로 계획대로 구현. REQ-005는 오케스트레이터가 옵션 A(라이브 호출 완전 제거,
+`price_at_signal`도 T-1 종가 사용)로 확정 후 진행. `_compute_t1_change_from_history()` 헬퍼로
+date 매칭 기반 T-1/T-2 선정, `_fetch_price_change_sync` 호출 완전 제거. 계획 대비 범위 이탈 없음.
+
+- 테스트: `test_near_limit_up_carry.py` 29 passed, surge 전체 618 passed, 전체 스위트
+  1833 passed / 0 failed
+- 커밋: `ca1ad10`
+- 상태: completed
+
+**후속 관측 필요**: 오늘(07-03) 이 버그로 생성된 과거 `034940`(조아제약) 시그널은 재분류되지 않음
+(Exclusions 4 준수, 전진 적용만). `near_limit_up_carry` 탐지기의 실제 precision 개선 여부는
+향후 며칠 `surge_prediction_evaluation`으로 확인 필요 — 별도 SPEC 없이 관찰 사항으로만 기록.
