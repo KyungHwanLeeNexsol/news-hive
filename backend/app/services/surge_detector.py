@@ -4175,8 +4175,34 @@ def build_scan_universe(
     # SurgeActualOutcome에서 오늘 데이터를 활용하거나 naver_finance에서 직접 조회
     try:
         from app.services.naver_finance import fetch_volume_leaders_sync, fetch_stock_price_history_sync
+        from app.services.stock_registry_service import fetch_tracked_stock_codes
 
-        volume_leader_codes = fetch_volume_leaders_sync(limit=100)
+        # SPEC-AI-074 REQ-002: 유계 오버페치 — 레버리지/인버스 ETF·ETN이 절대 거래량 순위
+        # 상위 슬롯을 점유해 genuine 중·소형주 후보를 밀어내는 크라우딩아웃을 보상하기 위해
+        # market별 조회 한도를 100→140으로 상향하고 최대 3페이지(naver_finance.py 페이지네이션,
+        # 단일 페이지 ≈50행)까지 조회한다. _min_ratio(2.0)·max_scan_universe(150)는 불변
+        # (Exclusion 4/5). detect_volume_breakout(:3906)은 별도 호출부라 영향받지 않는다.
+        volume_leader_codes = fetch_volume_leaders_sync(limit=140, max_pages=3)
+
+        # @MX:NOTE: [AUTO] SPEC-AI-074 REQ-001 — 비율 필터링 이전에 앱 stocks 테이블과
+        # 교집합하여 레버리지/인버스 ETF·ETN(및 기타 미추적 상품)을 후보에서 배제한다. 이들은
+        # 절대 거래량 순위 상위를 구조적으로 점유해 실제 200%+ 비율 급증 중·소형주를 밀어내는
+        # 크라우딩아웃을 유발한다(예: 109610 에스와이, 2026-07-07 실제 미탐지). 분류 규칙은
+        # SPEC-AI-071 정답 수집 경로와 공유하는 stock_registry_service.fetch_tracked_stock_codes
+        # (단일 출처, 코드대역 휴리스틱 아님).
+        tracked_codes = fetch_tracked_stock_codes(db, volume_leader_codes)
+        if tracked_codes is not None:
+            excluded_codes = [c for c in volume_leader_codes if c not in tracked_codes]
+            if excluded_codes:
+                # SPEC-AI-074 REQ-005: 배제 관측 로깅 (SPEC-AI-071 REQ-004 형식과 일관)
+                logger.info(
+                    "[스캔유니버스] Pool B stocks 미존재 종목 제외: 제외=%d건 (예: %s)",
+                    len(excluded_codes), excluded_codes[:5],
+                )
+            volume_leader_codes = [c for c in volume_leader_codes if c in tracked_codes]
+        # tracked_codes is None → stocks 조회 실패, fail-open으로 미필터 진행
+        # (SPEC-AI-074 REQ-004, SPEC-AI-071 EC-1 계승)
+
         _baseline_days = 20
         _min_ratio = 2.0  # 200% = 2배
 

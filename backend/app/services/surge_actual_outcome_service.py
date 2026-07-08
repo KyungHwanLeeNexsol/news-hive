@@ -38,34 +38,24 @@ async def _fetch_code_info(code: str) -> dict | None:
 
 
 def _fetch_tracked_stock_codes(db: Session, codes: list[str]) -> set[str] | None:
-    # @MX:NOTE: [AUTO] SPEC-AI-071 — 정답 모집단을 앱 stocks 테이블 존재 종목으로 제한하기
-    # 위한 교집합 조회. build_scan_universe(SPEC-AI-065)가 stocks에서만 후보를 구성하므로,
-    # stocks에 없는 코드(레버리지/인버스 ETN·미추적 기업)는 어떤 탐지기로도 잡을 수 없는
-    # 영구 false negative가 되어 recall/precision을 왜곡한다.
-    """결합 코드 집합 중 앱 `stocks` 테이블에 존재하는 코드 집합을 반환한다.
+    # @MX:NOTE: [AUTO] SPEC-AI-074 — 분류 로직을 stock_registry_service.fetch_tracked_stock_codes로
+    # 추출(단일 출처, REQ-001 HARD). 이 함수는 SPEC-AI-071 호출부의 기존 import 경로
+    # (`_fetch_tracked_stock_codes`)를 깨지 않기 위한 하위 호환 위임 래퍼이며 거동은 불변이다.
+    """`stocks` 교집합 조회를 stock_registry_service로 위임한다(SPEC-AI-074, 거동 불변).
 
-    DB 조회 실패 시(SSL 끊김 등) None을 반환하여 호출부가 fail-open으로
-    미필터 진행하도록 위임한다(REQ-AI071-001 EC-1, 기존 종목명 조회 실패 처리 관례와 일관).
+    분류 규칙의 실제 구현·불변 계약(@MX:ANCHOR)은 `stock_registry_service.fetch_tracked_stock_codes`
+    를 참고. Pool B(SPEC-AI-074)도 동일 헬퍼를 재사용해 규칙이 두 곳에 중복되지 않는다.
 
     Args:
         db: SQLAlchemy 동기 세션
         codes: 교집합 대상 코드 목록
 
     Returns:
-        stocks에 존재하는 코드 집합. 조회 실패 시 None.
+        stocks에 존재하는 코드 집합. 조회 실패 시 None(fail-open, REQ-AI071-001 EC-1).
     """
-    from app.models.stock import Stock  # 순환 임포트 방지를 위해 지연 임포트
+    from app.services.stock_registry_service import fetch_tracked_stock_codes
 
-    try:
-        rows = db.query(Stock.stock_code).filter(Stock.stock_code.in_(codes)).all()
-        return {row.stock_code for row in rows}
-    except Exception as e:
-        logger.warning("stocks 교집합 조회 실패 — 미필터 진행 (fail-open): %s", e)
-        try:
-            db.rollback()
-        except Exception:
-            pass
-        return None
+    return fetch_tracked_stock_codes(db, codes)
 
 
 async def collect_daily_surge_outcomes(db: Session, trading_date: date) -> int:

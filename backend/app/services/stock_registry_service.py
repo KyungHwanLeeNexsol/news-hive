@@ -32,6 +32,46 @@ def _infer_sector_id(name: str) -> int:
     return _DEFAULT_SECTOR_ID
 
 
+def fetch_tracked_stock_codes(db: Session, codes: list[str]) -> set[str] | None:
+    # @MX:ANCHOR: [AUTO] SPEC-AI-074 — "앱 stocks 테이블 존재 종목만 유효 후보"라는
+    # 분류 규칙의 단일 출처. fan_in>=2: SPEC-AI-071 정답 수집 경로
+    # (surge_actual_outcome_service.collect_daily_surge_outcomes, 원래 구현 위치)와
+    # SPEC-AI-074 Pool B 후보 정제 경로(surge_detector.build_scan_universe)가 함께 호출한다.
+    # @MX:REASON: [AUTO] 분류 로직이 두 곳에 중복 구현되면 드리프트(예: 한쪽만 갱신)로
+    # recall/precision이 왜곡될 위험이 있어, SPEC-AI-071에서 최초 구현된 로직을 이 중립
+    # 위치로 추출해 단일 출처로 유지한다(SPEC-AI-074 REQ-001 HARD). 반환 계약(`None`=조회
+    # 실패 → 호출부 fail-open)은 SPEC-AI-071 EC-1 그대로이며 변경되지 않는다.
+    """결합 코드 집합 중 앱 `stocks` 테이블에 존재하는 코드 집합을 반환한다.
+
+    DB 조회 실패 시(SSL 끊김 등) None을 반환하여 호출부가 fail-open으로
+    미필터 진행하도록 위임한다(SPEC-AI-071 REQ-AI071-001 EC-1, SPEC-AI-074 REQ-AI074-004가
+    동일 계약을 계승).
+
+    호출부:
+    - `surge_actual_outcome_service.collect_daily_surge_outcomes` (SPEC-AI-071, 정답 모집단 정제)
+    - `surge_detector.build_scan_universe` Pool B (SPEC-AI-074, 거래량 순위 후보 정제 —
+      레버리지/인버스 ETF·ETN 등 비-stocks 상품이 절대 거래량 상위를 점유해 genuine
+      중·소형주를 밀어내는 크라우딩아웃 방지)
+
+    Args:
+        db: SQLAlchemy 동기 세션
+        codes: 교집합 대상 코드 목록
+
+    Returns:
+        stocks에 존재하는 코드 집합. 조회 실패 시 None.
+    """
+    try:
+        rows = db.query(Stock.stock_code).filter(Stock.stock_code.in_(codes)).all()
+        return {row.stock_code for row in rows}
+    except Exception as e:
+        logger.warning("stocks 교집합 조회 실패 — 미필터 진행 (fail-open): %s", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return None
+
+
 async def _fetch_stock_info(code: str) -> dict | None:
     """네이버 모바일 integration API에서 종목명·시가총액 조회.
 

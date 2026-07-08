@@ -837,11 +837,20 @@ def fetch_stock_price_history_sync(stock_code: str, pages: int = 3) -> list[Pric
     return results
 
 
-def fetch_volume_leaders_sync(limit: int = 50) -> list[str]:
+def fetch_volume_leaders_sync(limit: int = 50, max_pages: int = 1) -> list[str]:
     """Naver 거래량 순위 페이지에서 당일 거래량 상위 종목 코드를 동기적으로 반환한다.
 
     KOSPI + KOSDAQ 각 limit개씩 조회하여 중복 없이 합산 반환.
     탐지기 실행 시점(장 중 또는 장 마감 후)에 따라 당일 누적 거래량 기준.
+
+    SPEC-AI-074 REQ-002: 단일 페이지 행 수(~50)를 초과하는 limit을 채우려면 max_pages(> 1)를
+    지정한다 — market별 추가 페이지(&page=N)를 순차 조회하는 유계 오버페치다. 기존 호출부
+    (detect_volume_breakout, SPEC-AI-062/063/066)는 max_pages 기본값 1로 단일 페이지 거동을
+    그대로 유지하여 거동 diff가 없다(SPEC-AI-074 Exclusion 3).
+
+    Args:
+        limit: market(KOSPI/KOSDAQ)별 최대 반환 종목 수.
+        max_pages: market별 최대 조회 페이지 수 (기본 1 = 기존 단일 페이지 거동, 하위 호환).
     """
     from bs4 import BeautifulSoup
 
@@ -849,27 +858,40 @@ def fetch_volume_leaders_sync(limit: int = 50) -> list[str]:
     seen: set[str] = set()
 
     for sosok in (0, 1):  # 0=KOSPI, 1=KOSDAQ
-        url = f"https://finance.naver.com/sise/sise_quant.naver?sosok={sosok}"
-        try:
-            with httpx.Client(timeout=10, follow_redirects=True) as client:
-                resp = client.get(url, headers=HEADERS)
-                resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, "html.parser")
-            count = 0
-            for a_tag in soup.select("a.tltle[href*='code=']"):
-                import re as _re
-                m = _re.search(r"code=(\d{6})", a_tag.get("href", ""))
-                if not m:
-                    continue
-                code = m.group(1)
-                if code not in seen:
-                    seen.add(code)
-                    codes.append(code)
-                    count += 1
-                if count >= limit:
-                    break
-        except Exception as e:
-            logger.warning("거래량 순위 조회 실패 (sosok=%d): %s", sosok, e)
+        count = 0
+        for page in range(1, max(1, max_pages) + 1):
+            if count >= limit:
+                break
+            url = f"https://finance.naver.com/sise/sise_quant.naver?sosok={sosok}"
+            if page > 1:
+                url = f"{url}&page={page}"
+            try:
+                with httpx.Client(timeout=10, follow_redirects=True) as client:
+                    resp = client.get(url, headers=HEADERS)
+                    resp.raise_for_status()
+                soup = BeautifulSoup(resp.text, "html.parser")
+                rows = soup.select("a.tltle[href*='code=']")
+                if not rows:
+                    break  # 더 이상 페이지 없음
+                new_on_page = 0
+                for a_tag in rows:
+                    import re as _re
+                    m = _re.search(r"code=(\d{6})", a_tag.get("href", ""))
+                    if not m:
+                        continue
+                    code = m.group(1)
+                    if code not in seen:
+                        seen.add(code)
+                        codes.append(code)
+                        count += 1
+                        new_on_page += 1
+                    if count >= limit:
+                        break
+                if new_on_page == 0:
+                    break  # 신규 코드 없음(중복만 있거나 목록 끝) → 추가 페이지 무의미
+            except Exception as e:
+                logger.warning("거래량 순위 조회 실패 (sosok=%d, page=%d): %s", sosok, page, e)
+                break
 
     return codes
 
