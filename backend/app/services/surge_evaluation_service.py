@@ -479,6 +479,30 @@ def generate_detector_improvement_suggestions(
     return suggestions
 
 
+def _is_near_limit_up_carry_signal(surge_metadata_json: str | None) -> bool:
+    """surge_metadata 문자열이 near_limit_up_carry 탐지 결과인지 판별한다.
+
+    SPEC-AI-075: near_limit_up_carry(surge_detector.py:2649)는 signal_type=="surge_candidate"를
+    표준 지평 탐지기와 공유하므로 signal_type 필터로는 배제할 수 없다. surge_basis 리스트
+    멤버십(코드베이스 전반의 탐지기 귀속 정본)을 1차 판별 기준으로, 플랫 near_limit_up_carry
+    키(True)를 OR 폴백으로 사용한다(surge_detector.py:2751-2756 — 탐지기는 두 키를 항상 함께
+    쓰지만 향후 변형에도 견고하도록). JSON 파싱 실패(손상 데이터)는 표준 지평 시그널로 보수적
+    포함한다(fail-safe) — 배제 로직 오류로 표준 시그널을 잘못 버리는 것보다 안전하다.
+    """
+    if not surge_metadata_json:
+        return False
+    try:
+        metadata = json.loads(surge_metadata_json)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(metadata, dict):
+        return False
+    surge_basis = metadata.get("surge_basis")
+    if isinstance(surge_basis, list) and "near_limit_up_carry" in surge_basis:
+        return True
+    return metadata.get("near_limit_up_carry") is True
+
+
 def evaluate_surge_predictions(
     db: Session,
     trading_date: date,
@@ -523,7 +547,7 @@ def evaluate_surge_predictions(
     # 2. T-1 surge_candidate 시그널 조회 (created_at 날짜 기준)
     # preday_disclosure는 제외: 공시 기반 단기 반응 예측이므로 was_surge(10%+) 기준과 불일치
     signal_rows = (
-        db.query(FundSignal.stock_id, Stock.stock_code)
+        db.query(FundSignal.stock_id, Stock.stock_code, FundSignal.surge_metadata)
         .join(Stock, FundSignal.stock_id == Stock.id)
         .filter(
             FundSignal.signal_type == "surge_candidate",
@@ -533,7 +557,29 @@ def evaluate_surge_predictions(
         .all()
     )
 
-    predicted_set: set[str] = {row.stock_code for row in signal_rows}
+    # @MX:NOTE: [AUTO] SPEC-AI-075 — near_limit_up_carry(surge_detector.py:2649)는
+    # signal_type=="surge_candidate"를 표준 지평 탐지기와 공유하지만 target day가 시그널
+    # 발행일(D) 자체라 지평이 다르다(표준 규칙은 T-1→T 비교). signal_type으로는 구분 불가하므로
+    # surge_metadata 내용(surge_basis 리스트 멤버십 1차, 플랫 near_limit_up_carry 키 OR 폴백)으로
+    # predicted_set 한 곳에서만 배제한다(actual_set/표준 버킷팅 규칙 불변). 라이브 데이터(2026-07-06/
+    # 07-07)에서 near_limit_up_carry가 전체 surge_candidate 발신의 100%/75%를 차지해 evaluation
+    # coverage/recall 지표를 오염시켰음을 확인(research.md §6).
+    # @MX:SPEC: SPEC-AI-075 REQ-AI075-001, REQ-AI075-002
+    predicted_set: set[str] = set()
+    excluded_near_limit_up_carry_codes: list[str] = []
+    for row in signal_rows:
+        if _is_near_limit_up_carry_signal(row.surge_metadata):
+            excluded_near_limit_up_carry_codes.append(row.stock_code)
+            continue
+        predicted_set.add(row.stock_code)
+
+    if excluded_near_limit_up_carry_codes:
+        logger.info(
+            "[급등평가] near_limit_up_carry 배제: %d건 (예시: %s) — SPEC-AI-075 평가 지평 불일치",
+            len(excluded_near_limit_up_carry_codes),
+            excluded_near_limit_up_carry_codes[:5],
+        )
+
     logger.info(
         "T-1 surge_candidate 시그널: %d건 (T-1=%s)", len(predicted_set), prev_business_day
     )

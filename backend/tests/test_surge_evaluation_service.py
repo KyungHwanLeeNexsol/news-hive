@@ -208,16 +208,23 @@ class TestEvaluateSurgePredictionsCharacterization:
         predicted_codes: list[str],
         actual_surge_codes: list[str],
         trading_date: date,
+        near_limit_up_carry_codes: list[str] | None = None,
     ):
-        """TestTPFPFNCalculation._setup_signals_and_outcomes와 동일한 셋업 헬퍼(독립 복제)."""
+        """TestTPFPFNCalculation._setup_signals_and_outcomes와 동일한 셋업 헬퍼(독립 복제).
+
+        near_limit_up_carry_codes(SPEC-AI-075): 표준 지평(theme_cluster) predicted_codes와 별도로,
+        near_limit_up_carry 탐지 metadata(surge_basis 리스트 + 플랫 플래그)를 가진 surge_candidate
+        시그널을 T-1 버킷에 추가 주입한다 — 평가 측 배제 로직 재현/검증 전용.
+        """
         from datetime import datetime, timezone
         from app.models.stock import Stock
         from app.models.fund_signal import FundSignal
         from app.models.sector import Sector
         from app.services.surge_trading_service import _get_prev_business_day
 
+        near_limit_up_carry_codes = near_limit_up_carry_codes or []
         stocks: dict[str, int] = {}
-        all_codes = list(set(predicted_codes + actual_surge_codes))
+        all_codes = list(set(predicted_codes + actual_surge_codes + near_limit_up_carry_codes))
 
         for i, code in enumerate(all_codes):
             sector = Sector(name=f"특성화섹터_{code}_{i}", is_custom=False)
@@ -249,6 +256,23 @@ class TestEvaluateSurgePredictionsCharacterization:
                 ),
             )
             db.add(signal)
+
+        for code in near_limit_up_carry_codes:
+            carry_signal = FundSignal(
+                stock_id=stocks[code],
+                signal="buy",
+                signal_type="surge_candidate",
+                confidence=0.36,
+                reasoning="상한가 근접 종목 — 전일 22.00% 상승, 미체결 모멘텀 이월",
+                surge_metadata=(
+                    '{"surge_basis": ["near_limit_up_carry"], "near_limit_up_carry": true, '
+                    '"yesterday_change_pct": 22.0, "surge_probability_score": 0.36}'
+                ),
+                created_at=datetime(
+                    t_minus_1.year, t_minus_1.month, t_minus_1.day, 15, 20, tzinfo=timezone.utc
+                ),
+            )
+            db.add(carry_signal)
 
         for code in actual_surge_codes:
             outcome = SurgeActualOutcome(
@@ -401,6 +425,159 @@ class TestEvaluateSurgePredictionsCharacterization:
             evaluate_surge_predictions(db, trading_date)
 
         assert mock_commit.called
+
+    # -----------------------------------------------------------------------
+    # SPEC-AI-075: near_limit_up_carry 평가 시점 불일치(evaluation-timing horizon mismatch)
+    # 재현/회귀. near_limit_up_carry(surge_detector.py detect_near_limit_up_carries)는
+    # signal_type=="surge_candidate"를 표준 지평 탐지기와 공유하지만, target day가 시그널
+    # 발행일(D) 자체다. 표준 규칙은 T-1 버킷을 T와 비교하므로 D+1 실행에서 D 발행분이 잘못된
+    # 날과 대조된다. 아래 재현 테스트(AC-075-001/004)는 "수정 전 near_limit_up_carry가
+    # predicted_set/predicted_count에 포함됨"을 관찰 가능한 사실로 고정한다 — 수정 전에는
+    # 실패해야 정상(Reproduction-First, CLAUDE.md Rule 4)이며, 배제 구현 후 통과해야 한다.
+    # -----------------------------------------------------------------------
+
+    def test_reproduce_near_limit_up_carry_included_before_fix(self, db: Session):
+        """AC-075-001 재현(Rule 4 RED): 수정 전 near_limit_up_carry(N=3)가 표준 지평(M=2)과 함께
+        predicted_count에 전부 계상된다. 수정 후 기대치(M=2만)로 단언하므로, 수정 전 코드에서는
+        이 assert가 실패해야 정상이다(현재 predicted_count == 5).
+        """
+        trading_date = date(2026, 6, 9)
+        self._setup(
+            db,
+            predicted_codes=["THEME1", "THEME2"],  # 표준 지평 M=2
+            actual_surge_codes=[],
+            trading_date=trading_date,
+            near_limit_up_carry_codes=["CARRY1", "CARRY2", "CARRY3"],  # near_limit_up_carry N=3
+        )
+
+        from app.services.surge_evaluation_service import evaluate_surge_predictions
+        result = evaluate_surge_predictions(db, trading_date)
+
+        # 수정 후 기대치: near_limit_up_carry(N=3) 배제 → 표준 지평(M=2)만 predicted_count에 남는다.
+        assert result.predicted_count == 2
+
+    def test_dominated_scenario_predicted_count_zero_after_exclusion(self, db: Session):
+        """AC-075-004: 2026-07-06형 지배 시나리오 — T-1 버킷 7건 전부가 near_limit_up_carry,
+        표준 지평 0건. 수정 후 predicted_count=0(그 날 표준 지평 예측이 없었다는 정직한 반영),
+        precision은 기존 zero-denominator 처리로 0.0을 유지한다.
+        """
+        trading_date = date(2026, 6, 9)
+        self._setup(
+            db,
+            predicted_codes=[],
+            actual_surge_codes=[],
+            trading_date=trading_date,
+            near_limit_up_carry_codes=["C1", "C2", "C3", "C4", "C5", "C6", "C7"],
+        )
+
+        from app.services.surge_evaluation_service import evaluate_surge_predictions
+        result = evaluate_surge_predictions(db, trading_date)
+
+        assert result.predicted_count == 0
+        assert result.precision == 0.0
+
+    def test_near_limit_up_carry_stays_in_actual_set_predicted_excluded_only(self, db: Session):
+        """AC-075-003: near_limit_up_carry 종목이 T에 실제 급등해도 actual_set(시장전체 진실)에는
+        그대로 남고, predicted_set에서만 배제된다 — actual_surge_count diff 0.
+        """
+        trading_date = date(2026, 6, 9)
+        self._setup(
+            db,
+            predicted_codes=[],
+            actual_surge_codes=["CARRY1"],
+            trading_date=trading_date,
+            near_limit_up_carry_codes=["CARRY1"],
+        )
+
+        from app.services.surge_evaluation_service import evaluate_surge_predictions
+        result = evaluate_surge_predictions(db, trading_date)
+
+        assert result.actual_surge_count == 1  # actual_set 불변(시장전체 진실)
+        assert result.predicted_count == 0  # near_limit_up_carry 배제
+        assert result.true_positive == 0  # predicted에서 빠졌으므로 TP 아님
+
+    def test_standard_theme_cluster_signal_not_excluded_no_false_positive(self, db: Session):
+        """AC-075-002: 표준 탐지기(theme_cluster) metadata는 surge_basis/플랫 키 어느 쪽에도
+        near_limit_up_carry를 가리키지 않으므로 오탐 배제되지 않는다.
+        """
+        trading_date = date(2026, 6, 9)
+        self._setup(
+            db,
+            predicted_codes=["THEME1"],
+            actual_surge_codes=[],
+            trading_date=trading_date,
+        )
+
+        from app.services.surge_evaluation_service import evaluate_surge_predictions
+        result = evaluate_surge_predictions(db, trading_date)
+
+        assert result.predicted_count == 1
+
+    def _inject_raw_signal(self, db: Session, stock_code: str, surge_metadata: str, trading_date: date):
+        """_setup이 다루지 못하는 원시 surge_metadata 변형(플랫 전용/리스트 전용/손상 JSON) 주입."""
+        from datetime import datetime, timezone
+        from app.models.stock import Stock
+        from app.models.sector import Sector
+        from app.models.fund_signal import FundSignal
+        from app.services.surge_trading_service import _get_prev_business_day
+
+        sector = Sector(name=f"AI075섹터_{stock_code}", is_custom=False)
+        db.add(sector)
+        db.flush()
+        stock = Stock(stock_code=stock_code, name=f"주식{stock_code}", sector_id=sector.id, market="KOSPI")
+        db.add(stock)
+        db.flush()
+
+        t_minus_1 = _get_prev_business_day(trading_date)
+        signal = FundSignal(
+            stock_id=stock.id,
+            signal="buy",
+            signal_type="surge_candidate",
+            confidence=0.5,
+            reasoning="SPEC-AI-075 엣지케이스 테스트",
+            surge_metadata=surge_metadata,
+            created_at=datetime(
+                t_minus_1.year, t_minus_1.month, t_minus_1.day, 15, 20, tzinfo=timezone.utc
+            ),
+        )
+        db.add(signal)
+        db.commit()
+
+    def test_excluded_via_surge_basis_only_without_flat_flag(self, db: Session):
+        """AC-075-002/EC-3: surge_basis 리스트 멤버십만 있고 플랫 키가 없어도 배제된다(1차 판별)."""
+        trading_date = date(2026, 6, 9)
+        self._inject_raw_signal(
+            db, "BASISONLY", '{"surge_basis": ["near_limit_up_carry"]}', trading_date
+        )
+
+        from app.services.surge_evaluation_service import evaluate_surge_predictions
+        result = evaluate_surge_predictions(db, trading_date)
+
+        assert result.predicted_count == 0
+
+    def test_excluded_via_flat_flag_only_without_surge_basis(self, db: Session):
+        """AC-075-002/EC-3: 플랫 near_limit_up_carry:true만 있고 surge_basis가 없어도 OR 폴백으로
+        배제된다(견고성)."""
+        trading_date = date(2026, 6, 9)
+        self._inject_raw_signal(
+            db, "FLATONLY", '{"near_limit_up_carry": true}', trading_date
+        )
+
+        from app.services.surge_evaluation_service import evaluate_surge_predictions
+        result = evaluate_surge_predictions(db, trading_date)
+
+        assert result.predicted_count == 0
+
+    def test_corrupted_metadata_json_included_failsafe(self, db: Session):
+        """EC-2: surge_metadata JSON 파싱 실패 시 표준 지평으로 보수적 포함(fail-safe) — 손상된
+        시그널이라는 이유로 표준 시그널을 잘못 배제하지 않는다."""
+        trading_date = date(2026, 6, 9)
+        self._inject_raw_signal(db, "BROKEN1", "{invalid json", trading_date)
+
+        from app.services.surge_evaluation_service import evaluate_surge_predictions
+        result = evaluate_surge_predictions(db, trading_date)
+
+        assert result.predicted_count == 1
 
 
 # ---------------------------------------------------------------------------
