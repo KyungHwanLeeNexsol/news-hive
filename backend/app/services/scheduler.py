@@ -273,6 +273,13 @@ def _cleanup_old_disclosures(db):
         logger.info(f"Cleaned up {deleted} disclosures older than 5 days")
 
 
+# @MX:ANCHOR: [AUTO] _run_dart_crawl — 스케줄러 정기 잡 + watchdog(_check_dart_health) 양쪽에서
+# 직접 호출되는 고 fan_in(>=3) 진입점. 정리(_cleanup_old_disclosures)/수집(fetch_dart_disclosures)
+# 독립 격리 계약을 변경하려면 이 함수를 호출하는 모든 경로(정기 스케줄, watchdog 복구 스레드)의
+# 영향을 함께 검토해야 한다.
+# @MX:REASON: SPEC-AI-073 REQ-AI073-001 — 정리 실패가 수집을 차단해 8일+ 데이터 아웃티지를
+# 유발한 실제 프로덕션 인시던트(2026-06-30~07-08)의 회귀를 막는 방어선. 격리를 제거하면
+# 정리 단계의 어떤 미래 실패(FK 위반 외의 사유 포함)도 다시 수집 전체를 중단시킬 수 있다.
 @retry_with_backoff(max_attempts=3)
 def _run_dart_crawl():
     """Sync wrapper that runs the async DART disclosure crawl."""
@@ -282,7 +289,17 @@ def _run_dart_crawl():
 
     db = SessionLocal()
     try:
-        _cleanup_old_disclosures(db)
+        # @MX:WARN: [AUTO] 정리(cleanup)와 수집(fetch)을 독립 try/except로 격리 — 정리 실패가
+        # 수집을 막지 못하게 하는 2차 방어선(FK 원인 교정과 무관하게 항상 유지).
+        # @MX:REASON: SPEC-AI-073 REQ-AI073-001. 정리 단계에서 예외(과거 FK ForeignKeyViolation
+        # 포함, 향후 다른 원인도 대상)가 발생하면 세션이 abort 상태가 되므로, 수집 진행 전
+        # db.rollback()으로 반드시 복구해야 한다(복구 없이 진행 시 PendingRollbackError 위험).
+        try:
+            _cleanup_old_disclosures(db)
+        except Exception as cleanup_err:
+            logger.error(f"DART disclosure cleanup failed (수집은 계속 진행): {cleanup_err}")
+            db.rollback()
+
         # days=5: 공휴일 연속 휴장(최대 3일) + 복구 버퍼 2일. watchdog 2h 재실행으로 장기 다운타임 불필요.
         count = asyncio.run(fetch_dart_disclosures(db, days=5))
         logger.info(f"DART crawl completed: {count} new disclosures")

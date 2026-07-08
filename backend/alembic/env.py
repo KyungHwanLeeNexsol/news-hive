@@ -11,8 +11,15 @@ config = context.config
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
+# @MX:WARN: [AUTO] disable_existing_loggers=False 명시 필수 — 기본값(True)은 alembic.ini의
+# [loggers](root/sqlalchemy/alembic만 나열)에 없는 기존 로거(app.services.* 전체)를
+# `.disabled = True`로 영구 비활성화시킨다. Logger.isEnabledFor()는 disabled를 최우선 검사하므로
+# 레벨과 무관하게 ERROR/CRITICAL 포함 모든 로그가 완전한 no-op이 된다.
+# @MX:REASON: SPEC-AI-073 REQ-AI073-003 — _run_migrations()가 앱 시작 시 1회 실행되며, 이
+# 인자가 없으면 app.services.scheduler/dart_crawler 로거가 프로세스 수명 내내 침묵해 실제
+# 프로덕션에서 8일간 DART 크롤 실패(ForeignKeyViolation)가 무증상으로 방치됐다.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 from app.database import Base  # noqa: E402
 from app.models import (  # noqa: E402, F401

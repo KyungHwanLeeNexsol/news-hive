@@ -68,8 +68,11 @@ class FundSignal(Base):
 
     # SPEC-AI-004: 공시 기반 시그널 추적
     signal_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # @MX:NOTE: [AUTO] disclosure_id FK는 ON DELETE SET NULL(마이그레이션 068) — CASCADE 아님.
+    # fund_signals는 예측 기록/평가 모집단(SPEC-AI-041/043/071)이라 출처 공시가 5일 보존을
+    # 벗어나 삭제되어도 신호 레코드 자체는 보존되어야 한다. disclosure_id는 출처 메타데이터일 뿐.
     disclosure_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("disclosures.id"), nullable=True
+        Integer, ForeignKey("disclosures.id", ondelete="SET NULL"), nullable=True
     )
 
     # SPEC-AI-005: 동적 TP/SL 방식 추적

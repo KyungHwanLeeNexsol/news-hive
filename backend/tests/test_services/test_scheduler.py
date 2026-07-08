@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.services.scheduler import (
+    _check_dart_health,
     _cleanup_old_disclosures,
     _run_commodity_news_crawl,
     _run_commodity_price_fetch,
@@ -109,6 +110,135 @@ class TestRunDartCrawl:
         mock_cleanup.assert_called_once_with(mock_db)
         mock_arun.assert_called_once()
         mock_db.close.assert_called_once()
+
+    # -------------------------------------------------------------------
+    # SPEC-AI-073 REQ-AI073-001: 정리 실패가 수집을 차단하지 않도록 격리
+    # -------------------------------------------------------------------
+
+    @patch("app.services.scheduler._run_keyword_matching")
+    @patch("app.services.job_retry.time.sleep")
+    @patch("app.services.scheduler.asyncio.run")
+    @patch("app.services.scheduler._cleanup_old_disclosures")
+    @patch("app.services.scheduler.SessionLocal")
+    def test_characterize_cleanup_failure_does_not_block_fetch(
+        self, mock_session_cls, mock_cleanup, mock_arun, mock_sleep, mock_kw_match,
+    ) -> None:
+        """AC-073-001/REQ-AI073-001 재현: 정리 실패가 수집을 막지 않아야 한다.
+
+        재현(Rule 4): 격리 전 코드에서는 정리 예외가 그대로 전파되어
+        retry_with_backoff가 3회 모두 재시도해도 fetch_dart_disclosures
+        (asyncio.run)가 단 한 번도 호출되지 못한 채 종료됐다 — 수정 후에는
+        정리 실패에도 불구하고 같은 시도 내에서 수집이 진행되어야 한다.
+        """
+        mock_db = MagicMock()
+        mock_session_cls.return_value = mock_db
+        mock_cleanup.side_effect = Exception("FK violation simulation")
+        mock_arun.return_value = 7
+
+        _run_dart_crawl()
+
+        mock_arun.assert_called_once()
+        mock_kw_match.assert_called_once()
+        # 정리 실패 후 수집 진행 전 세션이 rollback으로 복구되어야 한다(트랜잭션 abort 방지)
+        mock_db.rollback.assert_called()
+
+    @patch("app.services.scheduler._run_keyword_matching")
+    @patch("app.services.scheduler.asyncio.run")
+    @patch("app.services.scheduler._cleanup_old_disclosures")
+    @patch("app.services.scheduler.SessionLocal")
+    def test_cleanup_success_unaffected_by_isolation(
+        self, mock_session_cls, mock_cleanup, mock_arun, mock_kw_match,
+    ) -> None:
+        """EC-1: 정리 성공 시 격리 도입 후에도 정상 동작(회귀 없음)."""
+        mock_db = MagicMock()
+        mock_session_cls.return_value = mock_db
+        mock_arun.return_value = 3
+
+        _run_dart_crawl()
+
+        mock_cleanup.assert_called_once_with(mock_db)
+        mock_arun.assert_called_once()
+        mock_kw_match.assert_called_once()
+
+
+class TestCheckDartHealthWatchdog:
+    """SPEC-AI-073 REQ-AI073-005: watchdog 자동 복구 경로 회귀 가드.
+
+    _check_dart_health의 2시간 임계·Telegram 알림 로직 자체는 변경하지 않는다(diff 0).
+    본 테스트는 watchdog가 stale 감지 시 여전히 _run_dart_crawl을 직접 호출하며(REQ-001/002의
+    격리·FK 혜택을 자동으로 상속), 임계/알림 로직이 그대로임을 확인하는 회귀 가드다.
+    """
+
+    @staticmethod
+    def _fixed_now_kst_daytime():
+        """장 시간(07~18 KST) 내 고정 시각을 반환하는 datetime 서브클래스.
+
+        test_macro_risk.py의 FakeDatetime 패턴과 일관되게, datetime.now(tz)의 tz 인자에
+        따라 올바른 절대시각을 반환해 now_kst.hour 게이트와 now_utc 경과시간 계산이 모두
+        실제 datetime 연산으로 정확히 동작하도록 한다.
+        """
+        from datetime import datetime, timezone
+
+        fixed_utc = datetime(2026, 7, 8, 1, 0, tzinfo=timezone.utc)  # KST 10:00
+
+        class FixedDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                if tz is None:
+                    return fixed_utc.replace(tzinfo=None)
+                return fixed_utc.astimezone(tz)
+
+        return FixedDatetime, fixed_utc
+
+    @patch("app.services.scheduler.threading.Thread")
+    @patch("app.services.scheduler._send_dart_stale_alert")
+    @patch("app.services.scheduler.SessionLocal")
+    def test_stale_detection_triggers_run_dart_crawl_recovery_thread(
+        self, mock_session_cls, mock_alert, mock_thread_cls,
+    ) -> None:
+        """2시간 초과 stale 감지 시 CRITICAL 로그 + 알림 + _run_dart_crawl 복구 스레드 시작."""
+        from datetime import timedelta
+
+        fixed_dt, fixed_utc = self._fixed_now_kst_daytime()
+
+        mock_db = MagicMock()
+        mock_session_cls.return_value = mock_db
+        # 3시간 전 마지막 수집 (2시간 임계 초과)
+        stale_time = fixed_utc - timedelta(hours=3)
+        mock_db.query.return_value.scalar.return_value = stale_time
+
+        with patch("app.services.scheduler.datetime", fixed_dt):
+            _check_dart_health()
+
+        mock_alert.assert_called_once()
+        mock_thread_cls.assert_called_once()
+        _, thread_kwargs = mock_thread_cls.call_args
+        assert thread_kwargs["target"] is _run_dart_crawl, (
+            "watchdog 복구는 여전히 _run_dart_crawl을 직접 호출해야 REQ-001/002 혜택을 상속받는다"
+        )
+        mock_thread_cls.return_value.start.assert_called_once()
+
+    @patch("app.services.scheduler.threading.Thread")
+    @patch("app.services.scheduler._send_dart_stale_alert")
+    @patch("app.services.scheduler.SessionLocal")
+    def test_not_stale_skips_recovery(
+        self, mock_session_cls, mock_alert, mock_thread_cls,
+    ) -> None:
+        """2시간 이내 수집이면 복구 스레드를 시작하지 않는다(임계 로직 diff 0)."""
+        from datetime import timedelta
+
+        fixed_dt, fixed_utc = self._fixed_now_kst_daytime()
+
+        mock_db = MagicMock()
+        mock_session_cls.return_value = mock_db
+        recent_time = fixed_utc - timedelta(minutes=30)
+        mock_db.query.return_value.scalar.return_value = recent_time
+
+        with patch("app.services.scheduler.datetime", fixed_dt):
+            _check_dart_health()
+
+        mock_alert.assert_not_called()
+        mock_thread_cls.assert_not_called()
 
 
 class TestRunNewsImpactBackfill:

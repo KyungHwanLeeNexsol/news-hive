@@ -22,24 +22,39 @@ from app.services.scheduler import start_scheduler, stop_scheduler
 
 import logging
 
-# 구조화된 JSON 로깅 설정 (기존 로그 출력과 병행)
-try:
-    from pythonjsonlogger.json import JsonFormatter as _JsonFormatter
 
-    _json_handler = logging.StreamHandler()
-    _json_formatter = _JsonFormatter(
-        "%(asctime)s %(name)s %(levelname)s %(message)s",
-        rename_fields={"asctime": "timestamp", "levelname": "level"},
-    )
-    _json_handler.setFormatter(_json_formatter)
-    logging.root.handlers = [_json_handler]
-    logging.root.setLevel(logging.INFO)
-except ImportError:
-    # python-json-logger 미설치 시 기본 로깅 유지
-    logging.basicConfig(level=logging.INFO)
+def _configure_json_logging() -> None:
+    """구조화된 JSON 로깅 설정 (기존 로그 출력과 병행).
 
-# yfinance 실패 다운로드 스팸 억제 (ERROR 레벨 → CRITICAL만 통과, journald 덮어쓰기 방지)
-logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+    @MX:WARN: [AUTO] _run_migrations() 실행 직후 반드시 재호출해야 한다 — alembic/env.py의
+    fileConfig()가 alembic.ini의 [logger_root](level=WARNING, handlers=console 플레인 포매터)로
+    root 로거 핸들러/레벨을 재구성해버리기 때문이다(fileConfig는 disable_existing_loggers 값과
+    무관하게 [logger_root] 섹션을 항상 적용한다).
+    @MX:REASON: SPEC-AI-073 REQ-AI073-003 방어선 2 — env.py의 disable_existing_loggers=False
+    수정(방어선 1)만으로는 app.services.* 로거의 완전 침묵(disabled=True)은 막지만, root의
+    JSON 포맷/INFO 레벨이 마이그레이션 이후 alembic 기본 포맷으로 되돌아가는 것은 막지 못한다.
+    이 함수를 멱등하게 재호출해 "기존 main.py 로깅 설정 안에서" 계약(Exclusion 7)을 지킨다.
+    """
+    try:
+        from pythonjsonlogger.json import JsonFormatter as _JsonFormatter
+
+        _json_handler = logging.StreamHandler()
+        _json_formatter = _JsonFormatter(
+            "%(asctime)s %(name)s %(levelname)s %(message)s",
+            rename_fields={"asctime": "timestamp", "levelname": "level"},
+        )
+        _json_handler.setFormatter(_json_formatter)
+        logging.root.handlers = [_json_handler]
+        logging.root.setLevel(logging.INFO)
+    except ImportError:
+        # python-json-logger 미설치 시 기본 로깅 유지
+        logging.basicConfig(level=logging.INFO)
+
+    # yfinance 실패 다운로드 스팸 억제 (ERROR 레벨 → CRITICAL만 통과, journald 덮어쓰기 방지)
+    logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+
+
+_configure_json_logging()
 
 
 def _run_migrations():
@@ -64,6 +79,9 @@ async def lifespan(app: FastAPI):
 
     # Startup: run migrations synchronously (fast, required before serving)
     _run_migrations()
+    # SPEC-AI-073 REQ-AI073-003 방어선 2: alembic/env.py의 fileConfig()가 root 로거
+    # 핸들러/레벨을 alembic.ini 기본값으로 재구성하므로, 마이그레이션 직후 즉시 복원한다.
+    _configure_json_logging()
 
     # SPEC-AI-069 REQ-AI069-002 (D4): auto.yaml을 base yaml 기준으로 리셋(idempotent).
     # auto_improve_enabled=false(기본값)인 동안 매 startup마다 auto.yaml을 빈 오버라이드로
