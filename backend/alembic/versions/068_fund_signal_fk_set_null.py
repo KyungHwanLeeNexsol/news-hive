@@ -17,7 +17,15 @@ AccessExclusiveLock이 앱의 지속적인 RowShareLock 트랜잭션(fund_signal
 이전 버전으로 무중단 유지, 단 마이그레이션 미적용 상태로 배포가 막힘). 이를 완화하기 위해
 DDL 실행에 짧은 lock_timeout + 재시도를 추가한다 — 의미(ON DELETE 거동)는 변경하지 않는다.
 
-Revision ID: 068_fund_signal_disclosure_set_null
+리비전 ID 재명명(2026-07-08, 같은 배포 하드닝 작업 중): 최초 리비전 ID
+"068_fund_signal_disclosure_set_null"(36자)이 `alembic_version.version_num` 컬럼의
+VARCHAR(32) 한도를 초과해 `StringDataRightTruncation`으로 실패했다 — 직전 리비전
+"067_surge_detector_contribution"이 정확히 32자로 한도에 걸쳐 있었던 것과 대비된다.
+이 DDL 자체(FK 재생성)는 lock_timeout+재시도 덕분에 이미 성공했었고, 실패는 그 이후
+Alembic 자체의 버전 기록 UPDATE 단계에서 발생했다(트랜잭션 전체 롤백되어 데이터 유실 없음).
+이후 신규 마이그레이션 작성 시 revision 문자열이 32자를 넘지 않도록 주의할 것.
+
+Revision ID: 068_fund_signal_fk_set_null
 Revises: 067_surge_detector_contribution
 Create Date: 2026-07-08
 """
@@ -32,7 +40,7 @@ from alembic import op
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
-revision = "068_fund_signal_disclosure_set_null"
+revision = "068_fund_signal_fk_set_null"
 down_revision = "067_surge_detector_contribution"
 branch_labels = None
 depends_on = None

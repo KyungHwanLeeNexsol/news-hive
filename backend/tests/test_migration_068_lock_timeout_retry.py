@@ -21,7 +21,7 @@ _MIGRATION_PATH = os.path.join(
     "..",
     "alembic",
     "versions",
-    "068_fund_signal_disclosure_set_null.py",
+    "068_fund_signal_fk_set_null.py",
 )
 
 
