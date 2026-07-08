@@ -4,6 +4,54 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fix — SPEC-AI-074: Pool B 거래량 후보 레버리지/인버스 ETF·ETN 제거 (2026-07-08)
+
+#### `e41cde6` — stocks 교집합 정제 + 유계 오버페치로 crowding-out 해소
+
+**목적**: 레버리지/인버스 ETF·ETN(KODEX 인버스 등)이 Naver 절대 거래량 순위 상위를 구조적으로
+점유해, 실제 200%+ 비율 급증한 중·소형주가 Pool B 후보에서 밀려나던 문제 수정(실측: `109610`
+에스와이, 2026-07-07 비율 6.86x인데도 미탐지).
+
+- SPEC-AI-071의 `stocks` 교집합 분류를 `stock_registry_service.fetch_tracked_stock_codes`로
+  추출해 071/074가 공유하는 단일 출처로 통합(071 테스트 무회귀)
+- Pool B 후보를 비율 필터링 이전에 `stocks` 교집합으로 정제, `fetch_volume_leaders_sync`에 유계
+  페이지네이션(`limit=140`/`max_pages=3`) 추가로 crowding-out 보상. `detect_volume_breakout`
+  (AI-062/063/066)은 영향 없음(diff 0)
+- `stocks` 조회 실패 시 fail-open, 배제 종목 수 로깅
+
+**영향 파일**: `backend/app/services/surge_detector.py`, `backend/app/services/naver_finance.py`,
+`backend/app/services/stock_registry_service.py`(신규), `backend/tests/test_spec_ai_074.py`(신규 479줄)
+
+---
+
+### Fix — SPEC-AI-073: DART 공시 수집 8일 아웃티지 및 로거 무음화 버그 수정 (2026-07-08)
+
+#### `abebcfc`, `6131f65`, `ca5a5e9` — 정리-선행 차단 제거 + FK 개정 + 로거 근본원인 수정 + 배포 하드닝
+
+**목적**: `fund_signals.disclosure_id` FK(NO ACTION)가 5일 보존 정책 삭제와 충돌해 2026-06-30부터
+DART 크롤 정리 단계가 매번 `ForeignKeyViolation`으로 실패, 같은 함수 내 실제 공시 수집이 한 번도
+실행되지 못했다. 급등예측 스캔 유니버스의 Pool A(공시 기반)가 8일+ 동안 0으로 고정된 근본 원인.
+동시에 `app.services.*` 로거가 ERROR/CRITICAL 포함 전혀 표면화되지 않아 8일간 무증상 방치됨.
+
+- `fund_signals.disclosure_id` FK를 `ON DELETE SET NULL`로 변경(마이그레이션 068), 정리/수집
+  로직을 독립 try/except로 격리(`abebcfc`)
+- 로거 무음화 근본 원인 확정: `alembic/env.py`의 `fileConfig()` 기본값
+  (`disable_existing_loggers=True`)이 `app.services.*` 로거를 영구 비활성화시키고 있었음(연구
+  단계 uvicorn 가설이 아니었음). `main.py`에 로깅 재설정 방어선 추가(`abebcfc`)
+- 배포 중 발견된 프로덕션 전용 이슈 2건 동일자 후속 수정: 마이그레이션 068의 `ALTER TABLE` 락
+  경합(AccessExclusiveLock)으로 인한 데드락 → `lock_timeout`+SAVEPOINT 재시도 하드닝(`6131f65`),
+  리비전 ID가 `alembic_version.version_num VARCHAR(32)` 초과 → 27자로 축약(`ca5a5e9`)
+- 배포 검증: `alembic current` = `068_fund_signal_fk_set_null (head)`, 프로덕션
+  `journalctl`에서 `"DART crawl completed: 7 new disclosures"` 확인(2026-07-08)
+
+**영향 파일**: `backend/app/services/scheduler.py`, `backend/app/models/fund_signal.py`,
+`backend/app/main.py`, `backend/alembic/env.py`,
+`backend/alembic/versions/068_fund_signal_fk_set_null.py`(신규),
+`backend/tests/test_spec_ai_073.py`(신규 190줄), `backend/tests/test_services/test_scheduler.py`,
+`backend/tests/test_migration_068_lock_timeout_retry.py`(신규)
+
+---
+
 ### Fix — SPEC-AI-072: near_limit_up_carry 탐지기 T-1 데이터 소스 교정 (2026-07-03)
 
 #### `ca1ad10` — 라이브 등락률 대신 T-1 종가-대-종가 change_rate 사용

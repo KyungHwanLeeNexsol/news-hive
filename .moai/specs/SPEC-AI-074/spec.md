@@ -1,7 +1,7 @@
 ---
 id: SPEC-AI-074
 version: 0.1.0
-status: draft
+status: completed
 created: 2026-07-08
 updated: 2026-07-08
 author: MoAI
@@ -200,3 +200,33 @@ Pool B를 **미필터로 진행**(현행 거동 보존)하여 조회 실패가 P
   정제 삽입점에 `@MX:NOTE`(SPEC-AI-074 의도)로 "비-stocks 배제 + 크라우딩아웃 보상" 기록.
 - 추출된 공유 `stocks`-교집합 헬퍼 — 다수 호출부(071 정답 경로 + 074 Pool B) fan_in >= 2, 규칙의 단일
   출처. `@MX:ANCHOR`(+`@MX:REASON`)로 "앱 추적 종목만 유효 후보" 불변 계약 고정.
+
+---
+
+## Implementation Notes (2026-07-08)
+
+manager-ddd가 DDD(ANALYZE-PRESERVE-IMPROVE)로 계획대로 구현. plan.md가 제시한 축 1(오염 제거)·
+축 2(유계 오버페치)를 모두 채택했고, 계획 대비 범위 이탈 없음(커밋 1건, `e41cde6`).
+
+- `_fetch_tracked_stock_codes`(SPEC-AI-071, `surge_actual_outcome_service.py`)를 신규
+  `stock_registry_service.fetch_tracked_stock_codes`로 추출해 071(정답 경로)과 074(Pool B 경로)가
+  동일 헬퍼를 import하는 단일 출처로 통합(거동 불변, 071 기존 테스트 무회귀로 확인).
+- `build_scan_universe`의 Pool B 블록에서 비율 필터링 이전에 `stocks` 교집합을 삽입해 비-`stocks`
+  상품(레버리지/인버스 ETF·ETN)을 배제.
+- `naver_finance.fetch_volume_leaders_sync`에 유계 페이지네이션(`max_pages`, 기본값 1=기존 거동
+  하위호환)을 추가하고, Pool B는 `limit=140`/`max_pages=3`으로 오버페치해 배제로 인한
+  crowding-out을 보상(plan.md가 제시한 `limit≈130~150` 추정 범위 내에서 확정).
+  `detect_volume_breakout`(SPEC-AI-062/063/066)은 기존 호출부를 그대로 사용해 영향 없음(diff 0
+  테스트로 확인).
+- `stocks` 조회 실패 시 fail-open(미필터 진행) + 배제 종목 수 로깅을 REQ-004/005대로 구현.
+- 계획과의 divergence 없음 — SPEC-AI-073과 달리 배포 중 추가 프로덕션 이슈는 발견되지 않음(서비스
+  재시작 정상, 에러 없음).
+
+**최종 검증**:
+- 로컬 전체 스위트: `pytest tests/ -n 4 -m "not slow"` **1860 passed, 4 skipped, 3 xpassed**
+  (2026-07-08 재확인, `backend/tests/test_spec_ai_074.py` 479줄 신규,
+  `test_surge_actual_outcome_service.py`(071) 전량 통과로 헬퍼 추출 회귀 없음 확인)
+- 배포 확인: 프로덕션 `newshive.service` 재시작 후 `active (running)` 상태 유지, 재시작 직후
+  에러 로그 없음(2026-07-08 SSH 확인). Pool B 크라우딩아웃 해소(`109610`류 genuine 종목 표면화)는
+  급등 스캔 사이클의 특성상 다음 실제 거래일 관찰로 확인 예정(EC-5/롤아웃 전략에 따른 전진 관측).
+- 상태: completed (커밋 `e41cde6`)

@@ -1,7 +1,7 @@
 ---
 id: SPEC-AI-073
 version: 0.1.0
-status: draft
+status: completed
 created: 2026-07-08
 updated: 2026-07-08
 author: MoAI
@@ -187,3 +187,50 @@ The system **SHALL** `app.services.scheduler` 및 `app.services.dart_crawler`(�
 - `_run_dart_crawl`(`scheduler.py:276`) — 다수 스케줄러 진입점 + watchdog에서 호출되는 고 fan_in
   경계. 정리/수집 격리 계약을 `@MX:ANCHOR`(+`@MX:REASON`)로 고정.
 - `main.py:26-42` 로깅 설정 블록 — 운영 가시성 불변식. 원인 확정 후 `@MX:NOTE`로 의도/제약 기록.
+
+---
+
+## Implementation Notes (2026-07-08)
+
+manager-ddd가 DDD(ANALYZE-PRESERVE-IMPROVE)로 계획대로 구현. REQ-001(정리/수집 격리)·REQ-002(FK
+`ON DELETE SET NULL`, 마이그레이션 068)·REQ-003(로거 가시성)·REQ-005(watchdog 회귀 가드)를 모두
+반영. 배포 과정에서 계획에 없던 두 건의 프로덕션 전용 이슈가 추가로 발견되어 같은 날 후속 수정으로
+처리됨(SPEC 의도인 "동일 수정의 배포 가능성" 범위 내 정당한 확장이며 범위 크리프 아님).
+
+- **커밋 1 — `abebcfc`**: 핵심 3종 수정. `fund_signal.py`의 `disclosure_id` FK를
+  `ondelete="SET NULL"`로 변경 + 마이그레이션 068(`068_fund_signal_disclosure_set_null.py`,
+  이후 `ca5a5e9`에서 파일명 변경) 신규. `scheduler.py`의 `_run_dart_crawl`에서 정리/수집을 독립
+  try/except로 격리. 로거 가시성 근본 원인을 확정해 수정 — **research.md §3의 uvicorn
+  `disable_existing_loggers` 가설이 아니라, `alembic/env.py`의 `fileConfig()` 기본값
+  (`disable_existing_loggers=True`)이 `app.services.*` 로거를 영구 비활성화시키고 있었음이 실제
+  원인**이었다(계획 대비 원인 진단의 정정). `main.py`에 마이그레이션 실행 이후 로깅 재설정을 추가하는
+  방어선 2를 넣어 대응.
+- **커밋 2 — `6131f65`(SPEC-AI-073 후속, 계획에 없던 프로덕션 전용 이슈 #1)**: 2026-07-08 실제
+  배포 시도에서 마이그레이션 068의 `ALTER TABLE`(FK drop/recreate)이 `AccessExclusiveLock`을
+  요구해 운영 중인 앱의 `RowShareLock` 트랜잭션과 교착(DeadlockDetected)했다. `deploy.sh`의
+  `set -e`로 배포가 중단되어 서비스 자체는 무중단 유지됐으나 마이그레이션은 미적용 상태로 남았다.
+  DDL 실행에 `lock_timeout(5s)` + SAVEPOINT 단위 재시도(최대 5회, backoff 3s)를 추가해 무한 대기
+  대신 빠른 실패 후 재시도하도록 하드닝. ON DELETE 거동(SET NULL)의 의미는 변경 없음.
+- **커밋 3 — `ca5a5e9`(SPEC-AI-073 후속, 계획에 없던 프로덕션 전용 이슈 #2)**: `6131f65`로 FK
+  변경 DDL 자체는 성공했으나, `alembic_version.version_num`이 `VARCHAR(32)`인데 리비전 ID
+  `"068_fund_signal_disclosure_set_null"`(36자)이 이를 초과해 `StringDataRightTruncation`으로
+  배포가 재차 실패(트랜잭션 전체 롤백, 데이터 유실 없음). 리비전 ID를
+  `"068_fund_signal_fk_set_null"`(27자)로 축약해 해결. 거동(SET NULL, lock_timeout+재시도) 변경 없음.
+- **plan.md가 이 두 이슈를 예견하지 못한 이유**: 로컬 개발 환경에 실제 운영 트래픽이 존재하는
+  PostgreSQL 인스턴스가 없어, `ALTER TABLE` 락 경합(운영 중 동시 쓰기 트랜잭션과의 교착)과 Alembic
+  버전 테이블의 실제 컬럼 폭 제약(`VARCHAR(32)`)을 사전에 재현/검증할 수 없었다. 두 문제 모두
+  로컬 단위 테스트로는 드러나지 않고 라이브 배포 시점에만 발현되는 클래스의 버그다.
+
+**최종 검증**:
+- 로컬 전체 스위트: `pytest tests/ -n 4 -m "not slow"` **1860 passed, 4 skipped, 3 xpassed**
+  (2026-07-08 재확인, `backend/tests/test_spec_ai_073.py` 190줄 + `test_services/test_scheduler.py`
+  +130줄 + `test_migration_068_lock_timeout_retry.py` 190줄 포함)
+- 배포 검증: 프로덕션 `alembic current` → `068_fund_signal_fk_set_null (head)` 확인
+  (2026-07-08 SSH 확인)
+- 프로덕션 `journalctl -u newshive` 실제 로그 확인(2026-07-08 05:08:54 UTC):
+  `{"name": "app.services.scheduler", "level": "INFO", "message": "DART crawl completed: 7 new
+  disclosures"}` — Bug 1(수집 차단)과 Bug 2(로거 무음화)가 모두 해소되어 실제 DART 공시 수집이
+  재개되고 그 결과가 `journalctl`에 표면화됨을 실측으로 확인. 동일 시각
+  `app.services.dart_crawler`의 `"DART: page N/21..."` 진행 로그, `disclosure_impact_scorer`의
+  공시 시그널 생성 로그도 정상 표출됨.
+- 상태: completed (커밋 `abebcfc`, `6131f65`, `ca5a5e9`)
