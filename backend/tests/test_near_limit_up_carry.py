@@ -911,3 +911,359 @@ def test_ec5_disabled_config_never_fetches_history(db):
 
     assert signals == []
     mock_fetch.assert_not_called()
+
+
+# ===========================================================================
+# SPEC-AI-077: near_limit_up 후보 쿼리 NULL 시총 굶주림 교정 (DDD ANALYZE-PRESERVE-IMPROVE)
+#
+# 재현 우선(CLAUDE.md Rule 4): AC-077-001은 수정 전 코드에서 "NULL 시총 후보 도달 수 = 0"
+# (레거시 nullslast+limit가 non-null로 한도를 다 채워 NULL을 완전히 밀어냄)을 재현하며,
+# 이 테스트는 수정 전에는 FAIL해야 하고 수정 후에는 PASS해야 한다.
+# ===========================================================================
+
+def test_ac077_001_null_market_cap_starvation_fixed_live_scale_replay(db):
+    """AC-077-001: 굶주림 재현+교정 — non-null 4개(절단 압력)에서도 NULL >= floor 대표.
+
+    Given max_stocks_to_check=3, null_cap_min_slots=1, non-null 4개(모두 +27%) +
+    NULL 2개(+27%). 레거시(수정 전) 쿼리는 non-null 상위 3개만 반환해 NULL fetch=0.
+    수정 후에는 NULL fetch >= min(2,1)=1이어야 한다.
+    """
+    from app.services.surge_detector import detect_near_limit_up_carries
+
+    non_null_codes = ["077A00", "077A01", "077A02", "077A03"]
+    null_codes = ["077B00", "077B01"]
+    for code, cap in zip(non_null_codes, [1000, 900, 800, 700]):
+        _make_stock(db, code, f"non_null_{code}", market_cap=cap)
+    for code in null_codes:
+        _make_stock(db, code, f"null_{code}", market_cap=None)
+
+    cfg = _make_config(max_stocks_to_check=3, null_cap_min_slots=1)
+    history = _history_for_change(27.0)
+
+    with _patch_history(return_value=history) as mock_fetch:
+        signals = detect_near_limit_up_carries(db, cfg)
+
+    fetched_codes = {call.args[0] for call in mock_fetch.call_args_list}
+    null_fetched = set(null_codes) & fetched_codes
+
+    # 재현 우선: 수정 전에는 null_fetched == set() (len 0) → 아래 단언에서 FAIL해야 한다.
+    assert len(null_fetched) >= min(len(null_codes), cfg.null_cap_min_slots)
+    assert len(fetched_codes) <= cfg.max_stocks_to_check
+    assert len(signals) >= 1
+
+
+# ---------------------------------------------------------------------------
+# AC-077-002 (REQ-001): 비굶주림 일반 속성 (파라미터화)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "cap,floor,n_non_null,n_null",
+    [
+        (3, 1, 5, 3),
+        (3, 2, 4, 4),
+        (4, 2, 10, 5),
+    ],
+)
+def test_ac077_002_starvation_prevention_property(db, cap, floor, n_non_null, n_null):
+    """AC-077-002: NULL 후보 대표 수 >= min(M, F) — non-null 후보 수 N과 무관."""
+    from app.services.surge_detector import detect_near_limit_up_carries
+
+    non_null_codes = [f"n{i:04d}" for i in range(n_non_null)]
+    null_codes = [f"z{i:04d}" for i in range(n_null)]
+    for i, code in enumerate(non_null_codes):
+        _make_stock(db, code, f"nn{i}", market_cap=1000 - i)
+    for code in null_codes:
+        _make_stock(db, code, f"nl{code}", market_cap=None)
+
+    cfg = _make_config(max_stocks_to_check=cap, null_cap_min_slots=floor)
+    history = _history_for_change(27.0)
+
+    with _patch_history(return_value=history) as mock_fetch:
+        detect_near_limit_up_carries(db, cfg)
+
+    fetched_codes = {call.args[0] for call in mock_fetch.call_args_list}
+    null_fetched = set(null_codes) & fetched_codes
+    assert len(null_fetched) >= min(n_null, floor)
+
+
+# ---------------------------------------------------------------------------
+# AC-077-003 (REQ-002): 비용 상한 보존
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "cap,floor,n_non_null,n_null",
+    [
+        (3, 1, 5, 3),
+        (150, 2, 3, 4),
+        (10, 2, 3, 8),
+    ],
+)
+def test_ac077_003_cost_cap_preserved(db, cap, floor, n_non_null, n_null):
+    """AC-077-003: 총 fetch 종목 수는 절단 압력 유/무와 무관하게 항상 <= max_stocks_to_check."""
+    from app.services.surge_detector import detect_near_limit_up_carries
+
+    non_null_codes = [f"c{i:04d}" for i in range(n_non_null)]
+    null_codes = [f"d{i:04d}" for i in range(n_null)]
+    for i, code in enumerate(non_null_codes):
+        _make_stock(db, code, f"cn{i}", market_cap=1000 - i)
+    for code in null_codes:
+        _make_stock(db, code, f"cd{code}", market_cap=None)
+
+    cfg = _make_config(max_stocks_to_check=cap, null_cap_min_slots=floor)
+    history = _history_for_change(27.0)
+
+    with _patch_history(return_value=history) as mock_fetch:
+        detect_near_limit_up_carries(db, cfg)
+
+    fetched_codes = {call.args[0] for call in mock_fetch.call_args_list}
+    assert len(fetched_codes) <= cap
+
+
+def test_ac077_003_max_stocks_to_check_constant_unchanged(db):
+    """AC-077-003: max_stocks_to_check 기본값 1200 불변(비용 상한 리터럴 diff 0)."""
+    cfg = _make_config()
+    assert cfg.max_stocks_to_check == 1200
+
+
+# ---------------------------------------------------------------------------
+# AC-077-004 (REQ-003): floor 예약 후 non-null 우선 잔여 배분
+# ---------------------------------------------------------------------------
+
+def test_ac077_004_floor_reserved_then_non_null_priority_fill(db):
+    """AC-077-004: non-null 3개 전부 포함, NULL 대표 수 = min(8,10-3)=7, 총 fetch=10."""
+    from app.services.surge_detector import detect_near_limit_up_carries
+
+    non_null_codes = ["e0001", "e0002", "e0003"]
+    null_codes = [f"f{i:04d}" for i in range(8)]
+    for i, code in enumerate(non_null_codes):
+        _make_stock(db, code, f"nn{i}", market_cap=1000 - i * 10)
+    for code in null_codes:
+        _make_stock(db, code, f"nl{code}", market_cap=None)
+
+    cfg = _make_config(max_stocks_to_check=10, null_cap_min_slots=2)
+    history = _history_for_change(27.0)
+
+    with _patch_history(return_value=history) as mock_fetch:
+        detect_near_limit_up_carries(db, cfg)
+
+    fetched_codes = {call.args[0] for call in mock_fetch.call_args_list}
+    null_fetched = set(null_codes) & fetched_codes
+    non_null_fetched = set(non_null_codes) & fetched_codes
+
+    assert non_null_fetched == set(non_null_codes)
+    assert len(null_fetched) == min(8, 10 - 3)
+    assert len(fetched_codes) == 10
+
+
+# ---------------------------------------------------------------------------
+# AC-077-005 (REQ-005): 절단 압력 없음 — 전 후보 포함 + 집합 동등성
+# ---------------------------------------------------------------------------
+
+def test_ac077_005_no_truncation_pressure_includes_all(db):
+    """AC-077-005: 절단 압력 없으면(7<=150) 후보 SET이 7개 종목 전부와 동일."""
+    from app.services.surge_detector import detect_near_limit_up_carries
+
+    non_null_codes = ["g0001", "g0002", "g0003"]
+    null_codes = ["h0001", "h0002", "h0003", "h0004"]
+    for i, code in enumerate(non_null_codes):
+        _make_stock(db, code, f"nn{i}", market_cap=1000 - i * 10)
+    for code in null_codes:
+        _make_stock(db, code, f"nl{code}", market_cap=None)
+
+    cfg = _make_config(max_stocks_to_check=150, null_cap_min_slots=2)
+    history = _history_for_change(27.0)
+
+    with _patch_history(return_value=history) as mock_fetch:
+        detect_near_limit_up_carries(db, cfg)
+
+    fetched_codes = {call.args[0] for call in mock_fetch.call_args_list}
+    assert fetched_codes == set(non_null_codes) | set(null_codes)
+
+
+# ---------------------------------------------------------------------------
+# AC-077-006 (REQ-005): null_cap_min_slots=0 레거시 동등성 [백워드 호환 탈출구]
+# ---------------------------------------------------------------------------
+
+def test_ac077_006_null_cap_min_slots_zero_matches_legacy_nullslast(db):
+    """AC-077-006: null_cap_min_slots=0이면 후보 SET이 레거시 nullslast 쿼리와 정확히 동일."""
+    from app.models.stock import Stock
+    from app.services.surge_detector import detect_near_limit_up_carries
+    from sqlalchemy import nullslast, or_
+
+    non_null_codes = ["i0001", "i0002", "i0003", "i0004"]
+    null_codes = ["j0001", "j0002"]
+    for code, cap in zip(non_null_codes, [1000, 900, 800, 700]):
+        _make_stock(db, code, f"nn_{code}", market_cap=cap)
+    for code in null_codes:
+        _make_stock(db, code, f"nl_{code}", market_cap=None)
+
+    cfg = _make_config(max_stocks_to_check=3, null_cap_min_slots=0)
+
+    # 레거시(수정 전) 쿼리를 그대로 재현 — 회귀 가드 기준선
+    legacy_codes = {
+        s.stock_code
+        for s in (
+            db.query(Stock)
+            .filter(
+                or_(
+                    Stock.market_cap.is_(None),
+                    Stock.market_cap >= cfg.min_market_cap_eok,
+                )
+            )
+            .order_by(nullslast(Stock.market_cap.desc()))
+            .limit(cfg.max_stocks_to_check)
+            .all()
+        )
+    }
+
+    history = _history_for_change(27.0)
+    with _patch_history(return_value=history) as mock_fetch:
+        detect_near_limit_up_carries(db, cfg)
+
+    fetched_codes = {call.args[0] for call in mock_fetch.call_args_list}
+    assert fetched_codes == legacy_codes
+    assert fetched_codes == set(non_null_codes[:3])  # 시총 상위 3개, NULL 0개(굶주림 거동 복원)
+
+
+# ---------------------------------------------------------------------------
+# AC-077-007 (REQ-004): NULL 서브셋 날짜 로테이션 + 시간 커버리지
+# ---------------------------------------------------------------------------
+
+def test_ac077_007_null_subset_date_rotation_and_coverage(db):
+    """AC-077-007: 날짜별로 다른 NULL 서브셋 선정(로테이션), 동일 날짜는 결정적."""
+    from app.models.fund_signal import FundSignal
+    from app.services.surge_detector import detect_near_limit_up_carries
+    from app.services.surge_trading_service import _get_prev_business_day
+    from zoneinfo import ZoneInfo
+
+    non_null_codes = ["k0001", "k0002"]
+    null_codes = [f"l{i:04d}" for i in range(4)]
+    for i, code in enumerate(non_null_codes):
+        _make_stock(db, code, f"nn{i}", market_cap=1000 - i * 10)
+    for code in null_codes:
+        _make_stock(db, code, f"nl{code}", market_cap=None)
+
+    cfg = _make_config(max_stocks_to_check=3, null_cap_min_slots=1)
+    KST = ZoneInfo("Asia/Seoul")
+
+    def _run_for_date(scan_date: date) -> set[str]:
+        fixed_now = datetime(
+            scan_date.year, scan_date.month, scan_date.day, 10, 0, tzinfo=KST
+        )
+        t1 = _get_prev_business_day(scan_date)
+        t2 = _get_prev_business_day(t1)
+        history = _make_history(12700, 10000, t1=t1, t2=t2)
+        with patch(
+            "app.services.surge_detector.datetime",
+            wraps=datetime,
+            **{"now.return_value": fixed_now},
+        ), _patch_history(return_value=history) as mock_fetch:
+            detect_near_limit_up_carries(db, cfg)
+        result = {call.args[0] for call in mock_fetch.call_args_list} & set(null_codes)
+        # 다음 호출이 "동일 날짜 재실행(10:00/15:20)" 이외의 상태(기존 시그널)에 오염되지
+        # 않도록, 이 헬퍼 호출이 만든 시그널을 제거해 각 날짜를 독립적으로 관찰한다.
+        db.query(FundSignal).delete()
+        db.commit()
+        return result
+
+    d1 = date(2026, 7, 6)
+    d2 = date(2026, 7, 7)
+
+    d1_first = _run_for_date(d1)
+    d1_second = _run_for_date(d1)
+    assert d1_first == d1_second  # 동일 날짜 반복 호출 → 결정적(동일 서브셋)
+    assert len(d1_first) == 1  # null_limit = 3 - 2 = 1
+
+    d2_result = _run_for_date(d2)
+    assert len(d2_result) == 1
+    assert d1_first != d2_result  # 날짜에 따라 다른 NULL 서브셋(로테이션)
+
+
+# ---------------------------------------------------------------------------
+# AC-077-008 (REQ-006): floor 설정 로딩 + clamp + yaml 비구동
+# ---------------------------------------------------------------------------
+
+def test_ac077_008_null_cap_min_slots_default_and_yaml_not_driven(db):
+    """AC-077-008: null_cap_min_slots 기본값=300, surge_detection.yaml에 키 없음(yaml 비구동)."""
+    from app.surge_config.surge_settings import NearLimitUpConfig, _CONFIG_PATH
+
+    cfg = NearLimitUpConfig()
+    assert hasattr(cfg, "null_cap_min_slots")
+    assert cfg.null_cap_min_slots == 300
+
+    yaml_text = _CONFIG_PATH.read_text(encoding="utf-8")
+    assert "null_cap_min_slots" not in yaml_text
+    assert "near_limit_up" not in yaml_text
+
+
+def test_ac077_008_null_cap_min_slots_clamped_when_exceeds_cap(db):
+    """AC-077-008: floor(10) > cap(3) 오설정 시 예외 없이 안전 축소되고 총 fetch<=cap 유지."""
+    from app.services.surge_detector import detect_near_limit_up_carries
+
+    for i in range(4):
+        _make_stock(db, f"m{i:04d}", f"stk{i}", market_cap=None if i < 3 else 1000)
+
+    cfg = _make_config(max_stocks_to_check=3, null_cap_min_slots=10)
+    history = _history_for_change(27.0)
+
+    with _patch_history(return_value=history) as mock_fetch:
+        signals = detect_near_limit_up_carries(db, cfg)
+
+    assert len(mock_fetch.call_args_list) <= 3
+    assert isinstance(signals, list)
+
+
+def test_ac077_008_clamp_logs_warning(db, caplog):
+    """AC-077-008: floor > cap 오설정 시 경고 로그가 남는다."""
+    import logging
+
+    from app.services.surge_detector import detect_near_limit_up_carries
+
+    _make_stock(db, "n0001", "clampstk", market_cap=None)
+    cfg = _make_config(max_stocks_to_check=3, null_cap_min_slots=10)
+
+    with caplog.at_level(logging.WARNING, logger="app.services.surge_detector"):
+        with _patch_history(return_value=_history_for_change(27.0)):
+            detect_near_limit_up_carries(db, cfg)
+
+    assert "null_cap_min_slots" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# AC-077-009 (REQ-008): 굶주림 관측성
+# ---------------------------------------------------------------------------
+
+def test_ac077_009_starvation_observability_logging(db, caplog):
+    """AC-077-009: non-null/NULL 평가 수 + 로테이션 offset + 총 후보 수가 로그에 출력된다."""
+    import logging
+
+    from app.services.surge_detector import detect_near_limit_up_carries
+
+    for i, cap in enumerate([1000, 900, 800, 700]):
+        _make_stock(db, f"o{i:04d}", f"nn{i}", market_cap=cap)
+    for i in range(2):
+        _make_stock(db, f"p{i:04d}", f"nl{i}", market_cap=None)
+
+    cfg = _make_config(max_stocks_to_check=3, null_cap_min_slots=1)
+
+    with caplog.at_level(logging.INFO, logger="app.services.surge_detector"):
+        with _patch_history(return_value=_history_for_change(27.0)):
+            detect_near_limit_up_carries(db, cfg)
+
+    assert "near_limit_up" in caplog.text
+    assert "non-null=" in caplog.text
+    assert "rot_offset=" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# AC-077-011 (Exclusions): 임계/공식/설정 상수 무변경 재확인
+# ---------------------------------------------------------------------------
+
+def test_ac077_011_thresholds_and_formula_diff_zero(db):
+    """AC-077-011: 탐지 임계·공식·설정 상수가 SPEC-AI-077로 변경되지 않았음을 재확인."""
+    cfg = _make_config()
+    assert cfg.near_limit_up_min_pct == 15.0
+    assert cfg.near_limit_up_max_pct == 29.99
+    assert cfg.max_stocks_to_check == 1200
+    assert cfg.max_signals_per_day is None
+    assert cfg.min_market_cap_eok == 300

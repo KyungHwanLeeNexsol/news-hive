@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable
 
-from sqlalchemy import and_, nullslast, or_
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.surge_config.surge_settings import SurgeDetectionConfig
@@ -2644,8 +2644,10 @@ def _compute_t1_change_from_history(
 
 
 # @MX:ANCHOR: [AUTO] detect_near_limit_up_carries — 상한가 근접 carry-forward 진입점
-# @MX:REASON: fund_manager._run_coverage_expansion에서 호출. 전체 stocks 시총 상위 스캔 + 가격 이력 API 호출 포함
-# @MX:SPEC: SPEC-AI-023, SPEC-AI-072
+# @MX:REASON: fund_manager._run_coverage_expansion에서 호출. 전체 stocks 시총 상위 스캔 + 가격 이력 API
+#   호출 포함. 후보 선정은 non-null 우선 쿼리 + NULL floor quota(null_cap_min_slots) + 날짜 로테이션이
+#   nullslast()의 NULL 굶주림 메커니즘을 슈퍼시드(SPEC-AI-077) — max_stocks_to_check(비용 상한)는 불변.
+# @MX:SPEC: SPEC-AI-023, SPEC-AI-072, SPEC-AI-077
 def detect_near_limit_up_carries(
     db: Session,
     config: "NearLimitUpConfig",  # noqa: F821
@@ -2698,21 +2700,88 @@ def detect_near_limit_up_carries(
             )
         )
 
-        # 시총 상위 N 종목 — market_cap NULL 종목(전체의 60%+)도 후보 풀에 포함.
-        # 이전에는 NULL 제외로 남광토건 등 실제 상한가 근접 종목이 통째로 누락됐음.
-        # NULL은 nullslast()로 순위 뒤로 밀려 배치되며, max_stocks_to_check 확대로 도달 가능.
-        # min_market_cap_eok 미만인 종목은 제외하되, NULL 시총은 허용(REQ-AI023-001 a).
-        candidates = (
-            db.query(Stock)
-            .filter(
-                or_(
-                    Stock.market_cap.is_(None),
-                    Stock.market_cap >= config.min_market_cap_eok,
-                )
+        # SPEC-AI-077: NULL 대표는 floor quota(null_cap_min_slots) + 날짜 로테이션으로 보장한다.
+        # 구 메커니즘(nullslast()가 non-null 전체를 NULL 앞에 배치)은 non-null 수가
+        # max_stocks_to_check에 근접·초과하면 NULL을 통째로 밀어냈다(증상 처치였던 500→1200
+        # 확대는 재발을 지연시킬 뿐 메커니즘을 고치지 못함). max_stocks_to_check는 후보당
+        # 네트워크 fetch 예산 상한으로 불변(SPEC-AI-023/072 소유). min_market_cap_eok 미만인
+        # non-null 종목은 제외하되, NULL 시총은 항상 허용(REQ-AI023-001 a).
+        # @MX:NOTE: [AUTO] non-null 우선 쿼리 + NULL floor quota 쿼리(날짜 유도 로테이션)로 분리.
+        #   총 후보 <= max_stocks_to_check 보존, null_cap_min_slots==0이면 레거시 nullslast
+        #   집합과 동일(백워드 호환 탈출구, REQ-005).
+        # @MX:SPEC: SPEC-AI-077
+        from sqlalchemy import func as sqlfunc
+
+        null_count = (
+            db.query(sqlfunc.count(Stock.id)).filter(Stock.market_cap.is_(None)).scalar()
+        ) or 0
+
+        null_cap_min_slots = config.null_cap_min_slots
+        if null_cap_min_slots > config.max_stocks_to_check:
+            logger.warning(
+                "[near_limit_up] null_cap_min_slots(%d) > max_stocks_to_check(%d) — %d로 축소",
+                null_cap_min_slots,
+                config.max_stocks_to_check,
+                config.max_stocks_to_check,
             )
-            .order_by(nullslast(Stock.market_cap.desc()))
-            .limit(config.max_stocks_to_check)
+            null_cap_min_slots = config.max_stocks_to_check
+
+        reserved_null = min(null_count, null_cap_min_slots)
+        non_null_limit = config.max_stocks_to_check - reserved_null
+
+        non_null_candidates = (
+            db.query(Stock)
+            .filter(Stock.market_cap >= config.min_market_cap_eok)
+            .order_by(Stock.market_cap.desc())
+            .limit(non_null_limit)
             .all()
+        )
+
+        null_limit = config.max_stocks_to_check - len(non_null_candidates)
+
+        null_candidates: list[Stock] = []
+        rot_offset = 0
+        # null_cap_min_slots==0(백워드 호환 탈출구)이면 로테이션도 무효화해 레거시
+        # nullslast 거동(NULL은 PK/id 순으로 앞에서부터 채움)을 그대로 복원한다(REQ-005).
+        if null_limit > 0 and null_count > 0:
+            if config.null_cap_min_slots > 0:
+                rot_offset = (today_kst_start.date().toordinal() * null_limit) % null_count
+            null_candidates = (
+                db.query(Stock)
+                .filter(Stock.market_cap.is_(None))
+                .order_by(Stock.id.asc())
+                .offset(rot_offset)
+                .limit(null_limit)
+                .all()
+            )
+            if len(null_candidates) < null_limit:
+                # 로테이션 offset이 끝단에 걸치면 라운드로빈 wrap-around로 처음부터 채운다
+                # (us_news.py 라운드로빈 "even coverage" 관례 재사용).
+                remaining = null_limit - len(null_candidates)
+                seen_ids = {s.id for s in null_candidates}
+                wrap_candidates = (
+                    db.query(Stock)
+                    .filter(Stock.market_cap.is_(None))
+                    .order_by(Stock.id.asc())
+                    .limit(remaining)
+                    .all()
+                )
+                null_candidates.extend(s for s in wrap_candidates if s.id not in seen_ids)
+
+        seen_ids: set[int] = set()
+        candidates: list[Stock] = []
+        for s in non_null_candidates + null_candidates:
+            if s.id in seen_ids:
+                continue
+            seen_ids.add(s.id)
+            candidates.append(s)
+
+        logger.info(
+            "[near_limit_up] 후보 non-null=%d NULL=%d (rot_offset=%d) / 총 %d",
+            len(non_null_candidates),
+            len(null_candidates),
+            rot_offset,
+            len(candidates),
         )
 
         for stock in candidates:

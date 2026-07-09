@@ -569,6 +569,12 @@ class NearLimitUpConfig(BaseModel):
     max_signals_per_day: int | None = None
     # 시총 하한 필터 (억원) — REQ-AI023-001(a). NULL 시총 종목은 필터 대상에서 제외(허용)
     min_market_cap_eok: int = 300
+    # @MX:NOTE: [AUTO] SPEC-AI-077 REQ-006 — NULL 시총 종목 최소 보장 슬롯(floor quota).
+    # NearLimitUpConfig는 fund_manager.py에서 bare 생성되어 yaml 비구동이므로 이 필드는
+    # Pydantic 기본값 전용이다 — surge_detection.yaml에 추가 금지(dead config 방지).
+    # 0이면 로테이션/floor가 무효화되고 레거시 nullslast 거동으로 복귀한다(REQ-005 탈출구).
+    # @MX:SPEC: SPEC-AI-077 REQ-AI077-006
+    null_cap_min_slots: int = 300
 
 
 class InsiderPurchaseConfig(BaseModel):
