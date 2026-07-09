@@ -1,7 +1,7 @@
 ---
 id: SPEC-AI-077
-version: 0.1.0
-status: draft
+version: 1.0.0
+status: completed
 created: 2026-07-09
 updated: 2026-07-09
 author: MoAI
@@ -12,6 +12,10 @@ issue_number: 0
 # SPEC-AI-077: near_limit_up 후보 쿼리 NULL 시총 굶주림 교정 (Near-Limit-Up NULL-Market-Cap Candidate Starvation Fix)
 
 ## HISTORY
+
+- 2026-07-09 (v1.0.0): **구현 완료** — near_limit_up 탐지기 후보 풀 쿼리에서 NULL 시총 종목 85% 미평가 버그 수정.
+  commit: `9036490`, 테스트: `test_near_limit_up_carry.py` 356 라인 확장, 전체 1905건 PASS.
+  AC-077-001~004 전부 충족. NULL 종목에 최소 슬롯 quota + 날짜 로테이션으로 균등 평가 보장.
 
 - 2026-07-09 (v0.1.0): 최초 작성. 별도 조사(read-only 코드 검증 + 2026-07-09 라이브 DB 실측)로 확정된
   **near_limit_up 후보 풀 쿼리의 NULL 시총 굶주림 버그**를 SPEC화.

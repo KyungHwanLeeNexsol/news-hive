@@ -1,7 +1,7 @@
 ---
 id: SPEC-AI-075
-version: 0.1.0
-status: draft
+version: 1.0.0
+status: completed
 created: 2026-07-08
 updated: 2026-07-08
 author: MoAI
@@ -12,6 +12,10 @@ issue_number: 0
 # SPEC-AI-075: near_limit_up_carry 평가 시점 불일치 교정 (Evaluation-Timing Horizon Mismatch Fix)
 
 ## HISTORY
+
+- 2026-07-08 (v1.0.0): **구현 완료** — 급등예측 평가 시스템에서 near_limit_up_carry 지평 불일치 버그 수정.
+  commit: `811b340`, 테스트: `test_surge_evaluation_service.py` 181 라인 확장, 전체 1905건 PASS.
+  AC-075-001~003 전부 충족. 스캔 유니버스 절단 버그(SPEC-AI-076)의 전제 정화 완료.
 
 - 2026-07-08 (v0.1.0): 최초 작성. 별도 디버깅 조사(read-only, 코드 검증 + 프로덕션 데이터 검증)로 확정된
   **평가(evaluation) 시점 불일치 버그**를 SPEC화.

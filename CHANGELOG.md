@@ -4,6 +4,64 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fix — SPEC-AI-077: near_limit_up 후보 풀 NULL 시총 굶주림 교정 (2026-07-09)
+
+#### `9036490` — NULL 시총 종목 균등 평가 보장 (quota + 날짜 로테이션)
+
+**목적**: `detect_near_limit_up_carries()` 후보 쿼리가 `nullslast(market_cap.desc())`를 사용해 non-null 종목 957개가 전체 한도(1200) 이상이면 NULL 시총 1648개 중 1405개(85%)가 통째로 미평가되던 버그 수정. 라이브 실측 07-08: ~15-30% 급등주 4종이 NULL market_cap으로 탐지 대상 제외됐지만 정당한 near_limit_up_carry 후보였음.
+
+- `detect_near_limit_up_carries` 후보 쿼리를 non-null 우선 + NULL floor quota(날짜 로테이션) 2단계로 분리
+- `max_stocks_to_check`(1200) 비용 상한 불변 유지, 배분 메커니즘만 개선
+- 테스트: `test_near_limit_up_carry.py` 356 라인 확장, AC-077-001~004 전부 충족
+
+**영향 파일**: `backend/app/services/surge_detector.py`, `backend/app/surge_config/surge_settings.py`,
+`backend/tests/test_near_limit_up_carry.py`
+
+---
+
+### Fix — SPEC-AI-076: 스캔 유니버스 풀 절단 크라우딩아웃 교정 (2026-07-09)
+
+#### `6a429a9` — Pool A/B/C 최소 슬롯 quota (풀별 비굶주림 보장)
+
+**목적**: `build_scan_universe()` 최종 배분이 `pool_a + pool_b + pool_c`를 단순 concat 후 `[:150]`으로 슬라이스하는 방식이라 Pool A가 232까지 오르면 Pool C 52건이 100% 절단되던 버그 수정. 라이브 07-08: 스캔 유니버스가 사실상 Pool A만 포함되는 문제 발생.
+
+- `build_scan_universe()` 배분 로직을 엄격 concat-then-slice → quota(floor + 우선순위 잔여) 방식으로 교체
+- `max_scan_universe`(150) + `_min_ratio`(2.0) 불변, 배분 메커니즘만 개선 (비용 상한 동일)
+- 테스트: `test_spec_ai_065.py` 453 라인 신규, AC-076-001~005 전부 충족
+
+**영향 파일**: `backend/app/services/surge_detector.py`, `backend/app/surge_config/surge_detection.yaml`,
+`backend/app/surge_config/surge_settings.py`, `backend/tests/test_spec_ai_065.py`
+
+---
+
+### Fix — SPEC-AI-075: near_limit_up_carry 평가 지평 불일치 제외 (2026-07-08)
+
+#### `811b340` — near_limit_up_carry 지평 불일치 평가 필터 추가
+
+**목적**: `evaluate_surge_predictions()`가 모든 `signal_type=="surge_candidate"` 시그널을 "T-1 데이터로 익일(T) 예측"이라고 가정하지만, `detect_near_limit_up_carries` 탐지기는 지평이 다르다 — 시그널을 발행한 **그 날(day D)** 의 연속성만 예측한다. D에 발행된 시그널이 D+1에서 D+1 실제급등과 비교되어 **1거래일 늦게, 잘못된 날과 대조**되는 버그 수정.
+
+- 라이브 실측 07-08: 07-06 near_limit_up_carry 100%(7/7), 07-07 75%(9/12) 비중이 각각 다음날 평가에서 평가됨. 07-07 평가 `recall=0.0` 전부가 지평 불일치 시그널.
+- `predicted_set` 조립 시 `surge_metadata` 내용 필터로 near_limit_up_carry 배제 (preday_disclosure 제외와 동일 근거)
+- 테스트: `test_surge_evaluation_service.py` 181 라인 확장, AC-075-001~003 전부 충족
+
+**영향 파일**: `backend/app/services/surge_evaluation_service.py`,
+`backend/tests/test_surge_evaluation_service.py`
+
+---
+
+### Fix — 데일리 브리핑 로깅 버그 및 텔레그램 영구차단 스팸 수정 (2026-07-09)
+
+**목적**: DailyBriefing 생성 시 함수명 변경 미반영으로 AttributeError, 텔레그램 24시간 내 중복 알림 발송 시 채널 영구차단 스팸 방지.
+
+- `keyword_matcher.py`: 함수 시그니처 변경 반영, 배치 처리 최적화
+- `telegram_service.py`: 발송 이력 추적 + 24시간 쿨다운 로직 신규
+- 테스트: 193 라인 신규 테스트 추가
+
+**영향 파일**: `backend/app/services/keyword_matcher.py`, `backend/app/services/scheduler.py`,
+`backend/app/services/telegram_service.py`, `backend/tests/` 3개 파일
+
+---
+
 ### Fix — SPEC-AI-074: Pool B 거래량 후보 레버리지/인버스 ETF·ETN 제거 (2026-07-08)
 
 #### `e41cde6` — stocks 교집합 정제 + 유계 오버페치로 crowding-out 해소

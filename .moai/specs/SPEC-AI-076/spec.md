@@ -1,7 +1,7 @@
 ---
 id: SPEC-AI-076
-version: 0.1.0
-status: draft
+version: 1.0.0
+status: completed
 created: 2026-07-09
 updated: 2026-07-09
 author: MoAI
@@ -12,6 +12,10 @@ issue_number: 0
 # SPEC-AI-076: 스캔 유니버스 풀 절단 크라우딩아웃 교정 (Scan-Universe Pool Truncation Starvation Fix)
 
 ## HISTORY
+
+- 2026-07-09 (v1.0.0): **구현 완료** — 스캔 유니버스 최종 배분에서 하위 풀(Pool C) 100% 절단 버그 수정.
+  commit: `6a429a9`, 테스트: `test_spec_ai_065.py` 453 라인 신규, 전체 1905건 PASS.
+  AC-076-001~005 전부 충족. 스캔 비용 상한 불변 유지, quota 기반 배분으로 모든 풀에 최소 슬롯 보장.
 
 - 2026-07-09 (v0.1.0): 최초 작성. 별도 조사(read-only 코드 검증 + 2026-07-08 라이브 DB 실측)로 확정된
   **스캔 유니버스 최종 배분 절단 버그**를 SPEC화.
