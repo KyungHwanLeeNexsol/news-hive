@@ -481,9 +481,22 @@ class SurgeDetectionConfig(BaseModel):
     # @MX:SPEC: SPEC-AI-065 REQ-1
     zscore_min_baseline_samples: int = 10
     # SPEC-AI-065: 스캔 유니버스 최대 크기 (Pool A+B+C+기존 합산 상한)
-    # @MX:NOTE: [AUTO] SPEC-AI-065 REQ-2 — 150 초과 시 A > B > C > existing 우선순위로 잘라냄
+    # @MX:NOTE: [AUTO] SPEC-AI-065 REQ-2 — 150 초과 시 A > B > C > existing 우선순위로 잘라냄.
+    # SPEC-AI-076: 이 상한 값 자체는 불변(스캔 비용 상한, SPEC-AI-065 소유 유지) — 배분
+    # 메커니즘만 quota 방식(pool_b_min_slots/pool_c_min_slots)으로 슈퍼시드됨.
     # @MX:SPEC: SPEC-AI-065 REQ-2
     max_scan_universe: int = 150
+    # SPEC-AI-076 REQ-AI076-007: 풀별 최소 슬롯 예약(quota floor). 절단 압력 하에서 상위
+    # 우선순위 풀(특히 Pool A, 당일 DART 공시량에 의존해 통제 불가)이 하한 풀(B/C)을 0으로
+    # 굶기는 것을 방지한다. sum(floors) > max_scan_universe면 비율 축소 + 경고 로그(clamp).
+    # 기본값 0이면 레거시 엄격 concat-then-slice와 완전히 동일(REQ-AI076-004 백워드 호환).
+    # @MX:NOTE: [AUTO] SPEC-AI-076 REQ-007 — Pool B 최소 슬롯 floor
+    # @MX:SPEC: SPEC-AI-076 REQ-AI076-007
+    pool_b_min_slots: int = 20
+    # @MX:NOTE: [AUTO] SPEC-AI-076 REQ-007 — Pool C 최소 슬롯 floor(당일 실현급등 후행 풀,
+    # 무거운 DART 공시일에 가장 굶주리기 쉬워 Pool B보다 큰 기본값)
+    # @MX:SPEC: SPEC-AI-076 REQ-AI076-007
+    pool_c_min_slots: int = 30
 
     # @MX:ANCHOR: [AUTO] 앙상블 가중치 합산 검증 — 8개 탐지기 가중치 합산 반드시 1.0
     # @MX:REASON: 가중치 합산 != 1.0 이면 앙상블 스코어 범위가 0~1을 벗어나 시그널 임계값 판정이 왜곡됨

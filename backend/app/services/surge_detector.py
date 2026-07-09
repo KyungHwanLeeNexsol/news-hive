@@ -4110,6 +4110,12 @@ def detect_momentum_continuation(
 # SPEC-AI-065 REQ-2: 스캔 유니버스 확장 — Pool A/B/C 빌드
 # ---------------------------------------------------------------------------
 
+# @MX:ANCHOR: [AUTO] fan_in=3 — surge_detector.py:1933(gather_surge_candidates,
+# 직후 persist_pool_counts/persist_universe_members), scheduler.py:1226, :1243.
+# @MX:REASON: 배분 계약(quota가 엄격 concat-then-slice를 슈퍼시드; max_scan_universe
+# 비용 상한은 그대로 보존)이 세 호출부 모두의 스캔 유니버스 크기·풀 대표성을 결정한다 —
+# 계약을 깨면 세 호출부 전부에서 조용한 풀 굶주림 회귀가 재발할 수 있다.
+# @MX:SPEC: SPEC-AI-076 REQ-AI076-001/002/003
 def build_scan_universe(
     db: "Session",
     config: "SurgeDetectionConfig",
@@ -4121,7 +4127,9 @@ def build_scan_universe(
     - Pool A: 오늘 DART 공시 종목 (rcept_dt == today YYYYMMDD)
     - Pool B: 거래량 200%+ 당일 종목 (PriceRecord 히스토리 기반)
     - Pool C: 오늘 change_rate 5% 이상 종목 (SurgeActualOutcome)
-    - 최대 max_scan_universe 종목, 우선순위: A > B > C > existing
+    - 최대 max_scan_universe 종목(SPEC-AI-065 소유, 불변). 배분은 SPEC-AI-076 quota
+      방식(풀별 최소 슬롯 예약 + A > B(잔여) > C(잔여) > existing 우선순위 잔여 채움) —
+      엄격 concat-then-slice 아님. pool_b_min_slots=pool_c_min_slots=0이면 레거시와 동일.
 
     Args:
         db: SQLAlchemy 동기 세션
@@ -4132,7 +4140,9 @@ def build_scan_universe(
         (universe_codes, entry_pool_map, pool_counts)
         - universe_codes: 최종 스캔 유니버스 코드 목록
         - entry_pool_map: {stock_code: entry_pool} 딕셔너리
-        - pool_counts: {"pool_a": N, "pool_b": N, "pool_c": N} 집계
+        - pool_counts: {"pool_a"/"pool_b"/"pool_c": N(raw, pre-truncation),
+          "pool_a_scanned"/"pool_b_scanned"/"pool_c_scanned": N(post-truncation,
+          SPEC-AI-076 REQ-005)} 집계
     """
     from datetime import date as _date
 
@@ -4180,8 +4190,10 @@ def build_scan_universe(
         # SPEC-AI-074 REQ-002: 유계 오버페치 — 레버리지/인버스 ETF·ETN이 절대 거래량 순위
         # 상위 슬롯을 점유해 genuine 중·소형주 후보를 밀어내는 크라우딩아웃을 보상하기 위해
         # market별 조회 한도를 100→140으로 상향하고 최대 3페이지(naver_finance.py 페이지네이션,
-        # 단일 페이지 ≈50행)까지 조회한다. _min_ratio(2.0)·max_scan_universe(150)는 불변
-        # (Exclusion 4/5). detect_volume_breakout(:3906)은 별도 호출부라 영향받지 않는다.
+        # 단일 페이지 ≈50행)까지 조회한다. _min_ratio(2.0)·max_scan_universe(150)는 여전히 불변
+        # (Exclusion 4/5, SPEC-AI-074/065 소유 유지) — SPEC-AI-076으로 슈퍼시드된 것은 최종
+        # 배분 메커니즘(:4288 이하, 엄격 concat-then-slice → quota 기반)뿐이다.
+        # detect_volume_breakout(:3906)은 별도 호출부라 영향받지 않는다.
         volume_leader_codes = fetch_volume_leaders_sync(limit=140, max_pages=3)
 
         # @MX:NOTE: [AUTO] SPEC-AI-074 REQ-001 — 비율 필터링 이전에 앱 stocks 테이블과
@@ -4214,7 +4226,10 @@ def build_scan_universe(
                 if len(history) < _baseline_days + 1:
                     continue
                 # SPEC-AI-067 REQ-004: 당일(history[0]) 거래량만 장중 실시간 값으로 교정.
-                # Pool A/B/C 우선순위·max_scan_universe·_min_ratio=2.0은 불변(SPEC-AI-065 소유).
+                # max_scan_universe·_min_ratio=2.0은 여전히 불변(SPEC-AI-065/074 소유 유지).
+                # Pool A/B/C "우선순위"는 SPEC-AI-076으로 배분 메커니즘이 quota 기반(최소
+                # 슬롯 예약 + 우선순위 잔여 채움)으로 슈퍼시드되었다 — 엄격 concat-then-slice
+                # 아님(build_scan_universe :4288 이하 참조, 불변 슈퍼시드 결정).
                 today_vol = _resolve_today_volume(code, history[0].volume, config)
                 if today_vol <= 0:
                     continue
@@ -4275,21 +4290,61 @@ def build_scan_universe(
             pass
 
     # 기존 탐지기 결과 추가 (우선순위 최하)
+    # SPEC-AI-076 Exclusion 10 [HARD, Human 결정 2026-07-09]: 아래 루프가 existing_codes를
+    # 전량 entry_pool_map에 먼저 등록하므로, 이후 existing 병합 필터
+    # ([c for c in existing_codes if c not in entry_pool_map])는 항상 빈 리스트를 반환한다
+    # — 즉 순수 existing 종목은 실제로는 final_universe에 포함된 적이 없는 기존(pre-existing)
+    # 버그다. 본 SPEC의 스캔 범위(A/B/C 배분) 밖이므로 이 동작을 그대로 보존한다(AC-076-004).
     for code in existing_codes:
         if code not in entry_pool_map:
             entry_pool_map[code] = "existing"
 
-    pool_counts = {
+    # raw pre-truncation 카운트 — SurgeUniversePoolHistory.pool_a/b/c_count가 이 의미로
+    # 소비하므로(SPEC-AI-065 REQ-5, evaluate_surge_predictions) 절대 변경하지 않는다.
+    pool_counts: dict[str, int] = {
         "pool_a": len(pool_a_codes),
         "pool_b": len(pool_b_codes),
         "pool_c": len(pool_c_codes),
     }
 
-    # 우선순위: A > B > C > existing — max_universe 초과 시 잘라냄
+    # @MX:NOTE: [AUTO] SPEC-AI-076 REQ-AI076-001/003 — 풀별 최소 슬롯 예약(quota) 배분.
+    # 엄격 concat-then-slice(A>B>C>existing 우선순위, 슬롯 보장 없음)를 대체해, 상위 풀
+    # (특히 Pool A, 당일 DART 공시량에 의존해 시스템이 통제 불가)이 하위 풀(B/C)을 0으로
+    # 굶기는 것을 방지한다. (1) 각 풀 최소 슬롯 예약분을 앞쪽에 확보 → (2) 잔여를 기존
+    # 우선순위(A > B(잔여) > C(잔여) > existing)로 채움 → (3) dedup 후 안전 재절단.
+    # pool_b_min_slots==0 and pool_c_min_slots==0이면 예약분이 0이 되어 레거시 엄격
+    # concat-then-slice와 순서까지 정확히 동일한 결과를 낸다(REQ-AI076-004 백워드 호환).
+    # @MX:SPEC: SPEC-AI-076 REQ-AI076-001
+    reserved_b = min(len(pool_b_codes), config.pool_b_min_slots)
+    reserved_c = min(len(pool_c_codes), config.pool_c_min_slots)
+    sum_reserved = reserved_b + reserved_c
+    if sum_reserved > max_universe and sum_reserved > 0:
+        # SPEC-AI-076 REQ-AI076-007: 오설정(floor 합계 > 상한) 안전 축소(clamp) — 비율
+        # 유지하며 max_universe를 초과하지 않도록 조정. 예외 없이 완료되어야 한다.
+        # (sum_reserved > 0 가드: reserved 모두 0인데 max_universe만 음수인 병적 오설정에서
+        # 0으로 나누기를 방지 — 그 경우 reserved는 이미 0이라 추가 조정이 불필요하다.)
+        logger.warning(
+            "[스캔유니버스] 풀 예약 슬롯 합계 초과: reserved_b=%d reserved_c=%d 합계=%d "
+            "> 상한=%d — 비율 축소(clamp) 적용",
+            reserved_b, reserved_c, sum_reserved, max_universe,
+        )
+        reserved_b = (reserved_b * max_universe) // sum_reserved
+        reserved_c = max_universe - reserved_b
+
+    reserved_b_list = pool_b_codes[:reserved_b]
+    reserved_c_list = pool_c_codes[:reserved_c]
+    b_remaining = pool_b_codes[reserved_b:]
+    c_remaining = pool_c_codes[reserved_c:]
+
+    # 우선순위: [예약분(B>C)] > A > B(잔여) > C(잔여) > existing — max_universe 초과 시 잘라냄.
+    # max_scan_universe(150)·_min_ratio(2.0)는 불변(SPEC-AI-065/074 소유) — 이 블록은 배분
+    # 메커니즘만 다룬다(불변 슈퍼시드 결정, spec.md 참조).
     universe_ordered = (
-        pool_a_codes
-        + pool_b_codes
-        + pool_c_codes
+        reserved_b_list
+        + reserved_c_list
+        + pool_a_codes
+        + b_remaining
+        + c_remaining
         + [c for c in existing_codes if c not in entry_pool_map]
     )
     # 중복 제거 (순서 유지)
@@ -4301,14 +4356,31 @@ def build_scan_universe(
             universe_dedup.append(code)
 
     final_universe = universe_dedup[:max_universe]
+
+    # SPEC-AI-076 REQ-AI076-005: 절단 후(post-truncation) 풀별 실제 스캔 수 — 스키마 0
+    # (신규 DB 컬럼 없음, in-memory 계산 + 반환 dict 신규 키 + 로그 한정). 기존
+    # pool_a/b/c(raw) 키는 그대로 유지 — persist_pool_counts(surge_detector.py:~1953)
+    # 호출부는 raw 키만 명시적으로 추출하므로 scanned 키는 SurgeUniversePoolHistory에
+    # 새지 않는다(회귀 가드, AC-076-007).
+    from collections import Counter as _Counter
+
+    scanned_tally = _Counter(entry_pool_map.get(c, "existing") for c in final_universe)
+    pool_counts["pool_a_scanned"] = scanned_tally.get("pool_a", 0)
+    pool_counts["pool_b_scanned"] = scanned_tally.get("pool_b", 0)
+    pool_counts["pool_c_scanned"] = scanned_tally.get("pool_c", 0)
+
     logger.info(
-        "[스캔유니버스] 최종 유니버스: %d개 (상한=%d, A=%d B=%d C=%d existing=%d)",
+        "[스캔유니버스] 최종 유니버스: %d개 (상한=%d, raw: A=%d B=%d C=%d existing=%d | "
+        "scanned: A=%d B=%d C=%d)",
         len(final_universe),
         max_universe,
         pool_counts["pool_a"],
         pool_counts["pool_b"],
         pool_counts["pool_c"],
         len(existing_codes),
+        pool_counts["pool_a_scanned"],
+        pool_counts["pool_b_scanned"],
+        pool_counts["pool_c_scanned"],
     )
 
     return final_universe, entry_pool_map, pool_counts

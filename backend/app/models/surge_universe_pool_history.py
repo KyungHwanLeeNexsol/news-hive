@@ -27,11 +27,17 @@ class SurgeUniversePoolHistory(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     # 날짜 (KST 기준, UNIQUE — 일자당 하나의 레코드만 허용)
     date: Mapped[date] = mapped_column(Date, nullable=False, unique=True, index=True)
-    # Pool A (DART 공시 당일) 종목 수
+    # Pool A (DART 공시 당일) 종목 수 — build_scan_universe() 절단(quota 배분) 이전의
+    # raw pre-truncation 수. SPEC-AI-076 REQ-005: 이 의미는 불변(evaluate_surge_predictions/
+    # get_pool_counts_for_date가 raw 공급 지표로 소비). 절단 후 실제 스캔 수(scanned)는
+    # 이 컬럼에 저장되지 않는다 — build_scan_universe() 반환 pool_counts의 신규 키
+    # pool_a_scanned(스키마 0, in-memory/로그 전용)로만 노출된다.
     pool_a_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    # Pool B (거래량 200%+ 당일) 종목 수
+    # Pool B (거래량 200%+ 당일) 종목 수 — raw pre-truncation (위 pool_a_count와 동일 의미,
+    # SPEC-AI-076 REQ-005 불변). scanned는 pool_b_scanned(스키마 0)로만 노출.
     pool_b_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    # Pool C (등락률 5%+ 당일) 종목 수
+    # Pool C (등락률 5%+ 당일) 종목 수 — raw pre-truncation (위 pool_a_count와 동일 의미,
+    # SPEC-AI-076 REQ-005 불변). scanned는 pool_c_scanned(스키마 0)로만 노출.
     pool_c_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # 최종 스캔 유니버스 크기 (max_scan_universe로 잘라낸 이후)
     scan_universe_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

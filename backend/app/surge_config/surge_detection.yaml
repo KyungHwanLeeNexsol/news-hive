@@ -231,6 +231,10 @@ surge_detection:
   zscore_min_baseline_samples: 10
   # SPEC-AI-065 REQ-2: 스캔 유니버스 최대 크기
   max_scan_universe: 150
+  # SPEC-AI-076 REQ-AI076-007: 풀별 최소 슬롯 예약(quota floor) — 0이면 레거시 엄격
+  # concat-then-slice와 동일(백워드 호환). sum(floors) > max_scan_universe면 안전 축소.
+  pool_b_min_slots: 20
+  pool_c_min_slots: 30
   # SPEC-AI-066 REQ-AI066-001/006: 촉매 확신도 기반 조건부 완화 설정
   # enabled=false이면 REQ-002/003 완화 전면 비활성 → SPEC-AI-030/028 레거시 동작 복원
   catalyst_conviction:
