@@ -4,7 +4,7 @@ DB와 텔레그램 발송을 Mock으로 대체하여 매칭 로직만 순수하�
 """
 
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 # ---------------------------------------------------------------------------
@@ -278,3 +278,55 @@ def test_keyword_in_text_korean_word_boundary_valid_match() -> None:
     assert _keyword_in_text("하이브", "공시를 발표한 하이브")
     # 정상 매칭: 영문 혼용
     assert _keyword_in_text("하이브", "hybe 하이브 실적")
+
+
+# ---------------------------------------------------------------------------
+# _dispatch_notification 텔레그램 영구 차단(403) 처리 테스트
+# (프로덕션 버그: 사용자가 봇을 차단해도 매칭마다 재시도하며 에러 로그가 반복 발생)
+# ---------------------------------------------------------------------------
+
+
+def test_dispatch_notification_invalidates_chat_id_on_permanent_block() -> None:
+    """텔레그램이 403 'blocked by the user'를 반환하면 chat_id를 무효화하여
+    이후 알림에서 텔레그램 재시도(및 반복 에러 로그)를 건너뛰어야 한다."""
+    user_mock = MagicMock()
+    user_mock.id = 10
+    user_mock.telegram_chat_id = "999999"
+
+    db = MagicMock()
+    # User 조회(.first())와 PushSubscription 조회(.all()) 모두
+    # 동일한 query().filter() 체인을 공유하지만 서로 다른 메서드를 사용하므로 충돌 없음
+    db.query.return_value.filter.return_value.first.return_value = user_mock
+    db.query.return_value.filter.return_value.all.return_value = []  # Web Push 구독 없음
+
+    async def fake_send_blocked(
+        chat_id, text, parse_mode="HTML", reply_markup=None, result_info=None
+    ):
+        """실제 텔레그램 403 'Forbidden: bot was blocked by the user' 응답을 흉내낸다."""
+        if result_info is not None:
+            result_info["permanently_blocked"] = True
+        return False
+
+    with patch(
+        "app.services.telegram_service.send_telegram_message",
+        new=AsyncMock(side_effect=fake_send_blocked),
+    ):
+        import app.services.keyword_matcher as km_module
+
+        channel = km_module._dispatch_notification(
+            db=db,
+            user_id=10,
+            keyword_id=1,
+            content_type="news",
+            content_id=1,
+            content_title="테스트 뉴스",
+            content_url="https://example.com/1",
+            keyword_text="테스트키워드",
+        )
+
+    # 텔레그램 차단 + Web Push 미등록 → 발송 채널 없음
+    assert channel == "none"
+    # 영구 차단 감지 시 chat_id가 무효화되어야 다음 매칭부터 텔레그램 재시도가 발생하지 않는다
+    assert user_mock.telegram_chat_id is None
+    # 무효화는 즉시 커밋되어야 재시작/롤백 후에도 유지된다 (following.py:404 해제 패턴과 동일)
+    db.commit.assert_called()

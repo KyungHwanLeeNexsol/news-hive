@@ -14,6 +14,7 @@ from app.services.scheduler import (
     _run_commodity_news_crawl,
     _run_commodity_price_fetch,
     _run_crawl_job,
+    _run_daily_briefing,
     _run_dart_crawl,
     _run_exit_check,
     _run_fast_verify,
@@ -88,6 +89,50 @@ class TestRunSignalVerification:
 
         mock_arun.assert_called_once()
         mock_db.close.assert_called_once()
+
+
+class TestRunDailyBriefing:
+    """_run_daily_briefing 데일리 브리핑 생성 job 테스트.
+
+    briefing.market_sentiment는 DailyBriefing 모델(app/models/daily_briefing.py)에
+    존재하지 않는 컬럼이다. 로그 라인이 이를 참조하면 AttributeError가 발생해
+    retry_with_backoff가 3회 모두 소진되고, 실제로는 이미 커밋된 브리핑임에도
+    CRITICAL 실패로 오기록된다(순수 로깅 버그, 데이터 영향 없음).
+    """
+
+    @patch("app.services.job_retry.time.sleep")
+    @patch("app.services.scheduler._is_kr_market_open", return_value=True)
+    @patch("app.services.scheduler.asyncio.run")
+    @patch("app.services.scheduler.SessionLocal")
+    def test_characterize_generated_briefing_logs_without_attribute_error(
+        self, mock_session_cls, mock_arun, mock_market_open, mock_sleep,
+    ) -> None:
+        """재현(Rule 4): 존재하지 않는 briefing.market_sentiment 참조로 AttributeError가
+        발생하면 retry_with_backoff가 3회 모두 소진(sleep 2회 호출)된다. 수정 후에는
+        실제 모델 컬럼만 참조하여 첫 시도에서 성공해야 한다(재시도 없음).
+        """
+        from app.models.daily_briefing import DailyBriefing
+
+        mock_db = MagicMock()
+        mock_session_cls.return_value = mock_db
+        mock_briefing = MagicMock(spec=DailyBriefing)
+        mock_briefing.id = 42
+        mock_briefing.ai_model = "gemini-2.0-flash"
+        mock_arun.return_value = mock_briefing
+
+        _run_daily_briefing()
+
+        mock_sleep.assert_not_called()
+        assert mock_arun.call_count == 1
+        mock_db.close.assert_called_once()
+
+    @patch("app.services.scheduler._is_kr_market_open", return_value=False)
+    @patch("app.services.scheduler.SessionLocal")
+    def test_skips_on_weekend(self, mock_session_cls, mock_market_open) -> None:
+        """주말에는 브리핑 생성을 건너뛴다."""
+        _run_daily_briefing()
+
+        mock_session_cls.assert_not_called()
 
 
 class TestRunDartCrawl:

@@ -497,7 +497,7 @@ def _run_daily_briefing():
     try:
         briefing = asyncio.run(generate_daily_briefing(db))
         if briefing:
-            logger.info(f"Daily briefing generated: {briefing.id} ({briefing.market_sentiment})")
+            logger.info(f"Daily briefing generated: {briefing.id} (ai_model={briefing.ai_model})")
         else:
             logger.warning("Daily briefing generation returned None")
     except Exception as e:

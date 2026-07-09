@@ -685,9 +685,20 @@ def _dispatch_notification(
             from app.services.telegram_service import send_telegram_message
 
             # BackgroundScheduler는 동기 컨텍스트이므로 asyncio.run() 사용
-            success = asyncio.run(send_telegram_message(user.telegram_chat_id, message, reply_markup=reply_markup))
+            send_result: dict = {}
+            success = asyncio.run(
+                send_telegram_message(
+                    user.telegram_chat_id, message, reply_markup=reply_markup, result_info=send_result
+                )
+            )
             if success:
                 channel = "telegram"
+            elif send_result.get("permanently_blocked"):
+                # 사용자가 봇을 차단한 경우 — 매 매칭마다 재시도하며 에러 로그가
+                # 반복(시간당) 발생하는 것을 방지하기 위해 chat_id를 즉시 무효화한다.
+                # (following.py:404 연동 해제와 동일한 패턴 — 이후 알림은 Web Push로 폴백)
+                user.telegram_chat_id = None
+                db.commit()
         except Exception as e:
             logger.error(f"텔레그램 발송 실패 (user={user_id}): {e}")
 
