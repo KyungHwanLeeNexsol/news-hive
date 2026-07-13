@@ -4,6 +4,25 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fix — SPEC-AI-078: Pool A 공시 후보 impact_score 기반 우선순위 절단 교정 (2026-07-13)
+
+#### `1624fa3` — 무순위 절단 → impact 우선 잔존 (종목별 MAX 집계 + NULL-안전 정렬)
+
+**목적**: `build_scan_universe()`의 Pool A 조회 쿼리가 `ORDER BY` 부재로 DB 반환 순서(사실상 공시 접수 순)를 그대로 사용해, Pool A raw 후보가 `max_scan_universe`(150) 초과할 때 신호 품질과 무관하게 임의 절단되던 버그 수정. 라이브 실측 07-08: Pool A 232건 중 impact≥20만 155건인데도 04-08형 무순위 절단으로 고impact 종목(058730 다스코, impact=20) 정상 스코어링됐음에도 최종 유니버스에서 탈락 — 실제 상한가 유발한 공시가 신호 품질과 무관하게 손실된 사례.
+
+- Pool A 조회를 단순 `distinct()` → 종목별 `MAX(impact_score)` 집계 + 내림차순 정렬로 교체
+- NULL-안전 정렬: `is_(None).asc()` 선행으로 미스코어링(NULL) 공시를 명시적 후순위 처리 (Postgres 기본 NULLS FIRST 역효과 방지)
+- 설정 토글 `pool_a_rank_by_impact: bool = True` 추가 — False 시 레거시 DB-순서 복귀(백워드 호환)
+- 테스트: `test_spec_ai_065.py` 신규 7개 테스트, AC-078-001~006 충족, 기존 065/076/유니버스 테스트 무회귀
+- 백엔드 전체: 1912 passed, 4 skipped, 3 xpassed, 0 regressions
+
+**영향 파일**: `backend/app/services/surge_detector.py`, `backend/app/surge_config/surge_settings.py`,
+`backend/app/surge_config/surge_detection.yaml`, `backend/tests/test_spec_ai_065.py`
+
+**예측 기록 모드 유지 — 매매 영향 없음**: 실매매 비활성 상태. 유니버스 정렬만 변경, 발신/매수 로직 diff 0.
+
+---
+
 ### Fix — SPEC-AI-077: near_limit_up 후보 풀 NULL 시총 굶주림 교정 (2026-07-09)
 
 #### `9036490` — NULL 시총 종목 균등 평가 보장 (quota + 날짜 로테이션)

@@ -1,18 +1,22 @@
 ---
 id: SPEC-AI-078
-version: 0.1.0
-status: draft
+version: 1.0.0
+status: completed
 created: 2026-07-13
 updated: 2026-07-13
 author: MoAI
 priority: High
 issue_number: 0
+lifecycle_level: 1
 ---
 
 # SPEC-AI-078: Pool A 공시 후보 impact_score 기반 우선순위 절단 교정 (Impact-Ranked Pool A Truncation Fix)
 
 ## HISTORY
 
+- 2026-07-13 (v1.0.0): **완료 + 배포 검증** (commit `1624fa3`). DDD ANALYZE-PRESERVE-IMPROVE로 구현 완료.
+  모든 AC 충족. 프로덕션 배포(140.245.76.242) 확인 2026-07-13 01:50 UTC. 상세는 아래 "Implementation
+  Notes" 섹션 참조.
 - 2026-07-13 (v0.1.0): 최초 작성. 별도 심층 조사(SSH 프로덕션 DB 직접 조회 + read-only 코드 대조,
   `research.md`)로 확정된 **Pool A 무순위(unranked) 절단 버그**를 SPEC화.
   - **버그**: `build_scan_universe()`(`surge_detector.py:4188-4455`)의 Pool A 조회 쿼리
@@ -210,6 +214,64 @@ research.md와 함께 발견했으나 본 SPEC에 **포함하지 않는** 별개
   전 작성·확인, 수정 후 통과. 기존 065/076/유니버스 테스트 전량 무회귀. 신규/변경 로직 커버리지 85%+,
   `ruff` 무경고, 전체 백엔드 스위트 회귀 없음(`-n 4` 병렬 포함)(REQ-006).
 - 탐지기/후보 소싱/신호 발신/앙상블/매수 로직 diff 0. 신규 테이블/마이그레이션 없음.
+
+---
+
+## Implementation Notes (Level 1)
+
+### 실제 구현 요약 (2026-07-13, commit 1624fa3)
+
+#### 핵심 변경사항
+
+**Pool A 조회 정렬 도입** (`backend/app/services/surge_detector.py:4229-4245`)
+- 기존 `db.query(Disclosure.stock_code).filter(...).distinct()` → 정렬 없음
+- 신규: 종목별 `MAX(impact_score)` 집계 + NULL-안전 내림차순 정렬 추가
+- SQLAlchemy 패턴: `order_by(max_impact.is_(None).asc(), max_impact.desc())`
+  - NULL 공시를 명시적으로 후순위(NULLS LAST 동급) 처리
+  - Postgres/SQLite 양쪽에서 결정적 거동 보장 (이식성 우선)
+
+**설정 토글** (`backend/app/surge_config/surge_settings.py`, `surge_detection.yaml`)
+- `pool_a_rank_by_impact: bool = True` 필드 추가 (기본값: True)
+- False 시 레거시 DB-순서 경로로 복귀 (백워드 호환, REQ-AI078-005 보증)
+
+**테스트** (`backend/tests/test_spec_ai_065.py`)
+- 신규 7개 테스트: `TestImpactRankedPoolATruncation` 클래스
+- AC-078-001~006 전부 충족 (재현 우선 RED→GREEN 순서 준수)
+- 기존 테스트 전량 무회귀: `test_spec_ai_076.py`, `test_surge_universe_members.py`,
+  `test_surge_universe_pool_bugfix.py`
+- 백엔드 전체 스위트: **1912 passed, 4 skipped, 3 xpassed, 0 regressions**
+- 린트/타입체크: ruff 무경고, mypy 무신규 오류 (35개 baseline 불변)
+
+**배포 상태**
+- 프로덕션 배포: 2026-07-13 01:50 UTC (140.245.76.242)
+- 배포 확인: git hash 일치, `pool_a_rank_by_impact: true` 적용 확인
+
+#### 편차 및 선택사항
+
+**Plan.md에 없던 추가 구현: stock_code 3차 정렬 키**
+- Pool A 정렬: `impact DESC → NULLS LAST → stock_code ASC` (3단계)
+- 용도: 동률 impact 종목 간의 순서 안정성 보장 (테스트 정확 순서 검증용)
+- 신호 품질상 영향: 0 (동률 종목은 무차별)
+- 필요 이유: `TestLegacyEquivalenceWhenFloorsZero` 정확 순서 assertion 유지
+
+**REQ-AI078-007 (P2, 선택) 미구현**
+- 절단 impact 컷오프 관측성 로깅
+- 상태: **의도적 미구현** (optional, low priority)
+- 후속 SPEC 기회에 추가 가능
+
+#### 소유권 경계 무변경 (diff 0 검증)
+
+아래 4개 불변식은 수정 후에도 의도한 대로 유지됨 (코드 재확인):
+
+1. **`max_scan_universe`(150)**: 읽어 사용만, 값 불변 ✓
+2. **SPEC-AI-076 quota 메커니즘**: 예약/잔여 배분 구조 무변경 ✓
+3. **`pool_a` raw 카운트**: 절단 전 raw 공급 수 의미 불변 ✓
+4. **탐지기/발신/매매 로직**: 신호 발신 및 매수 로직 diff 0 ✓
+
+#### 신규 테이블/마이그레이션
+
+- 없음 (설정 필드 추가만)
+- 과거 데이터 백필: 없음 (2026-07-13 이후 전진 적용)
 
 ---
 
