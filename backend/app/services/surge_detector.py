@@ -4183,8 +4183,11 @@ def detect_momentum_continuation(
 # 직후 persist_pool_counts/persist_universe_members), scheduler.py:1226, :1243.
 # @MX:REASON: 배분 계약(quota가 엄격 concat-then-slice를 슈퍼시드; max_scan_universe
 # 비용 상한은 그대로 보존)이 세 호출부 모두의 스캔 유니버스 크기·풀 대표성을 결정한다 —
-# 계약을 깨면 세 호출부 전부에서 조용한 풀 굶주림 회귀가 재발할 수 있다.
-# @MX:SPEC: SPEC-AI-076 REQ-AI076-001/002/003
+# 계약을 깨면 세 호출부 전부에서 조용한 풀 굶주림 회귀가 재발할 수 있다. SPEC-AI-078:
+# Pool A 후보는 예약 로직 이전에 종목별 MAX(impact_score) 내림차순(NULL 최후순위)으로
+# 정렬되어 절단 발생 시 고impact 공시가 우선 잔존한다 — 이 정렬 계약이 깨지면 절단이
+# 다시 무순위(사실상 임의)로 되돌아간다.
+# @MX:SPEC: SPEC-AI-076 REQ-AI076-001/002/003, SPEC-AI-078 REQ-AI078-001/003
 def build_scan_universe(
     db: "Session",
     config: "SurgeDetectionConfig",
@@ -4215,6 +4218,8 @@ def build_scan_universe(
     """
     from datetime import date as _date
 
+    from sqlalchemy import func as sqlfunc
+
     existing_codes = existing_codes or set()
     today = _date.today()
     today_str = today.strftime("%Y%m%d")
@@ -4226,17 +4231,43 @@ def build_scan_universe(
     pool_c_codes: list[str] = []
 
     # Pool A: 오늘 DART 공시 종목
+    # @MX:NOTE: [AUTO] SPEC-AI-078 REQ-AI078-001/002/003 — 절단(:4427 슬라이스) 발생 시
+    # 어떤 공시가 잔존하는지가 impact_score와 무관한 DB 반환 순서(사실상 접수 순서)에
+    # 의존하던 버그를 교정. 종목별 MAX(impact_score) 대표값 기준 내림차순 정렬 후 절단하여
+    # 고impact 공시가 우선 잔존하도록 한다(research.md 058730형 실증 사례).
+    # @MX:REASON: PostgreSQL의 `ORDER BY <col> DESC`는 기본 NULLS FIRST라 미스코어링(NULL)
+    # 공시가 오히려 최우선 잔존하는 역효과가 발생한다. `is_(None).asc()`를 1차 정렬키로 두어
+    # NULL을 명시적으로 최후순위(NULLS LAST 동급)로 보낸다 — Postgres/SQLite 양쪽 이식성
+    # 우선(nullslast() 미사용, plan.md 참조). stock_code를 최종 동률 타이브레이커로 두어
+    # 동일 impact(전량 NULL 포함) 케이스에서도 결정론적 순서를 보장한다.
+    # @MX:SPEC: SPEC-AI-078 REQ-AI078-001
     try:
-        disclosure_rows = (
-            db.query(Disclosure.stock_code)
-            .filter(
-                Disclosure.rcept_dt == today_str,
-                Disclosure.stock_code.isnot(None),
+        if config.pool_a_rank_by_impact:
+            max_impact = sqlfunc.max(Disclosure.impact_score)
+            disclosure_rows = (
+                db.query(Disclosure.stock_code, max_impact.label("max_impact"))
+                .filter(
+                    Disclosure.rcept_dt == today_str,
+                    Disclosure.stock_code.isnot(None),
+                )
+                .group_by(Disclosure.stock_code)
+                .order_by(max_impact.is_(None).asc(), max_impact.desc(), Disclosure.stock_code.asc())
+                .all()
             )
-            .distinct()
-            .all()
-        )
-        pool_a_raw = [r.stock_code for r in disclosure_rows if r.stock_code]
+            pool_a_raw = [r.stock_code for r in disclosure_rows if r.stock_code]
+        else:
+            # SPEC-AI-078 REQ-AI078-005(a): 백워드 호환 탈출구 — 토글 비활성 시 레거시
+            # DB-순서(무순위) 거동을 정확히 보존한다.
+            legacy_disclosure_rows = (
+                db.query(Disclosure.stock_code)
+                .filter(
+                    Disclosure.rcept_dt == today_str,
+                    Disclosure.stock_code.isnot(None),
+                )
+                .distinct()
+                .all()
+            )
+            pool_a_raw = [r.stock_code for r in legacy_disclosure_rows if r.stock_code]
         # DB에 등록된 종목만 포함
         for code in pool_a_raw:
             if code not in entry_pool_map:

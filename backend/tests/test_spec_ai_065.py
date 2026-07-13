@@ -899,3 +899,233 @@ class TestFloorConfigSafetyClamp:
 
         # 정상 설정(합 <= cap)에서는 floor가 설정값 그대로 적용됨을 별도 확인(AC-076-001로 커버)
         assert len(pool_c_codes) == 120  # 픽스처 생성 확인용(사용 안 하면 lint 경고)
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-078 — Pool A impact_score 기반 우선순위 절단 교정
+# ---------------------------------------------------------------------------
+
+def _make_pool_a_disclosures_with_impact(
+    db: Session,
+    codes_and_impacts: list[tuple[str, float | None]],
+    prefix: str = "0",
+) -> list[str]:
+    """Pool A(DART 공시) raw 후보를 `impact_score`를 지정하여 DB 삽입 순서대로 생성한다.
+
+    `codes_and_impacts`에 준 순서 그대로 DB에 삽입되므로, ORDER BY가 없는 현행(레거시)
+    쿼리의 반환 순서를 결정론적으로 재현할 수 있다(SPEC-AI-078 REQ-006 재현 우선 테스트용).
+    """
+    codes: list[str] = []
+    for idx, (code, impact) in enumerate(codes_and_impacts):
+        db.add(
+            Disclosure(
+                corp_code=f"{prefix}{idx:07d}",
+                corp_name=f"테스트기업078_{idx}",
+                stock_code=code,
+                report_name="테스트공시(SPEC-AI-078)",
+                rcept_no=f"A078{prefix}{idx:010d}",
+                rcept_dt=_date.today().strftime("%Y%m%d"),
+                url=f"https://dart.fss.or.kr/test078/{prefix}/{idx}",
+                impact_score=impact,
+            )
+        )
+        codes.append(code)
+    db.flush()
+    return codes
+
+
+class TestImpactRankedPoolATruncation:
+    """SPEC-AI-078: Pool A raw > 실질 슬롯일 때 impact_score 내림차순 우선 잔존.
+
+    2026-07-08 라이브 재현: 058730(다스코, impact_score=20)이 저impact/무순위(NULL) 공시
+    150건 뒤(DB 반환 순서상)에 위치 → 현행(수정 전) 무순위 절단으로 final_universe에서
+    누락된다(research.md 실증 사례). max_scan_universe=150, Pool B/C 압박 없음(quota=0)으로
+    Pool A 풀-내부(intra-pool) 절단만 순수하게 재현한다.
+    """
+
+    def test_characterize_high_impact_disclosure_missing_before_fix(self, db: Session):
+        """RED(수정 전 재현): 고impact 종목이 저impact 150건 뒤에 위치하면 절단으로 누락된다."""
+        filler_codes = [(f"5{i:05d}", None) for i in range(150)]  # 무순위(NULL) 저impact 150건
+        high_impact_code = "058730"
+        codes_and_impacts = filler_codes + [(high_impact_code, 20.0)]  # 고impact가 맨 뒤(DB 반환 순서상)
+        _make_pool_a_disclosures_with_impact(db, codes_and_impacts)
+
+        cfg = get_surge_config().model_copy(
+            update={"max_scan_universe": 150, "pool_b_min_slots": 0, "pool_c_min_slots": 0}
+        )
+
+        with patch(
+            "app.services.naver_finance.fetch_volume_leaders_sync",
+            return_value=[],
+        ):
+            final_universe, entry_pool_map, _pool_counts = build_scan_universe(
+                db, cfg, existing_codes=set()
+            )
+
+        assert len(final_universe) == 150
+        assert high_impact_code in final_universe, (
+            f"impact 우선순위 정렬 적용 후에는 고impact(20) 종목 {high_impact_code}이 "
+            "저impact/무순위 150건보다 우선 잔존해야 한다(REQ-AI078-001, 058730형 사례). "
+            "이 assert가 실패한다면 아직 정렬이 적용되지 않은 것이다."
+        )
+
+    def test_null_impact_disclosures_deprioritized_not_excluded(self, db: Session):
+        """REQ-AI078-002: NULL(미스코어링) 공시는 최우선이 아닌 최후순위로 밀리되 배제되지 않는다."""
+        # NULL 15건을 먼저 삽입(DB 반환 순서상 앞쪽) + 낮은 impact 1건을 맨 뒤에 삽입
+        null_codes = [(f"6{i:05d}", None) for i in range(15)]
+        low_impact_code = "060001"
+        codes_and_impacts = null_codes + [(low_impact_code, 1.0)]
+        _make_pool_a_disclosures_with_impact(db, codes_and_impacts)
+
+        # 실질 슬롯을 1개만 남기도록 max_scan_universe=1로 강하게 좁힌다 — 16건 중 단 1건만
+        # 잔존 가능하므로 NULLS FIRST 역효과가 있으면 즉시 드러난다.
+        cfg = get_surge_config().model_copy(
+            update={"max_scan_universe": 1, "pool_b_min_slots": 0, "pool_c_min_slots": 0}
+        )
+
+        with patch(
+            "app.services.naver_finance.fetch_volume_leaders_sync",
+            return_value=[],
+        ):
+            final_universe, _map, _counts = build_scan_universe(
+                db, cfg, existing_codes=set()
+            )
+
+        assert len(final_universe) == 1
+        # NULLS FIRST 역효과가 없어야 한다: low_impact_code(1.0)가 NULL 15건보다 우선 잔존
+        assert low_impact_code in final_universe, (
+            "NULL 공시가 스코어링된 공시(impact=1.0)보다 우선 잔존하면 NULLS FIRST 역효과 "
+            "(REQ-AI078-002 위반)"
+        )
+
+    def test_null_impact_disclosures_still_included_when_no_pressure(self, db: Session):
+        """REQ-AI078-002: 절단 압력이 없으면 NULL 공시도 완전 배제되지 않고 포함된다."""
+        codes_and_impacts = [(f"7{i:05d}", None) for i in range(5)] + [("070006", 20.0)]
+        codes = _make_pool_a_disclosures_with_impact(db, codes_and_impacts)
+
+        cfg = get_surge_config().model_copy(
+            update={"max_scan_universe": 150, "pool_b_min_slots": 0, "pool_c_min_slots": 0}
+        )
+
+        with patch(
+            "app.services.naver_finance.fetch_volume_leaders_sync",
+            return_value=[],
+        ):
+            final_universe, _map, _counts = build_scan_universe(
+                db, cfg, existing_codes=set()
+            )
+
+        assert set(codes) <= set(final_universe), (
+            "절단 압력이 없으면 NULL 공시를 포함한 모든 Pool A 후보가 유니버스에 남아야 한다"
+        )
+
+    def test_stock_represented_by_max_impact_across_multiple_disclosures(self, db: Session):
+        """REQ-AI078-003: 같은 종목의 복수 공시는 최고(MAX) impact_score로 대표된다."""
+        target_code = "080001"
+        # target_code가 낮은 impact(1.0) 공시를 먼저 내고, 나중에 높은 impact(20.0) 공시를 낸다.
+        # 저impact 필러 149건을 사이에 끼워 넣어 절단 압력을 만든다.
+        codes_and_impacts: list[tuple[str, float | None]] = [(target_code, 1.0)]
+        codes_and_impacts += [(f"8{i:05d}", 5.0) for i in range(1, 150)]  # 149건, impact=5.0
+        codes_and_impacts.append((target_code, 20.0))  # target_code의 두 번째(고impact) 공시
+        _make_pool_a_disclosures_with_impact(db, codes_and_impacts)
+
+        cfg = get_surge_config().model_copy(
+            update={"max_scan_universe": 150, "pool_b_min_slots": 0, "pool_c_min_slots": 0}
+        )
+
+        with patch(
+            "app.services.naver_finance.fetch_volume_leaders_sync",
+            return_value=[],
+        ):
+            final_universe, _map, _counts = build_scan_universe(
+                db, cfg, existing_codes=set()
+            )
+
+        # target_code는 자신의 최고 impact(20.0)로 대표되어 impact=5.0인 149건보다 우선 잔존해야 한다.
+        assert target_code in final_universe, (
+            "종목별 MAX(impact_score) 대표 집계가 없으면 target_code가 impact=5.0 149건에 밀려 "
+            "누락될 수 있다(REQ-AI078-003)"
+        )
+
+    def test_toggle_off_matches_legacy_db_order_exactly(self, db: Session):
+        """REQ-AI078-005(a): `pool_a_rank_by_impact=False`면 레거시 DB-순서 거동과 정확히 동일."""
+        filler_codes = [(f"9{i:05d}", None) for i in range(150)]
+        high_impact_code = "090730"
+        codes_and_impacts = filler_codes + [(high_impact_code, 20.0)]
+        _make_pool_a_disclosures_with_impact(db, codes_and_impacts, prefix="t")
+
+        cfg = get_surge_config().model_copy(
+            update={
+                "max_scan_universe": 150,
+                "pool_b_min_slots": 0,
+                "pool_c_min_slots": 0,
+                "pool_a_rank_by_impact": False,
+            }
+        )
+
+        with patch(
+            "app.services.naver_finance.fetch_volume_leaders_sync",
+            return_value=[],
+        ):
+            final_universe, _map, _counts = build_scan_universe(
+                db, cfg, existing_codes=set()
+            )
+
+        assert len(final_universe) == 150
+        assert high_impact_code not in final_universe, (
+            "토글 비활성 시 정렬 미적용 레거시 거동과 동일해야 하므로, RED 테스트와 동일하게 "
+            "고impact 종목이 여전히 절단되어야 한다(REQ-AI078-005 백워드 호환)"
+        )
+
+    def test_no_truncation_pressure_result_set_unchanged_by_sort_toggle(self, db: Session):
+        """REQ-AI078-005(b): 절단 압력이 없으면 정렬 토글 여부와 무관하게 결과 집합이 동일하다."""
+        codes_and_impacts = [
+            ("a10001", 20.0), ("a10002", None), ("a10003", 5.0), ("a10004", None), ("a10005", 1.0),
+        ]
+        codes = _make_pool_a_disclosures_with_impact(db, codes_and_impacts, prefix="z")
+
+        results: dict[bool, set[str]] = {}
+        for toggle in (True, False):
+            cfg = get_surge_config().model_copy(
+                update={
+                    "max_scan_universe": 150,
+                    "pool_b_min_slots": 0,
+                    "pool_c_min_slots": 0,
+                    "pool_a_rank_by_impact": toggle,
+                }
+            )
+            with patch(
+                "app.services.naver_finance.fetch_volume_leaders_sync",
+                return_value=[],
+            ):
+                final_universe, _map, _counts = build_scan_universe(
+                    db, cfg, existing_codes=set()
+                )
+            results[toggle] = set(final_universe)
+
+        assert results[True] == results[False] == set(codes), (
+            "절단 압력이 없으면 토글 ON/OFF 모두 동일한 결과 집합을 내야 한다(REQ-AI078-005)"
+        )
+
+    def test_pool_a_raw_count_unaffected_by_sort(self, db: Session):
+        """REQ-AI078-004: 정렬은 리스트 순서만 바꾸고 pool_counts['pool_a'](raw) 길이는 불변."""
+        filler_codes = [(f"c{i:05d}", None) for i in range(150)]
+        codes_and_impacts = filler_codes + [("c99999", 20.0)]
+        _make_pool_a_disclosures_with_impact(db, codes_and_impacts, prefix="q")
+
+        cfg = get_surge_config().model_copy(
+            update={"max_scan_universe": 150, "pool_b_min_slots": 0, "pool_c_min_slots": 0}
+        )
+
+        with patch(
+            "app.services.naver_finance.fetch_volume_leaders_sync",
+            return_value=[],
+        ):
+            _final_universe, _map, pool_counts = build_scan_universe(
+                db, cfg, existing_codes=set()
+            )
+
+        assert pool_counts["pool_a"] == 151, (
+            "pool_counts['pool_a']는 절단 전 raw 공급 수(151)여야 한다 — 정렬 도입으로 "
+            "길이가 바뀌면 SPEC-AI-065 REQ-5 raw 카운트 계약 위반(REQ-AI078-004)"
+        )

@@ -235,6 +235,9 @@ surge_detection:
   # concat-then-slice와 동일(백워드 호환). sum(floors) > max_scan_universe면 안전 축소.
   pool_b_min_slots: 20
   pool_c_min_slots: 30
+  # SPEC-AI-078 REQ-AI078-005: Pool A 후보를 impact_score 내림차순(NULL 최후순위)으로
+  # 정렬할지 여부 — false면 레거시 DB-순서(무순위) 거동으로 복귀(백워드 호환).
+  pool_a_rank_by_impact: true
   # SPEC-AI-066 REQ-AI066-001/006: 촉매 확신도 기반 조건부 완화 설정
   # enabled=false이면 REQ-002/003 완화 전면 비활성 → SPEC-AI-030/028 레거시 동작 복원
   catalyst_conviction:

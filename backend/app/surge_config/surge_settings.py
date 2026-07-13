@@ -497,6 +497,13 @@ class SurgeDetectionConfig(BaseModel):
     # 무거운 DART 공시일에 가장 굶주리기 쉬워 Pool B보다 큰 기본값)
     # @MX:SPEC: SPEC-AI-076 REQ-AI076-007
     pool_c_min_slots: int = 30
+    # SPEC-AI-078 REQ-AI078-005: Pool A 후보 리스트를 종목별 MAX(impact_score) 내림차순
+    # (NULL은 최후순위)으로 정렬할지 여부. False면 레거시 DB-순서(무순위) 거동으로 복귀
+    # (백워드 호환 탈출구, SPEC-AI-076 pool_b_min_slots=0 패턴 계승). 기본값 True(신규 거동
+    # ON) — SPEC-AI-076이 floors 기본값을 비-0으로 배포한 선례와 정합.
+    # @MX:NOTE: [AUTO] SPEC-AI-078 REQ-AI078-005 — Pool A impact 정렬 토글
+    # @MX:SPEC: SPEC-AI-078 REQ-AI078-005
+    pool_a_rank_by_impact: bool = True
 
     # @MX:ANCHOR: [AUTO] 앙상블 가중치 합산 검증 — 8개 탐지기 가중치 합산 반드시 1.0
     # @MX:REASON: 가중치 합산 != 1.0 이면 앙상블 스코어 범위가 0~1을 벗어나 시그널 임계값 판정이 왜곡됨
