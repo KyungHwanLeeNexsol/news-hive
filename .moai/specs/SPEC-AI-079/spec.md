@@ -1,7 +1,7 @@
 ---
 id: SPEC-AI-079
-version: 0.1.0
-status: draft
+version: 1.0.0
+status: completed
 created: 2026-07-13
 updated: 2026-07-13
 author: Nexsol
@@ -13,6 +13,12 @@ issue_number: null
 
 ## HISTORY
 
+- 2026-07-13 (v1.0.0): 구현 완료 및 배포. `backend/app/surge_config/surge_detection.yaml`의
+  `volume_breakout.relative_threshold_enabled: false → true` (1줄 변경).
+  `test_surge_ai066.py` 전용 스위트 + 전체 회귀 스위트 전량 통과(1912 passed, 4 skipped, 3 xpassed,
+  regressions 0). 코드 로직 변경 없음. commit `446e1d6` pushed to main.
+  배포 상태: origin main 푸시 완료하였으나, 배포 가드 윈도우(15:15-16:10 KST) 영향으로
+  production 활성화는 ~16:10 KST 이후 예상(진행 중, 확정 아님).
 - 2026-07-13 (v0.1.0): draft 생성. SPEC-AI-066에서 이미 구현·테스트가 완료된
   `volume_breakout.relative_threshold_enabled` 기능을 프로덕션에서 최초 활성화.
   research.md의 코드/설정/테스트 주장 전량 검증 완료(설정 키 경로, 테스트 파일 존재,
@@ -183,3 +189,63 @@ INFO 레벨 요약 로그**를 방출 MAY 한다.
 - **SPEC-AI-078 (관련, 별개)**: Pool A 정렬 수정(그림자 유니버스/평가 지표). 본 SPEC은 실제
   탐지기 동작(volume_breakout)을 바꾸는 것이라 성격이 다르며 상호 독립.
 - **SPEC-AI-043**: 예측 기록(비-실매매) 모드 — 유지.
+
+---
+
+## 7. Implementation Notes (구현 완료)
+
+### 실제 구현 내용
+
+본 SPEC은 계획 단계에서 예고한 대로 **설정값 1줄 변경**으로 완결되었다. SPEC-AI-066에서
+완성·테스트된 로직의 활성화 스위치만 전환했으며, 신규 코드 로직은 없다.
+
+- **변경 파일**: `backend/app/surge_config/surge_detection.yaml` (`:217`)
+  - `volume_breakout.relative_threshold_enabled: false → true`
+- **변경 범위**: 1줄. 다른 임계값(volume_ratio_threshold, baseline_days 등), Pydantic 모델
+  기본값, AI-062/063/065/078의 로직, 매매/발신 게이팅 모두 diff 0.
+
+### 검증 결과
+
+REQ-AI079-004 무회귀 검증 완료:
+
+```
+cd backend && uv run pytest tests/test_surge_ai066.py --tb=short -q
+→ TestVolumeBreakoutRelative (플래그 True/False 양경로) 전량 통과
+→ test_new_fields_on_existing_configs (모델 기본값=False 단언) 통과
+
+cd backend && uv run pytest tests/ --tb=short -q -m "not slow"
+→ 1912 passed, 4 skipped, 3 xpassed
+→ regressions 0
+```
+
+### 배포 상태 — 주의: 진행 중
+
+- **Commit**: `446e1d6`, main branch push 완료 (2026-07-13 15:20~15:40 KST 경)
+- **프로덕션 활성화**: 배포 가드 윈도우(15:15-16:10 KST, 자동 지연)의 영향으로 production
+  서버(140.245.76.242:8000)에서 새 설정 활성화는 **~16:10 KST 이후 예상됨** (cicd auto-deploy).
+  현재(작성 시점) production 서버는 여전히 commit `1624fa3`(SPEC-AI-078) 실행 중이며, 본 변경
+  활성화는 미확정 상태.
+- **배포 후 관찰**: 첫 스캔부터 surge_candidate 후보 수 증가 예상 → 정상. precision 변화 관찰 권장
+  (R-1 리스크).
+
+### 근본원인 (REQ-AI079-002 배경)
+
+volume_breakout 탐지기는 전통적으로 **절대 거래량 순위(Naver top 50)만** 조회 후보로 삼아왔다.
+그 결과:
+- 뉴스 기사나 공시 커버리지가 **있는데도** 거래량 순위가 낮다는 이유만으로 후보 탈락
+- 실증 사례 (2026-07-13): 011090(에넥스, 당일 뉴스 있음) — 절대 거래량 순위 밖이라 레거시
+  경로에서는 미탐지, 실제 그날 +19.77% 상승
+
+본 활성화로:
+1. **촉매 유니버스 확장** — 당일/밤새 공시 또는 최근 뉴스 있는 종목을 거래량 순위 밖이어도
+   후보에 포함
+2. **z-score 상대 임계** — 고정 3.0배 못 미쳐도 종목 자기 20일 대비 z-score >= 2.0이면 후보 인정
+
+→ 뉴스/공시 기반 급등(011090 유형)의 탐지 커버리지 개선.
+
+### 위험 (R-1)
+
+후보 유니버스 확장 → surge_candidate 신호 수 **증가** → **precision 하락 가능성**.
+실제 자본 리스크는 없음(실매매 비활성, 예측 기록 모드, SPEC-AI-043 유지).
+완화: 배포 후 며칠간 INFO 로그(`[거래량폭발]`) 로 신호량/구성 변화 추이 관찰 후,
+필요 시 후속 SPEC에서 임계 조정.

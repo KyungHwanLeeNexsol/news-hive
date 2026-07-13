@@ -4,6 +4,39 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Feature — SPEC-AI-079: volume_breakout 상대임계(z-score) 확장 기능 활성화 (2026-07-13)
+
+#### `446e1d6` — 절대 거래량 순위 의존도 해소, 뉴스/공시 커버리지 종목 포함
+
+**목적**: SPEC-AI-066에서 이미 구현·테스트된 volume_breakout 탐지기의 **상대임계(z-score) 확장
+기능**을 프로덕션에서 최초 활성화. 탐지기가 절대 거래량 순위(Naver top 50)만 조회했던 한계를
+극복해, **뉴스/공시 커버리지가 있는데도 거래량 순위 밖이라는 이유만으로 탈락하던 종목들을 구제**.
+
+- **라이브 사례 (07-13)**: 011090(에넥스) — 당일 00:26 뉴스 커버리지 보유했으나, 절대 거래량
+  순위 밖 → 레거시 경로에서 미탐지. 실제 종가 기준 +19.77% 상승.
+- 활성화 로직(2가지 경로):
+  1. **촉매 유니버스 확장** — 당일/밤새 공시 또는 최근 뉴스 있는 종목을 거래량 순위 밖이어도
+     후보 유니버스(100) 상한 내에서 포함 (`_fetch_volume_breakout_catalyst_universe`)
+  2. **z-score 상대 임계** — 고정 3.0배 비율 미달이어도 종목 자기 20일 거래량 대비 z-score >= 2.0이면
+     후보 승인 (`_VB_RELATIVE_Z_THRESHOLD = 2.0`)
+- 구현: `backend/app/surge_config/surge_detection.yaml` `:217` `relative_threshold_enabled: false → true` **(1줄)**
+- 코드 로직 변경 없음. SPEC-AI-066 전용 테스트 스위트 + 전체 회귀 스위트 전량 통과
+  (1912 passed, 4 skipped, 3 xpassed, regressions 0).
+
+**예측 기록 모드 유지 — 매매 영향 없음**: 실매매 비활성 상태. volume_breakout 로직만 활성화,
+발신/매수 게이팅 diff 0.
+
+**알려진 위험 (R-1)**: 후보 유니버스 확장 → surge_candidate 신호 수 **증가** → precision
+하락 가능성. 자본 리스크는 없음(예측 기록 모드). 배포 후 며칠간 INFO 로그로 신호량/구성 추이
+관찰 후, 필요 시 후속 SPEC에서 임계 조정.
+
+**배포 상태**: commit `446e1d6` pushed to main (2026-07-13 15:20~15:40 KST).
+Production 활성화는 배포 가드 윈도우(15:15-16:10 KST) 영향으로 **~16:10 KST 이후 예상** (진행 중, 미확정).
+
+**영향 파일**: `backend/app/surge_config/surge_detection.yaml` (1줄)
+
+---
+
 ### Fix — SPEC-AI-078: Pool A 공시 후보 impact_score 기반 우선순위 절단 교정 (2026-07-13)
 
 #### `1624fa3` — 무순위 절단 → impact 우선 잔존 (종목별 MAX 집계 + NULL-안전 정렬)
