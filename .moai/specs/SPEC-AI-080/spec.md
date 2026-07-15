@@ -1,18 +1,22 @@
 ---
 id: SPEC-AI-080
-version: 0.2.1
-status: draft
+version: 1.0.0
+status: completed
 created: 2026-07-14
-updated: 2026-07-14
+updated: 2026-07-15
 author: Nexsol
 priority: High
 issue_number: null
+lifecycle_level: 1
 ---
 
 # SPEC-AI-080: 동일-당일 고확신 공시 촉매의 즉시 급등 시그널 발화 (Same-Day High-Conviction Disclosure → Immediate Surge Signal)
 
 ## HISTORY
 
+- 2026-07-15 (v1.0.0): **완료** (commit `66776b6`). DDD ANALYZE-PRESERVE-IMPROVE로 T0~T10 전 태스크
+  구현 완료. 신규 테스트 3개 파일(102 tests) 포함 전체 회귀 스위트 통과(1978 passed, 4 skipped,
+  3 xpassed, failures 0), ruff clean. 상세는 아래 "Implementation Notes" 섹션 참조.
 - 2026-07-14 (v0.1.0): 최초 작성. 2026-07-14 근본원인 조사(DB 포렌식 + 코드 추적)로 확정된
   **예측 지평 불일치(horizon mismatch)** 를 SPEC화. `scannable_recall`이 사전 선별된 T-1 스캔
   유니버스 종목에 대해서도 ~0%(07-06 0.0625, 07-07/08/10 0.0)로 정체된 근본 원인은 탐지기 임계 튜닝이
@@ -420,6 +424,56 @@ M&A, 자사주 소각, 속보성 뉴스)는 압도적으로 **급등 당일(T) �
 - T-1 배치 앙상블의 SCORING 갭 교정: 계약 공시 flat 0.82 → 계약금액/시총 스케일로 상향하거나
   disclosure_pattern 가중치/`immediate_disclosure_bypass_threshold` 조정([X-4], R-4). 별개 SPEC.
 - 텍스트-무관 순수 수급 급등 탐지기 신설([X-5]) — 오탐 위험 커 수일 관찰 후 판단.
+
+---
+
+## Implementation Notes (Level 1)
+
+### 실제 구현 요약 (2026-07-15, commit 66776b6)
+
+#### 핵심 변경사항
+
+**즉시발화 설정 토글** (`surge_config/surge_detection.yaml`, `surge_settings.py`)
+- `immediate_surge` 블록 추가, 기본값 `enabled: false`(레거시 완전 불변 보증, Scenario 6)
+
+**즉시발화 헬퍼 및 분기 연결** (`disclosure_impact_scorer.py`)
+- `_create_immediate_surge_signal()`: 고확신 이벤트클래스 + impact_score(계약금액/시총 스케일)
+  게이팅, `execute_signal_trade` 미호출(예측 기록 전용, REQ-005), 네이티브 키 정합 업서트
+- `process_disclosure_impact()`에 즉시발화 분기 연결, 15:20 KST 컷오프로 next_day/same_day
+  horizon 태깅(OQ-2 확정: 접수 시각 기준)
+
+**평가 지평 분리** (`surge_evaluation_service.py`)
+- `evaluate_surge_predictions()`: T-1 접수분 recall 편입(Scenario 1) + 당일 접수분 서브지표
+  분리(Scenario 2, 파생계산 — DP-2는 스키마 확장 없이 채택)
+
+**기존 덮어쓰기 사이트 마커 인지형 스킵** (`fund_manager.py`, v0.2.0 [E-9] 대응)
+- 재탐지 업서트(`:1436-1464`)와 SPEC-AI-039 캐리오버(`:1542-1597`) 양쪽에 `_is_immediate_disclosure_signal`
+  마커 인지형 스킵 추가 — 즉시발화 시그널의 `created_at`(T-1)·`surge_metadata`가 익일 배치 실행에도
+  보존됨(Scenario 7, DP-1 (i) 채택). 마커 미검출 시 두 사이트 거동은 기존과 완전 동일(R-7 무회귀).
+
+**타임존 검증** (OQ-1/EC-3)
+- 검증 완료, 코드 보정 불필요로 확정(T8) — created_at은 이미 KST 영업일과 정합.
+
+**테스트**
+- 신규 3개 파일: `test_disclosure_impact_scorer_immediate_surge.py`,
+  `test_surge_ai080_fund_manager.py`, `test_surge_ai080_timezone_boundary.py`
+- 기존 `test_surge_evaluation_service.py` 확장(228줄 추가)
+- 백엔드 전체 스위트: **1978 passed, 4 skipped, 3 xpassed, 0 regressions**. ruff clean.
+  (mypy는 프로젝트 미설치 환경으로 스킵 — 기존 프로젝트 상태와 동일)
+
+#### 편차 및 선택사항
+
+**REQ-AI080-007 (P2, 선택) — 별도 모듈 없이 충족**
+- 관측성 로그/서브지표 집계를 `evaluate_surge_predictions` 내 기존 로그 라인으로 충족.
+  별도 관측 모듈 신설은 불필요로 판단(T10).
+
+#### 신규 테이블/마이그레이션
+
+- 없음 (설정 필드 추가만). 과거 데이터 백필 없음(2026-07-15 이후 전진 적용).
+
+#### 배포 상태
+
+- 로컬 검증만 완료(2026-07-15). 프로덕션 배포는 아직 미완료 — main push 후 CI/CD 배포 확인 필요.
 
 ---
 

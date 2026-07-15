@@ -4,6 +4,40 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Feature — SPEC-AI-080: 동일-당일 고확신 공시 촉매 즉시 급등 시그널 발화 (2026-07-15)
+
+#### `66776b6` — 30분 반영 체크 게이트 우회, T-1/당일 지평 분리, 기존 덮어쓰기 사이트 귀속 보존
+
+**목적**: T-1 15:20 KST 배치 스캔 종료 이후 접수되는 고확신 이벤트클래스 공시(예: 단일판매·공급계약체결)가
+30분 `run_reflection_check`/`detect_unreflected_gap` 게이트를 기다리지 않고 즉시 `surge_candidate`
+시그널을 발화하도록, 기존 이벤트 구동 경로(`disclosure_impact_scorer.py`)를 repurpose.
+
+- **실증 대응**: 신테카바이오(226330) 07-09 16:41 KST 접수 → 07-10 급등 유형 미탐 사례.
+- 구현 4곳:
+  1. `immediate_surge` 설정 블록(기본 `enabled: false`) — `surge_detection.yaml`/`surge_settings.py`
+  2. `_create_immediate_surge_signal` 헬퍼 + `process_disclosure_impact` 분기 연결(15:20 컷오프로
+     next_day/same_day horizon 태깅), `execute_signal_trade` 미호출(예측 기록 전용)
+  3. `evaluate_surge_predictions`: T-1 접수분 recall 편입 + 당일 접수분 서브지표 분리
+  4. `fund_manager.py` 재탐지 업서트(`:1436-1464`)/SPEC-AI-039 캐리오버(`:1542-1597`) 마커 인지형
+     스킵 — 즉시발화 시그널의 `created_at`(T-1)·`surge_metadata`가 익일 배치 덮어쓰기에도 보존됨
+- 신규 테스트 3개 파일(102 tests) 포함 전체 회귀 스위트 통과
+  (1978 passed, 4 skipped, 3 xpassed, regressions 0). ruff clean.
+
+**예측 기록 모드 유지 — 매매 영향 없음**: 실매매 미배선(`execute_signal_trade` 미호출). 발신/매수
+게이팅 diff 0. `immediate_surge.enabled=false`(기본값)에서 레거시 동작 완전 불변.
+
+**알려진 위험 (R-1/R-2/R-6)**: 신규 즉시발화 경로가 활성화되기 전까지는 신호량 변화 없음(기본
+비활성). 활성화 시 `scannable_recall`/precision/즉시발화 종목의 T-1 귀속 유지 여부를 배포 후 며칠간
+관측 필요.
+
+**배포 상태**: commit `66776b6` — 로컬 검증 완료, main push 대기(`immediate_surge.enabled`는
+기본 비활성이므로 활성화는 별도 설정 변경 필요).
+
+**영향 파일**: `backend/app/services/{disclosure_impact_scorer,fund_manager,surge_evaluation_service}.py`,
+`backend/app/surge_config/{surge_detection.yaml,surge_settings.py}`
+
+---
+
 ### Feature — SPEC-AI-079: volume_breakout 상대임계(z-score) 확장 기능 활성화 (2026-07-13)
 
 #### `446e1d6` — 절대 거래량 순위 의존도 해소, 뉴스/공시 커버리지 종목 포함
