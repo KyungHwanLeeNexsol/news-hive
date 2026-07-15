@@ -1,7 +1,7 @@
 ---
 id: SPEC-AI-081
-version: 0.3.0
-status: draft
+version: 1.0.0
+status: completed
 created: 2026-07-15
 created_at: "2026-07-15"
 updated: 2026-07-15
@@ -16,6 +16,12 @@ labels: [disclosure-scoring, surge-detection, backend]
 
 ## HISTORY
 
+- 2026-07-15 (v1.0.0): **완료** (commit `70c1a52`). DDD ANALYZE-PRESERVE-IMPROVE로 T1~T8 구현
+  완료, T9(REQ-008 관측성 로깅, P2)는 파일당 MX NOTE 태그 상한 근접으로 의도적 스킵. AC-081-001~007/009
+  전부 PASS(독립 검증: manager-quality TRUST5 PASS, evaluator-active 4차원 전부 PASS). 신규 테스트
+  56개 포함 전체 회귀 스위트 통과(2001 passed, 0 failed, 기본+xdist 양쪽). `disclosure_content_aware_
+  scoring.enabled` 기본값 `false` — 배포되어도 즉시 동작 변화 없음(SPEC-AI-079/080 패턴 계승). mypy는
+  로컬 환경 미설치로 미검증(기존 환경 제약, 이 SPEC이 원인 아님).
 - 2026-07-15 (v0.1.0): 최초 작성. 2026-07-13→07-14 및 2026-07-09→07-10 두 독립 일자쌍 실거래
   포렌식(SSH+DB+코드 대조)에서 확정된 "scannable 미탐 100%(4/4, 14/14)" 근본원인 조사를 이어받아,
   그중 `disclosure_impact_scorer.py`의 `_BASE_IMPACT_BY_TYPE` flat 카테고리(주요사항보고/지분공시

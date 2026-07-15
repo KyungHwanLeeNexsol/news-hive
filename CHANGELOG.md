@@ -4,6 +4,44 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fix — SPEC-AI-081: 공시 충격 스코어링 flat-base 카테고리 콘텐츠 인식 정밀화 (2026-07-15)
+
+#### `70c1a52` — 최대주주 지배권 변경 키워드 확장 + 희석성 증권 발행결정 로컬 재분류
+
+**목적**: `score_disclosure_impact()`가 report_type 7종 중 "주요사항보고"/"지분공시"에 콘텐츠와
+무관한 flat 기본값(20/25)만 부여하던 문제 수정. 2026-07-13→07-14/07-09→07-10 두 독립 일자쌍
+실거래 포렌식(SSH+DB+코드 대조)에서 확정된 scannable 미탐(4/4, 14/14) 근본원인 조사에서 이어짐.
+
+- **실증 사례**: 006340 대원전선(지분공시, "최대주주등소유주식변동신고서") — 기존 Tier1 키워드
+  "최대주주 변경"과 실제 DART 표준 제목 불일치로 flat 25점에 캡, 익일 +17.84% 급등에도 미탐지.
+  038880 아이에이(전환사채 발행결정) — `dart_crawler` 자체 분류기의 패턴 우선순위 버그로
+  "주요사항보고"(+20)에 갇혀 있던 문제.
+- 구현 2가지 경로:
+  1. **최대주주 키워드 정규화 매칭** — `_is_controlling_shareholder_change()` 신규 헬퍼,
+     "최대주주"+변경/변동 어근 공존 판정 (006340형 25→50점)
+  2. **희석성 증권 발행결정 로컬 재분류** — `effective_report_type` 로컬 변수로 "발행공시" 경로
+     라우팅(038880형 20→-10점). **상향이 아닌 차등 처리가 목적** — 희석 신호는 report_name만으로
+     방향성(호재/악재) 판별 불가하므로 인위적 상향은 오탐 위험(연구 정정 사항, spec.md [X-9])
+- `disclosure.report_type` 저장값/`dart_crawler.py`는 무변경(diff 0 확인) — 재분류는 스코어링
+  함수 내부 로컬 계산에만 적용
+- 신규 설정 `disclosure_content_aware_scoring.enabled`(기본 `false`)로 게이팅. 비활성 시 7개
+  report_type 카테고리 전부 레거시와 byte-identical 확인
+- SPEC 작성 단계에서 독립 감사(plan-auditor) 3회 반복 — 연구 단계 가설 2건을 코드 대조로 정정
+  (ai_summary는 스코어링 시점에 사실상 항상 None, report_type은 DART가 아닌 자체 분류기 산출값)
+- 신규 테스트 56개 포함 전체 회귀 스위트 통과(2001 passed, 0 failed, 기본+xdist 양쪽). ruff clean.
+  독립 품질검증(manager-quality)·독립 평가(evaluator-active) 모두 PASS
+
+**예측 기록 모드 유지 — 매매 영향 없음**: 실매매 미배선. 발신/매수 게이팅 diff 0.
+`disclosure_content_aware_scoring.enabled=false`(기본값)에서 레거시 동작 완전 불변.
+
+**배포 상태**: commit `70c1a52` — 로컬 검증 완료, main push 대기(기본 비활성이므로 push해도
+즉시 동작 변화 없음).
+
+**영향 파일**: `backend/app/services/disclosure_impact_scorer.py`,
+`backend/app/surge_config/{surge_detection.yaml,surge_settings.py}`
+
+---
+
 ### Feature — SPEC-AI-080: 동일-당일 고확신 공시 촉매 즉시 급등 시그널 발화 (2026-07-15)
 
 #### `66776b6` — 30분 반영 체크 게이트 우회, T-1/당일 지평 분리, 기존 덮어쓰기 사이트 귀속 보존
