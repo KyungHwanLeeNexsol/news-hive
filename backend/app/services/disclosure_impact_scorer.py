@@ -84,6 +84,17 @@ _MNA_KEYWORDS = [
 ]
 _MNA_BONUS = 20
 
+# SPEC-AI-081 REQ-AI081-002: 희석성 증권 발행결정 로컬 재분류 키워드.
+# dart_crawler._REPORT_TYPE_PATTERNS의 "발행공시" 매핑 키워드 중 일부를 스코어링 전용으로
+# 로컬 재사용한다(단일 출처 위반 아님 — dart_crawler.py 저장값 자체는 미변경, [X-2]).
+# @MX:NOTE: [AUTO] SPEC-AI-081 — "주요사항보고서" 래퍼 접두사 우선매칭 버그(dart_crawler.py)로
+# 갇힌 희석성 증권 발행결정을 disclosure_content_aware_scoring.enabled=true일 때만 로컬
+# 재분류한다. dart_crawler.py의 패턴 순서/Disclosure.report_type 저장값은 변경하지 않는다.
+# @MX:SPEC: SPEC-AI-081 REQ-AI081-002
+_ISSUANCE_DILUTION_KEYWORDS = [
+    "전환사채", "신주인수권", "교환사채", "유상증자", "무상증자", "파생결합증권",
+]
+
 # SPEC-AI-051: 공시 키워드 Tier 배수 사전
 # Tier 1 (×2.0): 최고가치 이벤트
 _KEYWORD_TIER1 = ["FDA 승인", "세계 최초", "독점 공급", "최대주주 변경", "국가전략기술", "국책사업 선정"]
@@ -107,6 +118,19 @@ def _get_keyword_tier_multiplier(report_name: str, ai_summary: str | None) -> fl
     if any(kw in text for kw in _KEYWORD_TIER3):
         return 1.2
     return 1.0
+
+
+def _is_controlling_shareholder_change(normalized_text: str) -> bool:
+    """SPEC-AI-081 REQ-AI081-001: 최대주주 지배권 변경 공시 정규화 매칭.
+
+    DART 표준 제목("최대주주등소유주식변동신고서")은 기존 Tier1 리터럴 "최대주주 변경"과
+    공백·어근이 불일치해 매칭되지 않는다(spec.md §2 [E-2]). normalized_text는 호출부에서
+    루틴 거버넌스 매칭과 동일한 정규화(공백/가운뎃점 제거)를 적용한 텍스트이며, "최대주주" +
+    {변경, 변동, 교체} 어근 공존을 리터럴 부분 문자열 매칭으로 판정한다(§2 [A-2] 스타일 유지).
+    """
+    if "최대주주" not in normalized_text:
+        return False
+    return any(root in normalized_text for root in ("변경", "변동", "교체"))
 
 
 # @MX:NOTE: 지주사 임시 블랙리스트 — 섹터 파급 후보에서 제외
@@ -205,8 +229,25 @@ def score_disclosure_impact(
             except ValueError:
                 pass
 
+    # SPEC-AI-081 REQ-AI081-002: 희석성 증권 발행결정의 로컬 재분류(게이팅됨, "주요사항보고"만
+    # 해당). effective_report_type은 함수 로컬 변수이며 disclosure.report_type(저장 필드)은
+    # 절대 갱신하지 않는다(REQ-AI081-006 (c) 불변식).
+    # @MX:WARN: [AUTO] effective_report_type이 disclosure.report_type(저장값)과 달라질 수 있음
+    # @MX:REASON: 하위 소비자(disclosures 라우터 필터, SPEC-AI-028 disclosure_type_filter)는
+    #             여전히 저장된 report_type만 참조하므로 이 로컬 변수와의 불일치는 의도된
+    #             것이며, SPEC-AI-081의 변경 범위를 스코어링 로직 내부로 한정하는 설계다.
+    # @MX:SPEC: SPEC-AI-081 REQ-AI081-002
+    cfg_content_aware = get_surge_config().disclosure_content_aware_scoring
+    effective_report_type = report_type
+    if (
+        cfg_content_aware.enabled
+        and report_type == "주요사항보고"
+        and any(kw in report_name for kw in _ISSUANCE_DILUTION_KEYWORDS)
+    ):
+        effective_report_type = "발행공시"
+
     # 기본값 (REQ-DISC-004)
-    base = _BASE_IMPACT_BY_TYPE.get(report_type, 10)
+    base = _BASE_IMPACT_BY_TYPE.get(effective_report_type, 10)
 
     # @MX:NOTE: 기업지배구조 공시 중 M&A 키워드 감지 시 +20 가산 (합병/분할/영업양수도 등)
     if report_type == "기업지배구조" and any(kw in report_name for kw in _MNA_KEYWORDS):
@@ -214,6 +255,20 @@ def score_disclosure_impact(
 
     # SPEC-AI-051 REQ-AI051-005: Tier 배수 적용
     multiplier = _get_keyword_tier_multiplier(report_name, ai_summary)
+
+    # SPEC-AI-081 REQ-AI081-001: 최대주주 지배권 변경 키워드 커버리지 확장(게이팅됨).
+    # 기존 Tier1/2/3 어디에도 매칭되지 않았을 때만(multiplier==1.0) 정규화 매칭을 시도한다 —
+    # 이미 다른 Tier에 매칭된 기존 판정을 덮어쓰지 않는다. flat-base 경로(주요사항보고/
+    # 지분공시)에만 개입하며 다른 5개 카테고리·하위 소비자 게이팅 로직은 무변경(REQ-AI081-006).
+    if (
+        cfg_content_aware.enabled
+        and multiplier == 1.0
+        and effective_report_type in ("주요사항보고", "지분공시")
+    ):
+        normalized = (report_name + " " + ai_summary).replace(" ", "").replace("·", "")
+        if _is_controlling_shareholder_change(normalized):
+            multiplier = 2.0
+
     return round(min(float(base) * multiplier, 100.0), 1)
 
 

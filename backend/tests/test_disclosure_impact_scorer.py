@@ -20,6 +20,14 @@ from app.services.disclosure_impact_scorer import (
     run_reflection_check,
     score_disclosure_impact,
 )
+from app.surge_config.surge_settings import DisclosureContentAwareScoringConfig
+
+
+class _ContentAwareStubConfig:
+    """SPEC-AI-081: get_surge_config()를 대체하는 최소 스텁 — disclosure_content_aware_scoring만 필요."""
+
+    def __init__(self, enabled: bool) -> None:
+        self.disclosure_content_aware_scoring = DisclosureContentAwareScoringConfig(enabled=enabled)
 
 
 def _make_disclosure(**kwargs) -> MagicMock:
@@ -189,6 +197,209 @@ class TestScoreDisclosureImpact:
         """AC-004: 정기공시 → 기본 점수 10."""
         d = _make_disclosure(report_type="정기공시")
         assert score_disclosure_impact(d, None) == 10.0
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-081: 공시 충격 스코어링 flat-base 카테고리 콘텐츠 인식 정밀화
+# DDD PRESERVE(T1): 3개 실증 사례(465770/038880/006340)의 수정 전 flat 거동 재현.
+# REQ-AI081-007: 코드 변경 이전에 기존(flat) 거동을 고정하는 특성화 테스트.
+# ---------------------------------------------------------------------------
+
+class TestScoreDisclosureImpactContentAwareCharacterization:
+    """AC-081-001/002 RED: 수정 전 flat 거동 재현(코드 변경과 무관하게 성립해야 함)."""
+
+    def test_characterize_006340형_최대주주_커버리지갭_flat25(self):
+        """006340형: '최대주주등소유주식변동신고서'는 기존 Tier1 리터럴 '최대주주 변경'과
+        불일치해(공백/어근 차이) flat 지분공시 기본값 25가 그대로 반환된다(AC-081-001 RED)."""
+        d = _make_disclosure(report_type="지분공시", report_name="최대주주등소유주식변동신고서")
+        assert score_disclosure_impact(d, None) == 25.0
+
+    def test_characterize_038880형_전환사채_주요사항보고_flat20(self):
+        """038880형: '주요사항보고서(전환사채권발행결정)'는 dart_crawler 분류기의 '주요사항보고서'
+        패턴 우선매칭으로 '주요사항보고'가 되어 flat 기본값 20이 그대로 반환된다(AC-081-002 RED)."""
+        d = _make_disclosure(
+            report_type="주요사항보고",
+            report_name="주요사항보고서(전환사채권발행결정)",
+        )
+        assert score_disclosure_impact(d, None) == 20.0
+
+    def test_characterize_465770형_범용캐치올_flat20(self):
+        """465770형: '투자판단관련주요경영사항'(범용 캐치올, 신호 없음)은 flat 기본값 20이
+        그대로 반환된다 — 오탐 방지 음성 대조군(AC-081-003)으로 재사용."""
+        d = _make_disclosure(report_type="주요사항보고", report_name="투자판단관련주요경영사항")
+        assert score_disclosure_impact(d, None) == 20.0
+
+
+class TestContentAwareScoringControllingShareholderChange:
+    """AC-081-001 (REQ-001) GREEN: 최대주주 지배권 변경 키워드 커버리지 확장 — 006340형."""
+
+    def test_006340형_toggle_on_tier1_상향(self):
+        d = _make_disclosure(report_type="지분공시", report_name="최대주주등소유주식변동신고서")
+        with patch(
+            "app.services.disclosure_impact_scorer.get_surge_config",
+            return_value=_ContentAwareStubConfig(enabled=True),
+        ):
+            score = score_disclosure_impact(d, None)
+        assert score >= 30.0
+        assert score == 50.0  # 25 * 2.0 (Tier1 배수)
+
+
+class TestContentAwareScoringIssuanceDilutionReclassification:
+    """AC-081-002 (REQ-002) GREEN: 희석성 증권 발행결정 로컬 재분류 — 038880형."""
+
+    def test_038880형_toggle_on_발행공시경로_라우팅(self):
+        d = _make_disclosure(
+            report_type="주요사항보고",
+            report_name="주요사항보고서(전환사채권발행결정)",
+        )
+        with patch(
+            "app.services.disclosure_impact_scorer.get_surge_config",
+            return_value=_ContentAwareStubConfig(enabled=True),
+        ):
+            score = score_disclosure_impact(d, None)
+        assert score == -10.0
+
+    def test_038880형_report_type_저장값_불변(self):
+        """REQ-006(c) 불변식: 재분류는 로컬 계산에만 적용, disclosure.report_type 저장 필드는 불변."""
+        d = _make_disclosure(
+            report_type="주요사항보고",
+            report_name="주요사항보고서(전환사채권발행결정)",
+        )
+        with patch(
+            "app.services.disclosure_impact_scorer.get_surge_config",
+            return_value=_ContentAwareStubConfig(enabled=True),
+        ):
+            score_disclosure_impact(d, None)
+        assert d.report_type == "주요사항보고"
+
+
+class TestContentAwareScoringFalsePositiveGuard:
+    """AC-081-003/004 (REQ-005): 무신호 공시 인플레이션 금지 — toggle on 상태에서도 유지."""
+
+    def test_465770형_toggle_on_flat_유지(self):
+        """465770형(범용 캐치올)은 toggle on이어도 신규 키워드 어디에도 매칭되지 않아 flat 20 유지."""
+        d = _make_disclosure(report_type="주요사항보고", report_name="투자판단관련주요경영사항")
+        with patch(
+            "app.services.disclosure_impact_scorer.get_surge_config",
+            return_value=_ContentAwareStubConfig(enabled=True),
+        ):
+            score = score_disclosure_impact(d, None)
+        assert score == 20.0
+
+    def test_루틴_지분공시_toggle_on_5점_유지(self):
+        """루틴 거버넌스 캡 대상('최대주주' 키워드 없음)은 toggle on이어도 5.0 그대로 —
+        루틴 캡이 신규 로직 도달 전에 조기 반환하므로 상호 배타적(spec.md §2 [E-5])."""
+        d = _make_disclosure(
+            report_type="지분공시",
+            report_name="임원·주요주주특정증권등소유상황보고서",
+        )
+        with patch(
+            "app.services.disclosure_impact_scorer.get_surge_config",
+            return_value=_ContentAwareStubConfig(enabled=True),
+        ):
+            score = score_disclosure_impact(d, None)
+        assert score == 5.0
+
+
+class TestContentAwareScoringBackwardCompatibility:
+    """AC-081-005 (REQ-004) [HARD]: 토글 비활성(기본값) = 레거시 완전 동등."""
+
+    def test_006340형_toggle_off_기본값_25(self):
+        d = _make_disclosure(report_type="지분공시", report_name="최대주주등소유주식변동신고서")
+        assert score_disclosure_impact(d, None) == 25.0
+
+    def test_038880형_toggle_off_기본값_20(self):
+        d = _make_disclosure(
+            report_type="주요사항보고",
+            report_name="주요사항보고서(전환사채권발행결정)",
+        )
+        assert score_disclosure_impact(d, None) == 20.0
+
+    def test_명시적_enabled_False_스텁으로도_동일(self):
+        """기본 get_surge_config() 대신 명시적 enabled=False 스텁으로도 검증(이중 확인)."""
+        d = _make_disclosure(report_type="지분공시", report_name="최대주주등소유주식변동신고서")
+        with patch(
+            "app.services.disclosure_impact_scorer.get_surge_config",
+            return_value=_ContentAwareStubConfig(enabled=False),
+        ):
+            assert score_disclosure_impact(d, None) == 25.0
+
+    @pytest.mark.parametrize(
+        "report_type,report_name,ai_summary,expected",
+        [
+            ("기업지배구조", "이사회 의결 통지", None, 10.0),
+            ("지분공시", None, None, 25.0),
+            ("발행공시", None, None, -10.0),
+            ("정기공시", None, None, 10.0),
+            ("알수없는유형", None, None, 10.0),
+        ],
+    )
+    def test_기존_TestScoreDisclosureImpact_케이스_toggle_off_무회귀(
+        self, report_type, report_name, ai_summary, expected
+    ):
+        """기존 TestScoreDisclosureImpact의 대표 케이스가 toggle off 상태에서 코드 변경 없이
+        그대로 통과함을 재확인(AC-081-005 bullet 3)."""
+        kwargs = {"report_type": report_type}
+        if report_name is not None:
+            kwargs["report_name"] = report_name
+        if ai_summary is not None:
+            kwargs["ai_summary"] = ai_summary
+        d = _make_disclosure(**kwargs)
+        assert score_disclosure_impact(d, None) == expected
+
+
+class TestContentAwareScoringAdjacentCategoriesUnchanged:
+    """AC-081-006 (REQ-006) [HARD]: 다른 5개 카테고리는 toggle 여부와 무관하게 완전히 동일."""
+
+    @pytest.mark.parametrize(
+        "report_type,report_name",
+        [
+            ("실적변동", "실적변동 공시"),
+            ("기업지배구조", "합병계약 체결"),
+            ("발행공시", "유상증자 결정"),
+            ("정기공시", "사업보고서"),
+            ("기타공시", "해외투자 결정"),
+        ],
+    )
+    def test_인접_카테고리_toggle_무관_동일결과(self, report_type, report_name):
+        d_off = _make_disclosure(report_type=report_type, report_name=report_name)
+        score_off = score_disclosure_impact(d_off, None)
+
+        d_on = _make_disclosure(report_type=report_type, report_name=report_name)
+        with patch(
+            "app.services.disclosure_impact_scorer.get_surge_config",
+            return_value=_ContentAwareStubConfig(enabled=True),
+        ):
+            score_on = score_disclosure_impact(d_on, None)
+
+        assert score_off == score_on, (report_type, report_name)
+
+
+class TestContentAwareScoringAiSummaryIndependence:
+    """AC-081-009 (REQ-003) [HARD]: ai_summary 필드의 값 존재 자체가 1차/필수 신호원이 아니다."""
+
+    @pytest.mark.parametrize(
+        "report_type,report_name",
+        [
+            ("지분공시", "최대주주등소유주식변동신고서"),
+            ("주요사항보고", "주요사항보고서(전환사채권발행결정)"),
+        ],
+    )
+    def test_ai_summary_None_vs_무관텍스트_동일점수(self, report_type, report_name):
+        d_none = _make_disclosure(report_type=report_type, report_name=report_name, ai_summary=None)
+        d_filled = _make_disclosure(
+            report_type=report_type,
+            report_name=report_name,
+            ai_summary="분기 실적 발표 일정 안내(본 건과 무관한 텍스트)",
+        )
+        with patch(
+            "app.services.disclosure_impact_scorer.get_surge_config",
+            return_value=_ContentAwareStubConfig(enabled=True),
+        ):
+            score_none = score_disclosure_impact(d_none, None)
+            score_filled = score_disclosure_impact(d_filled, None)
+
+        assert score_none == score_filled, (report_type, report_name)
 
 
 # ---------------------------------------------------------------------------

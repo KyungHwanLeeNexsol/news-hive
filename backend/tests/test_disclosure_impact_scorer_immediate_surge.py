@@ -26,7 +26,10 @@ from app.services.disclosure_impact_scorer import (
     _is_immediate_event_class,
     process_disclosure_impact,
 )
-from app.surge_config.surge_settings import ImmediateSurgeConfig
+from app.surge_config.surge_settings import (
+    DisclosureContentAwareScoringConfig,
+    ImmediateSurgeConfig,
+)
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -75,10 +78,16 @@ def _immediate_cfg(**overrides) -> ImmediateSurgeConfig:
 
 
 class _StubSurgeConfig:
-    """get_surge_config()를 대체하는 최소 스텁 — immediate_surge 필드만 필요."""
+    """get_surge_config()를 대체하는 최소 스텁 — immediate_surge 필드만 필요.
+
+    SPEC-AI-081: score_disclosure_impact()가 get_surge_config().disclosure_content_aware_scoring
+    을 무조건 참조하게 되어(process_disclosure_impact() 내부에서 호출), 이 스텁도 해당 필드를
+    갖추어야 한다. 기본값 enabled=False로 레거시 동작을 그대로 보존한다(REQ-AI081-004 정합).
+    """
 
     def __init__(self, immediate_surge: ImmediateSurgeConfig) -> None:
         self.immediate_surge = immediate_surge
+        self.disclosure_content_aware_scoring = DisclosureContentAwareScoringConfig(enabled=False)
 
 
 # ---------------------------------------------------------------------------

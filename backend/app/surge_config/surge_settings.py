@@ -439,6 +439,18 @@ class ImmediateSurgeConfig(BaseModel):
     batch_cutoff_minute: int = 20
 
 
+class DisclosureContentAwareScoringConfig(BaseModel):
+    """SPEC-AI-081: 공시 충격 스코어링 flat-base 카테고리 콘텐츠 인식 정밀화 설정.
+
+    enabled=False(기본값)이면 score_disclosure_impact()의 flat-base 경로(주요사항보고/지분공시)가
+    레거시 거동(Tier1/2/3 키워드 목록 + 기존 report_type 기준 base)을 완전히 유지한다.
+    """
+
+    # @MX:NOTE: [AUTO] SPEC-AI-081 — 기본값 false(레거시 완전 보존, 공유 고fan-in 함수 변경 원칙)
+    # @MX:SPEC: SPEC-AI-081 REQ-AI081-004
+    enabled: bool = False
+
+
 class SurgeDetectionConfig(BaseModel):
     """급등 징후 탐지 전체 설정.
 
@@ -475,6 +487,11 @@ class SurgeDetectionConfig(BaseModel):
 
     # SPEC-AI-080: 동일-당일 고확신 공시 촉매 즉시 급등 시그널 발화 설정 (기본 비활성)
     immediate_surge: ImmediateSurgeConfig = Field(default_factory=ImmediateSurgeConfig)
+
+    # SPEC-AI-081: 공시 충격 스코어링 flat-base 카테고리 콘텐츠 인식 정밀화 설정 (기본 비활성)
+    disclosure_content_aware_scoring: DisclosureContentAwareScoringConfig = Field(
+        default_factory=DisclosureContentAwareScoringConfig
+    )
 
     # SPEC-AI-036: 품질 floor 게이트 — 보정 confidence / composite_score 최소값
     # # @MX:NOTE: [AUTO] SPEC-AI-036 — 두 조건 중 하나만 충족해도 시그널 통과 (OR 게이트)

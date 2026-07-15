@@ -288,3 +288,9 @@ surge_detection:
     min_impact: 40.0
     batch_cutoff_hour: 15
     batch_cutoff_minute: 20
+  # SPEC-AI-081: 공시 충격 스코어링 flat-base 카테고리(주요사항보고/지분공시) 콘텐츠 인식
+  # 정밀화 — 기본 비활성(레거시 완전 보존). enabled=true 시 최대주주 지배권 변경 키워드
+  # 정규화 매칭(REQ-001) + 희석성 증권 발행결정 로컬 재분류(REQ-002, 발행공시 경로로 라우팅)가
+  # 활성화된다.
+  disclosure_content_aware_scoring:
+    enabled: false
