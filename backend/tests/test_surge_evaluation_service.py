@@ -644,6 +644,234 @@ def _seed_predicted_and_actual(
     return t_minus_1
 
 
+# ---------------------------------------------------------------------------
+# SPEC-AI-080 T5: 즉시 발화 시그널 recall 편입(next_day) + 지평 분리(same_day) 배제
+#
+# REQ-AI080-004: T-1 종가 이후 접수분(horizon="next_day")은 기존 T-1→T predicted_set에
+# 자연 편입(created_at=T-1이므로 코드 변경 불필요, OQ-1 검증됨). 급등 당일 장중 접수분
+# (horizon="same_day")은 SPEC-AI-075의 near_limit_up_carry 배제 패턴을 재사용해 배제한다.
+# ---------------------------------------------------------------------------
+
+def _inject_ai080_signal(
+    db: Session, stock_code: str, surge_metadata: str, trading_date: date
+) -> None:
+    """SPEC-AI-080 즉시 발화 시그널을 T-1 created_at으로 직접 주입한다.
+
+    TestEvaluateSurgePredictionsCharacterization._inject_raw_signal과 동일한 패턴의
+    독립 복제 — 다른 클래스에서 재사용하기 위함.
+    """
+    from datetime import datetime, timezone
+    from app.models.stock import Stock
+    from app.models.sector import Sector
+    from app.models.fund_signal import FundSignal
+    from app.services.surge_trading_service import _get_prev_business_day
+
+    sector = Sector(name=f"AI080섹터_{stock_code}", is_custom=False)
+    db.add(sector)
+    db.flush()
+    stock = Stock(stock_code=stock_code, name=f"주식{stock_code}", sector_id=sector.id, market="KOSPI")
+    db.add(stock)
+    db.flush()
+
+    t_minus_1 = _get_prev_business_day(trading_date)
+    signal = FundSignal(
+        stock_id=stock.id,
+        signal="buy",
+        signal_type="surge_candidate",
+        confidence=0.6,
+        reasoning="SPEC-AI-080 즉시발화 테스트",
+        surge_metadata=surge_metadata,
+        created_at=datetime(
+            t_minus_1.year, t_minus_1.month, t_minus_1.day, 16, 41, tzinfo=timezone.utc
+        ),
+    )
+    db.add(signal)
+    db.commit()
+
+
+def _immediate_metadata(horizon: str, **overrides) -> str:
+    import json
+
+    meta = {
+        "surge_basis": ["immediate_disclosure"],
+        "immediate_disclosure": True,
+        "surge_probability_score": 0.8,
+        "event_class": "단일판매ㆍ공급계약체결",
+        "impact_score": 82.0,
+        "disclosure_id": 999,
+        "horizon": horizon,
+        "rcept_dt": "20260709",
+    }
+    meta.update(overrides)
+    return json.dumps(meta, ensure_ascii=False)
+
+
+class TestImmediateSurgeHorizonSeparation:
+    """SPEC-AI-080 REQ-AI080-004: 즉시 발화 시그널의 recall 편입/지평 분리."""
+
+    def test_scenario1_next_day_horizon_included_in_predicted_set(self, db: Session):
+        """Scenario 1: horizon="next_day"(T-1 종가 이후 접수분)는 표준 T-1→T predicted_set에
+        자연 편입되어 scannable_recall 집계 대상이 된다."""
+        trading_date = date(2026, 6, 9)
+        _inject_ai080_signal(
+            db, "IMMFIRE1", _immediate_metadata("next_day"), trading_date
+        )
+
+        from app.services.surge_evaluation_service import evaluate_surge_predictions
+        result = evaluate_surge_predictions(db, trading_date)
+
+        assert result.predicted_count == 1
+
+    def test_scenario2_same_day_horizon_excluded_from_predicted_set(self, db: Session):
+        """Scenario 2: horizon="same_day"(급등 당일 장중 접수분)는 표준 T-1→T predicted_set에서
+        배제된다(지평 오혼입 방지, R-3)."""
+        trading_date = date(2026, 6, 9)
+        _inject_ai080_signal(
+            db, "IMMFIRE2", _immediate_metadata("same_day"), trading_date
+        )
+
+        from app.services.surge_evaluation_service import evaluate_surge_predictions
+        result = evaluate_surge_predictions(db, trading_date)
+
+        assert result.predicted_count == 0
+
+    def test_same_day_excluded_signal_stays_in_actual_set(self, db: Session):
+        """same_day 배제 시그널도 SPEC-AI-075 near_limit_up_carry 배제와 동일하게 actual_set
+        (시장전체 진실)에는 영향을 주지 않는다 — predicted_set 배제만 일어난다."""
+        from app.models.surge_actual_outcome import SurgeActualOutcome
+
+        trading_date = date(2026, 6, 9)
+        _inject_ai080_signal(db, "IMMFIRE3", _immediate_metadata("same_day"), trading_date)
+        db.add(
+            SurgeActualOutcome(
+                trading_date=trading_date,
+                stock_code="IMMFIRE3",
+                stock_name="주식IMMFIRE3",
+                change_rate=12.0,
+                was_surge=True,
+                market="KOSPI",
+            )
+        )
+        db.commit()
+
+        from app.services.surge_evaluation_service import evaluate_surge_predictions
+        result = evaluate_surge_predictions(db, trading_date)
+
+        assert result.actual_surge_count == 1
+        assert result.predicted_count == 0
+        assert result.true_positive == 0
+
+    def test_mixed_next_day_and_same_day_only_next_day_counted(self, db: Session):
+        """next_day와 same_day가 혼재하면 next_day만 predicted_count에 계상된다."""
+        trading_date = date(2026, 6, 9)
+        _inject_ai080_signal(db, "MIXNEXT", _immediate_metadata("next_day"), trading_date)
+        _inject_ai080_signal(db, "MIXSAME", _immediate_metadata("same_day"), trading_date)
+
+        from app.services.surge_evaluation_service import evaluate_surge_predictions
+        result = evaluate_surge_predictions(db, trading_date)
+
+        assert result.predicted_count == 1
+
+    def test_ec8_missing_surge_metadata_silently_excluded(self, db: Session):
+        """EC-8/DoD: surge_metadata가 None이면 signal_type·날짜가 맞아도 침묵 배제된다
+        (surge_metadata.isnot(None) 필터, surge_evaluation_service.py 기존 동작 불변).
+        _create_immediate_surge_signal은 항상 non-None을 기록하므로 이 케이스는 발생하지
+        않아야 하지만, 기존 필터 자체의 동작은 회귀 없이 유지되어야 한다.
+        """
+        from datetime import datetime, timezone
+        from app.models.stock import Stock
+        from app.models.sector import Sector
+        from app.models.fund_signal import FundSignal
+        from app.services.surge_trading_service import _get_prev_business_day
+
+        trading_date = date(2026, 6, 9)
+        sector = Sector(name="AI080섹터_NOMETA", is_custom=False)
+        db.add(sector)
+        db.flush()
+        stock = Stock(stock_code="NOMETA", name="주식NOMETA", sector_id=sector.id, market="KOSPI")
+        db.add(stock)
+        db.flush()
+
+        t_minus_1 = _get_prev_business_day(trading_date)
+        db.add(
+            FundSignal(
+                stock_id=stock.id,
+                signal="buy",
+                signal_type="surge_candidate",
+                confidence=0.6,
+                reasoning="surge_metadata 누락 케이스",
+                surge_metadata=None,
+                created_at=datetime(
+                    t_minus_1.year, t_minus_1.month, t_minus_1.day, 16, 41, tzinfo=timezone.utc
+                ),
+            )
+        )
+        db.commit()
+
+        from app.services.surge_evaluation_service import evaluate_surge_predictions
+        result = evaluate_surge_predictions(db, trading_date)
+
+        assert result.predicted_count == 0
+
+    def test_immediate_disclosure_marker_not_misidentified_as_near_limit_up_carry(
+        self, db: Session
+    ):
+        """OQ-5(b): immediate_disclosure 마커는 _is_near_limit_up_carry_signal에 오판되지
+        않는다(마커 충돌 없음) — near_limit_up_carry 배제 로직과 독립적으로 next_day
+        시그널이 정상 집계된다."""
+        trading_date = date(2026, 6, 9)
+        _inject_ai080_signal(db, "NOCONFLICT", _immediate_metadata("next_day"), trading_date)
+
+        from app.services.surge_evaluation_service import (
+            _is_near_limit_up_carry_signal,
+            evaluate_surge_predictions,
+        )
+
+        result = evaluate_surge_predictions(db, trading_date)
+        assert result.predicted_count == 1
+        assert _is_near_limit_up_carry_signal(_immediate_metadata("next_day")) is False
+
+
+class TestIsSameDayEventHorizonSignal:
+    """_is_same_day_event_horizon_signal 판별 함수 단위 테스트(에러 경로 포함)."""
+
+    def test_none_returns_false(self):
+        from app.services.surge_evaluation_service import _is_same_day_event_horizon_signal
+
+        assert _is_same_day_event_horizon_signal(None) is False
+
+    def test_empty_string_returns_false(self):
+        from app.services.surge_evaluation_service import _is_same_day_event_horizon_signal
+
+        assert _is_same_day_event_horizon_signal("") is False
+
+    def test_invalid_json_returns_false_failsafe(self):
+        """EC-2 대칭: JSON 파싱 실패는 표준 지평으로 보수적 포함(fail-safe)."""
+        from app.services.surge_evaluation_service import _is_same_day_event_horizon_signal
+
+        assert _is_same_day_event_horizon_signal("{invalid json") is False
+
+    def test_non_dict_json_returns_false(self):
+        from app.services.surge_evaluation_service import _is_same_day_event_horizon_signal
+
+        assert _is_same_day_event_horizon_signal("[1, 2, 3]") is False
+
+    def test_missing_horizon_key_returns_false(self):
+        from app.services.surge_evaluation_service import _is_same_day_event_horizon_signal
+
+        assert _is_same_day_event_horizon_signal('{"surge_basis": ["theme_cluster"]}') is False
+
+    def test_horizon_next_day_returns_false(self):
+        from app.services.surge_evaluation_service import _is_same_day_event_horizon_signal
+
+        assert _is_same_day_event_horizon_signal(_immediate_metadata("next_day")) is False
+
+    def test_horizon_same_day_returns_true(self):
+        from app.services.surge_evaluation_service import _is_same_day_event_horizon_signal
+
+        assert _is_same_day_event_horizon_signal(_immediate_metadata("same_day")) is True
+
+
 class TestScannableRecallAndCoverage:
     def test_scenario1_scannable_recall_and_coverage_hand_calculated(self, db: Session):
         """acceptance.md Scenario 1 손계산 대조.

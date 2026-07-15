@@ -415,6 +415,30 @@ class RelativeScoringConfig(BaseModel):
     zscore_enabled: bool = False
 
 
+class ImmediateSurgeConfig(BaseModel):
+    """SPEC-AI-080: 동일-당일 고확신 공시 촉매 즉시 급등 시그널 발화 설정.
+
+    enabled=False(기본값)이면 disclosure_impact_scorer.process_disclosure_impact()의 즉시
+    발화 분기 전체가 비활성화되어 레거시 이벤트 구동 경로(반영 체크 예약/gap_pullback)만
+    실행된다(Scenario 6, rollback 완전성). 이벤트 클래스 화이트리스트는 별도 목록을 두지
+    않고 surge_detector._IMMEDIATE_EVENT_PATTERNS를 read-only로 재사용한다(REQ-AI080-003,
+    [X-2] — 탐지기 본체 로직/상수는 변경하지 않음. 단일 출처 유지).
+    """
+
+    # @MX:NOTE: [AUTO] SPEC-AI-080 — 즉시 발화 마스터 스위치. 기본값 false(레거시 완전 보존)
+    # @MX:SPEC: SPEC-AI-080 REQ-AI080-001
+    enabled: bool = False
+    # REQ-AI080-002: score_disclosure_impact()의 impact_score(계약금액/시총 스케일, 0~100)
+    # 게이팅 임계값. surge_detector의 flat immediate_disclosure_score(0.82)는 재사용하지
+    # 않는다([X-4] — 별개 스코어링 시스템, 이벤트 구동 경로 범위 밖).
+    min_impact: float = 40.0
+    # OQ-2: 배치 스캔 컷오프(KST, 기본 15:20) — 이 시각 이후(또는 장외/야간/장전, 주말)
+    # 접수분은 horizon="next_day"(T-1→T recall 편입), 09:00~컷오프 접수분(배치가 이미 볼
+    # 수 있었던 시간대)은 horizon="same_day"(REQ-AI080-004 둘째 규칙, 별도 서브지표).
+    batch_cutoff_hour: int = 15
+    batch_cutoff_minute: int = 20
+
+
 class SurgeDetectionConfig(BaseModel):
     """급등 징후 탐지 전체 설정.
 
@@ -448,6 +472,9 @@ class SurgeDetectionConfig(BaseModel):
     # true로 재활성하려면 REQ-003(backtest 가드 + Scannable Recall)이 충족되어야 한다.
     # @MX:SPEC: SPEC-AI-069 REQ-AI069-002
     auto_improve_enabled: bool = False
+
+    # SPEC-AI-080: 동일-당일 고확신 공시 촉매 즉시 급등 시그널 발화 설정 (기본 비활성)
+    immediate_surge: ImmediateSurgeConfig = Field(default_factory=ImmediateSurgeConfig)
 
     # SPEC-AI-036: 품질 floor 게이트 — 보정 confidence / composite_score 최소값
     # # @MX:NOTE: [AUTO] SPEC-AI-036 — 두 조건 중 하나만 충족해도 시그널 통과 (OR 게이트)

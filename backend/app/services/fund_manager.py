@@ -1225,6 +1225,35 @@ async def _gather_disclosure_candidates(db: Session) -> list[dict]:
     return candidates
 
 
+def _is_immediate_disclosure_signal(surge_metadata_json: str | None) -> bool:
+    """surge_metadata 문자열이 SPEC-AI-080 즉시 발화(immediate_disclosure) 시그널인지 판별한다.
+
+    disclosure_impact_scorer._create_immediate_surge_signal()이 부여하는 마커(surge_basis
+    리스트 멤버십 1차, 플랫 immediate_disclosure 키 OR 폴백)를 판별 기준으로 쓴다 —
+    surge_evaluation_service._is_near_limit_up_carry_signal(SPEC-AI-075)과 동일한 관례를
+    미러링한다. True이면 아래 두 덮어쓰기 사이트(재탐지 업서트/SPEC-AI-039 캐리오버)가
+    created_at·surge_metadata를 보존하도록 스킵한다(REQ-AI080-004 T-1 귀속 불변식, R-6/R-7).
+    JSON 파싱 실패는 False(레거시 거동 유지 — 기존 시그널 처리 경로에 영향 없음, fail-safe).
+
+    # @MX:NOTE: [AUTO] SPEC-AI-080 — surge_evaluation_service._is_near_limit_up_carry_signal
+    # 패턴을 그대로 미러링(동일 surge_metadata 판별 관례). 모듈 간 결합을 늘리지 않기 위해
+    # fund_manager.py 내부에 독립 구현(REQ-AI080-006 설계 메모, 순환 임포트 회피).
+    # @MX:SPEC: SPEC-AI-080 REQ-AI080-004
+    """
+    if not surge_metadata_json:
+        return False
+    try:
+        metadata = json.loads(surge_metadata_json)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(metadata, dict):
+        return False
+    surge_basis = metadata.get("surge_basis")
+    if isinstance(surge_basis, list) and "immediate_disclosure" in surge_basis:
+        return True
+    return metadata.get("immediate_disclosure") is True
+
+
 # @MX:NOTE: [AUTO] SPEC-AI-012 급등 탐지 진입점 — generate_daily_briefing의 asyncio.gather에서 호출
 # @MX:SPEC: SPEC-AI-012
 async def _gather_surge_candidates(
@@ -1445,8 +1474,23 @@ async def _gather_surge_candidates(
         )
 
         if existing:
+            # SPEC-AI-080 REQ-AI080-004/006 (R-6/R-7): 마커 인지형 스킵 판정 —
+            # 아래 surge_metadata/created_at 덮어쓰기 전에 기존 행이 즉시 발화 시그널인지
+            # 확인한다. 마커 미검출 시 이하 전체가 기존 거동과 완전히 동일(무회귀).
+            _existing_is_immediate = _is_immediate_disclosure_signal(existing.surge_metadata)
             existing.confidence = ensemble_score
-            existing.surge_metadata = metadata_json
+            # @MX:WARN: [AUTO] SPEC-AI-080 — created_at/surge_metadata 무조건 덮어쓰기 위험 지대
+            # (이 guard와 :created_at 재할당 guard 두 곳 모두 해당, 한 쌍의 위험 지대)
+            # @MX:REASON: 이 사이트는 stock_id+signal_type=="surge_candidate"라는 공유 조회
+            # 키로 대상 행을 선택하므로, 본 SPEC 범위 밖의 다른 surge_candidate 생산자
+            # (near_limit_up_carry/insider/theme_carry/forum/group_cascade 등, R-7) 행도
+            # 함께 덮어쓴다. 즉시 발화 마커가 있는 행에서만 surge_metadata·created_at 교체를
+            # 스킵해 T-1 귀속 식별 마커 소실(EC-8, predicted_set 침묵 배제)과 created_at
+            # 덮어쓰기(R-6, 배치가 평가보다 먼저 실행되어 안정적으로 재현)를 막는다. 마커
+            # 미검출 행은 두 guard 모두 비트 단위로 기존 거동과 동일해야 한다(R-7 무회귀).
+            # @MX:SPEC: SPEC-AI-080 REQ-AI080-004
+            if not _existing_is_immediate:
+                existing.surge_metadata = metadata_json
             existing.reasoning = (
                 f"[SPEC-AI-012 급등 징후] 앙상블 점수: {ensemble_score:.3f}, "
                 f"탐지기: {', '.join(candidate.active_detectors)}"
@@ -1461,7 +1505,10 @@ async def _gather_surge_candidates(
             # originally_created_at: 최초 생성 시각 보존 — created_at 갱신 전에 기록
             if existing.originally_created_at is None:
                 existing.originally_created_at = existing.created_at
-            existing.created_at = datetime.now(timezone.utc)
+            # created_at 재할당 guard — 위 SPEC-AI-080 WARN 태그(R-6/R-7)와 동일 위험 지대의
+            # 두 번째 절반. 마커 미검출 시 완전히 기존 거동과 동일.
+            if not _existing_is_immediate:
+                existing.created_at = datetime.now(timezone.utc)
             # 매수 실행가(paper_trading에서 기록)가 없는 경우에만 현재가로 보완
             if existing.price_at_signal is None and _signal_current_price is not None:
                 existing.price_at_signal = _signal_current_price
@@ -1589,12 +1636,24 @@ async def _gather_surge_candidates(
             "original_date": prev.created_at.date().isoformat(),
         })
 
+        # SPEC-AI-080 REQ-AI080-004/006 (R-6/R-7): 마커 인지형 스킵 판정 — created_at
+        # 재할당 전 원본 surge_metadata로 판정한다. surge_metadata 자체는 prev_meta.update()가
+        # 기존 키(surge_basis 등, 마커 포함)를 보존하므로 별도 가드가 필요 없다 —
+        # created_at만 가드한다.
+        _prev_is_immediate = _is_immediate_disclosure_signal(prev.surge_metadata)
         prev.confidence = decayed_score
         prev.surge_metadata = json.dumps(prev_meta, ensure_ascii=False)
         # originally_created_at: 최초 생성 시각 보존 — created_at 갱신 전에 기록
         if prev.originally_created_at is None:
             prev.originally_created_at = prev.created_at
-        prev.created_at = datetime.now(timezone.utc)
+        # @MX:WARN: [AUTO] SPEC-AI-080 — created_at 무조건 덮어쓰기 위험 지대(캐리오버 경로)
+        # @MX:REASON: R-6 — 배치/캐리오버(10:00/15:20 KST)가 평가(18:30 KST)보다 먼저
+        # 실행되어 즉시 발화 T-1 귀속을 보호하지 않으면 조용히 깨진다. 이 사이트도
+        # signal_type=="surge_candidate"+48h 윈도우라는 공유 조회 키를 쓰므로 R-7(다른
+        # surge_candidate 생산자 행 공유) 무회귀가 함께 요구된다. 마커 미검출 시 완전 불변.
+        # @MX:SPEC: SPEC-AI-080 REQ-AI080-004
+        if not _prev_is_immediate:
+            prev.created_at = datetime.now(timezone.utc)
         prev.reasoning = (
             f"[급등탐지 Carry-Over] 전일 점수 {original_conf:.3f}에서 5% decay 적용 → {decayed_score:.3f}"
         )

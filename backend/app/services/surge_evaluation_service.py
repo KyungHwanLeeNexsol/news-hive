@@ -503,6 +503,27 @@ def _is_near_limit_up_carry_signal(surge_metadata_json: str | None) -> bool:
     return metadata.get("near_limit_up_carry") is True
 
 
+def _is_same_day_event_horizon_signal(surge_metadata_json: str | None) -> bool:
+    """SPEC-AI-080 REQ-AI080-004 둘째 규칙: 급등 당일(T) 장중 접수된 즉시 발화 시그널
+    (horizon=="same_day")은 표준 T-1→T predicted_set에서 배제하고 별도 same-day 서브지표로
+    집계한다. disclosure_impact_scorer._create_immediate_surge_signal()이 T-1 종가 이후
+    접수분에는 horizon="next_day"를, 09:00~배치컷오프 접수분에는 horizon="same_day"를
+    부여한다(OQ-2). SPEC-AI-075의 near_limit_up_carry 배제 패턴(surge_metadata 내용 기반
+    판별)을 그대로 재사용한다 — signal_type만으로는 구분 불가하므로(둘 다
+    signal_type=="surge_candidate"를 공유). JSON 파싱 실패는 False(표준 지평 시그널로
+    보수적 포함, fail-safe — SPEC-AI-075와 동일한 안전 원칙).
+    """
+    if not surge_metadata_json:
+        return False
+    try:
+        metadata = json.loads(surge_metadata_json)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(metadata, dict):
+        return False
+    return metadata.get("horizon") == "same_day"
+
+
 def evaluate_surge_predictions(
     db: Session,
     trading_date: date,
@@ -546,6 +567,11 @@ def evaluate_surge_predictions(
 
     # 2. T-1 surge_candidate 시그널 조회 (created_at 날짜 기준)
     # preday_disclosure는 제외: 공시 기반 단기 반응 예측이므로 was_surge(10%+) 기준과 불일치
+    # @MX:NOTE: [AUTO] SPEC-AI-080 — surge_metadata.isnot(None)은 즉시 발화 시그널이
+    # predicted_set에 편입되기 위한 필수 조건이다. disclosure_impact_scorer가 non-None
+    # surge_metadata(OQ-5 마커 포함)를 기록하지 않으면 signal_type·날짜가 맞아도 여기서
+    # 조용히 배제된다(EC-8) — _create_immediate_surge_signal은 항상 non-None을 기록한다.
+    # @MX:SPEC: SPEC-AI-080 REQ-AI080-004
     signal_rows = (
         db.query(FundSignal.stock_id, Stock.stock_code, FundSignal.surge_metadata)
         .join(Stock, FundSignal.stock_id == Stock.id)
@@ -565,11 +591,19 @@ def evaluate_surge_predictions(
     # 07-07)에서 near_limit_up_carry가 전체 surge_candidate 발신의 100%/75%를 차지해 evaluation
     # coverage/recall 지표를 오염시켰음을 확인(research.md §6).
     # @MX:SPEC: SPEC-AI-075 REQ-AI075-001, REQ-AI075-002
+    # @MX:NOTE: [AUTO] SPEC-AI-080 — 즉시 발화 시그널 중 horizon=="same_day"(급등 당일 장중
+    # 접수분)도 동일 패턴으로 predicted_set에서 배제하고 별도 same-day 서브지표로 집계한다
+    # (REQ-AI080-004 둘째 규칙, Scenario 2).
+    # @MX:SPEC: SPEC-AI-080 REQ-AI080-004
     predicted_set: set[str] = set()
     excluded_near_limit_up_carry_codes: list[str] = []
+    excluded_same_day_event_codes: list[str] = []
     for row in signal_rows:
         if _is_near_limit_up_carry_signal(row.surge_metadata):
             excluded_near_limit_up_carry_codes.append(row.stock_code)
+            continue
+        if _is_same_day_event_horizon_signal(row.surge_metadata):
+            excluded_same_day_event_codes.append(row.stock_code)
             continue
         predicted_set.add(row.stock_code)
 
@@ -578,6 +612,16 @@ def evaluate_surge_predictions(
             "[급등평가] near_limit_up_carry 배제: %d건 (예시: %s) — SPEC-AI-075 평가 지평 불일치",
             len(excluded_near_limit_up_carry_codes),
             excluded_near_limit_up_carry_codes[:5],
+        )
+
+    if excluded_same_day_event_codes:
+        # REQ-AI080-007(P2): same-day 이벤트 서브지표 — 신규 테이블/컬럼 없이 로그로만 집계
+        # (DP-2: 파생 계산, 스키마 무변경). 표준 T-1→T scannable_recall과는 별도 지평.
+        logger.info(
+            "[급등평가] same-day 이벤트 서브지표(T→T, 표준 T-1→T 배제): %d건 (예시: %s) — "
+            "SPEC-AI-080 지평 분리",
+            len(excluded_same_day_event_codes),
+            excluded_same_day_event_codes[:5],
         )
 
     logger.info(

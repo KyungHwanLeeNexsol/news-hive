@@ -5,15 +5,19 @@
 """
 
 import asyncio
+import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
 from app.models.disclosure import Disclosure
 from app.models.fund_signal import FundSignal
 from app.models.stock import Stock
+# SPEC-AI-080 [X-2]: 화이트리스트 키워드만 read-only로 재사용 — 탐지기 로직/상수는 미변경
+from app.services.surge_detector import _IMMEDIATE_EVENT_PATTERNS
+from app.surge_config.surge_settings import get_surge_config
 
 logger = logging.getLogger(__name__)
 
@@ -387,6 +391,27 @@ async def process_disclosure_impact(
     is_market_hours = _is_market_hours(now_kst)
     is_after_market = _is_after_market_hours(now_kst)
 
+    # SPEC-AI-080 REQ-AI080-001~005: 고확신 당일 촉매 즉시 발화 — 30분 반영-갭 게이트
+    # (run_reflection_check → detect_unreflected_gap)를 기다리지 않고 DART 수집 시점에
+    # recall 집계 가능한 surge_candidate를 즉시 발화한다. 다른 공시 유형의 반영-갭 경로는
+    # 아래에 그대로 남아 불변이다([X-3]).
+    # @MX:NOTE: [AUTO] SPEC-AI-080 — immediate_surge.enabled=false(기본값)이면 이 분기가
+    # 전혀 평가/실행되지 않아 아래 레거시 반영-갭 경로만 동작한다(Scenario 6, rollback 완전성).
+    # 발화 시 execute_signal_trade를 호출하지 않는다(REQ-005 — 예측 기록 전용 배선,
+    # SPEC-AI-043 페이퍼 트레이딩 비활성 모드와 일관).
+    # @MX:SPEC: SPEC-AI-080 REQ-AI080-001
+    immediate_cfg = get_surge_config().immediate_surge
+    if (
+        immediate_cfg.enabled
+        and disclosure.stock_id
+        and disclosure.stock_code
+        and impact_score >= immediate_cfg.min_impact
+        and _is_immediate_event_class(disclosure.report_name)
+    ):
+        horizon = _classify_disclosure_horizon(now_kst, immediate_cfg)
+        await _create_immediate_surge_signal(db, disclosure, impact_score, horizon)
+        return
+
     if impact_score >= 20 and disclosure.stock_code and disclosure.baseline_price:
         if is_market_hours:
             # 30분 후 반영도 측정 job 등록 (REQ-DISC-009)
@@ -416,6 +441,141 @@ def _is_after_market_hours(kst_now: datetime) -> bool:
     """장마감 후(15:30~18:00) 여부."""
     return (kst_now.weekday() < 5 and
             (15, 30) <= (kst_now.hour, kst_now.minute) <= (18, 0))
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-080: 동일-당일 고확신 공시 촉매 즉시 급등 시그널 발화
+# ---------------------------------------------------------------------------
+
+def _is_immediate_event_class(report_name: str | None) -> bool:
+    """REQ-AI080-003: 즉시 발화 대상 고확신 이벤트 클래스 화이트리스트 판정.
+
+    surge_detector._IMMEDIATE_EVENT_PATTERNS(자사주소각/단일판매·공급계약체결/흡수합병 등)
+    의 키워드만 read-only로 재사용한다([X-2] — 탐지기 본체 로직/상수 자체는 변경하지
+    않음, 별도 화이트리스트를 새로 만들지 않아 단일 출처 유지). 점수(0~1)는 사용하지
+    않고 키워드 존재 여부만 판정에 쓴다(REQ-002 — 게이팅은 impact_score 기준, flat 점수
+    상수는 재도입하지 않음).
+    """
+    if not report_name:
+        return False
+    return any(keyword in report_name for keyword, _score in _IMMEDIATE_EVENT_PATTERNS)
+
+
+def _classify_disclosure_horizon(kst_now: datetime, cfg) -> str:
+    """OQ-2: 접수 시각 기준 recall 편입 지평 분류 (REQ-AI080-004).
+
+    Reception 09:00~batch_cutoff(기본 15:20) KST 평일(배치가 이미 볼 수 있었던 시간대)
+    → "same_day"(둘째 규칙 — T-1→T 버킷 배제, 별도 서브지표). 그 외(컷오프 이후/
+    장마감후/야간/장전/주말) → "next_day"(첫째 규칙 — T-1→T predicted_set 편입 대상).
+    """
+    if kst_now.weekday() < 5:
+        start = (9, 0)
+        cutoff = (cfg.batch_cutoff_hour, cfg.batch_cutoff_minute)
+        now_hm = (kst_now.hour, kst_now.minute)
+        if start <= now_hm < cutoff:
+            return "same_day"
+    return "next_day"
+
+
+async def _create_immediate_surge_signal(
+    db: Session,
+    disclosure: Disclosure,
+    impact_score: float,
+    horizon: str,
+) -> FundSignal | None:
+    """SPEC-AI-080 REQ-AI080-001~006: 고확신 당일 촉매 즉시 급등-집계 시그널 발화.
+
+    signal_type="surge_candidate" + surge_metadata(non-None, surge_basis에
+    "immediate_disclosure" 포함, OQ-5)로 발화하여 evaluate_surge_predictions()의
+    predicted_set 필터(surge_evaluation_service.py:553-555)에 편입 가능하게 한다.
+    execute_signal_trade는 절대 호출하지 않는다(REQ-005 — 예측 기록 전용).
+
+    REQ-006/Scenario 5: 기존 5역일 네이티브 업서트 조회 키(stock_id +
+    signal_type=="surge_candidate" + created_at>=5일전, fund_manager.py:1437-1445)에
+    정합하는 사전 조회를 여기서도 수행해 배치와의 중복 INSERT를 피한다 — 기존 행이
+    있으면 UPDATE, 없으면 신규 INSERT.
+    """
+    if not disclosure.stock_id:
+        return None
+
+    try:
+        from app.services.naver_finance import fetch_current_price
+        price = await fetch_current_price(disclosure.stock_code)
+    except Exception:
+        price = disclosure.baseline_price
+
+    confidence = min(max(impact_score, 0.0) / 100.0, 0.95)
+    matched_class = next(
+        (kw for kw, _score in _IMMEDIATE_EVENT_PATTERNS if kw in (disclosure.report_name or "")),
+        None,
+    )
+    now_utc = datetime.now(timezone.utc)
+
+    # OQ-5: (a) non-None이어야 recall 필터(surge_metadata.isnot(None))를 통과하고,
+    # (b) surge_basis에 near_limit_up_carry를 포함하지 않아 _is_near_limit_up_carry_signal에
+    # 오판되지 않으며, (c) fund_manager.py의 마커 인지형 스킵이 이 마커로 즉시 발화 행을
+    # 식별해 created_at·마커를 보존할 수 있어야 한다(DP-1).
+    metadata = {
+        "surge_basis": ["immediate_disclosure"],
+        "immediate_disclosure": True,
+        "surge_probability_score": round(confidence, 4),
+        "event_class": matched_class,
+        "impact_score": impact_score,
+        "disclosure_id": disclosure.id,
+        "horizon": horizon,
+        "rcept_dt": disclosure.rcept_dt,
+    }
+    metadata_json = json.dumps(metadata, ensure_ascii=False)
+    reasoning = (
+        f"[SPEC-AI-080 즉시발화] {disclosure.report_name} — "
+        f"impact={impact_score:.1f}, horizon={horizon}"
+    )
+
+    five_days_ago = now_utc - timedelta(days=5)
+    existing = (
+        db.query(FundSignal)
+        .filter(
+            FundSignal.stock_id == disclosure.stock_id,
+            FundSignal.signal_type == "surge_candidate",
+            FundSignal.created_at >= five_days_ago,
+        )
+        .first()
+    )
+
+    if existing:
+        existing.confidence = confidence
+        existing.surge_metadata = metadata_json
+        existing.reasoning = reasoning
+        if existing.originally_created_at is None:
+            existing.originally_created_at = existing.created_at
+        existing.created_at = now_utc
+        if existing.price_at_signal is None and price is not None:
+            existing.price_at_signal = price
+        signal = existing
+    else:
+        signal = FundSignal(
+            stock_id=disclosure.stock_id,
+            signal="buy",
+            confidence=confidence,
+            signal_type="surge_candidate",
+            surge_metadata=metadata_json,
+            disclosure_id=disclosure.id,
+            reasoning=reasoning,
+            originally_created_at=now_utc,
+            created_at=now_utc,
+            price_at_signal=price,
+        )
+        db.add(signal)
+
+    db.flush()
+    await _set_volatility_context(signal)
+    db.commit()
+
+    logger.info(
+        "[즉시발화] %s 생성/갱신 완료 (impact=%.1f, confidence=%.2f, horizon=%s)",
+        disclosure.corp_name, impact_score, confidence, horizon,
+    )
+    return signal
 
 
 def _schedule_reflection_check(disclosure_id: int) -> None:
