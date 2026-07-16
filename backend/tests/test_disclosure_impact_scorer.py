@@ -212,7 +212,11 @@ class TestScoreDisclosureImpactContentAwareCharacterization:
         """006340형: '최대주주등소유주식변동신고서'는 기존 Tier1 리터럴 '최대주주 변경'과
         불일치해(공백/어근 차이) flat 지분공시 기본값 25가 그대로 반환된다(AC-081-001 RED)."""
         d = _make_disclosure(report_type="지분공시", report_name="최대주주등소유주식변동신고서")
-        assert score_disclosure_impact(d, None) == 25.0
+        with patch(
+            "app.services.disclosure_impact_scorer.get_surge_config",
+            return_value=_ContentAwareStubConfig(enabled=False),
+        ):
+            assert score_disclosure_impact(d, None) == 25.0
 
     def test_characterize_038880형_전환사채_주요사항보고_flat20(self):
         """038880형: '주요사항보고서(전환사채권발행결정)'는 dart_crawler 분류기의 '주요사항보고서'
@@ -221,7 +225,11 @@ class TestScoreDisclosureImpactContentAwareCharacterization:
             report_type="주요사항보고",
             report_name="주요사항보고서(전환사채권발행결정)",
         )
-        assert score_disclosure_impact(d, None) == 20.0
+        with patch(
+            "app.services.disclosure_impact_scorer.get_surge_config",
+            return_value=_ContentAwareStubConfig(enabled=False),
+        ):
+            assert score_disclosure_impact(d, None) == 20.0
 
     def test_characterize_465770형_범용캐치올_flat20(self):
         """465770형: '투자판단관련주요경영사항'(범용 캐치올, 신호 없음)은 flat 기본값 20이
@@ -306,14 +314,22 @@ class TestContentAwareScoringBackwardCompatibility:
 
     def test_006340형_toggle_off_기본값_25(self):
         d = _make_disclosure(report_type="지분공시", report_name="최대주주등소유주식변동신고서")
-        assert score_disclosure_impact(d, None) == 25.0
+        with patch(
+            "app.services.disclosure_impact_scorer.get_surge_config",
+            return_value=_ContentAwareStubConfig(enabled=False),
+        ):
+            assert score_disclosure_impact(d, None) == 25.0
 
     def test_038880형_toggle_off_기본값_20(self):
         d = _make_disclosure(
             report_type="주요사항보고",
             report_name="주요사항보고서(전환사채권발행결정)",
         )
-        assert score_disclosure_impact(d, None) == 20.0
+        with patch(
+            "app.services.disclosure_impact_scorer.get_surge_config",
+            return_value=_ContentAwareStubConfig(enabled=False),
+        ):
+            assert score_disclosure_impact(d, None) == 20.0
 
     def test_명시적_enabled_False_스텁으로도_동일(self):
         """기본 get_surge_config() 대신 명시적 enabled=False 스텁으로도 검증(이중 확인)."""

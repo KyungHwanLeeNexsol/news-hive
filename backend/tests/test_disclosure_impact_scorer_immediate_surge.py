@@ -113,6 +113,10 @@ class TestProcessDisclosureImpactCharacterization:
                 "app.services.disclosure_impact_scorer.capture_baseline_price",
                 new_callable=AsyncMock, return_value=50000,
             ),
+            patch(
+                "app.services.disclosure_impact_scorer.get_surge_config",
+                return_value=_StubSurgeConfig(_immediate_cfg(enabled=False, min_impact=1.0)),
+            ),
             patch("app.services.disclosure_impact_scorer._schedule_reflection_check") as mock_schedule,
             patch(
                 "app.services.disclosure_impact_scorer._create_immediate_surge_signal",
@@ -138,6 +142,10 @@ class TestProcessDisclosureImpactCharacterization:
             patch(
                 "app.services.disclosure_impact_scorer.capture_baseline_price",
                 new_callable=AsyncMock, return_value=50000,
+            ),
+            patch(
+                "app.services.disclosure_impact_scorer.get_surge_config",
+                return_value=_StubSurgeConfig(_immediate_cfg(enabled=False, min_impact=1.0)),
             ),
             patch(
                 "app.services.disclosure_impact_scorer._create_gap_pullback_signal",

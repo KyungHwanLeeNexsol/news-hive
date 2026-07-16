@@ -279,18 +279,19 @@ surge_detection:
   # SPEC-AI-069 REQ-AI069-002: 자동개선 전면 중단 스위치 — 기본 false(REQ-002 확정 상태).
   # true 재활성은 REQ-003(backtest 가드 + Scannable Recall) 충족 이후에만.
   auto_improve_enabled: false
-  # SPEC-AI-080: 동일-당일 고확신 공시 촉매 즉시 급등 시그널 발화 — 기본 비활성(레거시 완전 보존).
-  # enabled=true로 전환 시 disclosure_impact_scorer.process_disclosure_impact()가 고확신
-  # 이벤트 클래스(자사주소각/단일판매공급계약/흡수합병 등) + impact_score>=min_impact 공시를
+  # SPEC-AI-080: 동일-당일 고확신 공시 촉매 즉시 급등 시그널 발화.
+  # 2026-07-16 활성화(evaluator-active 독립 검증 PASS, 전체 회귀 2001 passed 확인 후 배포).
+  # disclosure_impact_scorer.process_disclosure_impact()가 고확신 이벤트 클래스
+  # (자사주소각/단일판매공급계약/흡수합병 등) + impact_score>=min_impact 공시를
   # 30분 반영-갭 게이트 없이 즉시 surge_candidate로 발화한다.
   immediate_surge:
-    enabled: false
+    enabled: true
     min_impact: 40.0
     batch_cutoff_hour: 15
     batch_cutoff_minute: 20
-  # SPEC-AI-081: 공시 충격 스코어링 flat-base 카테고리(주요사항보고/지분공시) 콘텐츠 인식
-  # 정밀화 — 기본 비활성(레거시 완전 보존). enabled=true 시 최대주주 지배권 변경 키워드
-  # 정규화 매칭(REQ-001) + 희석성 증권 발행결정 로컬 재분류(REQ-002, 발행공시 경로로 라우팅)가
-  # 활성화된다.
+  # SPEC-AI-081: 공시 충격 스코어링 flat-base 카테고리(주요사항보고/지분공시) 콘텐츠 인식 정밀화.
+  # 2026-07-16 활성화(evaluator-active 독립 검증 PASS, 전체 회귀 2001 passed 확인 후 배포).
+  # 최대주주 지배권 변경 키워드 정규화 매칭(REQ-001) + 희석성 증권 발행결정 로컬 재분류
+  # (REQ-002, 발행공시 경로로 라우팅)가 활성화된다.
   disclosure_content_aware_scoring:
-    enabled: false
+    enabled: true
