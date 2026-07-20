@@ -48,6 +48,17 @@ MIN_ACTION_CONFIDENCE: float = 0.50
 _MARKET_DATA_CACHE: dict[str, tuple[float, dict]] = {}
 _MARKET_DATA_CACHE_TTL: float = 3600.0  # 1시간(초)
 
+# @MX:NOTE: [AUTO] SPEC-AI-082 — gather_surge_candidates 글로벌 타임아웃(초).
+#   gather_surge_candidates(종목당 다중 sync HTTP 호출, 순차 루프)의 문서화된 정상 실행
+#   시간은 12~15분(:3106 부근 SPEC-AI-022 주석)이다. 이 값은 그 정상 상단(15분/900s)을
+#   여유 있게(≈+33% 헤드룸) 상회해야 하며, 그렇지 않으면 정상 소요 시간 안에 끝나는 실제
+#   탐지 작업이 asyncio.TimeoutError로 빈 리스트([])로 오폐기된다(2026-07-20 프로덕션
+#   라이브 로그로 확인, 최근 ~11거래일 중 7일 재현). 동시에 이 가드는 유계(bounded)로
+#   유지해야 한다 — 제거하거나 사실상 무한 대기로 만들지 말 것(REQ-AI082-003). 테스트는
+#   이 모듈 상수를 monkeypatch 하여 실 HTTP 지연 없이 타임아웃 분기를 결정적으로 구동한다.
+# @MX:SPEC: SPEC-AI-082 REQ-AI082-001
+_GATHER_TIMEOUT_S: float = 1200  # 20분 (문서화된 정상 상단 15분 대비 ≈+33% 헤드룸)
+
 
 def _parse_json_response(text: str) -> dict | None:
     """Extract JSON from a Gemini response that may include markdown code blocks."""
@@ -1290,9 +1301,9 @@ async def _gather_surge_candidates(
     except Exception as _e:
         logger.warning("[급등탐지] 레짐 조회 실패, NEUTRAL 적용: %s", _e)
 
-    # 성능 패치: sync HTTP 루프를 스레드로 분리 + 5분 글로벌 타임아웃
+    # 성능 패치: sync HTTP 루프를 스레드로 분리 + 글로벌 타임아웃(모듈 상수 _GATHER_TIMEOUT_S,
+    # SPEC-AI-082 — 상단 선언부 @MX:NOTE 참조)
     # gather_surge_candidates는 종목당 다중 sync HTTP 호출 — 직접 await 시 event loop 블로킹
-    _GATHER_TIMEOUT_S = 300
     try:
         _loop = asyncio.get_event_loop()
         candidates = await asyncio.wait_for(
