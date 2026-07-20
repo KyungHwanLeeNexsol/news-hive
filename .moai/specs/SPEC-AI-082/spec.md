@@ -1,7 +1,7 @@
 ---
 id: SPEC-AI-082
-version: 0.1.0
-status: draft
+version: 1.0.0
+status: completed
 created: 2026-07-20
 created_at: "2026-07-20"
 updated: 2026-07-20
@@ -16,6 +16,13 @@ labels: [surge-detection, timeout-guard, ops-reliability, backend]
 
 ## HISTORY
 
+- 2026-07-20 (v1.0.0): **완료** (commit `b2e6cbc`). DDD ANALYZE-PRESERVE-IMPROVE로 타임아웃 상수
+  승격 완료. 신규 테스트 7개 파일 포함 전체 회귀 스위트 통과(2008 passed, 0 failed). 타임아웃 값
+  300s→1200s 상향으로 정상 실행(12~15분)이 폐기되던 기존 버그 해결. **편차: [R-3](타임아웃 후
+  고아 스레드의 세션 수명 안전성) 남은 미해결 위험으로, 근본 수정은 §8 후속 SPEC 후보(c)로 유예** —
+  본 SPEC 범위는 최소 안전 수정(타임아웃 값 교정)에만 한정하되, 이 편차는 동의 문서에 명시적 기록됨.
+  신규 파일: `backend/tests/test_surge_ai082_gather_timeout.py`(245L). 영향 파일:
+  `backend/app/services/fund_manager.py` 전용. ruff clean.
 - 2026-07-20 (v0.1.0): 최초 작성. 2026-07-20 프로덕션(ubuntu@140.245.76.242) SSH 라이브 로그 +
   DB 조회 + 코드 read-only 대조로 이미 근본원인이 확정된 버그를 SPEC화. `_gather_surge_candidates()`
   (`fund_manager.py:1259`)의 글로벌 타임아웃 상수 `_GATHER_TIMEOUT_S = 300`(5분, `:1295`)이,
@@ -270,6 +277,48 @@ SPEC-AI-043), 스케줄러 크론 시각·주기. 본 SPEC의 변경은 `_gather
   단계에서 정상 상단 대비 헤드룸을 재검토(블로커 아님).
 - [OQ-3] **브리핑 경로 별도 타임아웃 여부([R-1]).** 단일 값 상향으로 충분한지, 두 호출 경로에 서로
   다른 타임아웃이 필요한지는 Run 단계에서 브리핑 스케줄 여유를 확인 후 판단(기본은 단일 값).
+
+---
+
+## Implementation Notes (Level 1)
+
+### 실제 구현 요약 (2026-07-20, commit b2e6cbc)
+
+#### 핵심 변경사항
+
+**타임아웃 상수 승격** (`fund_manager.py`)
+- `_GATHER_TIMEOUT_S = 300` (함수 내부 리터럴) → `_GATHER_TIMEOUT_S = 1200` (모듈 레벨 상수, 
+  `:1295` 이동)
+- 테스트 가능성(REQ-004): monkeypatch/주입 가능한 모듈 상수로 승격, 기존 동작 diff 0
+
+**재현 테스트** (`test_surge_ai082_gather_timeout.py`)
+- 신규 7개 테스트 (245줄): RED 재현(소형 주입 타임아웃 + 블로킹 mock) → 오폐기 확인, GREEN 
+  (타임아웃 상향) → 결과 보존 확인
+- DDD PRESERVE 기존 mock 테스트 무회귀 확인(`test_surge_ai080_fund_manager.py` 기존 케이스 
+  동일 통과)
+
+**폐기 경로 보존** (`fund_manager.py:1311-1316`)
+- `asyncio.TimeoutError` 핸들러: 경고 로그 + `return []` 기존 거동 유지 (REQ-007)
+
+#### 편차 및 선택사항
+
+**[R-3] 타임아웃 후 고아 스레드 미해결**
+- 미해결 위험으로 명시 고지(§5 [R-3]). 값 상향으로 발생 빈도는 감소하나 위험 자체는 닫히지 않음.
+  근본 수정(세션 격리 / 취소 가능 executor / thread-safe 핸드오프)은 §8(c) 후속 SPEC 후보로 
+  유예(SPEC 작성 단계에서 동의 문서에 명시적 기록).
+
+#### 신규 테이블/마이그레이션
+
+- 없음. 스키마 변경 없음. 과거 데이터 백필 없음(2026-07-20 이후 전진 적용).
+
+#### 배포 상태
+
+- 로컬 검증 완료(2026-07-20, commit b2e6cbc). main push 이후 프로덕션 배포 대기.
+
+#### 영향 파일
+
+- `backend/app/services/fund_manager.py` (diff: +1 모듈 상수, -2 함수 내부 로컬)
+- `backend/tests/test_surge_ai082_gather_timeout.py` (신규, 7 tests)
 
 ---
 
