@@ -34,12 +34,13 @@ from app.services.scheduler import (
 class TestRunCrawlJob:
     """_run_crawl_job이 올바른 서비스를 호출하는지 검증."""
 
+    @patch("app.services.scheduler._maybe_trigger_event_rescan")
     @patch("app.services.scheduler._run_keyword_matching")
     @patch("app.services.scheduler._cleanup_old_articles")
     @patch("app.services.scheduler.asyncio.run")
     @patch("app.services.scheduler.SessionLocal")
     def test_calls_crawl_and_sentiment(
-        self, mock_session_cls, mock_arun, mock_cleanup, mock_kw_match,
+        self, mock_session_cls, mock_arun, mock_cleanup, mock_kw_match, mock_event_rescan,
     ) -> None:
         """crawl_all_news를 호출하고 sentiment 없는 기사를 backfill한다."""
         mock_db = MagicMock()
@@ -53,7 +54,10 @@ class TestRunCrawlJob:
 
         mock_cleanup.assert_called_once_with(mock_db)
         assert mock_arun.call_count >= 1  # crawl_all_news + detect_macro_risks
-        mock_db.close.assert_called_once()
+        # SPEC-AI-083 REQ-AI083-008: event_rescan_enabled 활성화로 _run_crawl_job이 뉴스 저장
+        # 후 이벤트 재스캔 훅용 세션을 추가로 열고 닫는다(별도 세션, 훅 자체 검증은
+        # test_surge_ai066.TestEventRescan). 여기서는 크롤 세션이 최소 1회 닫히는지만 확인한다.
+        assert mock_db.close.call_count >= 1
 
     @patch("app.services.job_retry.time.sleep")
     @patch("app.services.scheduler._cleanup_old_articles")

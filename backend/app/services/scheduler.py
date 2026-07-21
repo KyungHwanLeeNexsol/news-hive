@@ -2410,6 +2410,30 @@ def start_scheduler():
         coalesce=True,
         replace_existing=True,
     )
+    # @MX:NOTE: [AUTO] SPEC-AI-083 REQ-AI083-001/013 — 09:05~BUY_CUTOFF(11:00) 구간 장중
+    #   고빈도 재스캔. 기존 10:00 단일 스캔이 장 초반(09:00~10:00)에 이미 실현된 급등을
+    #   구조적으로 놓치던 사각지대를 다잡 확장으로 축소한다. 간격 근거: gather 1회 정상 소요
+    #   12~15분(fund_manager.py:3106 부근)·최악 20분(_GATHER_TIMEOUT_S=1200, SPEC-AI-082)
+    #   대비 ~20분 간격으로 배치해 max_instances=1 하에서 실행 겹침(misfire)을 방지한다
+    #   (REQ-AI083-002/003). 진짜 분 단위 고빈도는 gather 순차 HTTP 재구조화 없이는 불가하며
+    #   ([X-6] 후속), 본 스케줄은 gather 소요에 상한이 잡히는 현실적 재스캔이다. 콜백은 기존
+    #   후보 생성 전용 _run_surge_signal_generate를 재사용한다 — 매수/청산 콜백을 신규
+    #   참조하지 않는다(예측 기록 모드, REQ-AI083-010/[X-3]). 09:10은 사각지대 축소용 조기
+    #   스캔(REQ-AI083-004), 10:55는 BUY_CUTOFF 직전 마지막 스캔이다.
+    # @MX:SPEC: SPEC-AI-083 REQ-AI083-001
+    for _intraday_hour, _intraday_minute in ((9, 10), (9, 35), (10, 30), (10, 55)):
+        scheduler.add_job(
+            _run_surge_signal_generate,
+            "cron",
+            day_of_week="mon-fri",
+            hour=_intraday_hour,
+            minute=_intraday_minute,
+            timezone="Asia/Seoul",
+            id=f"surge_signal_generate_intraday_{_intraday_hour:02d}{_intraday_minute:02d}",
+            max_instances=1,
+            coalesce=True,
+            replace_existing=True,
+        )
     # SPEC-AI-043: 포트폴리오 실행 비활성화 — 예측 기록 모드로 전환
     # surge_execute_buys, surge_check_exits, surge_force_max_holding_exit 잡 비활성화
     # (SurgePortfolio/SurgeTrade 데이터는 보존, 복구 가능)

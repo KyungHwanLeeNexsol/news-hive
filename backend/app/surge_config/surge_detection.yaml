@@ -259,7 +259,10 @@ surge_detection:
     comention_theme_enabled: false
     comention_min_pairs: 3
     # REQ-007: 고임팩트 뉴스 이벤트 구동 재스캔 (staged rollout, LLM 예산 가드)
-    event_rescan_enabled: false
+    # SPEC-AI-083 REQ-AI083-008: 뉴스 기반 이벤트 재스캔 활성화(false→true, 2026-07-21 사용자
+    # 승인). 인프라(_maybe_trigger_event_rescan, 가드 포함)는 SPEC-AI-066에서 이미 구현됨 —
+    # 본 변경은 설정 플립만. 가드 값(쿨다운 30분/일일 20회)은 불변([X-8]). 롤백=false 복귀.
+    event_rescan_enabled: true
     event_rescan_cooldown_minutes: 30
     max_daily_event_triggers: 20
   # SPEC-AI-067 REQ-AI067-007: 장중 당일 거래량 실시간성 개선

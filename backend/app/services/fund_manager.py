@@ -1391,6 +1391,19 @@ async def _gather_surge_candidates(
     # @MX:NOTE: 5영업일 중복 방지 — SPEC-AI-012 AC-SURGE-005 명시 기준
     five_days_ago = datetime.now(timezone.utc) - timedelta(days=5)
 
+    # @MX:NOTE: [AUTO] SPEC-AI-083 REQ-AI083-005 — 장중 재스캔이 생성하는 당일 후보의
+    #   same-day 지평 귀속. SPEC-AI-080의 시각 기반 분류(_classify_disclosure_horizon)를
+    #   재사용해 평일 09:00~batch_cutoff(15:20) 스캔이면 same_day, 그 외(15:20 배치·08:30
+    #   브리핑·장전/장후)면 next_day로 분류한다. same_day일 때만 metadata["horizon"]을
+    #   주입하고 next_day면 키를 넣지 않아 기존 배치 메타데이터를 바이트 동일하게 보존한다
+    #   (REQ-AI083-011/[X-4]). 귀속이 없으면 당일(T) 후보가 표준 date(created_at)==T-1
+    #   버킷에서 T+1 급등과 비교되어 recall이 구조적으로 안 움직인다([R-4], 최상위 리스크).
+    # @MX:SPEC: SPEC-AI-083 REQ-AI083-005
+    from app.services.disclosure_impact_scorer import _classify_disclosure_horizon
+    _intraday_horizon = _classify_disclosure_horizon(
+        datetime.now(_KST), surge_config.immediate_surge
+    )
+
     for candidate in candidates:
         stock = db.query(Stock).filter(Stock.stock_code == candidate.stock_code).first()
         if not stock:
@@ -1399,6 +1412,10 @@ async def _gather_surge_candidates(
 
         ensemble_score = compute_ensemble_score(candidate, surge_config)
         metadata = surge_candidate_to_signal_metadata(candidate, surge_config)
+        # SPEC-AI-083 REQ-AI083-005: same_day일 때만 horizon 주입(next_day면 키 미포함 →
+        # 15:20 배치/08:30 브리핑 메타데이터 바이트 동일 유지, [X-4]). 상단 @MX:NOTE 참조.
+        if _intraday_horizon == "same_day":
+            metadata["horizon"] = "same_day"
         metadata_json = json.dumps(metadata, ensure_ascii=False)
 
         # SPEC-AI-036: composite_score / factor_scores 계산 (예외 격리)
