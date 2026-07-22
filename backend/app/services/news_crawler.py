@@ -303,6 +303,45 @@ def _resolve_query_relations(
     return results
 
 
+def _resolve_description_relations(
+    ad: dict,
+    index: KeywordIndex,
+    existing_relations: list[dict],
+    max_relations: int,
+) -> list[dict]:
+    """SPEC-AI-085: 기사 설명(description)에서 신규 종목/섹터 관계를 도출한다.
+
+    classify_news(ai_classifier.py:332)의 종목명 최장일치 + 한글 선행문자 배제 가드를
+    그대로 재사용하며(REQ-AI085-001/003), 기존 제목/쿼리 관계(existing_relations)와
+    (stock_id, sector_id) 쌍이 중복되는 매칭은 제외해 제목 관계를 우선 보존하고(EC-2),
+    기사당 신규 관계 수를 max_relations로 유계한다(REQ-AI085-003, 시황/묶음 기사 남발
+    방지). 이 함수 자체는 설정 게이팅 로직을 갖지 않는다 — 호출부(crawl_all_news)가
+    설정 플래그 확인 후에만 호출한다(REQ-AI085-006, 완전 additive).
+
+    @MX:NOTE: [AUTO] SPEC-AI-085 REQ-AI085-001/002/003 — 설명 기반 관계 생성 핵심 로직.
+    @MX:SPEC: SPEC-AI-085
+    """
+    description = ad.get("description") or ""
+    if not description:
+        return []
+
+    existing_pairs = {
+        (rel.get("stock_id"), rel.get("sector_id")) for rel in existing_relations
+    }
+
+    new_relations: list[dict] = []
+    for rel in classify_news(description, index):
+        pair = (rel.get("stock_id"), rel.get("sector_id"))
+        if pair in existing_pairs:
+            continue
+        existing_pairs.add(pair)
+        new_relations.append(rel)
+        if len(new_relations) >= max_relations:
+            break
+
+    return new_relations
+
+
 async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
     """Main orchestrator: crawl news, classify by keyword, and save."""
     stocks = db.query(Stock).all()
@@ -527,6 +566,14 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
     # Translate English titles to Korean before saving
     await translate_articles_batch(unique_articles)
 
+    # SPEC-AI-085: 설명(description) 기반 관계 생성 게이팅 (REQ-AI085-006, 기본값 false).
+    # enabled=False면 아래 루프의 게이팅 블록이 전혀 실행되지 않아 기존 제목/쿼리 관계
+    # 생성과 완전히 동일하다(레거시 보존, AC-085-006/EC-7).
+    from app.surge_config.surge_settings import DescriptionRelationMatchingConfig
+
+    _desc_relation_config = DescriptionRelationMatchingConfig()
+    _description_relation_total = 0
+
     # Pre-compute relations and discard articles with no sector/stock match
     for ad in unique_articles:
         relations: list[dict] = []
@@ -540,7 +587,26 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
                 "match_type": "keyword", "relevance": "indirect",
             })
         relations.extend(classify_news(ad["title"], index))
+
+        # SPEC-AI-085 REQ-AI085-001/002: 제목/쿼리에 없는 종목명이 설명(description)에만
+        # 등장하는 기사를 구제한다 — 무-관계 → 키워드 없음 → 승격 없음 순환 고리 차단.
+        # 엄격히 additive(REQ-AI085-005): 위에서 계산된 기존 관계는 손대지 않는다.
+        if _desc_relation_config.enabled:
+            description_relations = _resolve_description_relations(
+                ad, index, relations, _desc_relation_config.max_relations_per_article,
+            )
+            if description_relations:
+                _description_relation_total += len(description_relations)
+                relations.extend(description_relations)
+
         ad["_relations"] = relations
+
+    # SPEC-AI-085 REQ-AI085-009: 관측성 — 크롤당 생성된 설명 기반 관계 수를 유계 로그로
+    # 요약한다(스키마 없음, 종목별 로그 금지).
+    if _desc_relation_config.enabled:
+        logger.info(
+            f"[SPEC-AI-085] Description-based relations created this crawl: {_description_relation_total}"
+        )
 
     # AI 분류: 키워드 매칭이 안 된 기사에 대해 AI로 섹터 분류 시도
     unmatched_count = sum(1 for a in unique_articles if not a.get("_relations"))

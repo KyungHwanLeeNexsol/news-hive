@@ -714,6 +714,23 @@ class NewsUrgencyRecalibrationConfig(BaseModel):
     enabled: bool = False
 
 
+class DescriptionRelationMatchingConfig(BaseModel):
+    """SPEC-AI-085: 기사 설명(description) 기반 종목 관계 생성 설정.
+
+    enabled=False(기본값)이면 news_crawler의 관계 계산 루프가 기사 설명 텍스트를 전혀
+    매칭하지 않아 기존 제목(classify_news)/쿼리(_resolve_query_relations) 기반 관계
+    생성과 완전히 동일하다(REQ-AI085-006, 롤백=플래그 복귀로 완전 레거시).
+    """
+
+    # @MX:NOTE: [AUTO] SPEC-AI-085 REQ-AI085-006 — 마스터 스위치. 기본값 false(레거시 완전 보존)
+    # @MX:SPEC: SPEC-AI-085 REQ-AI085-006
+    enabled: bool = False
+    # REQ-AI085-003: 기사당 설명 기반 신규 관계 생성 상한 — 시황/묶음 기사 남발 방지.
+    # @MX:NOTE: [AUTO] SPEC-AI-085 REQ-AI085-003 — 값은 배포 전 보수적 기본치(실측 캘리브레이션
+    # 아님, plan.md DP-1). 배포 후 관측(REQ-AI085-009) 결과에 따라 조정 대상.
+    max_relations_per_article: int = 5
+
+
 class BollingerSqueezeConfig(BaseModel):
     """SPEC-AI-051: 볼린저 밴드 스퀴즈 탐지 설정."""
 
