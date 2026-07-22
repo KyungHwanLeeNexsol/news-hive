@@ -15,6 +15,9 @@ from app.services.news_crawler import (
     _build_search_queries,
     _resolve_query_relations,
     _classify_urgency,
+    _matches_theme_rally_keyword,
+    _compute_theme_co_mention_counts,
+    _article_theme_topic_counts,
 )
 
 
@@ -526,6 +529,77 @@ class TestClassifyUrgency:
             recent_topic_counts={"삼성전자": 4},
         )
         assert result != "breaking"
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-084 그룹 B: 뉴스 긴급도 재보정 헬퍼 테스트 (DDD PRESERVE — _classify_urgency
+# 함수 자체는 위 TestClassifyUrgency에서 무회귀 확인됨. 여기서는 새로 추가된 호출부 헬퍼만
+# 검증한다 — REQ-AI084-005/006/007/009.)
+# ---------------------------------------------------------------------------
+
+class TestThemeRallyKeyword:
+    """REQ-AI084-006: 산업 테마 랠리 촉매 표현 판별."""
+
+    @pytest.mark.parametrize("title", [
+        "로봇주 '불기둥'…삼성전자 로봇 승부수에 줄줄이 상한가",
+        "2차전지 테마주 동반 상승",
+        "반도체 특징주 급등",
+    ])
+    def test_matches_rally_keywords(self, title: str) -> None:
+        assert _matches_theme_rally_keyword(title) is True
+
+    def test_routine_title_does_not_match(self) -> None:
+        """REQ-AI084-007 음성 대조: 무촉매 일상 제목은 매칭되지 않는다."""
+        assert _matches_theme_rally_keyword("삼성전자 주주총회 개최 일정") is False
+
+
+class TestThemeCoMentionCounts:
+    """REQ-AI084-005: 크롤 배치 내 co-mention 카운트 집계."""
+
+    def test_counts_theme_keyword_across_batch(self) -> None:
+        theme_keywords = ["로봇", "반도체"]
+        articles = [
+            {"title": "로봇 관련주 급등"},
+            {"title": "로봇 테마 랠리 지속"},
+            {"title": "반도체 수출 호조"},
+            {"title": "무관한 뉴스"},
+        ]
+        counts = _compute_theme_co_mention_counts(articles, theme_keywords)
+        assert counts["로봇"] == 2
+        assert counts["반도체"] == 1
+
+    def test_burst_triggers_breaking_via_classify_urgency(self) -> None:
+        """co-mention 카운트가 임계(>=5)를 넘으면 기존 _classify_urgency 경로가 breaking을 반환."""
+        theme_keywords = ["로봇"]
+        articles = [{"title": f"로봇 테마 기사 {i}"} for i in range(6)]
+        batch_counts = _compute_theme_co_mention_counts(articles, theme_keywords)
+
+        ad = articles[0]
+        topic_counts = _article_theme_topic_counts(ad, batch_counts, theme_keywords)
+        assert topic_counts == {"로봇": 6}
+        assert _classify_urgency(ad["title"], recent_topic_counts=topic_counts) == "breaking"
+
+    def test_unrelated_article_gets_no_topic_counts(self) -> None:
+        """기사 자체에 등장하지 않는 테마의 카운트는 전달되지 않는다(오상향 방지)."""
+        theme_keywords = ["로봇"]
+        articles = [{"title": f"로봇 테마 기사 {i}"} for i in range(6)] + [
+            {"title": "무관한 뉴스"}
+        ]
+        batch_counts = _compute_theme_co_mention_counts(articles, theme_keywords)
+
+        unrelated_ad = articles[-1]
+        topic_counts = _article_theme_topic_counts(unrelated_ad, batch_counts, theme_keywords)
+        assert topic_counts == {}
+        assert _classify_urgency(unrelated_ad["title"], recent_topic_counts=topic_counts) == "routine"
+
+
+class TestUrgencyRecalibrationGating:
+    """REQ-AI084-008: 설정 게이팅 기본값 확인(단계적 롤아웃)."""
+
+    def test_default_config_is_disabled(self) -> None:
+        from app.surge_config.surge_settings import NewsUrgencyRecalibrationConfig
+
+        assert NewsUrgencyRecalibrationConfig().enabled is False
 
 
 # ---------------------------------------------------------------------------

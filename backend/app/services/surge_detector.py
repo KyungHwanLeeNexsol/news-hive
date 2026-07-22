@@ -3145,6 +3145,198 @@ def detect_theme_group_carry_forward(
 
 
 # ---------------------------------------------------------------------------
+# SPEC-AI-084 그룹 A: 뉴스 기반 산업 테마 전파 (키워드 바스켓 carry-forward)
+# ---------------------------------------------------------------------------
+
+# @MX:ANCHOR: [AUTO] detect_theme_news_carry — fund_manager._run_coverage_expansion()에서 호출
+# @MX:REASON: 커버리지 확장 파이프라인(fan_in >= 3)에 추가된 키워드 바스켓 테마 전파 탐지기.
+# detect_theme_group_carry_forward(SPEC-AI-025, 계열/지분 그룹)를 stocks.keywords 바스켓으로
+# 미러링한 additive 탐지기 — 원 로직/ThemeGroup 테이블은 절대 변경하지 않는다(REQ-AI084-016).
+def detect_theme_news_carry(
+    db: Session,
+    config: "ThemeNewsCarryConfig",  # noqa: F821
+) -> list[FundSignal]:
+    """SPEC-AI-084: 키워드 바스켓 앵커 활성화 시 미이동 멤버에 surge_candidate 전파.
+
+    ``stocks.keywords``(그룹 C가 채움) 공유 키워드로 정의된 테마 바스켓 내에서, 멤버 하나
+    이상이 가격 임계(``anchor_surge_min_pct``) 이상 상승하고 테마 활성이 확인되면(복수 멤버
+    동반 이동 OR 고긴급 테마 뉴스 + 최소 1개 앵커, REQ-AI084-011) 아직 안 움직인 다른 멤버에게
+    후보 신호를 전파한다.
+
+    앵커(이미 임계를 넘은 멤버)는 자기 자신에게 재전파되지 않는다 — 이는
+    ``detect_theme_group_carry_forward``의 앵커 self-exclusion과 동형이며, 첫 급등 종목
+    (first mover)이 이 탐지기의 전파 대상이 될 수 없음을 구조적으로 보장한다
+    (REQ-AI084-017, [X-1]).
+
+    전파 신호는 ``surge_metadata["horizon"] = "same_day"``를 설정해 기존
+    ``_is_same_day_event_horizon_signal``(surge_evaluation_service.py:506) 평가 경로에
+    편입된다(REQ-AI084-013, P0 HARD).
+
+    Args:
+        db: SQLAlchemy 세션
+        config: ThemeNewsCarryConfig
+
+    Returns:
+        생성된 FundSignal 목록
+    """
+    import json as _json
+    from zoneinfo import ZoneInfo
+
+    if not config.enabled:
+        return []
+
+    KST = ZoneInfo("Asia/Seoul")
+    signals: list[FundSignal] = []
+
+    try:
+        today_kst_start = datetime.now(KST).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        today_utc_start = today_kst_start.astimezone(timezone.utc)
+
+        # 오늘 이미 시그널 있는 stock_id 집합 (REQ-AI084-010 미이동 멤버 한정)
+        existing_ids: set[int] = set(
+            row[0]
+            for row in (
+                db.query(FundSignal.stock_id)
+                .filter(FundSignal.created_at >= today_utc_start)
+                .distinct()
+                .all()
+            )
+        )
+
+        # 키워드 바스켓 멤버십 구성: keyword -> [stock, ...]
+        # REQ-AI084-012 [HARD]: keywords가 NULL/빈 배열인 종목은 무해한 no-op으로 제외
+        # (그룹 C 미완/부분완 상태에서도 안전 — 빈 바스켓 = 전파 없음).
+        tagged_stocks = [s for s in db.query(Stock).all() if s.keywords]
+
+        baskets: dict[str, list[Stock]] = {}
+        for stock in tagged_stocks:
+            for kw in stock.keywords:
+                baskets.setdefault(kw, []).append(stock)
+
+        emitted_codes: set[int] = set()  # EC-3: 크로스바스켓 dedup
+        baskets_evaluated = 0
+
+        for keyword, members in baskets.items():
+            # EC-1: 바스켓 멤버 수가 min_basket_size 미만 → 전파 대상 없음(no-op)
+            if len(members) < config.min_basket_size:
+                continue
+
+            baskets_evaluated += 1
+
+            # 앵커 후보 판정: 각 멤버의 가격 변동을 조회해 임계 초과 멤버를 앵커로 인정
+            anchor_members: list[tuple[Stock, float]] = []
+            for member in members:
+                # EC-4: 가격 조회 실패 → 해당 멤버는 앵커 후보에서 조용히 제외(기존 관례)
+                price_data = _fetch_price_change_sync(member.stock_code)
+                if price_data is None:
+                    continue
+                change_rate = price_data.get("change_rate", 0.0)
+                if change_rate >= config.anchor_surge_min_pct:
+                    anchor_members.append((member, change_rate))
+
+            if not anchor_members:
+                continue
+
+            # REQ-AI084-011 [HARD]: 테마 활성 확인 게이트 (오전파 통제)
+            # 경로 1: 복수 바스켓 멤버 동반 이동
+            theme_confirmed = len(anchor_members) >= config.min_anchor_members_for_activation
+            # 경로 2: 앵커 1개 이상 + 고긴급 테마 뉴스(그룹 B 산출물이 여기서 그룹 A에 기여)
+            if not theme_confirmed:
+                theme_confirmed = _has_high_urgency_theme_news(
+                    db, keyword, config.high_urgency_window_hours
+                )
+
+            if not theme_confirmed:
+                continue
+
+            anchor_stock_ids = {m.id for m, _ in anchor_members}
+            best_anchor, best_change_rate = max(anchor_members, key=lambda pair: pair[1])
+
+            basket_count = 0
+            for member in members:
+                if basket_count >= config.max_signals_per_basket:
+                    break
+                if member.id in anchor_stock_ids:
+                    # 앵커(이미 움직인 멤버, first-mover 포함)는 자기 자신에 재전파되지
+                    # 않는다 — REQ-AI084-010/017, detect_theme_group_carry_forward와 동형.
+                    continue
+                if member.id in existing_ids:
+                    continue
+                if member.id in emitted_codes:
+                    continue
+
+                confidence = round(best_change_rate / 30.0 * 0.4, 4)
+                metadata = {
+                    "surge_basis": ["theme_news_carry"],
+                    "theme_keyword": keyword,
+                    "anchor_stock_code": best_anchor.stock_code,
+                    "anchor_change_pct": round(best_change_rate, 2),
+                    "basket_anchor_count": len(anchor_members),
+                    "surge_probability_score": confidence,
+                    # REQ-AI084-013 [HARD]: 당일 후보 same-day 지평 귀속(확정 계약).
+                    # 트리거 임계(전량 vs 조건)는 OQ-5/DP-5에 위임 — 본 구현은 "전량
+                    # same_day"를 채택한다(전파 후보는 항상 당일 급등을 예측하므로).
+                    "horizon": "same_day",
+                }
+                signal = FundSignal(
+                    stock_id=member.id,
+                    signal="buy",
+                    signal_type="surge_candidate",
+                    confidence=confidence,
+                    reasoning=(
+                        f"뉴스 기반 테마 전파 — '{keyword}' 바스켓 앵커 "
+                        f"{best_anchor.stock_code} {best_change_rate:.2f}% 상승"
+                    ),
+                    surge_metadata=_json.dumps(metadata, ensure_ascii=False),
+                    paper_executed=True,
+                )
+                db.add(signal)
+                signals.append(signal)
+                emitted_codes.add(member.id)
+                basket_count += 1
+
+        if signals:
+            db.commit()
+
+        logger.info(
+            "[theme_news_carry] 평가 %d개 바스켓, 시그널 %d건 생성",
+            baskets_evaluated,
+            len(signals),
+        )
+
+    except Exception as e:
+        logger.error("[theme_news_carry] 예외 발생: %s", e, exc_info=True)
+        return []
+
+    return signals
+
+
+def _has_high_urgency_theme_news(db: Session, keyword: str, window_hours: int) -> bool:
+    """REQ-AI084-011: 최근 window_hours 내 keyword가 포함된 breaking/important 뉴스 존재 여부.
+
+    theme_news_carry 테마 활성 확인 게이트의 두 번째 경로(고긴급 테마 뉴스 + 최소 1개 앵커).
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
+    cutoff_naive = cutoff.replace(tzinfo=None)
+
+    row = (
+        db.query(NewsArticle.id)
+        .filter(
+            NewsArticle.published_at >= cutoff_naive,
+            NewsArticle.urgency.in_(["breaking", "important"]),
+            or_(
+                NewsArticle.title.contains(keyword),
+                NewsArticle.content.contains(keyword),
+            ),
+        )
+        .first()
+    )
+    return row is not None
+
+
+# ---------------------------------------------------------------------------
 # SPEC-AI-026: 포럼 언급 급증 탐지기
 # ---------------------------------------------------------------------------
 

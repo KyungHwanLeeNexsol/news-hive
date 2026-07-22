@@ -676,6 +676,44 @@ class GroupCascadeConfig(BaseModel):
     companion_required_below_prob: float = 0.4
 
 
+class ThemeNewsCarryConfig(BaseModel):
+    """SPEC-AI-084 그룹 A: 뉴스 기반 산업 테마 전파(키워드 바스켓 carry-forward) 설정.
+
+    detect_theme_group_carry_forward(SPEC-AI-025, 계열/지분 그룹 전용)를 stocks.keywords
+    (그룹 C가 채우는 테마 키워드 바스켓)로 재키잉한 additive 탐지기의 설정이다.
+    enabled=False(기본값)이면 detect_theme_news_carry가 즉시 빈 리스트를 반환해 레거시
+    파이프라인(기존 7종 탐지기 + theme_group_carry)이 완전히 보존된다(REQ-AI084-015,
+    단계적 롤아웃 — SPEC-AI-079 관례 계승).
+    """
+
+    # @MX:NOTE: [AUTO] SPEC-AI-084 REQ-AI084-015 — 마스터 스위치. 기본값 false(레거시 완전 보존)
+    # @MX:SPEC: SPEC-AI-084 REQ-AI084-015
+    enabled: bool = False
+    # 앵커 판정 최소 등락률(%) — ThemeGroupCarryConfig.anchor_surge_min_pct와 동일 기본값
+    anchor_surge_min_pct: float = 5.0
+    # REQ-AI084-011: 테마 활성 확인 게이트 — 복수 멤버 동반 이동 임계(최소 앵커 수)
+    min_anchor_members_for_activation: int = 2
+    # REQ-AI084-011: 고긴급 테마 뉴스 판정 윈도우(시간) — 앵커 1개 + 고긴급 뉴스 경로
+    high_urgency_window_hours: int = 24
+    # 바스켓당 최대 발행 시그널 수
+    max_signals_per_basket: int = 5
+    # EC-1: 이 미만 멤버 수의 바스켓은 전파 대상 없음(no-op)
+    min_basket_size: int = 2
+
+
+class NewsUrgencyRecalibrationConfig(BaseModel):
+    """SPEC-AI-084 그룹 B: 뉴스 긴급도 재보정(co-mention 버스트 + 촉매 커버리지 확장) 설정.
+
+    enabled=False(기본값)이면 news_crawler._classify_urgency 호출부가 recent_topic_counts를
+    전혀 공급하지 않고 촉매 키워드 확장도 적용하지 않아 기존 긴급도 분류와 완전히 동일하다
+    (REQ-AI084-008, 롤백=플래그 복귀로 완전 레거시).
+    """
+
+    # @MX:NOTE: [AUTO] SPEC-AI-084 REQ-AI084-008 — 마스터 스위치. 기본값 false(레거시 완전 보존)
+    # @MX:SPEC: SPEC-AI-084 REQ-AI084-008
+    enabled: bool = False
+
+
 class BollingerSqueezeConfig(BaseModel):
     """SPEC-AI-051: 볼린저 밴드 스퀴즈 탐지 설정."""
 

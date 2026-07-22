@@ -72,6 +72,56 @@ def _classify_urgency(
     return "routine"
 
 
+# ---------------------------------------------------------------------------
+# SPEC-AI-084 그룹 B: 뉴스 긴급도 재보정 (co-mention 버스트 + 촉매 커버리지 확장)
+# ---------------------------------------------------------------------------
+# REQ-AI084-006: 산업 테마 랠리를 시사하는 촉매성 표현 (2026-07-22 로봇 랠리 "특징주" 보도 계승).
+# _IMPORTANT_KEYWORDS(기존, 변경 없음)와 별개 목록으로 두어 레거시 분류 결과를 보존한다.
+_THEME_RALLY_KEYWORDS = [
+    "특징주", "테마주", "동반 상승", "동반상승", "줄줄이 상한가", "일제히 상한가", "불기둥",
+]
+
+
+def _matches_theme_rally_keyword(title: str) -> bool:
+    """REQ-AI084-006: 제목에 산업 테마 랠리 촉매 표현이 포함되는지 판별한다."""
+    title_lower = title.lower()
+    return any(kw.lower() in title_lower for kw in _THEME_RALLY_KEYWORDS)
+
+
+def _compute_theme_co_mention_counts(
+    articles: list[dict],
+    theme_keywords: list[str],
+) -> dict[str, int]:
+    """REQ-AI084-005: 이번 크롤 배치 내 테마 키워드별 언급 기사 수를 집계한다(co-mention 카운트).
+
+    DP-4 결정: 별도 DB 조회 없이 기존 크롤 배치(``unique_articles``) 내 집계로 산정한다
+    (윈도우 = 1회 크롤 사이클, 테마 키 = ``ThemeClusterConfig.keywords`` 어휘 — 그룹 C의
+    키워드 태깅과 동일 어휘를 재사용해 일관성을 유지한다).
+    """
+    counts: dict[str, int] = {kw: 0 for kw in theme_keywords}
+    for ad in articles:
+        text = f"{ad.get('title') or ''} {ad.get('description') or ''}"
+        for kw in theme_keywords:
+            if kw in text:
+                counts[kw] += 1
+    return counts
+
+
+def _article_theme_topic_counts(
+    ad: dict,
+    batch_counts: dict[str, int],
+    theme_keywords: list[str],
+) -> dict[str, int]:
+    """기사 하나에 실제로 등장하는 테마 키워드만 골라 배치 집계 카운트를 부여한다.
+
+    ``_classify_urgency``의 ``recent_topic_counts`` 계약(topic -> count)에 맞춘 어댑터.
+    기사와 무관한 테마의 카운트까지 통째로 넘기면 무관한 기사가 오상향될 위험이 있으므로,
+    해당 기사 텍스트에 실제 등장하는 테마만 골라 전달한다(REQ-AI084-007 오상향 방지 보조).
+    """
+    text = f"{ad.get('title') or ''} {ad.get('description') or ''}"
+    return {kw: batch_counts[kw] for kw in theme_keywords if kw in text}
+
+
 # Regex to strip noise for title dedup (whitespace, punctuation, source suffixes)
 _TITLE_NOISE_RE = re.compile(r"[\s\-–—·:;,.\[\](){}「」『』<>《》\u200b]+")
 # Match source suffix: "- 한국경제", "- 철강금속신문", "| 뉴스1" etc. (1-4 words at end)
@@ -531,6 +581,22 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
     sector_name_map = {s.id: s.name for s in sectors}
     stock_name_map = {s.id: s.name for s in stocks}
 
+    # SPEC-AI-084 그룹 B: 긴급도 재보정 게이팅 (REQ-AI084-008, 기본값 false=완전 레거시).
+    # co-mention 카운트는 크롤 배치(unique_articles) 전체에 대해 1회만 집계한다.
+    from app.surge_config.surge_settings import NewsUrgencyRecalibrationConfig
+
+    _urgency_recalib_enabled = NewsUrgencyRecalibrationConfig().enabled
+    _theme_keywords: list[str] = []
+    _theme_co_mention_counts: dict[str, int] = {}
+    if _urgency_recalib_enabled:
+        from app.surge_config.surge_settings import get_surge_config
+
+        _theme_keywords = list(get_surge_config().theme_cluster.keywords)
+        _theme_co_mention_counts = _compute_theme_co_mention_counts(unique_articles, _theme_keywords)
+
+    # SPEC-AI-084 그룹 C M2: 지속 태깅 훅 — 이번 크롤에서 뉴스가 새로 연결된 종목 id 수집
+    _touched_stock_ids: set[int] = set()
+
     for i in range(0, len(unique_articles), batch_size):
         batch = unique_articles[i : i + batch_size]
 
@@ -573,8 +639,17 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
             # 감성: AI 분류 결과 우선, 없으면 키워드 기반 6단계 분류
             params[f"se{j}"] = ad.get("_ai_sentiment") or classify_sentiment(ad["title"])  # noqa: F823
             params[f"ct{j}"] = ad.get("_content")
-            # 긴급도 분류
-            params[f"ug{j}"] = _classify_urgency(ad["title"])
+            # 긴급도 분류 (SPEC-AI-084 그룹 B: 게이팅된 재보정, REQ-AI084-008/009)
+            if _urgency_recalib_enabled:
+                _topic_counts = _article_theme_topic_counts(
+                    ad, _theme_co_mention_counts, _theme_keywords
+                )
+                _urgency = _classify_urgency(ad["title"], recent_topic_counts=_topic_counts)
+                if _urgency == "routine" and _matches_theme_rally_keyword(ad["title"]):
+                    _urgency = "important"
+            else:
+                _urgency = _classify_urgency(ad["title"])
+            params[f"ug{j}"] = _urgency
 
         sql = sa_text(
             f"""INSERT INTO news_articles (title, summary, url, source, published_at, sentiment, content, urgency)
@@ -668,6 +743,8 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
                     continue
 
                 seen_pairs.add(pair)
+                if rel.get("stock_id"):
+                    _touched_stock_ids.add(rel["stock_id"])
                 rel_values.append(
                     f"(:ni{rel_idx}, :si{rel_idx}, :se{rel_idx}, :mt{rel_idx}, :rv{rel_idx},"
                     f" :rs{rel_idx}, :pt{rel_idx}, :ir{rel_idx}, :sc{rel_idx})"
@@ -729,6 +806,16 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
                 logger.error(f"가격 스냅샷 캡처 실패 (뉴스 수집은 정상 진행): {e}")
 
         logger.info(f"Batch {i // batch_size + 1}: {len(url_to_id)} articles ({saved_count} total)")
+
+    # SPEC-AI-084 그룹 C M2: 지속 태깅 훅 — 이번 크롤에서 뉴스가 연결된 종목만 갱신(비용 유계).
+    # 뉴스 수집 파이프라인에 절대 영향을 주지 않도록 예외로 격리한다(REQ-AI084-003).
+    if _touched_stock_ids:
+        try:
+            from app.services.keyword_tagging_service import refresh_stock_keywords
+
+            refresh_stock_keywords(db, list(_touched_stock_ids))
+        except Exception as e:
+            logger.warning(f"[keyword_tagging] 지속 태깅 훅 실패 (뉴스 수집은 정상 진행): {e}")
 
     logger.info(f"Saved {saved_count} new articles.")
     return saved_count

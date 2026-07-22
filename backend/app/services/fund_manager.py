@@ -4108,3 +4108,21 @@ def _run_coverage_expansion(db: Session, surge_results: list[dict]) -> None:
                 db.rollback()
             except Exception:
                 pass
+
+    # 9. 뉴스 기반 산업 테마 전파 (SPEC-AI-084 그룹 A, additive — 기존 경로 불변)
+    try:
+        from app.services.surge_detector import detect_theme_news_carry
+        from app.surge_config.surge_settings import ThemeNewsCarryConfig
+        theme_news_cfg = ThemeNewsCarryConfig()
+        with db.begin_nested():
+            theme_news_signals = detect_theme_news_carry(db, theme_news_cfg)
+        logger.info("[theme_news_carry] 완료 — %d건", len(theme_news_signals))
+    except Exception as e:
+        logger.error("[theme_news_carry] 예외 발생: %s", e, exc_info=True)
+        try:
+            db.execute(text("SELECT 1"))
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
