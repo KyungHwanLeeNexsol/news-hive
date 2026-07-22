@@ -14,6 +14,7 @@ from app.services.news_crawler import (
     _is_similar_title,
     _build_search_queries,
     _resolve_query_relations,
+    _resolve_description_relations,
     _classify_urgency,
     _matches_theme_rally_keyword,
     _compute_theme_co_mention_counts,
@@ -276,6 +277,136 @@ class TestResolveQueryRelations:
         sectors = [self._make_sector(10, "반도체")]
         result = _resolve_query_relations("관련없는검색어", index, sectors)
         assert result == []
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-085: 설명(description) 기반 종목 관계 생성 테스트
+#
+# DDD Reproduction-First (REQ-AI085-008): 제목/쿼리 매칭만으로는 설명에만 종목명이
+# 등장하는 기사가 관계를 만들지 못한다는 결손(RED)을 먼저 캡처한 뒤, 신규 헬퍼
+# _resolve_description_relations 도입으로 그 결손이 해소됨(GREEN)을 검증한다.
+# ---------------------------------------------------------------------------
+
+class TestDescriptionBasedRelationsCharacterization:
+    """변경 전 현재 거동 캡처 — 제목/쿼리 매칭만으로는 설명-only 종목명이 결손됨(RED 재현)."""
+
+    def _make_index(self, stock_names: dict | None = None):
+        from app.services.ai_classifier import KeywordIndex
+        return KeywordIndex(stock_names=stock_names or {}, stock_keywords={}, sector_keywords={})
+
+    def test_title_only_stock_name_creates_relation_existing_behavior(self) -> None:
+        """(a) 기존 거동: 제목에 종목명이 있으면 classify_news가 관계를 만든다(무회귀 대상)."""
+        from app.services.ai_classifier import classify_news
+
+        index = self._make_index(stock_names={"로보스타": (1, 10)})
+        result = classify_news("로보스타 주가 불기둥", index)
+        assert len(result) == 1
+        assert result[0]["stock_id"] == 1
+
+    def test_description_only_stock_name_is_missed_by_title_matching(self) -> None:
+        """(b) 결손 재현: 제목엔 종목명이 없고 설명에만 있으면 classify_news(title)이
+        놓친다 — 이것이 SPEC-AI-085이 닫으려는 결손이다."""
+        from app.services.ai_classifier import classify_news
+
+        index = self._make_index(stock_names={"로보스타": (1, 10)})
+        title = "로봇주 줄줄이 상한가"
+        description = "레인보우로보틱스, 로보스타, 로보티즈 등 로봇 관련주 급등"
+
+        title_relations = classify_news(title, index)
+        assert title_relations == []  # 결손 재현: 제목 매칭으로는 관계 미생성
+
+        # 설명에는 실제로 종목명이 포함되어 있음 (분류 함수가 텍스트만 다르면 잡아낼 수 있음)
+        description_relations = classify_news(description, index)
+        assert len(description_relations) == 1
+        assert description_relations[0]["stock_id"] == 1
+
+    def test_query_none_rss_article_title_matching_regression_guard(self) -> None:
+        """(c) _query=None RSS/애그리게이터 기사의 제목 매칭 회귀 보호."""
+        from app.services.ai_classifier import classify_news
+
+        index = self._make_index(stock_names={"삼성전자": (1, 10)})
+        ad = {"title": "삼성전자 4분기 실적 발표", "_query": None, "description": ""}
+        result = classify_news(ad["title"], index)
+        assert len(result) == 1
+        assert result[0]["stock_id"] == 1
+
+
+class TestResolveDescriptionRelations:
+    """_resolve_description_relations 신규 헬퍼 테스트 (GREEN — REQ-AI085-001~003)."""
+
+    def _make_index(self, stock_names: dict | None = None):
+        from app.services.ai_classifier import KeywordIndex
+        return KeywordIndex(stock_names=stock_names or {}, stock_keywords={}, sector_keywords={})
+
+    def test_creates_relation_for_description_only_stock_name(self) -> None:
+        """REQ-AI085-001: 설명에만 등장하는 종목명이 관계를 생성해야 한다."""
+        index = self._make_index(stock_names={"로보스타": (1, 10)})
+        ad = {
+            "title": "로봇주 줄줄이 상한가",
+            "description": "레인보우로보틱스, 로보스타, 로보티즈 등 로봇 관련주 급등",
+        }
+        result = _resolve_description_relations(ad, index, existing_relations=[], max_relations=5)
+        assert len(result) == 1
+        assert result[0]["stock_id"] == 1
+
+    def test_does_not_depend_on_stock_keywords(self) -> None:
+        """REQ-AI085-002: stocks.keywords가 비어 있어도(종목 이름 인덱스만으로) 매칭되어야 한다."""
+        index = self._make_index(stock_names={"로보스타": (1, 10)})
+        # stock_keywords가 빈 인덱스이므로 이름 매칭만으로 결과가 나와야 함
+        assert index.stock_keywords == {}
+        ad = {"title": "무관한 제목", "description": "로보스타 주가 강세"}
+        result = _resolve_description_relations(ad, index, existing_relations=[], max_relations=5)
+        assert len(result) == 1
+        assert result[0]["stock_id"] == 1
+
+    def test_dedup_against_existing_title_relation(self) -> None:
+        """EC-2: 설명 매칭 종목이 이미 제목/쿼리로 관계가 있으면 중복 생성하지 않는다."""
+        index = self._make_index(stock_names={"삼성전자": (1, 10)})
+        ad = {"title": "삼성전자 실적", "description": "삼성전자 4분기 영업이익 발표"}
+        existing = [{"stock_id": 1, "sector_id": 10, "match_type": "keyword", "relevance": "direct"}]
+        result = _resolve_description_relations(ad, index, existing_relations=existing, max_relations=5)
+        assert result == []  # 이미 존재하는 (stock_id, sector_id) 쌍은 재생성하지 않음
+
+    def test_empty_description_returns_empty(self) -> None:
+        """EC-1: 설명이 없거나 빈 문자열이면 매칭이 발화하지 않는다(오류 없음)."""
+        index = self._make_index(stock_names={"삼성전자": (1, 10)})
+        assert _resolve_description_relations(
+            {"title": "t", "description": None}, index, existing_relations=[], max_relations=5
+        ) == []
+        assert _resolve_description_relations(
+            {"title": "t", "description": ""}, index, existing_relations=[], max_relations=5
+        ) == []
+
+    def test_respects_per_article_cap(self) -> None:
+        """EC-4/REQ-AI085-003: 기사당 신규 관계 수가 상한을 넘지 않아야 한다(남발 방지)."""
+        index = self._make_index(stock_names={
+            f"종목{i}": (i, 10) for i in range(10)
+        })
+        description = " ".join(f"종목{i}" for i in range(10)) + " 등 급등"
+        ad = {"title": "시황 특징주", "description": description}
+        result = _resolve_description_relations(ad, index, existing_relations=[], max_relations=3)
+        assert len(result) <= 3
+
+    def test_name_boundary_guard_prevents_false_positive(self) -> None:
+        """EC-3: classify_news의 한글 선행문자 배제 가드가 설명 매칭에도 그대로 적용된다."""
+        index = self._make_index(stock_names={"하이닉스": (99, 10), "SK하이닉스": (1, 10)})
+        ad = {"title": "무관한 제목", "description": "SK하이닉스 실적 호조"}
+        result = _resolve_description_relations(ad, index, existing_relations=[], max_relations=5)
+        # 최장일치로 "SK하이닉스"만 매칭되고, 그 안에 포함된 "하이닉스"의 오탐은 배제되어야 한다
+        stock_ids = {r["stock_id"] for r in result}
+        assert stock_ids == {1}
+        assert 99 not in stock_ids
+
+
+class TestDescriptionRelationMatchingGating:
+    """REQ-AI085-006: 설정 게이팅 기본값 확인(단계적 롤아웃)."""
+
+    def test_default_config_is_disabled(self) -> None:
+        from app.surge_config.surge_settings import DescriptionRelationMatchingConfig
+
+        config = DescriptionRelationMatchingConfig()
+        assert config.enabled is False
+        assert config.max_relations_per_article > 0
 
 
 # ---------------------------------------------------------------------------
