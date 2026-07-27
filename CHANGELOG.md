@@ -4,6 +4,66 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Feature — SPEC-AI-088: same_day/near_limit_up_carry 시그널 사전 이동폭(pre_signal_change_pct) 계측 (2026-07-27)
+
+**목적**: 급등예측 시스템의 same_day 지평 시그널(SPEC-AI-080/083)과 near_limit_up_carry
+시그널(SPEC-AI-072)은 신호 발생 시점에 이미 얼마나 움직인 종목인지를 기록하지 않아, "이미
+20% 상승한 뒤 뒤늦게 태깅된 종목"과 "지금 막 움직이기 시작한 종목"이 동일하게 라벨링되는
+순환논리 문제가 있었다(2026-07-27 실측 사례: 현대무벡스가 +19.93% 상승 후 시그널 발화).
+`feedback_realtime_surge_verification.md`의 "same_day 시그널은 price_at_signal vs T-1종가
+대조로 순환논리 배제 필수" 교훈을 시스템 자체의 계측 필드로 운영화한다.
+
+**핵심 변경 (REQ-001~005, 전량 구현, 9/9 AC PASS, 측정 전용 — Option A, 사용자 명시 승인)**:
+1. **REQ-001** `fund_manager._gather_surge_candidates()`(장중 재스캔 same_day 경로) — 시그널
+   시점 가격 산출을 위해 이미 호출 중인 `fetch_current_price_with_change_sync()`의 동일 응답에서
+   `change_rate`를 추가 추출해 `surge_metadata["pre_signal_change_pct"]`로 저장. 신규 네트워크
+   호출 없음.
+2. **REQ-002** `disclosure_impact_scorer._create_immediate_surge_signal()`(즉시발화 same_day
+   경로) — 현재가 조회 함수를 `fetch_current_price` → `fetch_current_price_with_change`로
+   교체(1콜→1콜, 응답 필드만 확장). `price_at_signal`은 기존과 동일 코드 경로 유지,
+   `pre_signal_change_pct`만 신규 저장. 단, 두 함수의 모바일 API 폴백 엔드포인트가
+   다르다(`/api/stock/{code}/integration`[구, 문서화된 폐기 엔드포인트] vs
+   `/api/stock/{code}/price`[신]) — 시가총액 상위 50위 밖 종목에서는 이 교체가 `current_price`
+   조회 성공률 자체를 개선하는 의도된 부수 효과를 수반한다(판정 로직·신뢰도 스코어링 무관).
+3. **REQ-003** `surge_detector.detect_near_limit_up_carries()`(near_limit_up_carry 경로) —
+   `price_at_signal == t1_close` 불변식의 직접적 결과로 `pre_signal_change_pct = 0.0` 상수를
+   `metadata` dict에 삽입. 계산·fetch 불필요.
+4. **REQ-004 [HARD]** 신규 헬퍼 `_extract_pre_signal_change_pct()`(`surge_trading.py`) —
+   `_is_same_day_event_horizon_signal()`과 동일한 fail-safe JSON 파싱 패턴(파싱 실패/비-dict/
+   키 부재/비수치 값 → 예외 없이 `None`). 기존 판별 함수(`_is_same_day_event_horizon_signal`/
+   `_is_near_limit_up_carry_signal`)는 호출·변경하지 않음 — 새 필드는 그 판별 결과에 부가되는
+   형제 데이터일 뿐(diff 0 확인).
+5. **REQ-005** `GET /api/surge-trading/evaluation/{date_str}`(`_get_signal_details_for_date()`)
+   및 `GET /api/surge-trading/prediction-history`(인라인 item dict 2곳 — 오늘 미평가/과거
+   평가완료 분기)에 공유 헬퍼로 `pre_signal_change_pct`를 배선. 필드 부재 시 `null`.
+
+**Out of Scope 준수**: 탐지기 신뢰도 스코어링·앙상블 가중치·임계값(`min_score_for_signal` 등)
+무변경. `_is_same_day_event_horizon_signal()`/`_is_near_limit_up_carry_signal()`(evaluation
+predicted_set 배제 로직) 무변경. `pre_signal_change_pct` 값을 근거로 한 시그널 억제·필터링·
+재점수화 없음(측정만, 후속 SPEC의 범위). `detect_theme_news_carry()`(SPEC-AI-084, 현재
+`enabled=False`)는 전파 대상 멤버에 `price_at_signal` 자체를 설정하지 않아 신규 fetch 없이는
+계측 불가 — 이 SPEC의 명시적 제외 대상(후속 SPEC 후보). 신규 DB 마이그레이션·컬럼 없음
+(`surge_metadata` 기존 Text/JSON 필드에 키 하나 추가). 기존 레코드 소급 백필 없음(전진 적용만).
+`GET /api/surge-trading/coverage` 집계/롤업 지표 추가 없음.
+
+**테스트**: 신규 `test_spec_ai_088.py`(34개 테스트) 전량 GREEN. REQ-002 함수 교체로 실제 코드
+경로가 바뀌면서 `test_disclosure_impact_scorer_immediate_surge.py`의 mock 대상 5곳이 구
+함수(`fetch_current_price`)를 겨냥해 실네트워크 호출로 이어지던 문제를 발견·수정(신
+함수로 mock 대상 갱신, 판정 로직 무영향, REQ-002의 직접적 귀결). 전체 백엔드 회귀 스위트
+**2145 passed, 4 skipped, 3 xpassed, 0 failed**(SPEC-AI-087 baseline 2111 대비 +34, 0 회귀).
+`ruff check .` clean(재검증 완료). **mypy 갭**: 이 환경에 mypy 미설치 — SPEC-AI-087 §E.2와
+동일한 기존 환경 갭이며 본 SPEC이 도입한 조건이 아님(해결하지 않음).
+
+**신규 fetch 비용 0**: REQ-001/002는 이미 발생 중인 네트워크 호출의 반환값에서 버려지던
+필드를 추가로 읽을 뿐이며, REQ-003은 상수 삽입이다. mock 호출 횟수 assert로 3개 경로 전부
+확인.
+
+**예측 기록 모드 유지 — 매매 영향 없음**: 시그널 발화 여부·신뢰도 스코어링·탐지기 임계값
+전부 이 SPEC에서 무변경. `surge_metadata`에 관측 필드 하나가 추가될 뿐, 기존 시그널 생성·평가
+결과는 바이트 동등(추가된 키 자체는 제외).
+
+**배포 상태**: 커밋 완료(main direct push, Route A Hybrid Trunk, Tier S), CI/CD 자동 배포 대상.
+
 ### Feature — SPEC-AI-087: 시가총액/키워드 데이터 완전성 개선 (2026-07-27)
 
 **목적**: 2026-07-24 급등예측 recall 근사 0% 근본원인 조사에서, 추적 종목(`stocks` 테이블,

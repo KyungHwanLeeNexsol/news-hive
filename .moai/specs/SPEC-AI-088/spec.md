@@ -2,7 +2,7 @@
 id: SPEC-AI-088
 title: "same_day/near_limit_up_carry 시그널 사전 이동폭(pre_signal_change_pct) 계측"
 version: "0.1.1"
-status: in-progress
+status: completed
 created: 2026-07-27
 updated: 2026-07-27
 author: Nexsol

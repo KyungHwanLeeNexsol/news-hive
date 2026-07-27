@@ -59,4 +59,19 @@ m1_to_mN_commit_strategy: "milestone별 개별 커밋(M1/M2/M3-M4 통합/M5), �
 
 ## §E.4 Sync-phase Audit-Ready Signal
 
-_<pending sync-phase>_
+sync_status: complete
+sync_complete_at: "2026-07-27"
+sync_commit_sha: "pending-backfill-sync-spec-ai-088"
+
+**B12 self-test 결과**:
+- a) pre-emission grep `grep -c 'SPEC-AI-088' CHANGELOG.md` → 커밋 전 0 (중복 없음 확인)
+- b) AC count 일치 — acceptance.md SSOT `grep -cE '^### AC-088-[0-9]+'` → 9, CHANGELOG 본문 REQ-001~005(9 AC 대응) 언급과 일치
+- c) 파일 경로 검증 — `ls backend/app/services/fund_manager.py backend/app/services/disclosure_impact_scorer.py backend/app/services/surge_detector.py backend/app/routers/surge_trading.py backend/tests/test_spec_ai_088.py` 전부 존재 확인
+
+**sync-phase 독립 재검증(§E.2 재구현이 아닌 재관측)**:
+- `uv run pytest tests/test_spec_ai_088.py -q --tb=short`(backend/) → `34 passed in 2.37s`
+- `uv run ruff check .`(backend/) → `All checks passed!`
+
+frontmatter status 전이: spec.md `status: in-progress` → `completed`(단일 sync 커밋, 3-phase close). plan.md/acceptance.md는 frontmatter 없음(Tier S — spec.md만 frontmatter 보유).
+
+CHANGELOG.md `[Unreleased]` 섹션에 SPEC-AI-088 항목 추가(목적/핵심변경/Out of Scope/테스트/신규 fetch 비용/예측기록모드/배포상태 — 기존 SPEC-AI-087 항목과 동일 형식).
