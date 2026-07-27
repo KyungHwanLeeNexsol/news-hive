@@ -61,7 +61,7 @@ m1_to_mN_commit_strategy: "milestone별 개별 커밋(M1/M2/M3-M4 통합/M5), �
 
 sync_status: complete
 sync_complete_at: "2026-07-27"
-sync_commit_sha: "pending-backfill-sync-spec-ai-088"
+sync_commit_sha: "600a9331b1a04080eb3d210c18b3c08e7ff8fb33"
 
 **B12 self-test 결과**:
 - a) pre-emission grep `grep -c 'SPEC-AI-088' CHANGELOG.md` → 커밋 전 0 (중복 없음 확인)
