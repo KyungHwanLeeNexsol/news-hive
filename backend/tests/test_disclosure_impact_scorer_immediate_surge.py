@@ -460,9 +460,12 @@ class TestCreateImmediateSurgeSignal:
         db.commit = MagicMock()
 
         with (
+            # SPEC-AI-088 REQ-002: _create_immediate_surge_signal이 fetch_current_price_with_change로
+            # 교체되었으므로(current_price + change_rate 동시 반환), 이 모듈은 그 함수를 패치한다.
             patch(
-                "app.services.naver_finance.fetch_current_price",
-                new_callable=AsyncMock, return_value=50000,
+                "app.services.naver_finance.fetch_current_price_with_change",
+                new_callable=AsyncMock,
+                return_value={"current_price": 50000, "change_rate": 0.0},
             ),
             # 프로세스 전역 캐시(app.services.market_context._volatility_cache) 오염 방지 —
             # 실제 네트워크 호출을 막아 다른 테스트 모듈(test_market_context.py)에 영향 없게 한다.
@@ -497,9 +500,12 @@ class TestCreateImmediateSurgeSignal:
         db.commit = MagicMock()
 
         with (
+            # SPEC-AI-088 REQ-002: _create_immediate_surge_signal이 fetch_current_price_with_change로
+            # 교체되었으므로(current_price + change_rate 동시 반환), 이 모듈은 그 함수를 패치한다.
             patch(
-                "app.services.naver_finance.fetch_current_price",
-                new_callable=AsyncMock, return_value=50000,
+                "app.services.naver_finance.fetch_current_price_with_change",
+                new_callable=AsyncMock,
+                return_value={"current_price": 50000, "change_rate": 0.0},
             ),
             patch(
                 "app.services.market_context.get_market_volatility",
@@ -525,9 +531,12 @@ class TestCreateImmediateSurgeSignal:
         db.commit = MagicMock()
 
         with (
+            # SPEC-AI-088 REQ-002: _create_immediate_surge_signal이 fetch_current_price_with_change로
+            # 교체되었으므로(current_price + change_rate 동시 반환), 이 모듈은 그 함수를 패치한다.
             patch(
-                "app.services.naver_finance.fetch_current_price",
-                new_callable=AsyncMock, return_value=50000,
+                "app.services.naver_finance.fetch_current_price_with_change",
+                new_callable=AsyncMock,
+                return_value={"current_price": 50000, "change_rate": 0.0},
             ),
             patch(
                 "app.services.paper_trading.execute_signal_trade",
@@ -575,9 +584,12 @@ class TestCreateImmediateSurgeSignal:
         db.commit = MagicMock()
 
         with (
+            # SPEC-AI-088 REQ-002: _create_immediate_surge_signal이 fetch_current_price_with_change로
+            # 교체되었으므로(current_price + change_rate 동시 반환), 이 모듈은 그 함수를 패치한다.
             patch(
-                "app.services.naver_finance.fetch_current_price",
-                new_callable=AsyncMock, return_value=50000,
+                "app.services.naver_finance.fetch_current_price_with_change",
+                new_callable=AsyncMock,
+                return_value={"current_price": 50000, "change_rate": 0.0},
             ),
             patch(
                 "app.services.market_context.get_market_volatility",
@@ -607,8 +619,9 @@ class TestCreateImmediateSurgeSignal:
         db.commit = MagicMock()
 
         with (
+            # SPEC-AI-088 REQ-002: fetch_current_price_with_change로 교체됨(1콜→1콜, 응답 필드만 확장)
             patch(
-                "app.services.naver_finance.fetch_current_price",
+                "app.services.naver_finance.fetch_current_price_with_change",
                 new_callable=AsyncMock, side_effect=Exception("네트워크 오류"),
             ),
             patch(

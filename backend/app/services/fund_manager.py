@@ -1482,13 +1482,25 @@ async def _gather_surge_candidates(
 
         # 시그널 생성 시점 현재가 조회 — 낮은 confidence로 매수 미실행 시에도 signal_verifier 검증 가능하도록
         _signal_current_price: int | None = None
+        # SPEC-AI-088 REQ-001: 이미 도착한 응답에서 등락률도 함께 추출(신규 fetch 없음)
+        _signal_current_price_change_pct: float | None = None
         try:
             from app.services.naver_finance import fetch_current_price_with_change_sync
             _price_data = fetch_current_price_with_change_sync(candidate.stock_code)
             if _price_data:
                 _signal_current_price = _price_data.get("current_price")
+                _signal_current_price_change_pct = _price_data.get("change_rate")
         except Exception as _price_e:
             logger.warning("[급등탐지] %s 현재가 조회 실패 (price_at_signal=None): %s", candidate.stock_code, _price_e)
+
+        # @MX:NOTE: [AUTO] SPEC-AI-088 REQ-AI088-001 — same_day 지평 시그널의 시그널 시점
+        #   사전 이동폭(pre_signal_change_pct) 계측. metadata_json은 위(:1419)에서 이미
+        #   직렬화되었으므로 여기서 재직렬화한다(신규 fetch 없음, 순환논리 계측 전용 —
+        #   측정만, 억제/필터링/신뢰도 조정 없음, Option A).
+        # @MX:SPEC: SPEC-AI-088 REQ-AI088-001
+        if _intraday_horizon == "same_day" and _signal_current_price_change_pct is not None:
+            metadata["pre_signal_change_pct"] = round(_signal_current_price_change_pct, 2)
+            metadata_json = json.dumps(metadata, ensure_ascii=False)
 
         # 5영업일 내 중복 시그널 확인 → 있으면 업데이트, 없으면 신규 생성
         existing = (

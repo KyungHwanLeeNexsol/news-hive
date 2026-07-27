@@ -2857,11 +2857,14 @@ def detect_near_limit_up_carries(
             reasoning = (
                 f"상한가 근접 종목 — 전일 {change_rate:.2f}% 상승, 미체결 모멘텀 이월"
             )
+            # SPEC-AI-088 REQ-003: price_at_signal==t1_close 불변식의 직접적 결과로
+            # pre_signal_change_pct는 항상 정확히 0.0 — 계산/fetch 불필요(상수 삽입).
             metadata = {
                 "surge_basis": ["near_limit_up_carry"],
                 "yesterday_change_pct": round(change_rate, 2),
                 "surge_probability_score": confidence,
                 "near_limit_up_carry": True,
+                "pre_signal_change_pct": 0.0,
             }
 
             # SPEC-AI-072 REQ-005 (옵션 A): price_at_signal은 T-1 종가(완전 이력 기반).

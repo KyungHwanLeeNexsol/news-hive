@@ -553,11 +553,16 @@ async def _create_immediate_surge_signal(
     if not disclosure.stock_id:
         return None
 
+    # SPEC-AI-088 REQ-002: current_price와 함께 change_rate도 반환하는 동등 함수로 교체
+    # (1콜→1콜, 응답 필드만 확장). price 산출 경로/폴백 의미는 기존과 동일 유지.
     try:
-        from app.services.naver_finance import fetch_current_price
-        price = await fetch_current_price(disclosure.stock_code)
+        from app.services.naver_finance import fetch_current_price_with_change
+        _price_data = await fetch_current_price_with_change(disclosure.stock_code)
+        price = _price_data.get("current_price") if _price_data else disclosure.baseline_price
+        _change_pct = _price_data.get("change_rate") if _price_data else None
     except Exception:
         price = disclosure.baseline_price
+        _change_pct = None
 
     confidence = min(max(impact_score, 0.0) / 100.0, 0.95)
     matched_class = next(
@@ -580,6 +585,11 @@ async def _create_immediate_surge_signal(
         "horizon": horizon,
         "rcept_dt": disclosure.rcept_dt,
     }
+    # @MX:NOTE: [AUTO] SPEC-AI-088 REQ-AI088-002 — same_day 지평 즉시발화 시그널의
+    #   사전 이동폭(pre_signal_change_pct) 계측(측정만, Option A). 신규 fetch 없음.
+    # @MX:SPEC: SPEC-AI-088 REQ-AI088-002
+    if horizon == "same_day" and _change_pct is not None:
+        metadata["pre_signal_change_pct"] = round(_change_pct, 2)
     metadata_json = json.dumps(metadata, ensure_ascii=False)
     reasoning = (
         f"[SPEC-AI-080 즉시발화] {disclosure.report_name} — "
