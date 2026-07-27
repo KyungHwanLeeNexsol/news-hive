@@ -46,7 +46,7 @@ gap을 재현. M2(REQ-001~003, `fund_manager.py`/`disclosure_impact_scorer.py`/
 
 run_status: complete
 run_complete_at: "2026-07-27"
-run_commit_sha: "pending-backfill-M5"
+run_commit_sha: "d98f8f152bbca72c251cd60c83d3dee50dd6c1c2"
 ac_pass_count: 9
 ac_fail_count: 0
 preserve_list_post_run_count: 1
