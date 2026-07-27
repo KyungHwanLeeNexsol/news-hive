@@ -3,6 +3,7 @@
 /surge prefix 하에 5개 엔드포인트 제공.
 POST /surge/execute는 관리자 인증 필요.
 """
+import json
 import logging
 from datetime import date
 
@@ -239,6 +240,31 @@ def get_evaluations(
         raise HTTPException(status_code=500, detail="평가 목록 조회 실패")
 
 
+# @MX:NOTE: [AUTO] SPEC-AI-088 REQ-AI088-004 — surge_metadata에서 pre_signal_change_pct를
+#   안전하게 추출하는 순수 함수. surge_evaluation_service._is_same_day_event_horizon_signal과
+#   동일한 fail-safe JSON 파싱 패턴(파싱 실패/비-dict/키 부재 → None)을 따르며, 기존 판별
+#   함수(_is_same_day_event_horizon_signal/_is_near_limit_up_carry_signal)를 호출하거나
+#   변경하지 않는다(부가 전용, Option A — 측정만).
+# @MX:SPEC: SPEC-AI-088 REQ-AI088-004
+def _extract_pre_signal_change_pct(surge_metadata_json: str | None) -> float | None:
+    """surge_metadata JSON에서 pre_signal_change_pct 값을 안전하게 추출한다.
+
+    파싱 실패/비-dict/키 부재/비수치 값이면 예외 없이 None을 반환한다.
+    """
+    if not surge_metadata_json:
+        return None
+    try:
+        metadata = json.loads(surge_metadata_json)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(metadata, dict):
+        return None
+    value = metadata.get("pre_signal_change_pct")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
+
+
 def _get_signal_details_for_date(db: Session, eval_date) -> list:
     """특정 날짜의 surge 시그널 목록을 반환하는 내부 헬퍼."""
     from app.models.fund_signal import FundSignal
@@ -270,6 +296,7 @@ def _get_signal_details_for_date(db: Session, eval_date) -> list:
                 "alpha_pct": fs.alpha_pct,
                 "is_correct": fs.is_correct,
                 "error_category": fs.error_category,
+                "pre_signal_change_pct": _extract_pre_signal_change_pct(fs.surge_metadata),
             }
             for fs, st in rows
         ]
@@ -464,6 +491,7 @@ def get_prediction_history(
                         "alpha_pct": None,
                         "is_correct": None,
                         "error_category": None,
+                        "pre_signal_change_pct": _extract_pre_signal_change_pct(fs.surge_metadata),
                     }
                     if fs.signal_type == "surge_candidate":
                         today_surge_signals.append(item)
@@ -508,6 +536,7 @@ def get_prediction_history(
                     "alpha_pct": fs.alpha_pct,
                     "is_correct": fs.is_correct,
                     "error_category": fs.error_category,
+                    "pre_signal_change_pct": _extract_pre_signal_change_pct(fs.surge_metadata),
                 }
                 if fs.signal_type == "surge_candidate":
                     surge_signals.append(item)
