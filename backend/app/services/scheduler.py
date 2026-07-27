@@ -419,6 +419,14 @@ def _run_securities_report_crawl():
     _run_keyword_matching()
 
 
+# SPEC-AI-087 REQ-001: 시장당 안전 상한(페이지당 50종목, 최대 3,000종목/시장). 기존
+# range(1, 11)(최대 500종목) 고정 상한이 추적 종목(stocks 테이블) 커버리지를 조용히
+# 절단하던 근본원인 — Naver API 자체에는 500종목 제한이 없음(이번 세션 실측:
+# KOSPI totalCount=2471, KOSDAQ=1822). 안전 상한은 API 이상 동작(무한 페이지네이션 등)
+# 방어선일 뿐이며, 정상 경로는 `if not items: break` 조기 종료로 그보다 먼저 끝난다.
+_MARKET_CAP_UPDATE_MAX_PAGES = 60
+
+
 @retry_with_backoff(max_attempts=3)
 def _update_market_caps():
     """Fetch market cap from Naver Mobile API and update DB stocks."""
@@ -432,7 +440,7 @@ def _update_market_caps():
 
         # Fetch multiple pages from both markets (50 per page)
         for mkt in ["KOSPI", "KOSDAQ"]:
-            for page in range(1, 11):  # 10 pages × 50 = top 500 per market
+            for page in range(1, _MARKET_CAP_UPDATE_MAX_PAGES + 1):
                 items, _total = asyncio.run(fetch_naver_stock_list(market=mkt, page=page, page_size=50))
                 if not items:
                     break
