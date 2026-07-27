@@ -48,4 +48,14 @@ m1_to_mN_commit_strategy: "milestone별 개별 커밋(M1/M2/M3/M5, M4는 M1/M2�
 
 ## §E.4 Sync-phase Audit-Ready Signal
 
-_<pending sync-phase>_
+sync_status: complete
+sync_complete_at: "2026-07-27"
+sync_commit_sha: "pending-backfill-SPEC-AI-087-sync"
+
+CHANGELOG.md `[Unreleased]` 섹션에 SPEC-AI-087 항목 추가(중복 방지 사전 grep 0건 확인),
+spec.md frontmatter `status: in-progress → completed` 전이(단일 sync 커밋으로 3-phase close
+병합). 진행상황 아티팩트 4종 중 spec.md(frontmatter만)/progress.md/CHANGELOG.md 3종만 이번
+커밋 범위. plan.md/acceptance.md 본문은 무변경(소유권 경계 준수).
+
+mypy 미설치 갭은 §E.2에서 이미 기록됨(기존 환경 갭, 본 SPEC 범위 아님) — CHANGELOG에도 정직하게
+반영.

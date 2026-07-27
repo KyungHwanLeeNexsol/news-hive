@@ -4,6 +4,67 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Feature — SPEC-AI-087: 시가총액/키워드 데이터 완전성 개선 (2026-07-27)
+
+**목적**: 2026-07-24 급등예측 recall 근사 0% 근본원인 조사에서, 추적 종목(`stocks` 테이블,
+2,605건) 중 63%가 `market_cap = NULL`이며, 여러 탐지기가 `market_cap >= threshold` 형태의
+하드 필터를 사용함을 확인 — SQL에서 `NULL >= N`은 항상 미충족이므로 NULL 시총 종목(통계적으로
+소형·유통주식수 적은, 실급등이 상대적으로 잦은 종목군)이 후보풀에서 조용히 배제되고 있었다.
+read-only 조사(DB 쿼리 + 코드 검증)로 확인된 3가지 근본원인을 사용자 승인에 따라 하나의 SPEC으로
+번들.
+
+**핵심 변경 (REQ-001~008, 전량 구현, 9/9 AC PASS)**:
+1. **REQ-001/002 [HARD]** 시총 업데이트 배치 잡(`_update_market_caps()`, scheduler.py) 페이지
+   상한을 시장당 상위 500종목 고정(`range(1, 11)`) → 안전 상한 3,000종목(`_MARKET_CAP_UPDATE_MAX_PAGES
+   = 60`, 시장당 60페이지)으로 확장. Naver 모바일 API 직접 조회로 API 자체엔 500종목 제한이
+   없음을 확인(KOSPI totalCount=2471/KOSDAQ=1822) — 제한은 순수히 하드코딩된 상한이었다. 기존
+   `if not items: break` 조기 종료 로직 유지, 이미 조회되던 상위 500위 이내 종목의 market_cap
+   계산 방식·값은 바이트 동등 확인.
+2. **REQ-003** `volume_anomaly` 탐지기에 SPEC-AI-077의 floor-quota + 날짜 로테이션 패턴 이식
+   (`VolumeAnomalyConfig.null_cap_min_slots: int = 0`, 기본 OFF). 신규 네트워크 fetch를 유발하는
+   유일한 경로이므로 opt-in floor-quota로 비용 상한.
+3. **REQ-004/005** `group_cascade`/`gap_up_runners` 탐지기에 boolean 토글로 NULL 시총 후보 편입
+   (`GroupCascadeConfig.cascade_include_null_market_cap`,
+   `GapUpRunnersConfig.runner_include_null_market_cap`, 둘 다 기본 `False`) — 기존 상한
+   (`max_cascade_per_flagship`, `.limit(5)`+`[:2]`) 내에서 non-null 종목보다 낮은 우선순위로 편입,
+   후보당 네트워크 fetch 없음(순수 DB/인메모리) 확인돼 단순 토글로 충분.
+4. **REQ-006 [HARD]** 편입 대상 경계 명시 — `detect_group_cascade_signals`의 대장주(flagship)
+   NULL 시총 제외 로직 및 `detect_bollinger_squeeze`의 시총 상위 N 선정 쿼리는 REQ-003~005
+   opt-in 활성화 상태에서도 무변경 확인(회귀 테스트로 고정).
+5. **REQ-007/008** 기존에 존재하나 미스케줄링 상태였던 `backfill_stock_keywords()`
+   (idempotent — NULL/빈 값 종목만 갱신)를 APScheduler 정기 잡(`keyword_backfill`)으로 등록.
+   외부 API/LLM 호출 없이 저장된 `NewsArticle`/`Disclosure` 레코드만 읽어 저비용. 추적 종목의
+   75.1%(1,957/2,605)가 `keywords = NULL` — 뉴스기반 테마전파 탐지기(SPEC-AI-084/085, 현재
+   플래그 OFF)의 입력 완전성을 개선.
+
+**Out of Scope 준수**: `build_scan_universe` 그림자 유니버스 배선(SPEC-AI-086 영역), 대장주 NULL
+배제 로직·bollinger_squeeze 상위 N 쿼리·`_get_theme_cluster_candidates`(SPEC-AI-038 소유)는
+수정 대상에서 명시적으로 제외. `refresh_stock_keywords()`(이미 태깅된 종목 재계산) 스케줄링은
+범위 밖. 탐지기 앙상블 가중치·적응형 임계값·매매 로직(SPEC-AI-043 예측기록모드) 무변경. 과거
+데이터 소급 백필 없음(전진 적용만). 신규 DB 마이그레이션 없음(Pydantic 설정 필드 추가 +
+스케줄러 잡 등록만).
+
+**테스트**: 신규 `test_spec_ai_087.py`(710줄, 17개 테스트) 전량 GREEN. 전체 백엔드 회귀 스위트
+**2111 passed, 4 skipped, 3 xpassed**(baseline 2094 대비 정확히 +17, 0 회귀). `ruff check .`
+clean. **mypy 갭**: 이 환경에 mypy가 설치돼 있지 않아(`ModuleNotFoundError`, pyproject.toml
+미선언) 실행 불가 — 본 SPEC이 도입한 사전 조건이 아닌 기존 환경 갭이며 정직하게 기록만 함(본
+SPEC 범위에서 해결하지 않음).
+
+**plan-audit**: iteration 2/3 PASS 0.95(Tier M 임계값 0.80).
+
+**예측 기록 모드 유지 — 매매 영향 없음**: 신규 opt-in 설정 필드(`null_cap_min_slots=0`,
+`cascade_include_null_market_cap=False`, `runner_include_null_market_cap=False`)가 전부
+기본값일 때 본 SPEC 적용 이전과 바이트 동등한 탐지 후보 집합·시그널 생성 결과.
+
+**배포 상태**: 커밋 완료(main direct push, Route A Hybrid Trunk), CI/CD 자동 배포 대상.
+
+**영향 파일**: `backend/app/services/scheduler.py`(_update_market_caps 페이지 상한,
+keyword_backfill 잡 등록), `backend/app/services/surge_detector.py`(3개 탐지기 NULL 시총
+편입), `backend/app/surge_config/surge_settings.py`(신규 설정 필드 3개),
+`backend/tests/test_spec_ai_087.py`(신규)
+
+---
+
 ### Feature — SPEC-AI-086: 스캔 유니버스 커버리지 확장 — 진단 우선 + 소스 풀/상한 유연화 (측정 계층 한정) (2026-07-27)
 
 **목적**: 2026-07-23 공식 평가 기준 실제 급등 종목의 87%(129/148)가 스캔 유니버스(150) 밖에
