@@ -2,7 +2,7 @@
 id: SPEC-AI-087
 title: "시가총액/키워드 데이터 완전성 개선"
 version: "0.1.0"
-status: draft
+status: in-progress
 created: 2026-07-27
 updated: 2026-07-27
 author: Nexsol
