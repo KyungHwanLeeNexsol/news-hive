@@ -616,6 +616,13 @@ class VolumeAnomalyConfig(BaseModel):
     max_confidence: float = 0.40
     # 가격 히스토리 조회 페이지 수 (1 page ≈ 10거래일)
     history_pages: int = 6
+    # @MX:NOTE: [AUTO] SPEC-AI-087 REQ-003 — NULL 시총 종목 최소 보장 슬롯(floor quota).
+    # 0(기본값)이면 NULL 전용 쿼리 자체를 스킵해 레거시 market_cap >= min_market_cap
+    # 단일 조건 조회와 바이트 동등하다(REQ-008 백워드 호환 탈출구). >0이면 SPEC-AI-077 패턴을
+    # 재사용해 날짜 로테이션 기반으로 NULL 시총 종목을 추가 편입한다. 이 경로만 후보당 신규
+    # 네트워크 fetch(fetch_stock_price_history_sync)가 발생하므로 opt-in으로 비용을 상한한다.
+    # @MX:SPEC: SPEC-AI-087 REQ-AI087-003
+    null_cap_min_slots: int = 0
 
 
 class NearLimitUpConfig(BaseModel):
@@ -687,6 +694,14 @@ class GroupCascadeConfig(BaseModel):
     # @MX:SPEC: SPEC-AI-050 REQ-4
     require_companion_detector: bool = True
     companion_required_below_prob: float = 0.4
+    # @MX:NOTE: [AUTO] SPEC-AI-087 REQ-004 — NULL 시총 계열사 편입 boolean 토글. False(기본값)면
+    # 기존 market_cap >= cascade_min_market_cap 단일 조건 필터와 바이트 동등하다(REQ-008).
+    # True면 기존 max_cascade_per_flagship 상한 내에서 NULL 시총 계열사를 non-null 종목보다
+    # 낮은 순위로 포함한다. 계열사 후보풀은 이미 접두사 매칭으로 소규모이고 상한이 걸려 있어
+    # (근거: near_limit_up만큼의 굶주림 위험 없음) floor-quota가 아닌 단순 토글로 충분하다.
+    # flagship(대장주) NULL 시총 배제 로직(REQ-006)은 이 필드의 영향을 받지 않는다.
+    # @MX:SPEC: SPEC-AI-087 REQ-AI087-004
+    cascade_include_null_market_cap: bool = False
 
 
 class ThemeNewsCarryConfig(BaseModel):
@@ -766,6 +781,13 @@ class GapUpRunnersConfig(BaseModel):
     min_leader_confidence: float = 0.75
     # 런너 confidence 감쇠율 (leader.confidence * decay)
     confidence_decay: float = 0.7
+    # @MX:NOTE: [AUTO] SPEC-AI-087 REQ-005 — NULL 시총 섹터 피어 편입 boolean 토글. False(기본값)면
+    # 기존 market_cap.isnot(None) 필터와 바이트 동등하다(REQ-008). True면 기존 섹터 피어 상한
+    # (.limit(5)) 및 런너 선정([:2]) 내에서 NULL 시총 피어를 non-null 종목보다 낮은 순위로
+    # 포함한다. 런너당 시세 조회는 [:2] 슬라이스로 이미 상한이 걸려 있어 이 토글 자체는 신규
+    # 네트워크 비용을 늘리지 않는다.
+    # @MX:SPEC: SPEC-AI-087 REQ-AI087-005
+    runner_include_null_market_cap: bool = False
 
 
 class CoverageDashboardConfig(BaseModel):

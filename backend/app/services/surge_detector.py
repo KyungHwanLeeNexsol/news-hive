@@ -2498,12 +2498,51 @@ def _detect_volume_anomaly_internal(
     lookback_start = datetime.now(timezone.utc) - timedelta(days=config.dormant_lookback_days)
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
-    # 최소 시가총액 이상인 전체 종목 조회
-    all_stocks = (
+    # 최소 시가총액 이상인 전체 종목 조회 (기존과 동일, 무제한 유지)
+    non_null_stocks = (
         db.query(Stock)
         .filter(Stock.market_cap >= config.min_market_cap)
         .all()
     )
+
+    # SPEC-AI-087 REQ-003: NULL 시총 종목은 floor quota(null_cap_min_slots) + 날짜
+    # 로테이션으로 opt-in 편입한다(SPEC-AI-077 패턴 이식). 이 경로만 후보당 신규
+    # fetch_stock_price_history_sync 호출을 유발하므로 기본값 0(스킵)으로 비용을 상한한다.
+    # @MX:NOTE: [AUTO] null_cap_min_slots==0이면 NULL 쿼리 자체를 스킵해 레거시(non_null_stocks만)와
+    #   바이트 동등(백워드 호환 탈출구, REQ-AI087-008).
+    # @MX:SPEC: SPEC-AI-087 REQ-AI087-003
+    null_stocks: list[Stock] = []
+    if config.null_cap_min_slots > 0:
+        from sqlalchemy import func as sqlfunc
+
+        null_count = (
+            db.query(sqlfunc.count(Stock.id)).filter(Stock.market_cap.is_(None)).scalar()
+        ) or 0
+        if null_count > 0:
+            null_limit = min(config.null_cap_min_slots, null_count)
+            rot_offset = (today_start.date().toordinal() * null_limit) % null_count
+            null_stocks = (
+                db.query(Stock)
+                .filter(Stock.market_cap.is_(None))
+                .order_by(Stock.id.asc())
+                .offset(rot_offset)
+                .limit(null_limit)
+                .all()
+            )
+            if len(null_stocks) < null_limit:
+                # 로테이션 offset이 끝단에 걸치면 라운드로빈 wrap-around로 처음부터 채운다
+                remaining = null_limit - len(null_stocks)
+                seen_ids = {s.id for s in null_stocks}
+                wrap_candidates = (
+                    db.query(Stock)
+                    .filter(Stock.market_cap.is_(None))
+                    .order_by(Stock.id.asc())
+                    .limit(remaining)
+                    .all()
+                )
+                null_stocks.extend(s for s in wrap_candidates if s.id not in seen_ids)
+
+    all_stocks = non_null_stocks + null_stocks
 
     # 오늘 surge_candidate 이미 있는 stock_id 집합
     today_surge_ids: set[int] = set()
@@ -3627,17 +3666,38 @@ def detect_group_cascade_signals(
 
         # @MX:WARN: [AUTO] stocks 테이블 name LIKE 접두사 매칭 — 인덱스 미활용 시 풀스캔 발생 가능
         # @MX:REASON: [AUTO] stocks.name은 인덱스 없음; 데이터 건수 적어 현재는 허용, 증가 시 인덱스 추가 필요
-        affiliate_candidates = (
-            db.query(Stock)
-            .filter(
-                Stock.name.like(f"{prefix}%"),
-                Stock.stock_code != stock_code,
-                Stock.market_cap >= config.cascade_min_market_cap,
+        # SPEC-AI-087 REQ-004: cascade_include_null_market_cap=True면 NULL 시총 계열사를
+        # 기존 max_cascade_per_flagship 상한 내에서 non-null 종목보다 낮은 순위로 편입한다.
+        # False(기본값)면 기존 단일 조건 필터와 바이트 동등(REQ-008). flagship(대장주) NULL
+        # 시총 배제 로직(상단, AC-003)은 이 토글의 영향을 받지 않는다(REQ-006).
+        # @MX:SPEC: SPEC-AI-087 REQ-AI087-004
+        if config.cascade_include_null_market_cap:
+            affiliate_candidates = (
+                db.query(Stock)
+                .filter(
+                    Stock.name.like(f"{prefix}%"),
+                    Stock.stock_code != stock_code,
+                    or_(
+                        Stock.market_cap >= config.cascade_min_market_cap,
+                        Stock.market_cap.is_(None),
+                    ),
+                )
+                .order_by(Stock.market_cap.desc().nullslast())
+                .limit(config.max_cascade_per_flagship)
+                .all()
             )
-            .order_by(Stock.market_cap.desc())
-            .limit(config.max_cascade_per_flagship)
-            .all()
-        )
+        else:
+            affiliate_candidates = (
+                db.query(Stock)
+                .filter(
+                    Stock.name.like(f"{prefix}%"),
+                    Stock.stock_code != stock_code,
+                    Stock.market_cap >= config.cascade_min_market_cap,
+                )
+                .order_by(Stock.market_cap.desc())
+                .limit(config.max_cascade_per_flagship)
+                .all()
+            )
 
         for affiliate in affiliate_candidates:
             num_candidates_evaluated += 1
@@ -4003,18 +4063,35 @@ def detect_gap_up_runners(
                 continue  # 동일 섹터 중복 처리 방지
             processed_sector_ids.add(leader_stock.sector_id)
 
-            # 동일 섹터 종목 market_cap 내림차순 (None 제외, 리더 제외)
-            sector_peers = (
-                db.query(Stock)
-                .filter(
-                    Stock.sector_id == leader_stock.sector_id,
-                    Stock.market_cap.isnot(None),
-                    Stock.id != leader_stock.id,
+            # 동일 섹터 종목 market_cap 내림차순 (리더 제외)
+            # SPEC-AI-087 REQ-005: runner_include_null_market_cap=True면 NULL 시총 피어를
+            # 기존 섹터 피어 상한(.limit(5)) 및 런너 선정([:2]) 내에서 non-null 종목보다 낮은
+            # 순위로 편입한다. False(기본값)면 기존 market_cap.isnot(None) 필터와 바이트
+            # 동등(REQ-008).
+            # @MX:SPEC: SPEC-AI-087 REQ-AI087-005
+            if config.runner_include_null_market_cap:
+                sector_peers = (
+                    db.query(Stock)
+                    .filter(
+                        Stock.sector_id == leader_stock.sector_id,
+                        Stock.id != leader_stock.id,
+                    )
+                    .order_by(Stock.market_cap.desc().nullslast())
+                    .limit(5)  # 상위 5개에서 2/3등 추출
+                    .all()
                 )
-                .order_by(Stock.market_cap.desc())
-                .limit(5)  # 상위 5개에서 2/3등 추출
-                .all()
-            )
+            else:
+                sector_peers = (
+                    db.query(Stock)
+                    .filter(
+                        Stock.sector_id == leader_stock.sector_id,
+                        Stock.market_cap.isnot(None),
+                        Stock.id != leader_stock.id,
+                    )
+                    .order_by(Stock.market_cap.desc())
+                    .limit(5)  # 상위 5개에서 2/3등 추출
+                    .all()
+                )
 
             # 2등, 3등 피어 (인덱스 0, 1)
             runners = sector_peers[:2]
