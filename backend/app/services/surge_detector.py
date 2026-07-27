@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import math
 import statistics
+import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from datetime import time as _time
@@ -1976,6 +1977,36 @@ def gather_surge_candidates(
             )
         except Exception as _pe:
             logger.warning("[스캔유니버스] pool_counts/유니버스멤버 영속화 실패 (무시): %s", _pe)
+
+        # SPEC-AI-089 M1 REQ-AI089-001/003/004/007: 측정 전용 계측 훅 (기본 비활성).
+        # @MX:NOTE: [AUTO] SPEC-AI-089 REQ-AI089-001 — 이미 계산된 _universe_codes/
+        # _entry_pool_map/merged에 대한 순수 인메모리 집합 연산 + 단일 로그 라인 기록.
+        # merged는 절대 변경하지 않는다(REQ-AI089-003 [HARD] — 읽기만 전달).
+        # @MX:SPEC: SPEC-AI-089 REQ-AI089-001, REQ-AI089-003, REQ-AI089-004, REQ-AI089-007
+        if config.universe_gap_measurement_enabled:
+            try:
+                from app.services.surge_universe_gap_service import (
+                    measure_universe_detection_gap,
+                )
+
+                _gap_t0 = time.monotonic()
+                _gap = measure_universe_detection_gap(_universe_codes, _entry_pool_map, merged)
+                _gap_elapsed = time.monotonic() - _gap_t0
+                logger.info(
+                    "[유니버스간극측정] 실행됨 소요=%.4fs — "
+                    "A(raw=%d/커버=%d) B(raw=%d/커버=%d) C(raw=%d/커버=%d) D(raw=%d/커버=%d)",
+                    _gap_elapsed,
+                    _gap.get("pool_a_total", 0),
+                    _gap.get("pool_a_covered", 0),
+                    _gap.get("pool_b_total", 0),
+                    _gap.get("pool_b_covered", 0),
+                    _gap.get("pool_c_total", 0),
+                    _gap.get("pool_c_covered", 0),
+                    _gap.get("pool_d_total", 0),
+                    _gap.get("pool_d_covered", 0),
+                )
+            except Exception as _ge:
+                logger.warning("[유니버스간극측정] 측정 실패 (무시): %s", _ge)
     except Exception as _ue:
         logger.warning("[스캔유니버스] 유니버스 빌드 실패 (무시): %s", _ue)
         try:

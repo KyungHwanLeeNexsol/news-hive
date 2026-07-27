@@ -562,6 +562,13 @@ class SurgeDetectionConfig(BaseModel):
     # @MX:SPEC: SPEC-AI-086 REQ-AI086-004
     dynamic_scan_universe_caps: dict[str, int] = Field(default_factory=dict)
 
+    # SPEC-AI-089 M1 REQ-AI089-001/003/004: 스캔 유니버스↔탐지망 간극 측정 계측 플래그.
+    # 기본값 OFF — 활성화해도 순수 읽기·집계(신규 네트워크 조회/DB 쓰기 없음)이며 탐지
+    # 파이프라인 출력에 영향을 주지 않는다(REQ-003 불변식, AC-089-008로 검증).
+    # @MX:NOTE: [AUTO] SPEC-AI-089 REQ-AI089-001 — 측정 계측 토글(기본 비활성)
+    # @MX:SPEC: SPEC-AI-089 REQ-AI089-001
+    universe_gap_measurement_enabled: bool = False
+
     # @MX:ANCHOR: [AUTO] 앙상블 가중치 합산 검증 — 8개 탐지기 가중치 합산 반드시 1.0
     # @MX:REASON: 가중치 합산 != 1.0 이면 앙상블 스코어 범위가 0~1을 벗어나 시그널 임계값 판정이 왜곡됨
     @model_validator(mode="after")
