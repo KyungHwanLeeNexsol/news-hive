@@ -50,7 +50,7 @@ m1_to_mN_commit_strategy: "milestone별 개별 커밋(M1/M2/M3/M5, M4는 M1/M2�
 
 sync_status: complete
 sync_complete_at: "2026-07-27"
-sync_commit_sha: "pending-backfill-SPEC-AI-087-sync"
+sync_commit_sha: "092c62a"
 
 CHANGELOG.md `[Unreleased]` 섹션에 SPEC-AI-087 항목 추가(중복 방지 사전 grep 0건 확인),
 spec.md frontmatter `status: in-progress → completed` 전이(단일 sync 커밋으로 3-phase close
