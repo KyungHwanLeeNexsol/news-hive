@@ -471,6 +471,33 @@ def _update_market_caps():
         db.close()
 
 
+@retry_with_backoff(max_attempts=3)
+def _run_keyword_backfill():
+    """SPEC-AI-087 REQ-007: keywords가 NULL/공백인 추적 종목에 키워드 태깅을 시도한다.
+
+    backfill_stock_keywords()는 이미 저장된 NewsArticle/Disclosure 레코드만 읽으며
+    외부 API/LLM 호출이 없어(REQ-AI084-004(b)) 정기 실행 비용이 낮다. 이미 keywords가
+    채워진 종목(수동 설정 포함)은 idempotent 계약에 따라 건드리지 않는다.
+    """
+    _start = _time.monotonic()
+    from app.services.keyword_tagging_service import backfill_stock_keywords
+
+    db = SessionLocal()
+    try:
+        result = backfill_stock_keywords(db)
+        logger.info(
+            "[keyword_backfill] 스캔 %d개, 신규 태깅 %d개, 기존 보존(스킵) %d개",
+            result.stocks_scanned,
+            result.stocks_tagged,
+            result.stocks_skipped_existing,
+        )
+    except Exception as e:
+        logger.error(f"Keyword backfill failed: {e}")
+        raise
+    finally:
+        _record_job_duration("keyword_backfill", _time.monotonic() - _start)
+        db.close()
+
 
 @retry_with_backoff(max_attempts=3)
 def _run_signal_verification():
@@ -2106,6 +2133,15 @@ def start_scheduler():
         id="market_cap_update",
         replace_existing=True,
         next_run_time=datetime.now(timezone.utc),
+    )
+    # SPEC-AI-087 REQ-007: 키워드 백필 — 1일 1회(외부 API/LLM 호출 없어 시총 업데이트보다
+    # 낮은 빈도로 충분, DART/네이버 rate limit과 무관)
+    scheduler.add_job(
+        _run_keyword_backfill,
+        "interval",
+        hours=24,
+        id="keyword_backfill",
+        replace_existing=True,
     )
     # 데일리 브리핑 + 매수/매도 시그널 생성: 매일 08:30 KST (장 시작 전, 평일만)
     # SPEC-AI-015: 시장 레짐 사전 분류 (08:55 KST — 브리핑 5분 전)
