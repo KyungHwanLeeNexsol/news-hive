@@ -38,7 +38,7 @@ DDD ANALYZE-PRESERVE-IMPROVE, M1~M5 완료(M4는 M1/M2에 이미 포함된 회�
 
 run_status: complete
 run_complete_at: "2026-07-27"
-run_commit_sha: "pending-backfill-435311c"
+run_commit_sha: "5ee07733a9ad8eb5221d5c806f6202005541d98f"
 ac_pass_count: 9
 ac_fail_count: 0
 preserve_list_post_run_count: 4
