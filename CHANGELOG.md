@@ -4,6 +4,61 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Feature — SPEC-AI-086: 스캔 유니버스 커버리지 확장 — 진단 우선 + 소스 풀/상한 유연화 (측정 계층 한정) (2026-07-27)
+
+**목적**: 2026-07-23 공식 평가 기준 실제 급등 종목의 87%(129/148)가 스캔 유니버스(150) 밖에
+있는 구조적 커버리지 천장에 대응. read-only 코드 검증으로 `build_scan_universe`가 탐지 입력이
+아닌 **측정 전용 그림자 유니버스**임을 확인 — 상한 상향이 recall을 올리지 않는다는 사실을
+정직하게 전제로 삼아, 본 SPEC은 **측정 계층(커버리지 지표) 확장 + 진단 관측성에 한정**하고
+유니버스→탐지 배선(진짜 recall 레버)은 별도 후속 SPEC으로 분리(Exclusion 1).
+
+**핵심 변경 (REQ-001~008, 전량 구현)**:
+1. **REQ-001** `max_scan_universe` 경계 clamp `[50, 600]` — 오설정 시 경고 로그 후 clamp,
+   예외 없이 완료. 기본값 150은 항상 경계 이내라 clamp는 no-op(백워드 호환).
+2. **REQ-002 [HARD]** `diagnose_non_scannable_causes()` 신규 — non_scannable 실제급등 종목이
+   **truncated**(후보 풀엔 있었으나 상한 절단으로 탈락) / **absent**(어떤 풀 기준도 미충족)인지
+   구분. `SurgeActualOutcome`/`Disclosure` 기존 테이블 재사용, 신규 DB 마이그레이션 없음.
+   Pool B(거래량)는 장중 실시간 데이터 사후 재구성 불가로 재판정 대상에서 제외(정직한 한계 문서화).
+3. **REQ-003** Pool D(뉴스 언급 기반, `NewsStockRelation.relevance="direct"`) 신규 소스 풀 —
+   `pool_d_min_slots` quota 예약 슬롯으로 기존 배분 로직에 통합. **기본값 0 = 완전 비활성**
+   (소싱 쿼리 자체가 스킵됨). 조회는 유계(예약 슬롯의 5배 상한)로 제한, fail-open.
+4. **REQ-004** 장중 시간대별 동적 상한(`dynamic_scan_universe_caps`, 선택, 기본 빈 dict) —
+   미설정 시 REQ-001 단일 평탄 상한으로 폴백.
+5. **REQ-005 [HARD]** 측정 전용 비용 경계 — 기존 Pool A/B/C·gather·탐지 경로의 탐지기 실행 수/
+   소요시간/외부 조회 수/LLM 발신 호출 수 불변식 유지. Pool D의 유계·기본-OFF 소싱 조회는
+   별개의 명시 허용 비용으로 범위 분리(spec.md D5).
+6. **REQ-006 [HARD]** `classify_scannable_denominator_expansion()` 순수 함수 신규 —
+   scannable_recall 하락이 탐지 회귀가 아니라 측정 분모(유니버스) 확장에 기인함을
+   `scannable_denominator_expanded`(비영속 런타임 속성, 신규 DB 컬럼 없음)로 기계 검증 가능하게
+   표식.
+7. **REQ-007** 백워드 호환 탈출구 — 신규 설정 전부 기본값(상한 150·Pool D OFF·동적 상한 OFF)일 때
+   기존 출력과 바이트 동등.
+8. **REQ-008** 관측성 — 적용 상한/풀별 raw·scanned 카운트/신규 풀 카운트를 단일 로그 라인으로 기록,
+   신규 스키마·종목별 상세 로그 없음.
+
+**Ownership 경계 준수**: `build_scan_universe`의 배분 메커니즘만 확장 — 탐지기 본체/앙상블 가중치/
+적응형 임계/발신 게이팅/매매(SPEC-AI-043 예측기록모드)는 무변경. Pool A/B/C 소싱 로직(SPEC-AI-073/
+074/078/065) 무변경. `_min_ratio`(2.0) 변경 없음. `existing_codes` 병합 필터 pre-existing 버그는
+SPEC-AI-076 Exclusion 10과 동일하게 의도적으로 미수정 유지.
+
+**테스트**: 신규 `test_spec_ai_086.py`(746줄, 24 tests) 단독 24/24 PASS. 전체 백엔드 회귀 스위트
+**2094 passed, 4 skipped, 3 xpassed** — 회귀 없음. `ruff check app/` clean.
+
+**예측 기록 모드 유지 — 매매 영향 없음**: 본 SPEC은 측정 계층 한정(coverage 지표 개선 목적) —
+발신 시그널 수/매수 게이팅/실제 탐지 도달 범위는 diff 0. `pool_d_min_slots=0`·
+`dynamic_scan_universe_caps={}`(둘 다 기본값)에서 레거시 동작과 완전 동일.
+
+**배포 상태**: 커밋 완료(main direct push, Route A Hybrid Trunk), CI/CD 자동 배포 대상.
+
+**영향 파일**: `backend/app/services/surge_detector.py`(build_scan_universe 배분/진단/Pool D),
+`backend/app/services/surge_evaluation_service.py`(diagnose_non_scannable_causes,
+classify_scannable_denominator_expansion), `backend/app/routers/surge_trading.py`,
+`backend/app/services/scheduler.py`(prior_scannable_metrics 배선),
+`backend/app/surge_config/{surge_detection.yaml,surge_settings.py}`(신규 설정 키),
+`backend/tests/{test_spec_ai_086.py(신규),test_spec_ai_065.py}`
+
+---
+
 ### Fix — SPEC-AI-082: 급등 후보 수집 글로벌 타임아웃 오폐기 교정 (2026-07-20)
 
 #### `b2e6cbc` — 타임아웃 상수 승격 및 값 상향 (300s → 1200s)

@@ -835,17 +835,57 @@ def _run_surge_verify_predictions():
         except Exception as _pce:
             logger.warning("[급등평가] pool_counts 조회 실패 (0으로 기록됨): %s", _pce)
 
-        evaluation = evaluate_surge_predictions(db, today, pool_counts=pool_counts)
+        # SPEC-AI-086 REQ-AI086-006: 직전 평가 레코드의 scannable_actual_count/
+        # scan_universe_size를 조회하여 scannable_denominator_expanded 판정에 전달한다.
+        # 레코드가 없으면(fail-open) None을 넘겨 evaluate_surge_predictions가 계산을
+        # 건너뛰고(REQ-AI086-007 기존 동작과 동일) 속성만 None으로 남긴다.
+        prior_scannable_metrics = None
+        try:
+            from app.models.surge_prediction_evaluation import (
+                SurgePredictionEvaluation as _SPE,
+            )
+
+            _prior_eval = (
+                db.query(_SPE)
+                .filter(_SPE.evaluation_date < today)
+                .order_by(_SPE.evaluation_date.desc())
+                .first()
+            )
+            if _prior_eval is not None:
+                prior_scannable_metrics = {
+                    "scannable_actual_count": _prior_eval.scannable_actual_count or 0,
+                    "scan_universe_size": _prior_eval.scan_universe_size or 0,
+                }
+        except Exception as _pme:
+            logger.warning("[급등평가] prior_scannable_metrics 조회 실패 (무시): %s", _pme)
+
+        evaluation = evaluate_surge_predictions(
+            db, today, pool_counts=pool_counts, prior_scannable_metrics=prior_scannable_metrics
+        )
         logger.info(
-            "surge 예측 평가 완료: precision=%.3f, recall=%.3f, f1=%.3f",
+            "surge 예측 평가 완료: precision=%.3f, recall=%.3f, f1=%.3f, "
+            "scannable_denominator_expanded=%s",
             evaluation.precision or 0.0,
             evaluation.recall or 0.0,
             evaluation.f1_score or 0.0,
+            getattr(evaluation, "scannable_denominator_expanded", None),
         )
 
         # SPEC-AI-061 REQ-AI061-B01: 핵심 평가 결과(precision/recall/f1)를 FN 분석 블록 진입 전에
         # 즉시 커밋하여 이후 선택적 보강 블록에서 SSL 오류/쿼리 실패가 발생해도 결과를 보존한다.
         db.commit()
+
+        # SPEC-AI-086 REQ-AI086-002: non_scannable 실제급등주 원인 진단(truncated/absent)을
+        # 실제로 실행한다 — 핵심 평가 결과(위 commit)와 격리된 별도 블록으로, 실패해도
+        # precision/recall/f1/scannable_denominator_expanded 결과는 보존된다. 진단 자체는
+        # 함수 내부에서 요약 로그 1줄을 남긴다(REQ-AI086-008과 별개 로그, evaluate 시점 데이터
+        # 부재로 단일 로그 라인 통합 불가 — plan.md 실용적 분리 결정).
+        try:
+            from app.services.surge_evaluation_service import diagnose_non_scannable_causes
+
+            diagnose_non_scannable_causes(db, today)
+        except Exception as _dge:
+            logger.warning("[급등평가] non_scannable 원인 진단 실패 (무시): %s", _dge)
 
         # FN 분석 블록 — 예외 격리 (precision/recall/f1 결과는 위 commit으로 이미 보존)
         # SPEC-AI-061 REQ-AI061-B02

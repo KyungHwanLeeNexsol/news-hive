@@ -549,6 +549,19 @@ class SurgeDetectionConfig(BaseModel):
     # @MX:SPEC: SPEC-AI-078 REQ-AI078-005
     pool_a_rank_by_impact: bool = True
 
+    # SPEC-AI-086 REQ-AI086-003: Pool D(뉴스 언급 기반) 최소 슬롯 예약(quota floor).
+    # SPEC-AI-076 pool_b/c_min_slots quota 패턴을 확장한다. 기본값 0 = 완전 비활성
+    # (build_scan_universe의 Pool D 소싱 쿼리 자체가 스킵됨 — REQ-AI086-007 백워드 호환).
+    # @MX:NOTE: [AUTO] SPEC-AI-086 REQ-AI086-003 — Pool D 최소 슬롯 floor(기본 OFF)
+    # @MX:SPEC: SPEC-AI-086 REQ-AI086-003
+    pool_d_min_slots: int = 0
+    # SPEC-AI-086 REQ-AI086-004: 장중 시간대별 동적 스캔 상한(선택, 기본 비활성).
+    # 키는 시간대 라벨(surge_detector._DYNAMIC_CAP_TIME_BINS와 매칭), 값은 해당 시간대 적용
+    # 상한. 빈 dict(기본값)이면 REQ-AI086-001의 단일 평탄 상한(max_scan_universe)으로 폴백한다.
+    # @MX:NOTE: [AUTO] SPEC-AI-086 REQ-AI086-004 — 시간대별 동적 상한 맵(기본 비활성)
+    # @MX:SPEC: SPEC-AI-086 REQ-AI086-004
+    dynamic_scan_universe_caps: dict[str, int] = Field(default_factory=dict)
+
     # @MX:ANCHOR: [AUTO] 앙상블 가중치 합산 검증 — 8개 탐지기 가중치 합산 반드시 1.0
     # @MX:REASON: 가중치 합산 != 1.0 이면 앙상블 스코어 범위가 0~1을 벗어나 시그널 임계값 판정이 왜곡됨
     @model_validator(mode="after")

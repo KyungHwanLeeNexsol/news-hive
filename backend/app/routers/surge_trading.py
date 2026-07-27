@@ -566,7 +566,10 @@ def re_evaluate_surge_predictions(
     Args:
         date_str: 재평가할 날짜 (YYYY-MM-DD 형식, T 당일 기준)
     """
-    from app.services.surge_evaluation_service import evaluate_surge_predictions
+    from app.services.surge_evaluation_service import (
+        evaluate_surge_predictions,
+        diagnose_non_scannable_causes,
+    )
 
     try:
         eval_date = date.fromisoformat(date_str)
@@ -574,7 +577,40 @@ def re_evaluate_surge_predictions(
         raise HTTPException(status_code=400, detail=f"날짜 형식 오류: {date_str}")
 
     try:
-        evaluation = evaluate_surge_predictions(db, eval_date)
+        # SPEC-AI-086 REQ-AI086-006: 직전 평가 레코드 기준 scannable_denominator_expanded
+        # 판정용 지표 조회(fail-open, 없으면 None).
+        prior_scannable_metrics = None
+        try:
+            from app.models.surge_prediction_evaluation import (
+                SurgePredictionEvaluation as _SPE,
+            )
+
+            _prior_eval = (
+                db.query(_SPE)
+                .filter(_SPE.evaluation_date < eval_date)
+                .order_by(_SPE.evaluation_date.desc())
+                .first()
+            )
+            if _prior_eval is not None:
+                prior_scannable_metrics = {
+                    "scannable_actual_count": _prior_eval.scannable_actual_count or 0,
+                    "scan_universe_size": _prior_eval.scan_universe_size or 0,
+                }
+        except Exception as _pme:
+            logger.warning("[급등재평가] prior_scannable_metrics 조회 실패 (무시): %s", _pme)
+
+        evaluation = evaluate_surge_predictions(
+            db, eval_date, prior_scannable_metrics=prior_scannable_metrics
+        )
+
+        # SPEC-AI-086 REQ-AI086-002: non_scannable 원인 진단(truncated/absent) 실행.
+        # 실패해도 위 핵심 평가 결과는 이미 evaluate_surge_predictions 내부에서 커밋되어 보존됨.
+        non_scannable_diagnosis: dict[str, str] = {}
+        try:
+            non_scannable_diagnosis = diagnose_non_scannable_causes(db, eval_date)
+        except Exception as _dge:
+            logger.warning("[급등재평가] non_scannable 원인 진단 실패 (무시): %s", _dge)
+
         return {
             "evaluation_date": str(evaluation.evaluation_date),
             "predicted_count": evaluation.predicted_count,
@@ -585,6 +621,10 @@ def re_evaluate_surge_predictions(
             "precision": evaluation.precision,
             "recall": evaluation.recall,
             "f1_score": evaluation.f1_score,
+            "scannable_denominator_expanded": getattr(
+                evaluation, "scannable_denominator_expanded", None
+            ),
+            "non_scannable_diagnosis": non_scannable_diagnosis,
         }
     except Exception as e:
         logger.error("급등 예측 재평가 실패: %s", e)

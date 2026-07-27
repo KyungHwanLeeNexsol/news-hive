@@ -239,6 +239,13 @@ surge_detection:
   # SPEC-AI-078 REQ-AI078-005: Pool A 후보를 impact_score 내림차순(NULL 최후순위)으로
   # 정렬할지 여부 — false면 레거시 DB-순서(무순위) 거동으로 복귀(백워드 호환).
   pool_a_rank_by_impact: true
+  # SPEC-AI-086 REQ-AI086-003: Pool D(뉴스 언급 기반) 최소 슬롯 예약(quota floor).
+  # 0(기본)이면 완전 비활성 — Pool D 소싱 쿼리 자체가 스킵된다(백워드 호환).
+  pool_d_min_slots: 0
+  # SPEC-AI-086 REQ-AI086-004: 장중 시간대별 동적 스캔 상한(선택, 기본 비활성).
+  # 예: {premarket_early: 200, close_final: 250} — 빈 dict(기본)면 max_scan_universe
+  # 단일 평탄 상한으로 폴백한다.
+  dynamic_scan_universe_caps: {}
   # SPEC-AI-066 REQ-AI066-001/006: 촉매 확신도 기반 조건부 완화 설정
   # enabled=false이면 REQ-002/003 완화 전면 비활성 → SPEC-AI-030/028 레거시 동작 복원
   catalyst_conviction:

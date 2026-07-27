@@ -970,17 +970,23 @@ class TestImpactRankedPoolATruncation:
         )
 
     def test_null_impact_disclosures_deprioritized_not_excluded(self, db: Session):
-        """REQ-AI078-002: NULL(미스코어링) 공시는 최우선이 아닌 최후순위로 밀리되 배제되지 않는다."""
-        # NULL 15건을 먼저 삽입(DB 반환 순서상 앞쪽) + 낮은 impact 1건을 맨 뒤에 삽입
-        null_codes = [(f"6{i:05d}", None) for i in range(15)]
+        """REQ-AI078-002: NULL(미스코어링) 공시는 최우선이 아닌 최후순위로 밀리되 배제되지 않는다.
+
+        SPEC-AI-086 REQ-AI086-001 노트: max_scan_universe에 경계 [50,600] clamp가
+        도입되어 더 이상 1처럼 하한 미만 값으로 좁힐 수 없다(자동으로 50으로 clamp됨).
+        따라서 하한 경계값(50)을 그대로 실질 상한으로 사용하고, 후보 수를 51건(NULL 50 +
+        저impact 1)으로 늘려 "정확히 1건만 절단되는" 동일한 긴장도의 시나리오를 재현한다.
+        """
+        # NULL 50건을 먼저 삽입(DB 반환 순서상 앞쪽) + 낮은 impact 1건을 맨 뒤에 삽입
+        null_codes = [(f"6{i:05d}", None) for i in range(50)]
         low_impact_code = "060001"
         codes_and_impacts = null_codes + [(low_impact_code, 1.0)]
         _make_pool_a_disclosures_with_impact(db, codes_and_impacts)
 
-        # 실질 슬롯을 1개만 남기도록 max_scan_universe=1로 강하게 좁힌다 — 16건 중 단 1건만
-        # 잔존 가능하므로 NULLS FIRST 역효과가 있으면 즉시 드러난다.
+        # 51건 중 정확히 50건(하한 경계값)만 잔존하도록 좁힌다 — NULLS FIRST 역효과가
+        # 있으면 저impact 종목이 절단되어 즉시 드러난다.
         cfg = get_surge_config().model_copy(
-            update={"max_scan_universe": 1, "pool_b_min_slots": 0, "pool_c_min_slots": 0}
+            update={"max_scan_universe": 50, "pool_b_min_slots": 0, "pool_c_min_slots": 0}
         )
 
         with patch(
@@ -991,8 +997,8 @@ class TestImpactRankedPoolATruncation:
                 db, cfg, existing_codes=set()
             )
 
-        assert len(final_universe) == 1
-        # NULLS FIRST 역효과가 없어야 한다: low_impact_code(1.0)가 NULL 15건보다 우선 잔존
+        assert len(final_universe) == 50
+        # NULLS FIRST 역효과가 없어야 한다: low_impact_code(1.0)가 NULL 50건보다 우선 잔존
         assert low_impact_code in final_universe, (
             "NULL 공시가 스코어링된 공시(impact=1.0)보다 우선 잔존하면 NULLS FIRST 역효과 "
             "(REQ-AI078-002 위반)"

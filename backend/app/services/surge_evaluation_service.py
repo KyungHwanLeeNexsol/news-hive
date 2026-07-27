@@ -524,10 +524,116 @@ def _is_same_day_event_horizon_signal(surge_metadata_json: str | None) -> bool:
     return metadata.get("horizon") == "same_day"
 
 
+def diagnose_non_scannable_causes(
+    db: Session,
+    trading_date: date,
+) -> dict[str, str]:
+    # @MX:NOTE: [AUTO] SPEC-AI-086 REQ-AI086-002 — non_scannable 실제급등주 원인 진단
+    # (truncated vs absent). 신규 마이그레이션 없이 기존 테이블(SurgeActualOutcome,
+    # Disclosure)만 재사용한다. Pool B(거래량200%+)는 장중 실시간 거래량이 사후 재구성
+    # 불가능하므로 raw 재판정 대상에서 제외한다(plan.md R-1, 정직한 한계 문서화).
+    # @MX:SPEC: SPEC-AI-086 REQ-AI086-002
+    """trading_date(T)의 non_scannable 실제급등주를 truncated/absent로 분류한다.
+
+    T-1 시점 Pool A(DART 공시)/Pool C(당일 등락률 5%+) raw 후보 자격을 재판정하여,
+    자격이 있었으나(=상한/quota 절단으로 탈락) truncated, 자격 자체가 없었으면 absent로
+    분류한다.
+
+    Args:
+        db: SQLAlchemy 동기 세션
+        trading_date: 평가 기준 날짜 (T당일, SurgeActualOutcome.trading_date)
+
+    Returns:
+        {stock_code: "truncated" | "absent"} — non_scannable 종목이 없으면 빈 dict.
+    """
+    prev_business_day = _get_prev_business_day(trading_date)
+    prev_day_str = prev_business_day.strftime("%Y%m%d")
+
+    non_scannable_rows = (
+        db.query(SurgeActualOutcome.stock_code)
+        .filter(
+            SurgeActualOutcome.trading_date == trading_date,
+            SurgeActualOutcome.was_surge.is_(True),
+            SurgeActualOutcome.surge_type == "non_scannable",
+        )
+        .all()
+    )
+    non_scannable_codes = [r.stock_code for r in non_scannable_rows]
+    if not non_scannable_codes:
+        return {}
+
+    result: dict[str, str] = {}
+    try:
+        pool_a_raw_codes = {
+            r.stock_code
+            for r in db.query(Disclosure.stock_code)
+            .filter(
+                Disclosure.rcept_dt == prev_day_str,
+                Disclosure.stock_code.in_(non_scannable_codes),
+            )
+            .all()
+        }
+        pool_c_raw_codes = {
+            r.stock_code
+            for r in db.query(SurgeActualOutcome.stock_code)
+            .filter(
+                SurgeActualOutcome.trading_date == prev_business_day,
+                SurgeActualOutcome.stock_code.in_(non_scannable_codes),
+                SurgeActualOutcome.change_rate.isnot(None),
+                SurgeActualOutcome.change_rate >= 5.0,
+            )
+            .all()
+        }
+        truncated_bound_codes = pool_a_raw_codes | pool_c_raw_codes
+
+        for code in non_scannable_codes:
+            result[code] = "truncated" if code in truncated_bound_codes else "absent"
+    except Exception as e:
+        logger.warning("[급등평가] non_scannable 원인 진단 실패 (무시): %s", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return {}
+
+    truncated_count = sum(1 for v in result.values() if v == "truncated")
+    absent_count = len(result) - truncated_count
+    logger.info(
+        "[급등평가] non_scannable 원인 진단 완료 — date=%s truncated=%d absent=%d "
+        "(Pool B는 사후 재구성 불가로 재판정 대상 제외)",
+        trading_date, truncated_count, absent_count,
+    )
+    return result
+
+
+def classify_scannable_denominator_expansion(
+    *,
+    prev_scannable_actual_count: int,
+    prev_scan_universe_size: int,
+    curr_scannable_actual_count: int,
+    curr_scan_universe_size: int,
+) -> bool:
+    # @MX:NOTE: [AUTO] SPEC-AI-086 REQ-AI086-006 — scannable_recall 하락이 탐지 회귀가
+    # 아니라 측정 분모(스캔 유니버스) 확장에 기인했음을 기계적으로 구분하기 위한 명명
+    # 토큰. 순수 함수 — DB 접근 없음, 테스트에서 직접 assert 가능(D6 검증 기준).
+    # @MX:SPEC: SPEC-AI-086 REQ-AI086-006
+    """분모(스캔 유니버스) 확장 여부를 판정한다.
+
+    True이면 이번 평가의 scan_universe_size(분모)가 이전 대비 확장되었고
+    scannable_actual_count(실제급등 교집합)도 함께 늘었음을 의미한다 — 즉 "더 많이
+    재는" 확장이지 탐지 실패가 아니다.
+    """
+    return (
+        curr_scan_universe_size > prev_scan_universe_size
+        and curr_scannable_actual_count >= prev_scannable_actual_count
+    )
+
+
 def evaluate_surge_predictions(
     db: Session,
     trading_date: date,
     pool_counts: dict[str, int] | None = None,
+    prior_scannable_metrics: dict[str, int] | None = None,
 ) -> SurgePredictionEvaluation:
     # @MX:NOTE: [AUTO] SPEC-AI-041 — T-1 급등 시그널 적중 평가. surge_metadata IS NOT NULL 필터로 시그널 식별
     # @MX:SPEC: SPEC-AI-041 REQ-AI041-002
@@ -555,9 +661,15 @@ def evaluate_surge_predictions(
         trading_date: 평가 기준 날짜 (T당일)
         pool_counts: SPEC-AI-065 REQ-5 — 스캔 유니버스 pool 집계
                      {"pool_a": int, "pool_b": int, "pool_c": int, "scan_universe_size": int}
+        prior_scannable_metrics: SPEC-AI-086 REQ-AI086-006(선택) — 이전 평가의
+                     {"scannable_actual_count": int, "scan_universe_size": int}. 제공되면
+                     scannable_denominator_expanded를 계산해 반환 객체의 동명 속성(비영속,
+                     신규 컬럼 없음)에 설정하고 로그로 남긴다. 미제공(기본, 기존 호출부
+                     전부 해당) 시 속성은 None — 기존 동작과 완전히 동일(REQ-AI086-007).
 
     Returns:
-        저장된 SurgePredictionEvaluation 인스턴스
+        저장된 SurgePredictionEvaluation 인스턴스 (scannable_denominator_expanded 속성은
+        비영속 — DB 컬럼이 아니라 이 호출 결과에만 존재하는 런타임 속성)
     """
     # 1. T-1 영업일 산출
     prev_business_day = _get_prev_business_day(trading_date)
@@ -806,6 +918,32 @@ def evaluate_surge_predictions(
             db.rollback()
         except Exception:
             pass
+
+    # 8. SPEC-AI-086 REQ-AI086-006: scannable_denominator_expanded 명명 토큰(선택, 비영속).
+    # prior_scannable_metrics가 제공된 경우에만 계산 — 미제공 시 None(REQ-AI086-007 백워드
+    # 호환, 신규 DB 컬럼 없음 — 이 호출 결과 객체에만 존재하는 런타임 속성).
+    evaluation.scannable_denominator_expanded = None
+    if prior_scannable_metrics is not None:
+        try:
+            evaluation.scannable_denominator_expanded = classify_scannable_denominator_expansion(
+                prev_scannable_actual_count=int(
+                    prior_scannable_metrics.get("scannable_actual_count", 0)
+                ),
+                prev_scan_universe_size=int(
+                    prior_scannable_metrics.get("scan_universe_size", 0)
+                ),
+                curr_scannable_actual_count=scannable_actual_count,
+                curr_scan_universe_size=len(universe_set),
+            )
+            logger.info(
+                "[급등평가] scannable_denominator_expanded=%s (분모 %d→%d, scannable_actual %d→%d)",
+                evaluation.scannable_denominator_expanded,
+                prior_scannable_metrics.get("scan_universe_size", 0), len(universe_set),
+                prior_scannable_metrics.get("scannable_actual_count", 0), scannable_actual_count,
+            )
+        except Exception as _de:
+            logger.warning("[급등평가] scannable_denominator_expanded 계산 실패 (무시): %s", _de)
+            evaluation.scannable_denominator_expanded = None
 
     return evaluation
 
