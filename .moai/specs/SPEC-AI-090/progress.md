@@ -63,7 +63,7 @@ SPEC은 유효하게 완료된다.
 
 run_status: complete (M1 범위 한정 — M2/M3+는 본 SPEC 자율 실행 범위 밖)
 run_complete_at: "2026-07-28"
-run_commit_sha: "pending-backfill-m1"
+run_commit_sha: "22cb6622d1e193a9b0ed37d90a8efd8eef523fb1"
 ac_pass_count: 5 (1건 PASS-WITH-DEBT 포함 — AC-090-003, 표본 부족을 정직하게 기록한 것이 사유)
 ac_fail_count: 0
 preserve_list_post_run_count: 5 (surge_detector.py, surge_settings.py, surge_detection.yaml, surge_contribution_service.py, surge_detector_contribution 테이블 upsert 경로 — 전부 무변경)
