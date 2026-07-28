@@ -78,7 +78,7 @@ m1_to_mN_commit_strategy: "M1 단일 통합 커밋(구현+테스트+리포트) +
 
 sync_status: complete
 sync_complete_at: "2026-07-28"
-sync_commit_sha: "pending-backfill-SPEC-AI-090-sync"
+sync_commit_sha: "cf2928e668af17cfe812e04280cc44a592b87cc8"
 
 **M2 결정 게이트**: orchestrator가 AskUserQuestion 라운드을 통해 사용자로부터
 "탐지기별 분리 처리" 결정을 승인받았다 — near_limit_up_carry는 기준 B(미반전)를
