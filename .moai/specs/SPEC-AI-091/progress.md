@@ -87,7 +87,7 @@ DDD ANALYZE-PRESERVE-IMPROVE. M1(순환 고리 차단)+M2(매칭 알고리즘 �
 
 run_status: complete (M1+M2+M3 단일 통합 커밋 — M4 검증은 §E.2 AC 매트릭스로 대체 충족, M5 문서/CHANGELOG는 sync-phase 위임)
 run_complete_at: "2026-07-28"
-run_commit_sha: "pending-backfill-spec-ai-091-m1-m3"
+run_commit_sha: "bc360b0a37536fe1202ed31abd8b564359d9b63f"
 ac_pass_count: 11 (Must-Pass 8건 + Should-Pass 3건 전부 PASS — AC-AI091-009/010은 테스트 픽스처 DB 검증 기준 PASS, 프로덕션 실측은 별도 승인 필요 사항으로 잔여 위험에 명시)
 ac_fail_count: 0
 preserve_list_post_run_count: 3 (ThemeNewsCarryConfig.enabled=False, detect_theme_news_cluster/theme_cluster 로직, keyword_backfill 스케줄 잡+refresh_stock_keywords 크롤 훅 진입점 — 전부 무변경 확인)
