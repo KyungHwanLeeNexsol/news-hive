@@ -399,14 +399,21 @@ class TestResolveDescriptionRelations:
 
 
 class TestDescriptionRelationMatchingGating:
-    """REQ-AI085-006: 설정 게이팅 기본값 확인(단계적 롤아웃)."""
+    """REQ-AI085-006: 설정 게이팅 기본값 확인 (2026-07-28 프로덕션 활성화, 롤백=enabled False 복귀)."""
 
-    def test_default_config_is_disabled(self) -> None:
+    def test_default_config_is_enabled(self) -> None:
         from app.surge_config.surge_settings import DescriptionRelationMatchingConfig
 
         config = DescriptionRelationMatchingConfig()
-        assert config.enabled is False
+        assert config.enabled is True
         assert config.max_relations_per_article > 0
+
+    def test_explicit_disable_still_supported(self) -> None:
+        """롤백 경로: enabled=False로 명시 설정하면 기존 게이팅 동작이 그대로 유지된다."""
+        from app.surge_config.surge_settings import DescriptionRelationMatchingConfig
+
+        config = DescriptionRelationMatchingConfig(enabled=False)
+        assert config.enabled is False
 
 
 # ---------------------------------------------------------------------------
@@ -725,12 +732,18 @@ class TestThemeCoMentionCounts:
 
 
 class TestUrgencyRecalibrationGating:
-    """REQ-AI084-008: 설정 게이팅 기본값 확인(단계적 롤아웃)."""
+    """REQ-AI084-008: 설정 게이팅 기본값 확인 (2026-07-28 프로덕션 활성화, 롤백=enabled False 복귀)."""
 
-    def test_default_config_is_disabled(self) -> None:
+    def test_default_config_is_enabled(self) -> None:
         from app.surge_config.surge_settings import NewsUrgencyRecalibrationConfig
 
-        assert NewsUrgencyRecalibrationConfig().enabled is False
+        assert NewsUrgencyRecalibrationConfig().enabled is True
+
+    def test_explicit_disable_still_supported(self) -> None:
+        """롤백 경로: enabled=False로 명시 설정하면 기존 게이팅 동작이 그대로 유지된다."""
+        from app.surge_config.surge_settings import NewsUrgencyRecalibrationConfig
+
+        assert NewsUrgencyRecalibrationConfig(enabled=False).enabled is False
 
 
 # ---------------------------------------------------------------------------

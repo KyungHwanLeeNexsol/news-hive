@@ -227,15 +227,19 @@ def _mock_price_by_code(prices: dict[str, float]):
 # 마스터 스위치 (REQ-AI084-015)
 # ---------------------------------------------------------------------------
 
-def test_disabled_by_default_returns_empty(db):
-    """기본 설정(enabled=False)이면 즉시 빈 리스트 반환 — 레거시 파이프라인 완전 보존."""
+def test_disabled_returns_empty(db):
+    """enabled=False로 명시 설정하면 즉시 빈 리스트 반환 — 레거시 파이프라인 완전 보존.
+
+    2026-07-28 프로덕션 활성화(기본값 True 전환)로 롤백 경로(enabled=False)를
+    명시적으로 구성해 테스트한다 — 이전에는 바 생성자 기본값에 의존했다.
+    """
     from app.services.surge_detector import detect_theme_news_carry
     from app.surge_config.surge_settings import ThemeNewsCarryConfig
 
     _make_stock(db, "000010", "앵커", keywords=["로봇"])
     _make_stock(db, "000020", "멤버", keywords=["로봇"])
 
-    cfg = ThemeNewsCarryConfig()  # enabled=False 기본값
+    cfg = ThemeNewsCarryConfig(enabled=False)
     assert cfg.enabled is False
 
     with patch(

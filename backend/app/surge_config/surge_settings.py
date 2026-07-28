@@ -721,9 +721,10 @@ class ThemeNewsCarryConfig(BaseModel):
     단계적 롤아웃 — SPEC-AI-079 관례 계승).
     """
 
-    # @MX:NOTE: [AUTO] SPEC-AI-084 REQ-AI084-015 — 마스터 스위치. 기본값 false(레거시 완전 보존)
+    # @MX:NOTE: [AUTO] SPEC-AI-084 REQ-AI084-015 — 마스터 스위치. 2026-07-28 프로덕션 활성화
+    # (M1-M5 구현 완료 + 무회귀 검증 후 사용자 승인, 롤백=false 복귀).
     # @MX:SPEC: SPEC-AI-084 REQ-AI084-015
-    enabled: bool = False
+    enabled: bool = True
     # 앵커 판정 최소 등락률(%) — ThemeGroupCarryConfig.anchor_surge_min_pct와 동일 기본값
     anchor_surge_min_pct: float = 5.0
     # REQ-AI084-011: 테마 활성 확인 게이트 — 복수 멤버 동반 이동 임계(최소 앵커 수)
@@ -744,9 +745,10 @@ class NewsUrgencyRecalibrationConfig(BaseModel):
     (REQ-AI084-008, 롤백=플래그 복귀로 완전 레거시).
     """
 
-    # @MX:NOTE: [AUTO] SPEC-AI-084 REQ-AI084-008 — 마스터 스위치. 기본값 false(레거시 완전 보존)
+    # @MX:NOTE: [AUTO] SPEC-AI-084 REQ-AI084-008 — 마스터 스위치. 2026-07-28 프로덕션 활성화
+    # (M1-M5 구현 완료 + 무회귀 검증 후 사용자 승인, 롤백=false 복귀).
     # @MX:SPEC: SPEC-AI-084 REQ-AI084-008
-    enabled: bool = False
+    enabled: bool = True
 
 
 class DescriptionRelationMatchingConfig(BaseModel):
@@ -757,9 +759,10 @@ class DescriptionRelationMatchingConfig(BaseModel):
     생성과 완전히 동일하다(REQ-AI085-006, 롤백=플래그 복귀로 완전 레거시).
     """
 
-    # @MX:NOTE: [AUTO] SPEC-AI-085 REQ-AI085-006 — 마스터 스위치. 기본값 false(레거시 완전 보존)
+    # @MX:NOTE: [AUTO] SPEC-AI-085 REQ-AI085-006 — 마스터 스위치. 2026-07-28 프로덕션 활성화
+    # (구현 완료 + 무회귀 검증 후 사용자 승인, 롤백=false 복귀).
     # @MX:SPEC: SPEC-AI-085 REQ-AI085-006
-    enabled: bool = False
+    enabled: bool = True
     # REQ-AI085-003: 기사당 설명 기반 신규 관계 생성 상한 — 시황/묶음 기사 남발 방지.
     # @MX:NOTE: [AUTO] SPEC-AI-085 REQ-AI085-003 — 값은 배포 전 보수적 기본치(실측 캘리브레이션
     # 아님, plan.md DP-1). 배포 후 관측(REQ-AI085-009) 결과에 따라 조정 대상.
