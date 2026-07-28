@@ -115,7 +115,7 @@ git rev-parse HEAD
 cd backend && uv run python -c "from app.services.surge_detector import detect_momentum_continuation, detect_near_limit_up_carries; from app.services.surge_contribution_service import evaluate_detector_contribution; print('OK')"
 
 # 3. 기존 기여도/평가 테스트 베이스라인
-cd backend && uv run pytest tests/test_surge_contribution_service.py tests/test_near_limit_up_carry.py tests/test_surge_evaluation_service.py -q -m "not slow"
+cd backend && uv run pytest tests/test_spec_ai_070.py tests/test_near_limit_up_carry.py tests/test_surge_evaluation_service.py -q -m "not slow"
 
 # 4. 앙상블 가중치 합=1.0 불변식 회귀 확인 (SPEC-AI-090이 건드리지 않았음을 재확인)
 cd backend && uv run pytest tests/test_surge_detector.py -q -m "not slow" -k "ensemble or weight"
