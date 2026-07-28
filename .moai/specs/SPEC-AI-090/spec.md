@@ -2,7 +2,7 @@
 id: SPEC-AI-090
 title: "연속성 계열 탐지기 평가 기준 재검토 측정 스파이크 (Continuation-Detector Evaluation-Bar Recalibration Measurement Spike)"
 version: "0.1.1"
-status: draft
+status: in-progress
 created: 2026-07-28
 updated: 2026-07-28
 author: Nexsol
