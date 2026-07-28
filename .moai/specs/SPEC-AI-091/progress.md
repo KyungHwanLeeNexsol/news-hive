@@ -145,3 +145,26 @@ CHANGELOG.md `[Unreleased]` 섹션에 SPEC-AI-091 항목 추가(목적/핵심변
 frontmatter status 전이: spec.md `status: in-progress` → `completed`(단일 sync 커밋,
 3-phase close). plan.md/acceptance.md는 frontmatter 없음(Tier M — spec.md만 frontmatter
 보유, `.moai/development/spec-frontmatter-schema.md` 관례에 따름).
+
+## Post-Close Addendum: sync-audit F2/F3 Debt 해소 (2026-07-28)
+
+`.moai/reports/sync-audit/SPEC-AI-091-review-1.md`(PASS-WITH-DEBT, 82/100)의 non-blocking
+Craft 디펙트 2건을 post-close 후속 작업으로 해소:
+
+- **F2**(Medium) — `backend/scripts/remediate_keyword_tagging.py`의 실제 CLI 진입점
+  `main()`/`_print_report()`가 0% 커버리지였던 문제. `main()`을 `sys.argv`/`SessionLocal`
+  monkeypatch로 직접 호출하는 테스트 2건(기본 dry-run 무변경, `--execute` 실제 커밋)과
+  `_print_report()`의 dry-run/execute 양쪽 출력 형식을 검증하는 테스트 2건을 추가. 스크립트
+  실제 동작은 무변경(테스트 전용 추가) — 파일 커버리지 68% → 98%(라인 58/229만 잔여 미커버,
+  각각 `_is_before_cutoff`의 None 분기와 `if __name__ == "__main__":` 진입 라인으로 F2 범위
+  밖).
+- **F3**(Low) — 기존 `test_dry_run_reports_diagnosis_without_execute_flag`가 무관한
+  throwaway `argparse.ArgumentParser()`만 검증하던 문제. 실제 `main()` 호출로 재작성해
+  진짜 dry-run 기본값 배선을 검증하도록 대체(삭제 아님). 회귀 탐지력 확인: `--execute`의
+  `default=True`로 일시 변경 후 해당 테스트가 실패함을 확인(`assert '[DRY RUN]' in ...`
+  실패), 즉시 원복 후 `git diff`로 스크립트 파일 순변경 0 확인.
+
+검증: `backend/tests/test_remediate_keyword_tagging.py` 8→11 tests, 전체 `pytest tests/
+-m "not slow"` 2202→2205 passed(4 skipped, 3 xpassed 불변, 회귀 없음). `ruff check` 대상
+파일 전부 clean. 변경 파일: `backend/tests/test_remediate_keyword_tagging.py`만(서비스 코드
+무변경). 커밋: `test(SPEC-AI-091): sync-audit F2/F3 커버리지 보강`.

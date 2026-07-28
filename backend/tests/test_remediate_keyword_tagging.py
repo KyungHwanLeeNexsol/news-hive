@@ -8,6 +8,7 @@ conftest.py의 공유 ``db`` 픽스처(전체 ORM 스키마 create_all)를 재�
 
 from __future__ import annotations
 
+import sys
 from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
@@ -72,16 +73,62 @@ def test_dry_run_default_makes_no_db_changes(db: Session) -> None:
     assert report["after"] == report["before"]
 
 
-def test_dry_run_reports_diagnosis_without_execute_flag() -> None:
-    """스크립트 CLI가 --execute 없이 실행되면 진단만 출력한다(파서 기본값 확인)."""
-    import argparse
+def test_dry_run_reports_diagnosis_without_execute_flag(
+    db: Session, monkeypatch, capsys
+) -> None:
+    """AC-AI091-007(c) / sync-audit F3: 스크립트 CLI가 --execute 없이 실행되면 진단만
+    출력하고 DB를 전혀 변경하지 않는다 — 실제 ``main()`` 진입점(argparse 실배선)을
+    직접 호출해 검증한다.
 
-    from scripts.remediate_keyword_tagging import main  # noqa: F401 — import 성공 확인용
+    이전 버전은 무관한 throwaway ``argparse.ArgumentParser()``를 새로 만들어 stdlib
+    기본 동작만 확인했을 뿐, ``main()``이 실제로 구성하는 파서는 전혀 실행하지
+    않았다 — ``main()``의 실배선이 바뀌어도(예: 기본값이 환경변수 기반으로 바뀌거나
+    ``default=True``로 뒤집혀도) 이 테스트는 통과했을 것이다(sync-audit F3).
+    """
+    import scripts.remediate_keyword_tagging as remediate_module
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--execute", action="store_true")
-    args = parser.parse_args([])
-    assert args.execute is False
+    stock = _make_stock(
+        db, "023790", "동일스틸럭스", keywords=["로봇", "전기차", "배터리"]
+    )
+
+    monkeypatch.setattr(sys, "argv", ["remediate_keyword_tagging.py"])
+    monkeypatch.setattr(remediate_module, "SessionLocal", lambda: db)
+
+    remediate_module.main()
+
+    captured = capsys.readouterr()
+    assert "[DRY RUN]" in captured.out
+    assert "리셋 완료" not in captured.out
+
+    # main()이 db.close()를 호출하므로 동일 세션으로 재조회해 실제 DB 상태를 확인한다.
+    refetched = db.query(Stock).filter(Stock.stock_code == stock.stock_code).first()
+    assert refetched.keywords == ["로봇", "전기차", "배터리"]  # 불변 — DB 무변경
+
+
+def test_main_with_execute_flag_commits_changes_to_db(
+    db: Session, monkeypatch, capsys
+) -> None:
+    """sync-audit F2(b): ``main()``이 --execute 플래그로 실행되면 실제로 DB에 변경을
+    커밋한다(리셋이 실제로 영속화됨을 확인) — dry-run 테스트와 대비되는 반대쪽 분기."""
+    import scripts.remediate_keyword_tagging as remediate_module
+
+    stock = _make_stock(
+        db, "023790", "동일스틸럭스", keywords=["로봇", "전기차", "배터리"]
+    )
+
+    monkeypatch.setattr(sys, "argv", ["remediate_keyword_tagging.py", "--execute"])
+    monkeypatch.setattr(remediate_module, "SessionLocal", lambda: db)
+
+    remediate_module.main()
+
+    captured = capsys.readouterr()
+    assert "모드: execute" in captured.out
+    assert "리셋 완료: 1개 종목" in captured.out
+
+    # 연결된 뉴스가 없으므로 리셋 후 재백필 대상에서 제외되어 None으로 수렴한다 —
+    # 실제 알고리즘 재현이 아니라 --execute 경로가 진짜로 커밋됨을 확인하는 것이 목적.
+    refetched = db.query(Stock).filter(Stock.stock_code == stock.stock_code).first()
+    assert refetched.keywords is None
 
 
 # ---------------------------------------------------------------------------
@@ -218,3 +265,83 @@ def test_diagnose_computes_full_cap_pct_and_median(db: Session) -> None:
     assert result["full_cap_count"] == 1
     assert result["full_cap_pct"] == 50.0
     assert result["median_length"] == 6  # median(10, 2) == 6
+
+
+# ---------------------------------------------------------------------------
+# sync-audit F2(c): _print_report() 출력 형식 — 빈/비어있지 않은 결과 집합
+# ---------------------------------------------------------------------------
+
+
+def test_print_report_dry_run_output_shows_diagnosis_only(capsys) -> None:
+    """F2(c): dry-run 모드 + 태깅된 종목 0개(빈 결과 집합) — 진단만 출력하고
+    리셋/재백필 관련 문구는 전혀 출력하지 않는다."""
+    from scripts.remediate_keyword_tagging import _print_report
+
+    report = {
+        "mode": "dry-run",
+        "before": {
+            "total_stocks": 10,
+            "tagged_stocks": 0,
+            "unknown_provenance_count": 0,
+            "full_cap_count": 0,
+            "full_cap_pct": 0.0,
+            "median_length": 0.0,
+        },
+        "reset_count": 0,
+        "backfill_result": None,
+        "after": None,
+        "spot_check": None,
+    }
+
+    _print_report(report)
+
+    captured = capsys.readouterr()
+    assert "모드: dry-run" in captured.out
+    assert "태깅됨 0개" in captured.out
+    assert "[DRY RUN]" in captured.out
+    assert "리셋 완료" not in captured.out
+    assert "재백필 완료" not in captured.out
+
+
+def test_print_report_execute_output_shows_reset_backfill_and_spot_check(capsys) -> None:
+    """F2(c): execute 모드 + 비어있지 않은 결과 집합 — 리셋/재백필/스팟체크를
+    모두 출력한다."""
+    from scripts.remediate_keyword_tagging import KeywordTaggingResult, _print_report
+
+    report = {
+        "mode": "execute",
+        "before": {
+            "total_stocks": 5,
+            "tagged_stocks": 3,
+            "unknown_provenance_count": 1,
+            "full_cap_count": 1,
+            "full_cap_pct": 33.3,
+            "median_length": 4.0,
+        },
+        "reset_count": 3,
+        "backfill_result": KeywordTaggingResult(
+            stocks_scanned=5,
+            stocks_tagged=2,
+            stocks_skipped_existing=1,
+            keywords_added_total=3,
+        ),
+        "after": {
+            "total_stocks": 5,
+            "tagged_stocks": 2,
+            "unknown_provenance_count": 0,
+            "full_cap_count": 0,
+            "full_cap_pct": 0.0,
+            "median_length": 1.0,
+        },
+        "spot_check": {"023790": 1, "105560": 0, "192080": 2},
+    }
+
+    _print_report(report)
+
+    captured = capsys.readouterr()
+    assert "모드: execute" in captured.out
+    assert "리셋 완료: 3개 종목" in captured.out
+    assert "재백필 완료: 스캔 5개, 신규 태깅 2개, 기존 보존(스킵) 1개" in captured.out
+    assert "023790: 1개" in captured.out
+    assert "105560: 0개" in captured.out
+    assert "192080: 2개" in captured.out
