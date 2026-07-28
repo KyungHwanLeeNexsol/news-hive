@@ -721,10 +721,12 @@ class ThemeNewsCarryConfig(BaseModel):
     단계적 롤아웃 — SPEC-AI-079 관례 계승).
     """
 
-    # @MX:NOTE: [AUTO] SPEC-AI-084 REQ-AI084-015 — 마스터 스위치. 2026-07-28 프로덕션 활성화
-    # (M1-M5 구현 완료 + 무회귀 검증 후 사용자 승인, 롤백=false 복귀).
+    # @MX:NOTE: [AUTO] SPEC-AI-084 REQ-AI084-015 — 마스터 스위치. 2026-07-28 12:32 UTC경
+    # 프로덕션 발화 확인 결과 stocks.keywords 백필 데이터 오염(720개 종목 중 144개가 10개
+    # 테마 전부 보유 등 비정상 분포) 발견 — 무관 종목이 테마로 대량 오탐(당일 신호 69건 중
+    # 53건, 77%). 근본원인(keywords 백필 로직) 조사 완료 전까지 false로 롤백.
     # @MX:SPEC: SPEC-AI-084 REQ-AI084-015
-    enabled: bool = True
+    enabled: bool = False
     # 앵커 판정 최소 등락률(%) — ThemeGroupCarryConfig.anchor_surge_min_pct와 동일 기본값
     anchor_surge_min_pct: float = 5.0
     # REQ-AI084-011: 테마 활성 확인 게이트 — 복수 멤버 동반 이동 임계(최소 앵커 수)
