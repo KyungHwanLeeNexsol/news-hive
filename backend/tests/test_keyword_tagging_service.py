@@ -164,7 +164,9 @@ def _make_stock(db: Session, stock_code: str, name: str, keywords=None):
     return stock
 
 
-def _make_news_with_relation(db: Session, stock_id: int, title: str, content: str = ""):
+def _make_news_with_relation(
+    db: Session, stock_id: int, title: str, content: str = "", relevance: str = "direct"
+):
     from app.models.news import NewsArticle
     from app.models.news_relation import NewsStockRelation
 
@@ -181,7 +183,7 @@ def _make_news_with_relation(db: Session, stock_id: int, title: str, content: st
         news_id=article.id,
         stock_id=stock_id,
         match_type="keyword",
-        relevance="direct",
+        relevance=relevance,
     )
     db.add(rel)
     db.flush()
@@ -192,13 +194,23 @@ _ROBOT_KEYWORDS = ["로봇", "AI", "반도체"]
 
 
 # ---------------------------------------------------------------------------
-# AC-084-001: 뉴스/공시 기반 키워드 추출
+# AC-084-001 / AC-AI091-002/003: 뉴스/공시 기반 키워드 추출
+#
+# SPEC-AI-091 REQ-AI091-002: 단일 blob 매칭에서 "테마 키워드가 최소 2개의 서로 다른
+# 소스 텍스트에 출현할 때만 매칭" 방식으로 변경되었다 — 아래 픽스처는 이 계약을
+# 반영해 각 매칭 대상 키워드가 최소 2개의 서로 다른 텍스트에 등장하도록 구성한다.
 # ---------------------------------------------------------------------------
 
 def test_extract_theme_keywords_matches_vocab():
+    """REQ-AI091-002: 서로 다른 2개 이상의 텍스트에 등장하는 키워드만 매칭된다."""
     from app.services.keyword_tagging_service import extract_theme_keywords
 
-    texts = ["삼성전자 로봇 전담조직 신설", "AI 반도체 수요 급증"]
+    texts = [
+        "삼성전자 로봇 전담조직 신설",
+        "로봇 신사업 확대 발표",
+        "AI 반도체 수요 급증",
+        "AI 서버향 반도체 공급 확대",
+    ]
     matched = extract_theme_keywords(texts, _ROBOT_KEYWORDS)
 
     assert matched == ["로봇", "AI", "반도체"]
@@ -213,18 +225,72 @@ def test_extract_theme_keywords_no_match_returns_empty():
     assert matched == []
 
 
+def test_ac091_002_single_text_mention_is_excluded():
+    """REQ-AI091-002: 정확히 1개 텍스트에만 등장하는 키워드는 결과에서 제외된다.
+
+    §C 엣지 케이스 3의 대구 사례 — 단일 시황/묶음 기사가 우연히 언급한 무관 테마
+    단어가 매칭되지 않아야 한다(버그 재현 방지의 핵심 회귀 가드).
+    """
+    from app.services.keyword_tagging_service import extract_theme_keywords
+
+    texts = ["삼성전자 로봇 전담조직 신설", "AI 반도체 수요 급증"]
+    matched = extract_theme_keywords(texts, _ROBOT_KEYWORDS)
+
+    # 세 키워드 모두 정확히 1개 텍스트에만 등장 → 전부 제외
+    assert matched == []
+
+
+def test_ac091_002_exactly_two_texts_boundary_is_included():
+    """§C 엣지 케이스 3: 정확히 2개 텍스트에 등장하는 경계값은 포함된다(>= 2, 초과 아님)."""
+    from app.services.keyword_tagging_service import extract_theme_keywords
+
+    texts = ["로봇 사업 확대", "로봇 신제품 출시"]
+    matched = extract_theme_keywords(texts, _ROBOT_KEYWORDS)
+
+    assert matched == ["로봇"]
+
+
+def test_ac091_003_korean_preceding_char_boundary_guard():
+    """AC-AI091-003: 매칭 위치 직전 문자가 한글 음절이면 해당 매칭을 거부한다."""
+    from app.services.keyword_tagging_service import extract_theme_keywords
+
+    # "이닉스"가 테마 어휘라고 가정 — "SK하이닉스" 안의 "이닉스"는 직전 문자가
+    # 한글 음절("하")이므로 오탐으로 거부되어야 한다.
+    texts = ["SK하이닉스 실적 발표", "SK하이닉스 신규 투자 확대"]
+    matched = extract_theme_keywords(texts, ["이닉스"])
+
+    assert matched == []
+
+
 def test_ac001_backfill_fills_stock_keywords_from_linked_news(db):
-    """AC-084-001: NewsStockRelation으로 연결된 뉴스에서 테마 키워드를 추출해 채운다."""
+    """AC-084-001 / REQ-AI091-002: direct 뉴스 2건 이상에서 테마 키워드를 추출해 채운다."""
     from app.services.keyword_tagging_service import backfill_stock_keywords
 
     stock = _make_stock(db, "277810", "레인보우로보틱스", keywords=None)
     _make_news_with_relation(db, stock.id, "레인보우로보틱스, 로봇 사업 확대")
+    _make_news_with_relation(db, stock.id, "레인보우로보틱스 로봇 신제품 출시")
 
     result = backfill_stock_keywords(db, theme_keywords=_ROBOT_KEYWORDS)
 
     db.refresh(stock)
     assert stock.keywords == ["로봇"]
     assert result.stocks_tagged == 1
+
+
+def test_ac091_001_indirect_relation_text_excluded_from_gathering(db):
+    """AC-AI091-001: relevance="indirect" 관계에서 나온 뉴스 텍스트는 수집 대상에서
+    제외된다 — indirect 뉴스만 2건 있어도 태깅되지 않아야 한다."""
+    from app.services.keyword_tagging_service import backfill_stock_keywords
+
+    stock = _make_stock(db, "105560", "KB금융", keywords=None)
+    _make_news_with_relation(db, stock.id, "로봇 테마 관련주 급등", relevance="indirect")
+    _make_news_with_relation(db, stock.id, "로봇 테마 후속 보도", relevance="indirect")
+
+    result = backfill_stock_keywords(db, theme_keywords=_ROBOT_KEYWORDS)
+
+    db.refresh(stock)
+    assert stock.keywords is None
+    assert result.stocks_tagged == 0
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +303,7 @@ def test_ac002_backfill_idempotent_second_run_preserves(db):
 
     stock = _make_stock(db, "277810", "레인보우로보틱스", keywords=None)
     _make_news_with_relation(db, stock.id, "레인보우로보틱스 로봇 신사업")
+    _make_news_with_relation(db, stock.id, "레인보우로보틱스 로봇 사업 확대")
 
     result1 = backfill_stock_keywords(db, theme_keywords=_ROBOT_KEYWORDS)
     assert result1.stocks_tagged == 1
@@ -305,6 +372,7 @@ def test_ac005_refresh_merges_new_keywords_without_deleting_existing(db):
 
     stock = _make_stock(db, "277810", "레인보우로보틱스", keywords=["로봇"])
     _make_news_with_relation(db, stock.id, "레인보우로보틱스 AI 반도체 신사업 발표")
+    _make_news_with_relation(db, stock.id, "레인보우로보틱스 AI 반도체 협력 확대")
 
     updated = refresh_stock_keywords(db, [stock.id], theme_keywords=_ROBOT_KEYWORDS)
 
@@ -320,6 +388,7 @@ def test_ac005_refresh_caps_keywords_per_stock(db):
 
     stock = _make_stock(db, "277810", "레인보우로보틱스", keywords=["기존1", "기존2"])
     _make_news_with_relation(db, stock.id, "로봇 AI 반도체 관련 기사")
+    _make_news_with_relation(db, stock.id, "로봇 AI 반도체 후속 기사")
 
     updated = refresh_stock_keywords(
         db, [stock.id], theme_keywords=_ROBOT_KEYWORDS, max_keywords_per_stock=3

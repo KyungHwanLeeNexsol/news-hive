@@ -342,6 +342,21 @@ def _resolve_description_relations(
     return new_relations
 
 
+def _should_touch_stock_for_tagging(rel: dict) -> bool:
+    """SPEC-AI-091 REQ-AI091-004/005/006: 지속 태깅 트리거의 단일 relevance 게이트.
+
+    ``relevance == "direct"``인 관계에서 비롯된 ``stock_id``만 지속 태깅
+    (``refresh_stock_keywords`` 호출 대상)에 포함한다. 이 게이트는 관계를 생성한 경로
+    (검색 쿼리 매칭 ``_resolve_query_relations``, 기사 제목 매칭 ``classify_news``, 기사
+    설명 매칭 ``_resolve_description_relations`` — SPEC-AI-085, 현재 프로덕션 활성) 중
+    어느 것이든 무관하게 단일 개입점에서 동일하게 적용된다(Enforce Simplicity — 3곳
+    개별 패치 대신 1곳 게이트). ``relevance="indirect"`` 관계만 있는 종목은 이 게이트를
+    통과하지 못해 ``stocks.keywords``가 오염되지 않는다(``NewsStockRelation`` 자체의
+    생성/하류 소비는 이 게이트와 무관하게 불변).
+    """
+    return bool(rel.get("stock_id")) and rel.get("relevance") == "direct"
+
+
 async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
     """Main orchestrator: crawl news, classify by keyword, and save."""
     stocks = db.query(Stock).all()
@@ -809,7 +824,7 @@ async def crawl_all_news(db: Session, skip_us_news: bool = False) -> int:
                     continue
 
                 seen_pairs.add(pair)
-                if rel.get("stock_id"):
+                if _should_touch_stock_for_tagging(rel):
                     _touched_stock_ids.add(rel["stock_id"])
                 rel_values.append(
                     f"(:ni{rel_idx}, :si{rel_idx}, :se{rel_idx}, :mt{rel_idx}, :rv{rel_idx},"

@@ -28,11 +28,17 @@ from app.models.disclosure import Disclosure
 from app.models.news import NewsArticle
 from app.models.news_relation import NewsStockRelation
 from app.models.stock import Stock
+from app.services.ai_classifier import _count_keyword_matches
 
 logger = logging.getLogger(__name__)
 
 # REQ-AI084-003: 종목당 키워드 상한 (무한 증식 방지)
 DEFAULT_MAX_KEYWORDS_PER_STOCK = 10
+
+# REQ-AI091-002: 테마 키워드가 매칭으로 인정되기 위한 최소 서로 다른 소스 텍스트 출현 수.
+# 단일 시황/묶음 기사의 우연한 언급 하나만으로 무관 종목에 테마가 전파되는 것을 방지한다.
+# plan-phase 제안값(DP-2) — M3 재백필 실측 결과로 조정 여지를 남긴다(하드코딩 금지).
+DEFAULT_MIN_TEXT_OCCURRENCES = 2
 
 # 종목별 텍스트 조회 건수 상한 — 배치 비용을 유계화한다(REQ-AI084-002).
 _MAX_ARTICLES_PER_STOCK = 50
@@ -63,11 +69,18 @@ def _gather_stock_theme_texts(db: Session, stock_id: int) -> list[str]:
     """종목에 연결된 최근 뉴스(제목+본문)와 공시(보고서명) 텍스트를 조회한다.
 
     REQ-AI084-001 근거: ``NewsStockRelation`` 조인(뉴스) + ``Disclosure.stock_id``(공시).
+
+    REQ-AI091-001: ``NewsStockRelation.relevance == "direct"``인 행에서 나온 뉴스
+    텍스트만 반환한다 — "indirect"(같은 섹터/키워드를 공유할 뿐인 약한 신호) 텍스트는
+    제외해, 관계 생성 시점에 이미 확립된 direct/indirect 신뢰도 구분을 텍스트 수집
+    단계에도 일관되게 적용한다. 공시(disclosure) 조회는 ``relevance`` 개념이 없으므로
+    (Disclosure.stock_id 직접 연결) 이 필터의 대상이 아니다.
     """
     news_rows = (
         db.query(NewsArticle.title, NewsArticle.content)
         .join(NewsStockRelation, NewsStockRelation.news_id == NewsArticle.id)
         .filter(NewsStockRelation.stock_id == stock_id)
+        .filter(NewsStockRelation.relevance == "direct")
         .order_by(NewsArticle.id.desc())
         .limit(_MAX_ARTICLES_PER_STOCK)
         .all()
@@ -88,21 +101,37 @@ def _gather_stock_theme_texts(db: Session, stock_id: int) -> list[str]:
 def extract_theme_keywords(
     texts: list[str],
     theme_keywords: list[str] | None = None,
+    min_text_occurrences: int = DEFAULT_MIN_TEXT_OCCURRENCES,
 ) -> list[str]:
-    """텍스트 목록에서 테마 키워드 매칭 결과를 반환한다(규칙/사전 기반, LLM 미사용).
+    """개별 소스 텍스트 목록에서 테마 키워드 매칭 결과를 반환한다(규칙/사전 기반, LLM 미사용).
+
+    REQ-AI091-002: 하나의 연결된 blob(``" ".join(texts)``)이 아니라 각 텍스트를 개별
+    순회하며, 테마 키워드가 최소 ``min_text_occurrences``개의 **서로 다른** 텍스트에
+    출현할 때만 매칭 결과에 포함한다 — 단일 시황/묶음 기사가 우연히 언급한 무관 테마
+    단어가 연결 종목 전체에 전파되는 것을 방지한다.
+
+    REQ-AI091-003: 매칭 위치 직전 문자가 한글 음절이면 해당 매칭을 거부하는 경계 가드는
+    ``ai_classifier.py::_count_keyword_matches``의 기존 패턴을 그대로 재사용한다
+    (Enforce Simplicity — 신규 로직을 발명하지 않는다).
 
     Args:
-        texts: 종목에 연결된 뉴스 제목/본문, 공시 보고서명 등 원문 텍스트 목록.
+        texts: 종목에 연결된 뉴스 제목/본문, 공시 보고서명 등 개별 원문 텍스트 목록.
         theme_keywords: 매칭 대상 테마 어휘. None이면 ``ThemeClusterConfig.keywords`` 사용.
+        min_text_occurrences: 키워드가 매칭으로 인정되기 위한 최소 서로 다른 텍스트
+            출현 수(기본값 2 — 하드코딩 금지, 테스트/재캘리브레이션 용이성을 위해 파라미터화).
 
     Returns:
         매칭된 테마 키워드 목록(어휘 등장 순서, 중복 제거).
     """
     vocab = theme_keywords if theme_keywords is not None else _default_theme_keywords()
-    combined = " ".join(texts)
     matched: list[str] = []
     for kw in vocab:
-        if kw and kw in combined and kw not in matched:
+        if not kw:
+            continue
+        occurrence_count = sum(
+            1 for text in texts if text and _count_keyword_matches(text, [kw]) > 0
+        )
+        if occurrence_count >= min_text_occurrences:
             matched.append(kw)
     return matched
 

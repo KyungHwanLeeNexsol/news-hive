@@ -2,7 +2,7 @@
 id: SPEC-AI-091
 title: "stocks.keywords 오염 근본원인 수정 — 무경계 substring 매칭 + 자기강화 순환 고리 차단"
 version: "0.1.1"
-status: draft
+status: in-progress
 created: 2026-07-28
 updated: 2026-07-28
 author: manager-spec

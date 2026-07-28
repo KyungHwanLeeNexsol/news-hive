@@ -15,6 +15,7 @@ from app.services.news_crawler import (
     _build_search_queries,
     _resolve_query_relations,
     _resolve_description_relations,
+    _should_touch_stock_for_tagging,
     _classify_urgency,
     _matches_theme_rally_keyword,
     _compute_theme_co_mention_counts,
@@ -414,6 +415,70 @@ class TestDescriptionRelationMatchingGating:
 
         config = DescriptionRelationMatchingConfig(enabled=False)
         assert config.enabled is False
+
+
+class TestShouldTouchStockForTagging:
+    """SPEC-AI-091 AC-AI091-004/005/006: 지속 태깅 트리거의 단일 relevance 게이트.
+
+    ``_should_touch_stock_for_tagging``은 관계를 생성한 경로(검색 쿼리 매칭 /
+    제목 매칭 / 설명 매칭 — SPEC-AI-085)와 무관하게 ``relevance == "direct"``인
+    관계에서 비롯된 stock_id만 True를 반환해야 한다.
+    """
+
+    def test_direct_relation_with_stock_id_is_touched(self) -> None:
+        """AC-AI091-004: relevance="direct" 관계는 지속 태깅 대상에 포함되어야 한다."""
+        rel = {"stock_id": 1, "sector_id": 10, "match_type": "keyword", "relevance": "direct"}
+        assert _should_touch_stock_for_tagging(rel) is True
+
+    def test_indirect_relation_is_not_touched(self) -> None:
+        """AC-AI091-005: relevance="indirect" 관계만 있는 종목은 지속 태깅에서 제외되어야 한다."""
+        rel = {"stock_id": 1, "sector_id": 10, "match_type": "keyword", "relevance": "indirect"}
+        assert _should_touch_stock_for_tagging(rel) is False
+
+    def test_relation_without_stock_id_is_not_touched(self) -> None:
+        """섹터 전용 관계(stock_id=None)는 relevance와 무관하게 지속 태깅 대상이 아니다."""
+        rel = {"stock_id": None, "sector_id": 10, "match_type": "keyword", "relevance": "direct"}
+        assert _should_touch_stock_for_tagging(rel) is False
+
+    def test_query_matched_direct_relation_is_touched(self) -> None:
+        """AC-AI091-006: 검색 쿼리 매칭 경로(_resolve_query_relations) 산출물도 동일하게
+        게이트를 통과해야 한다 — 경로 무관 단일 개입점 확인."""
+        from app.services.ai_classifier import KeywordIndex
+
+        index = KeywordIndex(stock_names={"삼성전자": (1, 10)}, stock_keywords={}, sector_keywords={})
+        relations = _resolve_query_relations("삼성전자", index, sectors=[])
+        assert relations[0]["relevance"] == "direct"
+        assert _should_touch_stock_for_tagging(relations[0]) is True
+
+    def test_title_matched_indirect_relation_is_not_touched(self) -> None:
+        """AC-AI091-006: 제목 매칭 경로(classify_news)의 indirect(키워드 기반) 관계도
+        동일하게 배제되어야 한다."""
+        from app.services.ai_classifier import KeywordIndex, classify_news
+
+        index = KeywordIndex(
+            stock_names={},
+            stock_keywords={"로봇": [(1, 10)]},
+            sector_keywords={},
+        )
+        relations = classify_news("로봇 테마 급등", index)
+        assert relations[0]["relevance"] == "indirect"
+        assert _should_touch_stock_for_tagging(relations[0]) is False
+
+    def test_description_matched_indirect_relation_is_not_touched(self) -> None:
+        """AC-AI091-006: 설명 매칭 경로(_resolve_description_relations, SPEC-AI-085)에서
+        생성된 indirect 관계도 동일한 게이트를 통과해 배제되어야 한다(미해결 질문 해소)."""
+        from app.services.ai_classifier import KeywordIndex
+
+        index = KeywordIndex(
+            stock_names={},
+            stock_keywords={"로봇": [(1, 10)]},
+            sector_keywords={},
+        )
+        ad = {"title": "무관한 제목", "description": "로봇 테마 관련주 급등"}
+        result = _resolve_description_relations(ad, index, existing_relations=[], max_relations=5)
+        assert len(result) == 1
+        assert result[0]["relevance"] == "indirect"
+        assert _should_touch_stock_for_tagging(result[0]) is False
 
 
 # ---------------------------------------------------------------------------
