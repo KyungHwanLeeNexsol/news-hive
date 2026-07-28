@@ -100,4 +100,48 @@ m1_to_mN_commit_strategy: "M1+M2+M3 단일 통합 커밋(구현+테스트) + 후
 
 ## §E.4 Sync-phase Audit-Ready Signal
 
-_<pending sync-phase>_
+sync_status: complete
+sync_complete_at: "2026-07-28"
+sync_commit_sha: "pending-backfill-sync-ai091"
+
+**B12 self-test 결과**:
+- a) pre-emission grep `grep -c 'SPEC-AI-091' CHANGELOG.md` → 커밋 전 0 (중복 없음 확인)
+- b) AC count 일치 — acceptance.md SSOT `grep -cE '^### AC-AI091-[0-9]+'` → 11, CHANGELOG
+  본문에 AC-AI091-001~011(11건) 언급과 일치
+- c) 파일 경로 검증 — `ls backend/app/services/keyword_tagging_service.py
+  backend/app/services/news_crawler.py backend/scripts/remediate_keyword_tagging.py
+  backend/tests/test_keyword_tagging_service.py backend/tests/test_services/test_news_crawler.py
+  backend/tests/test_remediate_keyword_tagging.py` 전부 존재 확인
+
+**sync-phase 독립 재검증(§E.2 재구현이 아닌 재관측)**:
+- `uv run pytest tests/test_keyword_tagging_service.py tests/test_services/test_news_crawler.py
+  tests/test_remediate_keyword_tagging.py -q --tb=short`(backend/) →
+  `100 passed, 3 xpassed in 0.95s`
+- `uv run ruff check app/services/keyword_tagging_service.py app/services/news_crawler.py
+  scripts/remediate_keyword_tagging.py tests/test_keyword_tagging_service.py
+  tests/test_services/test_news_crawler.py tests/test_remediate_keyword_tagging.py`(backend/) →
+  `All checks passed!`
+
+**sync-auditor 미실행 사유**: 본 sync 세션은 `manager-docs` 에이전트로 위임되었으며,
+`manager-docs`의 frontmatter `tools:`에는 `Agent` 툴이 포함되어 있지 않다 — 다른 에이전트를
+스폰하는 결정은 오케스트레이터의 권한이며 `manager-docs`의 스코프 밖이다(agent-authoring.md
+"MoAI 서브에이전트는 Agent 툴이 tools 목록에 없어 중첩 스폰을 하지 않는다" 정책과 동일한
+경계). 참고로 `harness.yaml` auto_detection 규칙에 따르면 본 SPEC(6개 파일 변경, 백엔드
+서비스 3개 + 신규 스크립트 1개)은 `file_count > 3` 조건에 해당해 `standard` 레벨
+(`evaluator: true`, `evaluator_mode: final-pass`)로 분류될 가능성이 있다 — SPEC-AI-090
+(Tier S, 3개 파일, `minimal` 레벨 `evaluator: false`)과는 분류가 다르다. 따라서 sync-auditor
+4-dimension 정식 채점은 **본 세션에서 수행하지 못했음을 명시적으로 기록**하며, 오케스트레이터가
+필요 시 별도로 sync-auditor를 스폰해 이 SPEC을 검토할 것을 권고한다(대체 조치로 위 독립
+재검증을 수행했으나, 이는 4-dimension 채점을 대체하지 않는다).
+
+**CHANGELOG.md 판단**: SPEC-AI-088(실제 프로덕션 서비스 코드 변경 수반 사례, 4개 서비스
+파일 + 신규 테스트)이 CHANGELOG.md `[Unreleased]`에 항목을 추가한 선례를 따른다. 본
+SPEC-AI-091도 3개 서비스 파일(`keyword_tagging_service.py`/`news_crawler.py`/
+`ai_classifier.py`[확인만, 무변경]) + 신규 정화 스크립트를 수반하는 실질적 백엔드 버그
+수정이므로, SPEC-AI-090(측정 전용, 코드 변경 없음, CHANGELOG 미기록)과는 성격이 다르다.
+CHANGELOG.md `[Unreleased]` 섹션에 SPEC-AI-091 항목 추가(목적/핵심변경/Out of Scope/테스트/
+잔여위험[프로덕션 정화 미실행] — SPEC-AI-088/090과 동일 형식).
+
+frontmatter status 전이: spec.md `status: in-progress` → `completed`(단일 sync 커밋,
+3-phase close). plan.md/acceptance.md는 frontmatter 없음(Tier M — spec.md만 frontmatter
+보유, `.moai/development/spec-frontmatter-schema.md` 관례에 따름).

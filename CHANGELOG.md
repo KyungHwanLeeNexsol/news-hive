@@ -4,6 +4,53 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fix — SPEC-AI-091: `stocks.keywords` 오염 근본원인 수정 — 무경계 substring 매칭 + 자기강화 순환 고리 차단 (2026-07-28)
+
+**목적**: 급등예측 시스템의 뉴스 기반 탐지기가 소비하는 `stocks.keywords`가 (1) 무경계
+(unscoped) substring 매칭과 (2) 확정된 활성 자기강화 순환 고리라는 두 결함이 결합되어
+지속적으로 오염되고 있었다. 확정 오탐 예시: `023790`(동일스틸럭스, 철강사)가 10개 테마
+전부 태깅, `105560`(KB금융, 은행)이 로봇/전기차/배터리/조선/원전 포함 10개 태깅.
+2026-07-28 기준 719/2605 종목에 `keywords`가 채워져 있고 그중 144개(20%)가 상한(10개)을
+보유 — 상단 편중 분포.
+
+**핵심 변경 (REQ-AI091-001~011, Must-Pass 8건 + Should-Pass 3건 전량 PASS)**:
+1. **REQ-001** `keyword_tagging_service._gather_stock_theme_texts()` — `NewsStockRelation.
+   relevance == "direct"` 필터 추가. `relevance == "indirect"` 관계에서 나온 텍스트는
+   키워드 소스에서 제외.
+2. **REQ-002** `extract_theme_keywords()` — 단일 blob 결합 매칭에서, 개별 텍스트 순회 +
+   테마 키워드가 최소 2개의 서로 다른 소스 텍스트에 출현할 때만 매칭 결과에 포함하는
+   방식으로 재작성. 단일 시황/묶음 기사의 우연한 언급이 무관 종목에 전파되는 것을 방지.
+3. **REQ-003** 한글 선행문자 경계 가드 — `ai_classifier._count_keyword_matches`의 기존
+   경계 가드 로직을 재사용(신규 로직 발명 없음, Enforce Simplicity).
+4. **REQ-004/005/006 [HARD]** `news_crawler.py`에 신규 헬퍼 `_should_touch_stock_for_tagging(rel)`
+   추가 — 지속 태깅 트리거(`_touched_stock_ids`)의 단일 개입점에서 `relevance == "direct"`
+   관계에서 비롯된 stock_id만 통과시킨다. 관계 생성 3개 경로(검색 쿼리 매칭/기사 제목
+   매칭/기사 설명 매칭 — SPEC-AI-085, 현재 프로덕션 활성) 전체에 동일하게 적용되는
+   단일 개입점 설계(3곳 개별 패치가 아닌 1곳 차단, Enforce Simplicity).
+5. **REQ-007/008** 신규 정화 스크립트 `backend/scripts/remediate_keyword_tagging.py` —
+   자동 태깅 기원 종목의 `keywords`를 리셋 후 수정된 알고리즘으로 재백필. dry-run 기본값
+   [HARD](`--execute` 플래그 없이는 DB 무변경), provenance 불명 종목은 보수적 기본
+   리셋 대상 포함 + 진단 카운트 보고.
+6. **REQ-009/010** 정화 후 키워드 분포 상한(10개 보유 종목 비율 ≤5%, 중앙값 ≤4) 및 확정
+   오탐 3종목(`023790`/`105560`/`192080`) 스팟체크(≤3개) — 합성 데이터 시연으로 검증
+   (10개→1개 정화 확인).
+
+**Out of Scope 준수**: `ThemeNewsCarryConfig.enabled`(False 유지) 재활성화 안 함.
+`theme_cluster`/`detect_theme_news_cluster` 로직 무변경(이 탐지기는 `stocks.keywords`를
+전혀 참조하지 않음). 크롤 예산/API 쿼터 재설계, `keyword_backfill` 스케줄 잡/크롤 훅
+진입점 비활성화, `stocks.keywords` provenance 컬럼 신설 모두 범위 밖(후속 SPEC 후보).
+
+**테스트**: 신규/갱신 `test_keyword_tagging_service.py`(9건), `test_services/
+test_news_crawler.py::TestShouldTouchStockForTagging`(5건), `test_remediate_keyword_tagging.py`
+(8건, 신규) 전량 PASS. 전체 백엔드 회귀 스위트 **2202 passed, 4 skipped, 3 xpassed,
+0 failed**(SPEC-AI-090 baseline 대비 회귀 없음). `git diff`에 `theme_cluster`/
+`ThemeNewsCarryConfig` 관련 파일 변경 없음 확인. `ruff check .` clean.
+
+**잔여 위험(프로덕션 정화 미실행, 의도된 범위 제외)**: 정화 스크립트는 구현·테스트까지
+완료되었으나, 프로덕션 DB에 대한 실제 `--execute` 실행은 CI/CD 배포 확인 이후 사용자가
+별도로 요청할 때까지 보류한다(사용자 명시 결정) — 프로덕션 719개 종목의 기존 오염된
+`keywords`는 이번 릴리스 시점까지 미정화 상태로 남는다.
+
 ### Feature — SPEC-AI-088: same_day/near_limit_up_carry 시그널 사전 이동폭(pre_signal_change_pct) 계측 (2026-07-27)
 
 **목적**: 급등예측 시스템의 same_day 지평 시그널(SPEC-AI-080/083)과 near_limit_up_carry

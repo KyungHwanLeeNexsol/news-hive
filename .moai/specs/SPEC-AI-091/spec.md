@@ -1,8 +1,8 @@
 ---
 id: SPEC-AI-091
 title: "stocks.keywords 오염 근본원인 수정 — 무경계 substring 매칭 + 자기강화 순환 고리 차단"
-version: "0.1.1"
-status: in-progress
+version: "0.1.2"
+status: completed
 created: 2026-07-28
 updated: 2026-07-28
 author: manager-spec
@@ -49,6 +49,18 @@ tier: M
   - **(D4, minor)** AC-AI091-008/REQ-AI091-008의 "Where" 트리거가 capability-gate가
     아닌 종목별 데이터 상태 조건을 나타내던 taxonomic 오분류를 "While"(State-Driven)로
     정정했다.
+- 2026-07-28 (v0.1.2): sync-phase 완료 및 SPEC 종료. run-phase 구현 완료(commit
+  `bc360b0`, M1-M3 단일 통합 커밋) + `run_commit_sha` backfill(commit `cfe31d2`).
+  plan-auditor iteration 2 PASS(0.92, Tier M 임계 0.80). 전체 백엔드 회귀 스위트
+  **2202 passed, 4 skipped, 3 xpassed, 0 failed**(SPEC-AI-090 baseline 대비 회귀 없음).
+  AC-AI091-001~011 전량 PASS(Must-Pass 8건 + Should-Pass 3건 — AC-009/010은 테스트
+  픽스처 DB 검증 기준). **잔여 위험(의도된 범위 제외)**: 정화 스크립트
+  (`scripts/remediate_keyword_tagging.py`)는 M3에서 구현·테스트(합성 데이터 dry-run/
+  execute 시연)까지 완료되었으나, 프로덕션 DB `--execute` 실행은 본 SPEC의 자율 실행
+  범위 밖이며 CI/CD 배포 확인 이후 사용자가 별도로 요청할 때까지 보류한다(사용자
+  명시 결정, AskUserQuestion) — 프로덕션 719개 종목의 기존 오염된 `keywords`는 이번
+  sync 시점까지 미정화 상태로 남는다. 이는 SPEC 완료의 차단 사유가 아니다(§4 Out of
+  Scope 범위가 알고리즘 수정 + 정화 도구 제공이지, 프로덕션 실행 시점 강제가 아님).
 
 ---
 
