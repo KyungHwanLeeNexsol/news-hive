@@ -102,7 +102,7 @@ m1_to_mN_commit_strategy: "M1+M2+M3 단일 통합 커밋(구현+테스트) + 후
 
 sync_status: complete
 sync_complete_at: "2026-07-28"
-sync_commit_sha: "pending-backfill-sync-ai091"
+sync_commit_sha: "197d19a"
 
 **B12 self-test 결과**:
 - a) pre-emission grep `grep -c 'SPEC-AI-091' CHANGELOG.md` → 커밋 전 0 (중복 없음 확인)
