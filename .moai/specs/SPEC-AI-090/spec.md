@@ -1,8 +1,8 @@
 ---
 id: SPEC-AI-090
 title: "연속성 계열 탐지기 평가 기준 재검토 측정 스파이크 (Continuation-Detector Evaluation-Bar Recalibration Measurement Spike)"
-version: "0.1.1"
-status: in-progress
+version: "0.1.2"
+status: completed
 created: 2026-07-28
 updated: 2026-07-28
 author: Nexsol
@@ -44,6 +44,17 @@ related_specs: [SPEC-AI-065, SPEC-AI-023, SPEC-AI-072, SPEC-AI-070, SPEC-AI-089]
     (`OutOfScopeRule` 린트 컨벤션 + SPEC-AI-089 컨벤션 정합).
   - **(D6, minor)** REQ-AI090-001/002의 정규문에 직접 노출되어 있던 DB 테이블/필드 식별자를
     REQ-003~006과 동일하게 `> 구현 참고:` 블록으로 이동, 정규문은 WHAT 수준으로 유지.
+- 2026-07-28 v0.1.2 (completed, sync-phase 종료): M1(측정 스파이크) run-phase 완료
+  (commit `22cb662`)에 이어, M2 결정 게이트를 사용자 AskUserQuestion 승인으로 통과했다.
+  결정 요지("탐지기별 분리 처리", 코드 변경 없음)는
+  `.moai/reports/continuation-detector-eval-bar/2026-07-28.md` § M2 결정 (2026-07-28)에
+  전문 기록. **near_limit_up_carry**: 기준 B(미반전, 28.57%)를 보조/참고 지표로 병기하는
+  라벨링/보고 관례만 채택 — `evaluate_detector_contribution()`/앙상블 가중치/
+  `surge_detection.yaml`/매매 로직 무변경. **momentum_continuation**: 가설 1 검증 여부
+  판정을 보류(측정 불가 상태 유지) — 확장 측정은 향후 SPEC-AI-090 M3 또는 신규 SPEC
+  후보로만 기록, 착수 미승인. M2 승인이 "M3+ 착수 없이 라벨링 관례만 채택"이었으므로
+  본 SPEC은 M1 완료 + M2 결정 기록으로 유효하게 종료된다(plan.md §A/§C 원칙 그대로 적용).
+  status: in-progress → completed.
 
 ## 선행 SPEC (전제 조건 / Assumptions)
 

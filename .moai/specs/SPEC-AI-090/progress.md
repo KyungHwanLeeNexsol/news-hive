@@ -76,6 +76,40 @@ m1_to_mN_commit_strategy: "M1 단일 통합 커밋(구현+테스트+리포트) +
 
 ## §E.4 Sync-phase Audit-Ready Signal
 
-_<본 SPEC은 M1 완료로 유효하게 종료된다 — M2(결정 게이트)는 orchestrator가 별도
-AskUserQuestion 라운드로 진행하며, M2 승인 범위에 따라 sync-phase 진행 여부가
-결정된다(plan.md §A/§C 참고). 현재는 sync-phase 대기 아님 — M1 단독 완료 상태.>_
+sync_status: complete
+sync_complete_at: "2026-07-28"
+sync_commit_sha: "pending-backfill-SPEC-AI-090-sync"
+
+**M2 결정 게이트**: orchestrator가 AskUserQuestion 라운드을 통해 사용자로부터
+"탐지기별 분리 처리" 결정을 승인받았다 — near_limit_up_carry는 기준 B(미반전)를
+보조/참고 지표로 병기하는 라벨링 관례만 채택(코드 변경 없음), momentum_continuation은
+가설 1 판정을 보류(확장 측정은 향후 SPEC 후보로만 기록, 착수 미승인). 결정 전문은
+`.moai/reports/continuation-detector-eval-bar/2026-07-28.md` § M2 결정 (2026-07-28)에
+기록. M2 승인 범위가 "M3+ 착수 없음"이었으므로, 본 SPEC은 M1 완료 + M2 결정 기록만으로
+sync-phase 종료 대상이 되었다(plan.md §A/§C의 "M2 승인 없으면 M1 완료 + 리포트 제출로
+유효하게 완료된다" 원칙의 적용 — 이번 M2 결정 자체가 그 조건을 충족).
+
+**sync-phase 작업 범위(문서/결정 기록만, 프로덕션 코드 무변경)**:
+1. M1 리포트에 `## M2 결정 (2026-07-28)` 섹션 추가(탐지기별 결정 + "코드 변경 없음"
+   스코프 명시 + 위험도 평가).
+2. spec.md HISTORY에 v0.1.2 항목 추가, frontmatter `version: 0.1.1 → 0.1.2`,
+   `status: in-progress → completed` 전이(단일 sync 커밋, 3-phase close).
+3. plan.md/acceptance.md — 본 SPEC은 Tier S(spec.md만 frontmatter 보유, plan.md는
+   frontmatter 없음, acceptance.md 파일 자체가 존재하지 않음 — AC가 spec.md §Acceptance
+   Criteria에 인라인) — plan.md 본문/frontmatter 변경 없음.
+4. progress.md 본 §E.4 섹션 신규 작성.
+
+**sync-auditor 미실행 사유**: 본 sync 커밋은 순수 관리적(administrative) 커밋이다 —
+M1은 이미 plan-auditor PASS(0.95, iteration 2) + 자체 회귀 검증(§E.2/§E.3, 기존 테스트
+suite 무회귀, 신규 22개 테스트 100% 커버리지)을 완료했고, M2/sync-phase에서 추가된
+프로덕션 코드가 없으므로(문서·frontmatter만 변경) 4-dimension 품질 점수화 대상이 없다.
+
+**CHANGELOG.md/README.md**: 갱신하지 않음 — 본 SPEC은 측정 전용 스파이크이며 M2 결정도
+"코드 변경 없음"이므로 사용자 대면 기능/동작 변경이 없다. 선행 사례 SPEC-AI-089(동일
+M1/M2 분리 패턴)는 이 세션 시점까지 아직 M2/sync 단계에 도달하지 않아(progress.md
+§E.2/§E.3까지만 존재) closed 상태의 CHANGELOG 관례 선례가 없다. SPEC-AI-088은
+실제 프로덕션 코드/API 응답 변경을 수반한 사례로 본 SPEC과 성격이 다르다(CHANGELOG
+전례가 "코드 변경 있음" 케이스에 한정됨).
+
+frontmatter status 전이: spec.md `status: in-progress` → `completed`(단일 sync 커밋,
+3-phase close). plan.md는 frontmatter 없음(Tier S).
