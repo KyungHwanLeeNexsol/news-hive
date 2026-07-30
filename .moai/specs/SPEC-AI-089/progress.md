@@ -68,7 +68,7 @@ m1_to_mN_commit_strategy: "M1 단일 통합 커밋(구현+테스트+리포트+�
 
 sync_status: complete (M1 범위 한정 — M2 결정 게이트는 본 SPEC의 sync-phase 범위 밖, orchestrator가 별도 AskUserQuestion 라운드로 진행)
 sync_complete_at: "2026-07-30"
-sync_commit_sha: "pending-backfill-SPEC-AI-089-sync"
+sync_commit_sha: "f940a47"
 
 M1 완료 + 측정 리포트 제출로 본 SPEC은 유효하게 완료되었다(acceptance.md Definition of
 Done). sync-phase는 CHANGELOG 엔트리 추가 + spec.md frontmatter `completed` 전환만
