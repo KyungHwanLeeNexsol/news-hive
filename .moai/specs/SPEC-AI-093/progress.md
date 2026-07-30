@@ -80,4 +80,4 @@ Route A (Hybrid Trunk main-direct, Tier M) — manager-develop cycle_type=ddd.
 - 전체 회귀: `pytest tests/ -q -m "not slow"` → 2244 passed, 4 skipped, 3 xpassed
 - xdist 레이스 확인: `-n 4` 81 passed
 - 정적 검사: `ruff check` 통과 / `mypy` 미검증 (환경에 mypy 미설치 — Gap)
-- run_commit_sha: pending-backfill-run
+- run_commit_sha: bf0c295
