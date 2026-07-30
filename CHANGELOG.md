@@ -4,6 +4,53 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Feature — SPEC-AI-092: 급등 예측 재현율 회복 — 평가 스냅샷 안정화 + 스캔 유니버스 bridge 후보화 (2026-07-30)
+
+**목적**: SPEC-AI-089가 측정한 "스캔 유니버스(측정 전용)와 실제 탐지 후보 풀 사이의 구조적
+간극"의 조건부 구현 단계. 평가 완료 기록의 카운트 불변성을 확보하고, 스캔 유니버스에는
+있었지만 1차 탐지기에 승격되지 않은 종목을 제한된 비용으로 bridge 후보화한다.
+
+**핵심 변경 (REQ-AI092-001~006, AC-092-001~008 전량 PASS)**:
+1. **REQ-001/AC-092-001** `/api/surge-trading/prediction-history`가 평가 완료 row의
+   `predicted_count`를 `FundSignal` 재조회 결과가 아니라
+   `SurgePredictionEvaluation.predicted_count`(공식 저장값)로 반환하도록 고정 —
+   `FundSignal.created_at` 후일 이동에 의한 카운트 흔들림 제거.
+2. **REQ-002/AC-092-002** `surge_prediction_evaluation.predicted_codes_json` 컬럼 추가
+   (alembic `069_surge_prediction_evaluation_snapshot.py`, nullable TEXT, 순수 additive).
+   `evaluate_surge_predictions()`가 near-limit carry/same-day horizon 제외 이후의 공식
+   predicted set을 평가 시점에 스냅샷 저장하고 `restore_predicted_codes()`로 복원 —
+   `FundSignal.created_at`이 후일 이동해도 평가 당시 predicted set 재현 가능. `/evaluation/
+   {date}`·`/prediction-history` 응답에 `predicted_codes` 필드 추가(기존 필드 하위호환 유지).
+3. **REQ-003/004, AC-092-003~005/008** `scan_universe_bridge_candidates_enabled`
+   (기본 `False`) 플래그 뒤에 신규 `generate_scan_universe_bridge_candidates()` 추가 —
+   `build_scan_universe()`가 이미 조회한 pool_a/pool_c 종목 중 `merged`(1차 탐지 결과)에
+   없는 종목을 기존 DB 자료(공시 impact_score, 전일 등락률)만으로 점수화해 bridge 후보로
+   승격. 신규 외부 fetch(Naver/DART) 없음. `scan_universe_bridge_max_candidates`(기본 20)
+   전체 상한 + `scan_universe_bridge_pool_limits`(기본 `{"pool_a":10,"pool_c":10}`) 풀별
+   상한 적용. `surge_metadata.surge_basis`에 `scan_universe_bridge` + 원 entry pool 기록.
+   same-day horizon 후보는 bridge 경로에서도 표준 T-1→T predicted set에서 배제.
+   `merged` 딕셔너리는 `gather_surge_candidates()`의 단일 합류 지점에서만 변경.
+4. **REQ-005/AC-092-006** adaptive threshold(`compute_adaptive_threshold`) 연결성 조사 —
+   이미 매수 실행 gate(`execute_buy_orders`) 전용으로 올바르게 배선되어 있고 예측 생성
+   gate(`gather_surge_candidates`)와는 무관함을 확인. 배선 변경 없이 두 게이트가
+   설정명/로그명으로 이미 분리되어 있음을 양쪽 모듈에 교차 참조 주석으로 명시.
+5. **REQ-006/AC-092-007** `detect_missing_evaluation_records()`(순수 읽기, idempotent) +
+   `check_and_alert_missing_evaluation()`(누락 시 텔레그램 admin 경보, `TELEGRAM_ADMIN_CHAT_ID`
+   미설정 시 warning log로 fail-open) 추가. 평일 19:15 KST 스케줄러 잡 등록. untracked mover
+   방어는 SPEC-AI-071의 기존 `stocks` 교집합 필터로 이미 충족되어 있음을 확인(신규 코드 불요).
+
+**Out of Scope 준수**: same-day 후보를 표준 predicted set에 포함하지 않음. BEAR regime 매수
+실행 차단 정책 무변경. 전체 시장 급등주 전량 예측 대상화 안 함(coverage/scannable recall
+분리 유지).
+
+**테스트**: 신규 `test_spec_ai_092.py`(20개 테스트) 전량 PASS — AC-092-001~008 전량 커버.
+전체 백엔드 회귀 스위트 **2226 passed, 4 skipped, 3 xpassed, 0 failed**(실행 2026-07-30).
+`ruff check .` clean.
+
+**배포 상태**: 커밋 완료(main direct push, Route A Hybrid Trunk, Tier M). bridge 후보화 플래그
+기본 OFF이므로 배포 시 기존 시그널 생성 결과에 영향 없음 — 실제 coverage/precision 개선
+효과는 운영 활성화 후에만 관측 가능.
+
 ### Spike — SPEC-AI-089: 스캔 유니버스→탐지 배선 측정 스파이크 (M1, 2026-07-27)
 
 **목적**: 급등예측 recall 근사 0% 문제의 원인으로 지목된 "스캔 유니버스(측정 전용)와 실제

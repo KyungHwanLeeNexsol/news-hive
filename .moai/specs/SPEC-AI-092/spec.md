@@ -2,7 +2,7 @@
 id: SPEC-AI-092
 title: "급등 예측 재현율 회복: 스캔 유니버스 bridge 후보화와 평가 기록 안정화"
 version: "0.1.1"
-status: in-progress
+status: completed
 created: 2026-07-28
 updated: 2026-07-30
 author: Nexsol

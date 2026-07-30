@@ -158,17 +158,24 @@ ac_fail_count: 0
 
 ## §E.4 Sync-phase Audit-Ready Signal
 
-sync_status: draft-sync
-sync_complete_at: null
-sync_commit_sha: null
+sync_status: completed
+sync_complete_at: "2026-07-30"
+sync_commit_sha: pending-backfill-092
 
-이번 sync 작업에서 formal SPEC 산출물을 생성했다.
+이번 sync에서 CHANGELOG.md 항목 추가, spec.md frontmatter `in-progress → completed` 전환,
+progress.md §E.4 갱신을 수행했다. MX 태그(`@MX:NOTE`)는 run-phase에서 이미
+`generate_scan_universe_bridge_candidates()`, `detect_missing_evaluation_records()`,
+`check_and_alert_missing_evaluation()`에 부여되어 있음을 확인했다 — 추가 태깅 불필요.
+
+DB 스키마 문서(`​.moai/project/db/schema.md` 등) 자동 동기화는 `db.yaml`의
+`require_user_approval: true` 설정에 따라 자동 실행하지 않았다. 이번 SPEC은
+`backend/alembic/versions/069_surge_prediction_evaluation_snapshot.py`로 nullable
+`predicted_codes_json` TEXT 컬럼을 추가했다(순수 additive, non-breaking) — 사용자가
+`moai hook db-schema-sync`를 수동 실행하거나 승인하는 것을 권장한다.
 
 - `.moai/specs/SPEC-AI-092/spec.md`
 - `.moai/specs/SPEC-AI-092/plan.md`
 - `.moai/specs/SPEC-AI-092/acceptance.md`
 - `.moai/specs/SPEC-AI-092/research.md`
 - `.moai/specs/SPEC-AI-092/progress.md`
-
-Git delivery는 보류한다. 현재 작업트리에 `.claude/.moai/.agency` 사용자 변경이 대량으로 존재하므로,
-명시 승인 없이 sync commit/PR을 만들지 않는다.
+- `CHANGELOG.md`
