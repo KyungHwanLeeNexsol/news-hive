@@ -1170,6 +1170,32 @@ def _run_surge_detector_contribution():
         db.close()
 
 
+def _run_surge_missing_evaluation_check():
+    """SPEC-AI-092 REQ-AI092-006: 장마감 이후 당일 actual/evaluation 레코드 누락 감시.
+
+    평일 19:15 KST (verify_predictions 18:30, backtest_gate 18:45, auto_improve 19:00,
+    detector_contribution 19:05 이후 — 모든 평가 관련 잡이 실행을 마친 뒤 확인해야
+    "아직 안 돌았음"을 "누락"으로 오판하지 않는다). 순수 읽기 감지 + fail-open 경보.
+    """
+    if not _is_kr_market_open():
+        logger.debug("주말 — 급등평가 누락 감시 스킵")
+        return
+
+    _start = _time.monotonic()
+    from app.services.surge_evaluation_service import check_and_alert_missing_evaluation
+
+    db = SessionLocal()
+    try:
+        status = check_and_alert_missing_evaluation(db)
+        logger.info("[급등평가누락감시] 확인 완료: %s", status)
+    except Exception:
+        logger.exception("surge missing evaluation check 실패")
+        raise
+    finally:
+        _record_job_duration("surge_missing_evaluation_check", _time.monotonic() - _start)
+        db.close()
+
+
 def _run_surge_daily_report():
     """SPEC-AI-041: 텔레그램 일일 리포트 발송 (평일 17:05 KST)."""
     if not _is_kr_market_open():
@@ -2610,6 +2636,20 @@ def start_scheduler():
         minute=5,
         timezone="Asia/Seoul",
         id="surge_detector_contribution",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    # 19:15 — SPEC-AI-092 REQ-AI092-006: 급등평가 누락 감시 (verify_predictions 18:30,
+    # backtest_gate 18:45, auto_improve 19:00, detector_contribution 19:05 이후 실행)
+    scheduler.add_job(
+        _run_surge_missing_evaluation_check,
+        "cron",
+        day_of_week="mon-fri",
+        hour=19,
+        minute=15,
+        timezone="Asia/Seoul",
+        id="surge_missing_evaluation_check",
         max_instances=1,
         coalesce=True,
         replace_existing=True,

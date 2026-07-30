@@ -5,6 +5,15 @@
 
 임계값 산출은 시그널 생성 시점(15:20 배치)에 1회 실행되며
 매수 실행 시점(9:05 배치)에는 저장된 값을 읽는다.
+
+SPEC-AI-092 REQ-AI092-005 조사 결론(명명/로그 분리 확인): 이 모듈이 산출/저장하는
+적응형 임계값은 매수 실행 게이트 전용(execution-only)이며, 예측 생성 게이트
+(surge_detector.gather_surge_candidates의 effective_threshold — ensemble.min_score_for_signal /
+ensemble.regime_thresholds 기반)와는 무관하다. get_today_threshold()의 유일한 호출부는
+surge_trading_service.execute_buy_orders()(매수 실행)이며, gather_surge_candidates()는
+이 모듈을 import하지 않는다 — 두 게이트는 이미 설정명(min_score_for_signal vs
+adaptive_threshold)과 로그 라인("[앙상블] 유효임계=" vs "[SURGE] 적응형 매수 임계값=")이
+분리되어 있다. 예측 생성 gate에 연결하는 변경은 하지 않았다(AC-092-006 execution-only 분기).
 """
 
 import logging
