@@ -160,7 +160,7 @@ ac_fail_count: 0
 
 sync_status: completed
 sync_complete_at: "2026-07-30"
-sync_commit_sha: pending-backfill-092
+sync_commit_sha: e17d30a
 
 이번 sync에서 CHANGELOG.md 항목 추가, spec.md frontmatter `in-progress → completed` 전환,
 progress.md §E.4 갱신을 수행했다. MX 태그(`@MX:NOTE`)는 run-phase에서 이미
