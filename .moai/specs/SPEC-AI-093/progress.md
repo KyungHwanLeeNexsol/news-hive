@@ -87,7 +87,7 @@ Route A (Hybrid Trunk main-direct, Tier M) — manager-develop cycle_type=ddd.
 - sync_status: audit-ready
 - sync_complete_at: 2026-07-30
 - Route A (Hybrid Trunk main-direct, Tier M) — PR 없이 `main` 직접 push
-- sync_commit_sha: pending-backfill-SPEC-AI-093-sync
+- sync_commit_sha: 20dcfee
 
 ### 산출물
 
