@@ -629,6 +629,32 @@ def classify_scannable_denominator_expansion(
     )
 
 
+def restore_predicted_codes(evaluation: SurgePredictionEvaluation) -> list[str] | None:
+    # @MX:NOTE: [AUTO] SPEC-AI-092 REQ-AI092-002 — evaluate_surge_predictions()가 저장한
+    # predicted_codes_json 스냅샷에서 평가 당시 공식 predicted set을 복원한다.
+    # FundSignal.created_at이 carry-over/update 경로로 후일 이동해도 영향받지 않는다.
+    # 스냅샷 도입 이전 row(필드 없음) 또는 손상된 JSON은 None을 반환해 호출부가
+    # 기존 방식(FundSignal 재조회)으로 fail-open할 수 있게 한다.
+    # @MX:SPEC: SPEC-AI-092 REQ-AI092-002
+    """평가 레코드의 predicted_codes_json 스냅샷을 파싱해 복원한다.
+
+    Args:
+        evaluation: SurgePredictionEvaluation 인스턴스
+
+    Returns:
+        복원된 종목코드 리스트. 스냅샷이 없거나 손상되었으면 None(fail-open).
+    """
+    if not evaluation.predicted_codes_json:
+        return None
+    try:
+        codes = json.loads(evaluation.predicted_codes_json)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(codes, list):
+        return None
+    return codes
+
+
 def evaluate_surge_predictions(
     db: Session,
     trading_date: date,
@@ -835,6 +861,11 @@ def evaluate_surge_predictions(
     _pool_c = (pool_counts or {}).get("pool_c", 0)
     _scan_universe_size = (pool_counts or {}).get("scan_universe_size", 0)
 
+    # SPEC-AI-092 REQ-AI092-002: 평가 당시 공식 predicted set(near-limit carry/same-day
+    # horizon 배제 이후 확정된 predicted_set) 스냅샷. FundSignal.created_at 이동에 영향받지
+    # 않는다 — 이 시점에 이미 확정된 predicted_set을 그대로 직렬화한다.
+    predicted_codes_json = json.dumps(sorted(predicted_set), ensure_ascii=False)
+
     # 6. SurgePredictionEvaluation upsert (evaluation_date PK 기준)
     existing = (
         db.query(SurgePredictionEvaluation)
@@ -844,6 +875,7 @@ def evaluate_surge_predictions(
 
     if existing is not None:
         existing.predicted_count = len(predicted_set)
+        existing.predicted_codes_json = predicted_codes_json
         existing.actual_surge_count = len(actual_set)
         existing.true_positive = tp
         existing.false_positive = fp
@@ -867,6 +899,7 @@ def evaluate_surge_predictions(
         evaluation = SurgePredictionEvaluation(
             evaluation_date=trading_date,
             predicted_count=len(predicted_set),
+            predicted_codes_json=predicted_codes_json,
             actual_surge_count=len(actual_set),
             true_positive=tp,
             false_positive=fp,
@@ -1056,3 +1089,113 @@ async def analyze_misses_with_llm(
     )
     logger.info("LLM 분석 불가 — rule-based fallback 사용 (fn_count=%d)", len(missed_stocks))
     return fallback
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-092 REQ-AI092-006: 운영 평가 누락 감시
+# ---------------------------------------------------------------------------
+
+def detect_missing_evaluation_records(db: Session, trading_date: date) -> dict[str, Any]:
+    # @MX:NOTE: [AUTO] SPEC-AI-092 REQ-AI092-006 — 순수 읽기 전용 감지. 부작용이 없으므로
+    # 몇 번을 호출해도 동일 결과를 반환한다(idempotent).
+    # @MX:SPEC: SPEC-AI-092 REQ-AI092-006
+    """당일 surge_actual_outcome/surge_prediction_evaluation 레코드 존재 여부를 감지한다.
+
+    Args:
+        db: SQLAlchemy 동기 세션
+        trading_date: 확인할 거래일 (보통 오늘 KST)
+
+    Returns:
+        {"trading_date": str, "actual_outcome_missing": bool, "evaluation_missing": bool}
+    """
+    actual_exists = (
+        db.query(SurgeActualOutcome.stock_code)
+        .filter(SurgeActualOutcome.trading_date == trading_date)
+        .first()
+        is not None
+    )
+    evaluation_exists = (
+        db.query(SurgePredictionEvaluation.evaluation_date)
+        .filter(SurgePredictionEvaluation.evaluation_date == trading_date)
+        .first()
+        is not None
+    )
+    return {
+        "trading_date": str(trading_date),
+        "actual_outcome_missing": not actual_exists,
+        "evaluation_missing": not evaluation_exists,
+    }
+
+
+async def _send_missing_evaluation_alert(status: dict[str, Any]) -> bool:
+    """SPEC-AI-092 REQ-AI092-006: 텔레그램 admin 채널로 누락 경보를 발송한다.
+
+    TELEGRAM_ADMIN_CHAT_ID 미설정 또는 발송 실패 시 False를 반환한다(fail-open —
+    plan.md TASK-006: "알림 연동은 기존 Telegram admin 채널이 있으면 사용하고,
+    없으면 warning log로 fail-open한다").
+    """
+    import os
+
+    from app.services.telegram_service import send_telegram_message
+
+    chat_id = os.environ.get("TELEGRAM_ADMIN_CHAT_ID")
+    if not chat_id:
+        logger.warning(
+            "[급등평가누락감시] TELEGRAM_ADMIN_CHAT_ID 미설정 — 경보 발송 스킵(로그만 기록): %s",
+            status,
+        )
+        return False
+
+    missing_tables = []
+    if status.get("actual_outcome_missing"):
+        missing_tables.append("surge_actual_outcome")
+    if status.get("evaluation_missing"):
+        missing_tables.append("surge_prediction_evaluation")
+
+    text = (
+        "<b>⚠️ [급등예측 평가 누락 감시]</b>\n"
+        f"날짜: {status.get('trading_date')}\n"
+        f"누락 테이블: {', '.join(missing_tables) if missing_tables else '(없음)'}"
+    )
+    try:
+        return await send_telegram_message(chat_id=chat_id, text=text, parse_mode="HTML")
+    except Exception as exc:
+        logger.error("[급등평가누락감시] 텔레그램 발송 예외: %s", exc)
+        return False
+
+
+def check_and_alert_missing_evaluation(
+    db: Session,
+    trading_date: date | None = None,
+) -> dict[str, Any]:
+    # @MX:NOTE: [AUTO] SPEC-AI-092 REQ-AI092-006 — 장마감 이후 지정 시각 스케줄러 잡에서
+    # 호출되는 진입점. 감지(순수 읽기) + 누락 시 경보(fail-open). 여러 번 호출해도 안전하다
+    # (idempotent — 경보 발송 자체는 상태를 변경하지 않으며, 중복 발송 억제는 스케줄러
+    # max_instances=1 설정이 담당한다).
+    # @MX:SPEC: SPEC-AI-092 REQ-AI092-006
+    """당일 평가 누락을 감지하고 필요 시 텔레그램 admin 경보를 발송한다.
+
+    Args:
+        db: SQLAlchemy 동기 세션
+        trading_date: 확인 대상 날짜. None이면 오늘(KST)을 사용한다.
+
+    Returns:
+        detect_missing_evaluation_records()와 동일한 shape의 dict
+    """
+    if trading_date is None:
+        from zoneinfo import ZoneInfo
+
+        trading_date = datetime.now(ZoneInfo("Asia/Seoul")).date()
+
+    status = detect_missing_evaluation_records(db, trading_date)
+
+    if status["actual_outcome_missing"] or status["evaluation_missing"]:
+        logger.warning("[급등평가누락감시] 누락 감지: %s", status)
+        try:
+            asyncio.run(_send_missing_evaluation_alert(status))
+        except Exception as exc:
+            logger.warning("[급등평가누락감시] 경보 발송 실패 (무시): %s", exc)
+    else:
+        logger.info("[급등평가누락감시] 누락 없음: date=%s", status["trading_date"])
+
+    return status

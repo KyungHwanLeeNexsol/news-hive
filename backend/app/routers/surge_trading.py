@@ -328,6 +328,7 @@ def get_evaluation_by_date(
 
     try:
         from app.models.surge_prediction_evaluation import SurgePredictionEvaluation
+        from app.services.surge_evaluation_service import restore_predicted_codes
 
         row = (
             db.query(SurgePredictionEvaluation)
@@ -351,6 +352,9 @@ def get_evaluation_by_date(
             "improvements_applied_json": row.improvements_applied_json,
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "signal_details": _get_signal_details_for_date(db, eval_date),
+            # SPEC-AI-092 REQ-AI092-002: 평가 당시 공식 predicted set 스냅샷(있으면 우선
+            # 신뢰). 스냅샷 도입 이전 row는 None — signal_details/predicted_count로 fail-open.
+            "predicted_codes": restore_predicted_codes(row),
         }
     except HTTPException:
         raise
@@ -414,6 +418,7 @@ def get_prediction_history(
     from app.models.fund_signal import FundSignal
     from app.models.stock import Stock
     from app.models.disclosure import Disclosure  # noqa: F401 — FundSignal.disclosure 관계 해소용
+    from app.services.surge_evaluation_service import restore_predicted_codes
     from app.services.surge_trading_service import _get_prev_business_day, _get_next_business_day
 
     try:
@@ -550,16 +555,15 @@ def get_prediction_history(
             verified = [s["alpha_pct"] for s in surge_signals if s["alpha_pct"] is not None]
             avg_alpha = sum(verified) / len(verified) if verified else None
 
-            # predicted_count: DB 저장값 대신 실시간 재계산 (집계 버그 방어)
-            surge_count_live = len(surge_signals)
-
             result.append({
                 # signal_date(T-1)을 행 레이블로 사용: "6/9 행 = 6/9에 생성한 시그널 = 6/10 예측"
                 "trading_date": str(signal_date_for_eval[ev.evaluation_date]),
                 # target_date(T) = 실제 예측 대상일 (급등이 발생하는 날)
                 "target_date": str(ev.evaluation_date),
-                # surge_candidate만 실시간 카운트 (DB 저장값 ev.predicted_count 무시)
-                "predicted_count": surge_count_live,
+                # 평가 완료 행의 카운트는 평가 당시의 공식 predicted_set 결과가 정본이다.
+                # FundSignal.created_at은 carry-over/update 경로에서 후일 이동할 수 있으므로
+                # 여기서 재조회한 상세 목록 길이로 과거 평가 카운트를 덮어쓰지 않는다.
+                "predicted_count": ev.predicted_count,
                 "actual_surge_count": ev.actual_surge_count,
                 "true_positive": ev.true_positive,
                 "false_positive": ev.false_positive,
@@ -573,6 +577,9 @@ def get_prediction_history(
                 "signals": surge_signals + disclosure_signals,
                 "surge_signals": surge_signals,
                 "disclosure_signals": disclosure_signals,
+                # SPEC-AI-092 REQ-AI092-002: 평가 당시 공식 predicted set 스냅샷(있으면
+                # signal_date drift에 영향받지 않는 정본). 스냅샷 도입 이전 행은 None.
+                "predicted_codes": restore_predicted_codes(ev),
             })
 
         return result

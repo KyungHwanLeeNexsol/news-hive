@@ -74,6 +74,12 @@ class SurgePredictionEvaluation(Base):
     # SPEC-AI-068 REQ-003: 전체 실제급등주 종목 수 (coverage 분모, actual_surge_count와 동일값)
     total_actual_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=0)
 
+    # SPEC-AI-092 REQ-AI092-002: 평가 당시 공식 predicted set(near-limit carry/same-day
+    # horizon 제외) 종목코드 JSON 배열 스냅샷. FundSignal.created_at이 carry-over/update
+    # 경로로 후일 이동해도 평가 당시 predicted set을 복원할 수 있도록 한다. 과거(스냅샷
+    # 도입 이전) row는 null — API는 null이면 기존 방식(재조회)으로 fail-open한다.
+    predicted_codes_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     # 레코드 생성 시각
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

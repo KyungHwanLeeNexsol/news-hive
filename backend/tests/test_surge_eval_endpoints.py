@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 
 from app.models.surge_auto_improvement_log import SurgeAutoImprovementLog
+from app.models.fund_signal import FundSignal
 from app.models.surge_prediction_evaluation import SurgePredictionEvaluation
 
 
@@ -142,3 +143,54 @@ class TestGetImprovements:
         assert data[0]["parameter_path"] == "ensemble.weights.theme_cluster"
         assert abs(data[0]["old_value"] - 0.25) < 1e-6
         assert abs(data[0]["new_value"] - 0.28) < 1e-6
+
+
+# ---------------------------------------------------------------------------
+# GET /api/surge-trading/prediction-history
+# ---------------------------------------------------------------------------
+
+class TestGetPredictionHistory:
+    def test_evaluated_row_uses_stored_predicted_count_when_signal_date_drifts(
+        self, client, db, make_stock
+    ):
+        """평가 완료 행의 predicted_count는 현재 FundSignal 재조회 결과로 덮지 않는다."""
+        from app.services.surge_trading_service import _get_prev_business_day
+
+        eval_date = date(2026, 6, 10)
+        signal_date = _get_prev_business_day(eval_date)
+        stock = make_stock(name="히스토리드리프트종목", stock_code="909041")
+
+        db.add(SurgePredictionEvaluation(
+            evaluation_date=eval_date,
+            predicted_count=7,
+            actual_surge_count=3,
+            true_positive=1,
+            false_positive=6,
+            false_negative=2,
+            precision=1 / 7,
+            recall=1 / 3,
+            f1_score=0.2,
+        ))
+        db.add(FundSignal(
+            stock_id=stock.id,
+            signal="buy",
+            confidence=0.8,
+            reasoning="테스트 시그널",
+            signal_type="surge_candidate",
+            surge_metadata='{"surge_basis": ["theme_cluster"]}',
+            originally_created_at=datetime.combine(
+                signal_date, datetime.min.time()
+            ).replace(hour=15, minute=20),
+            created_at=datetime(2026, 6, 10, 10, 0),
+        ))
+        db.commit()
+
+        response = client.get("/api/surge-trading/prediction-history?days=90")
+        assert response.status_code == 200
+
+        row = next(
+            r for r in response.json()
+            if r["target_date"] == eval_date.isoformat()
+        )
+        assert row["trading_date"] == signal_date.isoformat()
+        assert row["predicted_count"] == 7
