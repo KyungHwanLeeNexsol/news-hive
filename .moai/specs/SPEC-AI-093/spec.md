@@ -2,7 +2,7 @@
 id: SPEC-AI-093
 title: "급등 결과 라벨 재정의: 장중 고가 기준 등락률(high_change_rate) 실측 수집"
 version: "0.1.0"
-status: in-progress
+status: completed
 created: 2026-07-30
 updated: 2026-07-30
 author: Nexsol

@@ -81,3 +81,42 @@ Route A (Hybrid Trunk main-direct, Tier M) — manager-develop cycle_type=ddd.
 - xdist 레이스 확인: `-n 4` 81 passed
 - 정적 검사: `ruff check` 통과 / `mypy` 미검증 (환경에 mypy 미설치 — Gap)
 - run_commit_sha: bf0c295
+
+## §E.4 Sync-phase Audit-Ready Signal
+
+- sync_status: audit-ready
+- sync_complete_at: 2026-07-30
+- Route A (Hybrid Trunk main-direct, Tier M) — PR 없이 `main` 직접 push
+- sync_commit_sha: pending-backfill-SPEC-AI-093-sync
+
+### 산출물
+
+| 산출물 | 내용 |
+|--------|------|
+| `CHANGELOG.md` `[Unreleased]` | SPEC-AI-093 Feature 항목 1건 추가 (SPEC-AI-092 항목 위) |
+| `spec.md` frontmatter | `status: in-progress` → `completed` (body 무수정) |
+| `progress.md` | 본 §E.4 섹션 추가 |
+
+### 프론트매터 전이 범위 주의
+
+`plan.md` / `acceptance.md`에는 YAML frontmatter 블록 자체가 없다(각각 `# SPEC-AI-093 Plan` /
+`# SPEC-AI-093 Acceptance Criteria` 헤딩으로 시작). 따라서 `status:` 전이는 frontmatter를 보유한
+`spec.md` 1개 파일에만 적용했다 — 없는 frontmatter를 신규 삽입하는 것은 body content 변경에
+해당하므로 수행하지 않았다(§SPEC Artifact Ownership).
+
+### 검증 근거
+
+- CHANGELOG 중복 방지: 작성 전 `grep -c 'SPEC-AI-093' CHANGELOG.md` → `0` (중복 없음 확인)
+- AC 개수 출처: `acceptance.md` §A AC 매트릭스 = 10개(AC-093-001~010, Must-Pass 8 / Should-Pass 2).
+  `progress.md`가 아닌 acceptance.md를 SSOT로 사용
+- CHANGELOG 기재 내용은 `plan.md` 서술이 아니라 실제 구현 파일
+  (`backend/app/services/surge_actual_outcome_service.py`) 직접 확인 후 작성
+- `@MX:TODO` 잔여: 변경 파일 2개에 0건 (`grep -n '@MX:TODO'` → no match).
+  본 SPEC 구현은 `@MX:NOTE` 2건 + `@MX:ANCHOR` 1건 + `@MX:SPEC` 참조로 마감
+
+### Gap (미검증)
+
+- `mypy`는 run-phase와 동일하게 환경 미설치로 미실행 (기존 Gap 승계)
+- 고가 수집의 실제 fallback 비율 / 배치 소요 시간 증가분은 **배포 후 첫 거래일 실측** 필요
+  (acceptance.md §E Definition of Done 마지막 항목 — 코드 머지로 충족되지 않는 운영 관측 항목)
+- `high_change_rate` 실측 커버리지는 배포일 이후 거래일부터만 축적됨(D3 백필 없음)

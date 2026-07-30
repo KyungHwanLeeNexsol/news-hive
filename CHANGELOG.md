@@ -4,6 +4,56 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Feature — SPEC-AI-093: 급등 결과 라벨 재정의 — 장중 고가 기준 등락률(high_change_rate) 실측 수집 (2026-07-30)
+
+**목적**: `surge_actual_outcome.high_change_rate`는 SPEC-AI-041이 명세하고 마이그레이션
+(`058_surge_actual_outcome.py`)까지 만든 실재 컬럼이지만, 모든 insert 경로에서 무조건 `None`으로
+하드코딩되어 있어 **한 번도 채워진 적이 없었다**. 그 결과 급등 라벨이 종가 기준 단일 축으로만
+측정되어, 장중 +15%까지 급등했다가 종가 +7%로 되밀린 종목이 체계적으로 비급등으로 분류되고
+있었다. 본 SPEC은 그 라벨 수집 정확도만을 범위로 하며, 예측 로직·유니버스·탐지기는 무수정이다.
+
+**핵심 변경 (REQ-AI093-001~006, AC-093-001~010 전량 10개 PASS)**:
+1. **REQ-001/002, AC-093-001/002/006** `compute_high_change_rate()` 순수 함수 추가 —
+   `(T일 일봉 high − T-1일 일봉 close) / T-1 close × 100`. T·T-1 레코드는 **인덱스가 아닌
+   `PriceRecord.date` 값 매칭**(`YYYY.MM.DD`)으로 특정한다. SPEC-AI-072에서 `near_limit_up_carry`가
+   인덱스 기반 조회로 T-1 등락률을 오라벨해 "이미 급등한 종목을 뒤늦게 추격"한 사례의 재발 차단.
+   `high_change_rate < change_rate`(고가가 종가보다 낮은 불가능 상태)는 계산 오류로 간주해
+   저장하지 않는다(허용 오차 0.01).
+2. **REQ-001/003, AC-093-003/005** `collect_daily_surge_outcomes()`가 기존
+   `_PRICE_CONCURRENCY` 세마포어 아래에서 `fetch_stock_price_history(code, pages=3)`를 **추가**
+   조회해 `"high_change_rate": None` 하드코딩을 실측값으로 교체. 실측 실패 시 `change_rate`로
+   대체하지 않고 **NULL로 남기며**(저장은 정직하게), 5개 사유 코드(`no_candle_t` /
+   `no_candle_t1` / `invalid_high` / `invalid_prev_close` / `invariant_violation`)를 종목별 DEBUG +
+   배치 종료 시 사유별 건수·비율 요약 INFO 1건으로 로깅한다. 개별 종목 실패는 배치를 중단하지
+   않는다(fail-open 유지). 카운터는 모듈 전역이 아닌 함수 지역 상태 — pytest-xdist 워커 간 레이스
+   회피(2026-07-03 CI 레이스 교훈).
+3. **REQ-004/AC-093-004** `change_rate`(Naver `fluctuationsRatio` 경로) 및
+   `was_surge`(`change_rate >= 10.0`) 산출식은 **문자 단위로 무수정**. `was_surge` 소비자 5개 파일
+   (`surge_evaluation_service.py` / `surge_universe_gap_service.py` / `surge_auto_improver.py` /
+   `surge_detector.py` / `scheduler.py`)도 무수정 — 특히 `surge_detector.py`의 SPEC-AI-050
+   테마캐리는 `was_surge`를 **탐지기 입력**으로 쓰므로, 라벨을 재정의했다면 예측 건수가 부수적으로
+   급증했을 것이다(D2 동결 근거).
+4. **REQ-005/AC-093-007/008** 고가 기반 성공 판정은 신규 컬럼이 아닌 **읽기 시점 파생 지표**로
+   제공 — `evaluate_high_based_outcomes()`가 `COALESCE(high_change_rate, change_rate) >= 10.0`으로
+   판정하고, 기존 `was_surge_count`를 **대체하지 않고 병렬로** 함께 반환한다. 거래일별 실측
+   커버리지(`high_change_rate IS NOT NULL` 비율)가 임계값(기본 0.90,
+   `SURGE_HIGH_COVERAGE_THRESHOLD`) 미만이면 `partial_collection=True`를 부착 — 배포 직후
+   부분 수집된 날의 낮은 고가 기반 recall을 실제 성능 저하로 오독하지 않게 한다. 현재 노출
+   표면은 서비스 계층 함수까지이며 `/prediction-history` API 확장은 후속 SPEC.
+5. **REQ-006/AC-093-009** 고가 조회 시도 수 / 캐시 적중(인메모리 기준 하한 추정) / 외부 호출 추정
+   건수를 배치 요약 로그 1건으로 계측 — spec.md D1의 "캐시 덕분에 증가분이 작을 것"이라는
+   **예상을 실측으로 대체**한다. `pages=3`은 연휴 직후 T-1 포함 보장과, `_price_cache`가
+   `stock_code`만으로 키를 잡아 짧은 일봉 리스트가 20거래일 이상을 요구하는 탐지기 계산을
+   굶기는 것을 방지하기 위한 값이다.
+
+**의도적 제외**: `was_surge` 재정의(D2 동결) / 과거 `surge_actual_outcome` 행 백필(D3 전진 적용만
+— SPEC-AI-071 선례) / 신규 컬럼·마이그레이션(D4 — 기존 nullable 컬럼 재사용). 고가 기반 지표는
+배포일 이후 거래일부터만 유효하며, 그 사실은 위 coverage guard가 표면화한다.
+
+**변경 파일 2개**: `backend/app/services/surge_actual_outcome_service.py`(EXTEND),
+`backend/tests/test_surge_actual_outcome_service.py`(기존 14개 단언 무수정 + 신규 18개 = 32 passed).
+전체 회귀 2244 passed / 4 skipped / 3 xpassed, `ruff check` 통과. 스키마 변경 없음.
+
 ### Feature — SPEC-AI-092: 급등 예측 재현율 회복 — 평가 스냅샷 안정화 + 스캔 유니버스 bridge 후보화 (2026-07-30)
 
 **목적**: SPEC-AI-089가 측정한 "스캔 유니버스(측정 전용)와 실제 탐지 후보 풀 사이의 구조적
