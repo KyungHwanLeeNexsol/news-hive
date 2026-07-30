@@ -152,7 +152,7 @@ OK
 
 run_status: implemented
 run_complete_at: "2026-07-30"
-run_commit_sha: pending-backfill-spec-ai-092-run
+run_commit_sha: 93dafed8bf5ecc0954e6325a743cb171d1728538
 ac_pass_count: 8
 ac_fail_count: 0
 
