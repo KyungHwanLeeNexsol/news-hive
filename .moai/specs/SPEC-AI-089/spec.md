@@ -2,9 +2,9 @@
 id: SPEC-AI-089
 title: "스캔 유니버스→탐지 배선 측정 스파이크 (Universe-to-Detection Wiring Measurement Spike)"
 version: "0.1.1"
-status: in-progress
+status: completed
 created: 2026-07-27
-updated: 2026-07-27
+updated: 2026-07-30
 author: Nexsol
 priority: High
 phase: "backend surge-detection v0.1.0"

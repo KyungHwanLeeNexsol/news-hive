@@ -66,6 +66,11 @@ m1_to_mN_commit_strategy: "M1 단일 통합 커밋(구현+테스트+리포트+�
 
 ## §E.4 Sync-phase Audit-Ready Signal
 
-_<본 SPEC은 M1 완료로 유효하게 종료된다 — M2(결정 게이트)는 orchestrator가 별도
-AskUserQuestion 라운드로 진행하며, M2 승인 범위에 따라 sync-phase 진행 여부가
-결정된다(plan.md §A/§C 참고). 현재는 sync-phase 대기 아님 — M1 단독 완료 상태.>_
+sync_status: complete (M1 범위 한정 — M2 결정 게이트는 본 SPEC의 sync-phase 범위 밖, orchestrator가 별도 AskUserQuestion 라운드로 진행)
+sync_complete_at: "2026-07-30"
+sync_commit_sha: "pending-backfill-SPEC-AI-089-sync"
+
+M1 완료 + 측정 리포트 제출로 본 SPEC은 유효하게 완료되었다(acceptance.md Definition of
+Done). sync-phase는 CHANGELOG 엔트리 추가 + spec.md frontmatter `completed` 전환만
+수행한다 — plan.md/acceptance.md는 YAML frontmatter를 보유하지 않아 전환 대상이 아니다.
+M2(배선 방식 결정)는 sync-phase 완료 이후 orchestrator가 별도로 진행한다.

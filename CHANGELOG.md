@@ -4,6 +4,58 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Spike — SPEC-AI-089: 스캔 유니버스→탐지 배선 측정 스파이크 (M1, 2026-07-27)
+
+**목적**: 급등예측 recall 근사 0% 문제의 원인으로 지목된 "스캔 유니버스(측정 전용)와 실제
+탐지 후보 풀 사이의 구조적 간극" 가설을 실측 데이터로 검증한다. SPEC-AI-086이 배선을
+후속 SPEC(Exclusion 1)으로 명시 위임한 데 대한 정식 착수 SPEC. 본 SPEC은 **측정 전용
+스파이크(M1)**이며, 배선 자체는 구현하지 않는다 — M2 결정 게이트(사용자 승인)가 있어야만
+후속 마일스톤(M3+)이 진행된다(plan.md §A).
+
+**핵심 변경 (REQ-AI089-001~007, M1 범위, 8/8 AC PASS)**:
+1. **REQ-001** 신규 순수 함수 `measure_universe_detection_gap()`
+   (`app/services/surge_universe_gap_service.py`, 신규 모듈) — 풀별(A/B/C/D) raw/커버
+   개수를 인메모리 집합 연산으로 산출. 신규 DB 쓰기 없음.
+2. **REQ-002** `analyze_no_signal_pool_attribution()` — 무시그널 실제급등 종목을 T-1 풀
+   귀속(pool_a/b/c/absent)으로 분류. `SurgeUniverseMember`(SPEC-AI-068)×`SurgeActualOutcome`
+   조인만 사용, 신규 마이그레이션 없음.
+3. **REQ-003 [HARD]** `gather_surge_candidates()`에 계측 훅 추가 — 신규 플래그
+   `universe_gap_measurement_enabled: bool = False`(기본 OFF) 뒤에 게이팅, `merged`(병합된
+   탐지 후보) 딕셔너리를 어떤 방식으로도 변경하지 않음(계측 ON 상태에서도 탐지 결과 완전
+   동일함을 fixture로 직접 검증 — AC-089-008).
+4. **REQ-004** 비용 예산 불변식 — 계측은 이미 계산된 `_universe_codes`/`merged`에 대한
+   순수 집합 연산 + 로그 1줄만 추가(신규 네트워크 조회 없음). 활성/비활성 실측 A/B 비교는
+   프로덕션 스케줄 잡 실행이 필요해 이번 세션에서 확보하지 못함(§ 잔여 위험 참고).
+5. **REQ-007** 관측성 — `[유니버스간극측정]` 로그 라인 1개(실행 여부·소요시간·풀별
+   raw/커버 요약), 종목별 상세 로그 없음, 신규 스키마 없음.
+
+**M1 측정 핵심 결과**(`.moai/reports/surge-universe-gap/2026-07-27.md`, 프로덕션 DB 15개
+표본 거래일 read-only 실측): 무시그널 실제급등 종목의 **83.1%가 T-1 스캔 유니버스 어디에도
+속하지 않는 "소스 부재형"**이며, 유니버스 배선(옵션 A/B/C)의 이론적 상한은 무시그널 문제의
+**최대 16.9%**에 불과하다. Pool A(공시) raw의 63.3%, Pool B(거래량) raw의 83.8%가 기존
+탐지기와 중복 없는 순수 미탐지 구간이다.
+
+**Out of Scope 준수**: 배선 구현 자체(옵션 A/B/C 코드 변경)는 M2 사용자 승인 전까지
+진행하지 않음 — 8개 1차 탐지기 함수 본체 무변경(정적 테스트로 확인). `max_scan_universe`/
+quota 배분/Pool A impact 정렬(SPEC-AI-065/076/078/086)과 NULL 시총 opt-in 편입(SPEC-AI-087)
+무변경. `SurgeTrade`/`SurgePortfolio` 실행 로직 무변경(예측기록모드 유지).
+
+**테스트**: 신규 `test_spec_ai_089.py`(15개 테스트) 전량 PASS — AC-089-001~008 전량 커버.
+전체 백엔드 회귀 스위트 **2160 passed, 4 skipped, 3 xpassed, 0 failed**(실행 2026-07-27).
+추가 타겟 회귀(유니버스/평가 테스트 64건) 전량 PASS. `ruff check .` clean. **mypy 갭**:
+이 환경에 mypy 미설치 — SPEC-AI-087/088과 동일한 기존 환경 갭(본 SPEC 도입 아님).
+
+**잔여 위험(M2 이전 프로덕션 실측 권고)**: AC-089-004(비용 예산 불변식)의 정량 실측값
+(활성/비활성 대비 5% 이내 증가, 1080초 이하)은 코드 구조 증거로만 확인됨 — 프로덕션
+스케줄 잡에서 계측 활성화 상태로 최소 1회 실측하는 것을 M2 결정 전 권고한다.
+
+**M2 결정 게이트**: 본 CHANGELOG 시점 기준 M2(배선 방식 A/B/C 선택 또는 배선 보류)는
+아직 진행되지 않았다 — M1 완료 + 리포트 제출만으로 본 SPEC은 유효하게 완료된 상태다
+(acceptance.md Definition of Done).
+
+**배포 상태**: 커밋 완료(main direct push, Route A Hybrid Trunk, Tier L). 신규 플래그
+기본 OFF이므로 배포 시 기존 시그널 생성·평가 결과에 영향 없음.
+
 ### Fix — SPEC-AI-091: `stocks.keywords` 오염 근본원인 수정 — 무경계 substring 매칭 + 자기강화 순환 고리 차단 (2026-07-28)
 
 **목적**: 급등예측 시스템의 뉴스 기반 탐지기가 소비하는 `stocks.keywords`가 (1) 무경계
