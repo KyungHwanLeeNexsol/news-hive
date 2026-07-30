@@ -2,20 +2,31 @@
 
 당일 상승률 상위 종목(KOSPI/KOSDAQ 각 100개)을 조회하여
 SurgeActualOutcome 테이블에 upsert한다.
+
+SPEC-AI-093: `high_change_rate`(장중 고가 기준 등락률)를 일봉 실측값으로 채운다.
+종가 기준 `change_rate`/`was_surge` 산출 경로는 동결(D1/D2)하고, 고가 기반 성공 판정은
+저장 컬럼이 아닌 읽기 시점 파생 지표(`evaluate_high_based_outcomes`)로 병렬 제공한다.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import time
 from datetime import date
 
-from sqlalchemy import case
+from sqlalchemy import case, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.models.surge_actual_outcome import SurgeActualOutcome
-from app.services.naver_finance import fetch_current_price_with_change, fetch_top_movers_codes
+from app.services.naver_finance import (
+    PriceRecord,
+    fetch_current_price_with_change,
+    fetch_stock_price_history,
+    fetch_top_movers_codes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +34,153 @@ logger = logging.getLogger(__name__)
 _TOP_MOVERS_LIMIT = 100
 # 종목별 가격 조회 동시성 제한 (레이트 리미트 방지)
 _PRICE_CONCURRENCY = 10
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-093: 고가 기준 등락률 수집 설정
+# ---------------------------------------------------------------------------
+
+# 고가 조회 시 요청할 일봉 페이지 수 (Naver sise_day는 페이지당 약 10거래일).
+# pages=3(≈30거래일)을 기본값으로 잡는 이유는 두 가지다.
+#   1) 연휴 직후 T-1이 며칠 전이어도 T/T-1 레코드가 모두 포함된다.
+#   2) `_price_cache`는 stock_code만으로 키를 잡으므로, pages=1로 조회하면 약 10거래일짜리
+#      짧은 리스트가 공유 캐시에 기록되어 20거래일 이상을 요구하는 탐지기 계산을 굶길 수 있다.
+#      코드베이스에서 이미 안전선으로 쓰이는 값(fetch_stock_price_history_sync 기본 pages=3)에 맞춘다.
+_HIGH_HISTORY_PAGES: int = int(os.getenv("SURGE_HIGH_HISTORY_PAGES", "3"))
+
+# REQ-AI093-005: 고가 기반 파생 지표의 "부분 수집" 판정 임계값 (기본 0.90).
+_HIGH_COVERAGE_THRESHOLD: float = float(os.getenv("SURGE_HIGH_COVERAGE_THRESHOLD", "0.90"))
+
+# REQ-AI093-001 불변식 비교 허용 오차. `change_rate`는 Naver fluctuationsRatio에서,
+# `high_change_rate`는 자체 계산에서 나오므로 소수 2자리 반올림 차이를 위반으로 오판하지 않는다.
+_HIGH_INVARIANT_TOLERANCE = 0.01
+
+# REQ-AI093-003: fallback 사유 코드 (영문 식별자 고정, 로그 문구만 한국어)
+_HIGH_FALLBACK_REASONS = (
+    "no_candle_t",
+    "no_candle_t1",
+    "invalid_high",
+    "invalid_prev_close",
+    "invariant_violation",
+)
+
+
+def _naver_date_key(d: date) -> str:
+    """`date`를 Naver 일봉 날짜 형식(`YYYY.MM.DD`)으로 변환한다."""
+    return d.strftime("%Y.%m.%d")
+
+
+def compute_high_change_rate(
+    records: list[PriceRecord],
+    trading_date: date,
+    prev_business_day: date,
+    change_rate: float,
+) -> tuple[float | None, str | None]:
+    # @MX:NOTE: [AUTO] SPEC-AI-093 — T-1 종가는 인덱스가 아닌 date 매칭으로 특정한다.
+    # @MX:REASON: SPEC-AI-072에서 near_limit_up_carry가 인덱스 기반 조회로 T-1 등락률을
+    #   오라벨해 "이미 당일 급등한 종목을 뒤늦게 추격"하는 정반대 동작을 한 사례가 있다.
+    # @MX:ANCHOR: (T일 high, T-1일 close) 쌍은 반드시 date 값 매칭으로만 결정된다.
+    # @MX:SPEC: SPEC-AI-093 REQ-AI093-001 REQ-AI093-002
+    """장중 고가 기준 등락률을 계산한다(순수 함수).
+
+    계산식: `(T일 high - T-1일 close) / T-1일 close * 100`
+
+    Args:
+        records: `fetch_stock_price_history`가 반환한 일봉 리스트 (순서 무관)
+        trading_date: 수집 기준 거래일 (T)
+        prev_business_day: 직전 영업일 (T-1)
+        change_rate: 같은 행의 종가 기준 등락률 (불변식 검증용)
+
+    Returns:
+        `(high_change_rate, None)` 성공, 또는 `(None, fallback_reason)` 실패.
+        fallback_reason은 `_HIGH_FALLBACK_REASONS` 중 하나.
+    """
+    by_date = {r.date.strip(): r for r in records if r.date}
+
+    t_record = by_date.get(_naver_date_key(trading_date))
+    if t_record is None:
+        return None, "no_candle_t"
+
+    t1_record = by_date.get(_naver_date_key(prev_business_day))
+    if t1_record is None:
+        return None, "no_candle_t1"
+
+    high = float(t_record.high)
+    if high <= 0:
+        return None, "invalid_high"
+
+    prev_close = float(t1_record.close)
+    if prev_close <= 0:
+        return None, "invalid_prev_close"
+
+    value = round((high - prev_close) / prev_close * 100, 2)
+
+    # REQ-AI093-001: 고가 >= 종가이므로 high_change_rate < change_rate는 계산 오류다.
+    if value < change_rate - _HIGH_INVARIANT_TOLERANCE:
+        return None, "invariant_violation"
+
+    return value, None
+
+
+def _is_price_history_cached(code: str) -> bool:
+    """일봉이 이미 인메모리 캐시에 신선하게 존재하는지 확인한다(REQ-AI093-006 계측용).
+
+    naver_finance의 캐시 상태를 읽기만 하며 수정하지 않는다. Redis 복구 경로로도
+    외부 호출이 생략될 수 있으므로 이 값은 "인메모리 적중"의 하한 추정치다.
+    """
+    try:
+        from app.services import naver_finance as _nf
+
+        if code not in _nf._price_cache.data:
+            return False
+        last = _nf._price_cache.last_updated.get(code, 0)
+        return (time.time() - last) < _nf._cache_ttl()
+    except Exception:
+        return False
+
+
+async def _fetch_price_history_for_high(code: str) -> list[PriceRecord]:
+    """고가 계산용 일봉을 조회한다. 실패 시 빈 리스트(배치 중단 없음)."""
+    try:
+        return await fetch_stock_price_history(code, pages=_HIGH_HISTORY_PAGES)
+    except Exception as e:
+        logger.debug("고가용 일봉 조회 실패 — 건너뜀 (%s): %s", code, e)
+        return []
+
+
+def _log_high_change_rate_summary(
+    *,
+    trading_date: date,
+    row_count: int,
+    fallback_counts: dict[str, int],
+    attempt_count: int,
+    cache_hit_count: int,
+) -> None:
+    """고가 수집 결과 요약(REQ-AI093-003) + 조회 비용 계측(REQ-AI093-006)을 각 1건 로깅한다.
+
+    배치 카운터는 모듈 전역이 아니라 호출자의 지역 상태로 전달받는다 —
+    pytest-xdist 병렬 워커 간 상태 공유 레이스를 원천 차단한다(plan.md §C).
+    """
+    fallback_total = sum(fallback_counts.values())
+    measured = row_count - fallback_total
+    breakdown = ", ".join(
+        f"{reason}={fallback_counts.get(reason, 0)}"
+        f"({(fallback_counts.get(reason, 0) / row_count * 100) if row_count else 0.0:.1f}%)"
+        for reason in _HIGH_FALLBACK_REASONS
+    )
+    logger.info(
+        "고가 기준 등락률 수집 요약: trading_date=%s, 실측=%d/%d (%.1f%%), fallback=%d [%s]",
+        trading_date, measured, row_count,
+        (measured / row_count * 100) if row_count else 0.0,
+        fallback_total, breakdown,
+    )
+    # 캐시 적중은 인메모리 기준 하한 추정(Redis 복구 경로도 외부 호출을 생략함).
+    logger.info(
+        "고가 조회 비용 계측: trading_date=%s, 조회시도=%d건, 캐시적중=%d건, "
+        "외부호출(추정)=%d건 (pages=%d)",
+        trading_date, attempt_count, cache_hit_count,
+        max(attempt_count - cache_hit_count, 0) * _HIGH_HISTORY_PAGES,
+        _HIGH_HISTORY_PAGES,
+    )
 
 
 async def _fetch_code_info(code: str) -> dict | None:
@@ -152,8 +310,32 @@ async def collect_daily_surge_outcomes(db: Session, trading_date: date) -> int:
     tasks = [_fetch_with_semaphore(code) for code in unique_codes]
     results = await asyncio.gather(*tasks)
 
+    # 2-b단계: SPEC-AI-093 — 고가 기준 등락률용 일봉 조회 (동일 세마포어 재사용).
+    # 기존 change_rate 경로(fetch_current_price_with_change)는 건드리지 않는 별도 조회다(D1).
+    from app.services.surge_trading_service import _get_prev_business_day as _prev_bday
+
+    prev_business_day = _prev_bday(trading_date)
+
+    async def _fetch_history_with_semaphore(
+        code: str,
+    ) -> tuple[str, list[PriceRecord], bool]:
+        was_cached = _is_price_history_cached(code)
+        async with semaphore:
+            return code, await _fetch_price_history_for_high(code), was_cached
+
+    history_results = await asyncio.gather(
+        *[_fetch_history_with_semaphore(code) for code in unique_codes]
+    )
+    history_map: dict[str, list[PriceRecord]] = {}
+    cache_hit_count = 0
+    for code, records, was_cached in history_results:
+        history_map[code] = records
+        if was_cached:
+            cache_hit_count += 1
+
     # 3단계: 유효한 결과만 upsert 준비
     rows_to_upsert: list[dict] = []
+    fallback_counts: dict[str, int] = {}
     for code, price_info in results:
         if price_info is None:
             # R1.5: 개별 종목 실패는 건너뜀 (배치 전체 중단 불가)
@@ -163,6 +345,20 @@ async def collect_daily_surge_outcomes(db: Session, trading_date: date) -> int:
         change_rate: float = price_info.get("change_rate", 0.0)
         market = code_to_market.get(code, "UNKNOWN")
 
+        # REQ-AI093-001/003: 실측 실패 시 change_rate로 대체하지 않고 NULL로 남긴다(D4).
+        high_change_rate, fallback_reason = compute_high_change_rate(
+            history_map.get(code) or [],
+            trading_date,
+            prev_business_day,
+            change_rate,
+        )
+        if fallback_reason is not None:
+            fallback_counts[fallback_reason] = fallback_counts.get(fallback_reason, 0) + 1
+            logger.debug(
+                "고가 기준 등락률 계산 불가 — NULL 저장: code=%s, reason=%s",
+                code, fallback_reason,
+            )
+
         rows_to_upsert.append({
             "trading_date": trading_date,
             "stock_code": code,
@@ -171,9 +367,19 @@ async def collect_daily_surge_outcomes(db: Session, trading_date: date) -> int:
             "stock_name": code,
             "change_rate": change_rate,
             "was_surge": change_rate >= 10.0,
-            "high_change_rate": None,  # 고가 기준 등락률은 현재 API에서 미지원
+            "high_change_rate": high_change_rate,
             "market": market,
         })
+
+    # REQ-AI093-003: 사유별 건수 + 비율 요약 (배치 1건).
+    # REQ-AI093-006: 고가 조회 비용 실측. upsert 대상이 0건이어도 항상 남긴다.
+    _log_high_change_rate_summary(
+        trading_date=trading_date,
+        row_count=len(rows_to_upsert),
+        fallback_counts=fallback_counts,
+        attempt_count=len(unique_codes),
+        cache_hit_count=cache_hit_count,
+    )
 
     if not rows_to_upsert:
         logger.warning("upsert할 레코드 없음: trading_date=%s", trading_date)
@@ -248,6 +454,73 @@ async def collect_daily_surge_outcomes(db: Session, trading_date: date) -> int:
         trading_date, saved_count, surge_count,
     )
     return saved_count
+
+
+def evaluate_high_based_outcomes(
+    db: Session,
+    trading_date: date,
+    surge_threshold: float = 10.0,
+    coverage_threshold: float | None = None,
+) -> dict:
+    # @MX:NOTE: [AUTO] SPEC-AI-093 — 고가 기반 성공 판정은 저장 컬럼이 아니라 읽기 시점 파생값이다.
+    # @MX:SPEC: SPEC-AI-093 REQ-AI093-005
+    """거래일별 고가 기반 파생 지표를 기존 `was_surge` 지표와 **병렬로** 반환한다.
+
+    파생 판정은 `COALESCE(high_change_rate, change_rate) >= surge_threshold`다(D4 — 저장은
+    정직하게 NULL, 소비 시점에 fallback 적용). 기존 `was_surge` 집계는 그대로 함께 반환하며
+    대체하지 않는다(D2 동결).
+
+    커버리지(`high_change_rate IS NOT NULL` 비율)가 임계값 미만이면 `partial_collection=True`를
+    부착한다 — 배포 직후처럼 부분 수집된 날의 낮은 고가 기반 recall을 실제 성능 저하로
+    오독하지 않게 하기 위함이다(D3 전진 적용의 대가를 표면화).
+
+    Args:
+        db: SQLAlchemy 동기 세션
+        trading_date: 조회 대상 거래일
+        surge_threshold: 급등 판정 임계 등락률 (기본 10.0 — 기존 `was_surge`와 동일 기준)
+        coverage_threshold: 부분 수집 판정 임계 커버리지. None이면 모듈 기본값(0.90).
+
+    Returns:
+        지표 dict. `total_rows == 0`이면 커버리지 0.0 + `partial_collection=True`.
+    """
+    if coverage_threshold is None:
+        coverage_threshold = _HIGH_COVERAGE_THRESHOLD
+
+    effective_rate = func.coalesce(
+        SurgeActualOutcome.high_change_rate, SurgeActualOutcome.change_rate
+    )
+    row = (
+        db.query(
+            func.count().label("total_rows"),
+            # count(col)은 NULL을 제외하므로 곧 실측 건수다.
+            func.count(SurgeActualOutcome.high_change_rate).label("high_measured_rows"),
+            func.sum(
+                case((SurgeActualOutcome.was_surge.is_(True), 1), else_=0)
+            ).label("was_surge_count"),
+            func.sum(
+                case((effective_rate >= surge_threshold, 1), else_=0)
+            ).label("high_based_surge_count"),
+        )
+        .filter(SurgeActualOutcome.trading_date == trading_date)
+        .one()
+    )
+
+    total_rows = int(row.total_rows or 0)
+    high_measured_rows = int(row.high_measured_rows or 0)
+    coverage = (high_measured_rows / total_rows) if total_rows else 0.0
+
+    return {
+        "trading_date": trading_date,
+        "total_rows": total_rows,
+        "high_measured_rows": high_measured_rows,
+        "coverage": coverage,
+        "coverage_threshold": coverage_threshold,
+        "partial_collection": coverage < coverage_threshold,
+        # 기존 지표 (병렬 유지 — 대체 금지)
+        "was_surge_count": int(row.was_surge_count or 0),
+        # 고가 기반 파생 지표
+        "high_based_surge_count": int(row.high_based_surge_count or 0),
+    }
 
 
 def backfill_stock_names(db: Session) -> int:
