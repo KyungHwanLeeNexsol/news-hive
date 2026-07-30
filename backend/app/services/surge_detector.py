@@ -93,6 +93,10 @@ class SurgeCandidate:
     momentum_continuation_score: float = 0.0
     # SPEC-AI-065 REQ-2: 후보 유입 풀 태그 (pool_a/pool_b/pool_c/existing)
     entry_pool: str = "existing"
+    # SPEC-AI-092 REQ-AI092-004: 스캔 유니버스 bridge 후보 점수(0.0~1.0). 앙상블 가중치
+    # 합산(compute_ensemble_score)에는 포함되지 않는다 — bridge 후보는 bypass_composite_score
+    # 경로로 downstream(composite_score/품질floor)을 통과한다.
+    bridge_score: float = 0.0
 
 
 def _sigmoid(x: float) -> float:
@@ -1931,6 +1935,8 @@ def gather_surge_candidates(
     # SPEC-AI-065 REQ-2: 스캔 유니버스 entry_pool 태깅
     # 기존 탐지기 결과로 entry_pool='existing' 설정, Pool A/B/C는 별도 탐지기에서 태깅됨
     existing_codes = set(merged.keys())
+    # SPEC-AI-092 REQ-AI092-003: 유니버스 빌드 실패/flag OFF 시 빈 리스트로 안전 기본값
+    _bridge_candidates: list[SurgeCandidate] = []
     try:
         _universe_codes, _entry_pool_map, _pool_counts = build_scan_universe(
             db, config, existing_codes=existing_codes
@@ -2007,6 +2013,20 @@ def gather_surge_candidates(
                 )
             except Exception as _ge:
                 logger.warning("[유니버스간극측정] 측정 실패 (무시): %s", _ge)
+
+        # SPEC-AI-092 REQ-AI092-003/004: 스캔 유니버스 bridge 후보화(기본 비활성).
+        # merged를 절대 변경하지 않고 별도 리스트로만 생성 — 호출부(qualified 합류 지점)에서
+        # 한 곳에서만 병합한다(plan.md TASK-004 원칙).
+        try:
+            _bridge_candidates = generate_scan_universe_bridge_candidates(
+                db, config, _universe_codes, _entry_pool_map, merged
+            )
+        except Exception as _be:
+            logger.warning("[브리지후보] 생성 실패 (무시): %s", _be)
+            try:
+                db.rollback()
+            except Exception:
+                pass
     except Exception as _ue:
         logger.warning("[스캔유니버스] 유니버스 빌드 실패 (무시): %s", _ue)
         try:
@@ -2158,6 +2178,9 @@ def gather_surge_candidates(
     qualified_codes: set[str] = set()
 
     # SPEC-AI-017 REQ-001: 레짐별 임계값 적용 (없으면 min_score_for_signal 사용)
+    # SPEC-AI-092 REQ-AI092-005: 이 예측 생성 게이트는 surge_threshold_service의 적응형
+    # 임계값(매수 실행 전용 — surge_threshold_service.py 모듈 docstring 참조)과 무관하다.
+    # 예측 생성 gate 값은 항상 ensemble.min_score_for_signal/regime_thresholds에서만 온다.
     effective_threshold = config.ensemble.regime_thresholds.get(
         market_regime, config.ensemble.min_score_for_signal
     )
@@ -2253,6 +2276,15 @@ def gather_surge_candidates(
                     candidate.volume_breakout_score,
                     _vb_bypass_threshold,
                 )
+
+    # SPEC-AI-092 REQ-AI092-003/004: bridge 후보 합류 (merged에 없던 pool_a/pool_c 종목).
+    # flag OFF 또는 조건 미충족이면 _bridge_candidates가 빈 리스트라 완전 무회귀(AC-092-003).
+    # bypass_composite_score가 이미 설정되어 있어 downstream(품질floor 면제 포함)은 기존
+    # volume_breakout bypass 경로와 동일하게 처리된다.
+    for _bc in _bridge_candidates:
+        if _bc.stock_code not in qualified_codes:
+            qualified.append(_bc)
+            qualified_codes.add(_bc.stock_code)
 
     # 앙상블 점수 내림차순 정렬
     qualified.sort(key=lambda c: compute_ensemble_score(c, config), reverse=True)
@@ -4916,3 +4948,179 @@ def build_scan_universe(
     )
 
     return final_universe, entry_pool_map, pool_counts
+
+
+# SPEC-AI-092 REQ-AI092-004: pool_a/pool_c bridge scoring 최소 통과 조건. 정규화된
+# 점수(0.0~1.0)가 이 값 미만이면 bridge 후보로 승격하지 않는다. 신규 config 필드가
+# 아니라 이 함수의 내부 상수다 — SPEC이 명시적 임계값을 요구하지 않았고, 소형 상수
+# 조정은 재배포만으로 가능하다.
+_BRIDGE_MIN_SCORE = 0.3
+
+
+def generate_scan_universe_bridge_candidates(
+    db: "Session",
+    config: "SurgeDetectionConfig",
+    universe_codes: list[str],
+    entry_pool_map: dict[str, str],
+    merged: dict[str, "SurgeCandidate"],
+) -> list[SurgeCandidate]:
+    # @MX:NOTE: [AUTO] SPEC-AI-092 REQ-AI092-003/004 — build_scan_universe() 결과 중 1차
+    # 탐지기 결과(merged)에 없는 pool_a/pool_c 종목을 이미 조회된 DB 자료(Disclosure.
+    # impact_score, SurgeActualOutcome.change_rate)만으로 점수화해 bridge 후보로 승격한다.
+    # 신규 외부 fetch(Naver/DART) 호출 없음(AC-092-005) — 순수 DB 재조회 + 인메모리 연산.
+    # merged는 절대 변경하지 않는다(호출부에서 qualified 리스트에만 append).
+    # @MX:SPEC: SPEC-AI-092 REQ-AI092-003, REQ-AI092-004, REQ-AI092-005
+    """스캔 유니버스 bridge 후보를 생성한다 (SPEC-AI-092).
+
+    build_scan_universe()가 이미 산출한 universe_codes/entry_pool_map과, 기존 탐지기가
+    채운 merged 딕셔너리만 입력으로 받는다. merged에 없는 pool_a/pool_c 종목을 이미
+    수집된 DB 자료(공시 impact_score, 전일 등락률)로 점수화하여
+    scan_universe_bridge_pool_limits/scan_universe_bridge_max_candidates 상한 안에서
+    SurgeCandidate 목록으로 반환한다.
+
+    Args:
+        db: SQLAlchemy 동기 세션
+        config: SurgeDetectionConfig (scan_universe_bridge_* 필드 참조)
+        universe_codes: build_scan_universe() 반환 최종 스캔 유니버스
+        entry_pool_map: build_scan_universe() 반환 {stock_code: entry_pool}
+        merged: gather_surge_candidates()가 이미 채운 1차 탐지기 결과 딕셔너리
+
+    Returns:
+        bridge 후보 SurgeCandidate 목록 (전체/pool별 상한 적용됨). flag OFF 또는
+        조건 미충족 시 빈 리스트.
+    """
+    if not config.scan_universe_bridge_candidates_enabled:
+        return []
+
+    candidate_codes = [
+        code
+        for code in universe_codes
+        if code not in merged and entry_pool_map.get(code) in ("pool_a", "pool_c")
+    ]
+    if not candidate_codes:
+        return []
+
+    from sqlalchemy import func as _sqlfunc
+
+    pool_a_codes = [c for c in candidate_codes if entry_pool_map.get(c) == "pool_a"]
+    pool_c_codes = [c for c in candidate_codes if entry_pool_map.get(c) == "pool_c"]
+
+    # Pool A 점수: 오늘 공시 최대 impact_score를 0~1로 정규화(100 스케일, disclosure_impact_scorer
+    # 관례와 동일 — score_disclosure_impact 확신도 정규화와 동일 분모).
+    pool_a_scores: dict[str, float] = {}
+    if pool_a_codes:
+        try:
+            today_str = date.today().strftime("%Y%m%d")
+            max_impact = _sqlfunc.max(Disclosure.impact_score)
+            rows = (
+                db.query(Disclosure.stock_code, max_impact.label("max_impact"))
+                .filter(
+                    Disclosure.rcept_dt == today_str,
+                    Disclosure.stock_code.in_(pool_a_codes),
+                )
+                .group_by(Disclosure.stock_code)
+                .all()
+            )
+            for r in rows:
+                if r.max_impact is not None:
+                    pool_a_scores[r.stock_code] = min(1.0, max(0.0, r.max_impact) / 100.0)
+        except Exception as e:
+            logger.warning("[브리지후보] Pool A 점수 조회 실패 (무시): %s", e)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+    # Pool C 점수: 전일(build_scan_universe와 동일 최신 거래일 기준) 등락률을 0~1로
+    # 정규화. 15%를 만점 기준으로 사용 — Pool C 진입 기준(5%+)의 3배 지점.
+    pool_c_scores: dict[str, float] = {}
+    if pool_c_codes:
+        try:
+            from app.models.surge_actual_outcome import SurgeActualOutcome
+
+            latest_row = (
+                db.query(SurgeActualOutcome.trading_date)
+                .filter(SurgeActualOutcome.change_rate.isnot(None))
+                .order_by(SurgeActualOutcome.trading_date.desc())
+                .first()
+            )
+            pool_c_date = latest_row.trading_date if latest_row else date.today()
+            rows = (
+                db.query(SurgeActualOutcome.stock_code, SurgeActualOutcome.change_rate)
+                .filter(
+                    SurgeActualOutcome.trading_date == pool_c_date,
+                    SurgeActualOutcome.stock_code.in_(pool_c_codes),
+                    SurgeActualOutcome.change_rate.isnot(None),
+                )
+                .all()
+            )
+            for r in rows:
+                pool_c_scores[r.stock_code] = min(1.0, max(0.0, r.change_rate) / 15.0)
+        except Exception as e:
+            logger.warning("[브리지후보] Pool C 점수 조회 실패 (무시): %s", e)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+    scored: dict[str, tuple[str, float]] = {}
+    for code in candidate_codes:
+        pool = entry_pool_map.get(code, "")
+        score = pool_a_scores.get(code) if pool == "pool_a" else pool_c_scores.get(code)
+        if score is not None and score >= _BRIDGE_MIN_SCORE:
+            scored[code] = (pool, score)
+
+    if not scored:
+        return []
+
+    # pool별 상한 적용 (점수 내림차순 우선 채택)
+    by_pool: dict[str, list[tuple[str, float]]] = {}
+    for code, (pool, score) in scored.items():
+        by_pool.setdefault(pool, []).append((code, score))
+
+    pool_limits = config.scan_universe_bridge_pool_limits
+    selected: list[tuple[str, str, float]] = []
+    for pool, items in by_pool.items():
+        items.sort(key=lambda x: x[1], reverse=True)
+        limit = pool_limits.get(pool)
+        if limit is not None:
+            items = items[:limit]
+        for code, score in items:
+            selected.append((code, pool, score))
+
+    # 전체 상한 적용 (점수 내림차순)
+    selected.sort(key=lambda x: x[2], reverse=True)
+    selected = selected[: config.scan_universe_bridge_max_candidates]
+
+    if not selected:
+        return []
+
+    selected_codes = [code for code, _pool, _score in selected]
+    stock_names: dict[str, str] = {
+        r.stock_code: r.name
+        for r in db.query(Stock.stock_code, Stock.name)
+        .filter(Stock.stock_code.in_(selected_codes))
+        .all()
+    }
+
+    bridge_candidates: list[SurgeCandidate] = []
+    for code, pool, score in selected:
+        bridge_candidates.append(
+            SurgeCandidate(
+                stock_code=code,
+                stock_name=stock_names.get(code, code),
+                entry_pool=pool,
+                bridge_score=score,
+                bypass_composite_score=score,
+                active_detectors=["scan_universe_bridge", pool],
+            )
+        )
+
+    logger.info(
+        "[브리지후보] 생성: %d개 (pool_a=%d, pool_c=%d, 상한=%d)",
+        len(bridge_candidates),
+        sum(1 for c in bridge_candidates if c.entry_pool == "pool_a"),
+        sum(1 for c in bridge_candidates if c.entry_pool == "pool_c"),
+        config.scan_universe_bridge_max_candidates,
+    )
+    return bridge_candidates

@@ -569,6 +569,22 @@ class SurgeDetectionConfig(BaseModel):
     # @MX:SPEC: SPEC-AI-089 REQ-AI089-001
     universe_gap_measurement_enabled: bool = False
 
+    # SPEC-AI-092 REQ-AI092-003: 스캔 유니버스에 있었지만 merged(1차 탐지기 결과)에 없는
+    # 종목을 비용 제한(신규 외부 fetch 없음) 안에서 bridge 후보로 평가하는 기능 토글.
+    # 기본값 False — OFF 상태에서는 gather_surge_candidates() 출력이 bridge 도입 이전과
+    # 완전히 동일하다(AC-092-003). ON이어도 pool_a/pool_c만 대상이다.
+    # @MX:NOTE: [AUTO] SPEC-AI-092 REQ-AI092-003 — bridge 후보화 토글(기본 비활성)
+    # @MX:SPEC: SPEC-AI-092 REQ-AI092-003
+    scan_universe_bridge_candidates_enabled: bool = False
+    # 전체 bridge 후보 수 상한 (REQ-AI092-004 상한 조건)
+    # @MX:SPEC: SPEC-AI-092 REQ-AI092-004
+    scan_universe_bridge_max_candidates: int = 20
+    # pool별 bridge 후보 수 상한. 키에 없는 pool은 무제한(설계상 pool_a/pool_c만 사용).
+    # @MX:SPEC: SPEC-AI-092 REQ-AI092-004
+    scan_universe_bridge_pool_limits: dict[str, int] = Field(
+        default_factory=lambda: {"pool_a": 10, "pool_c": 10}
+    )
+
     # @MX:ANCHOR: [AUTO] 앙상블 가중치 합산 검증 — 8개 탐지기 가중치 합산 반드시 1.0
     # @MX:REASON: 가중치 합산 != 1.0 이면 앙상블 스코어 범위가 0~1을 벗어나 시그널 임계값 판정이 왜곡됨
     @model_validator(mode="after")
