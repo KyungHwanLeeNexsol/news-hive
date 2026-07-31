@@ -4830,14 +4830,25 @@ def build_scan_universe(
                 pass
 
     # 기존 탐지기 결과 추가 (우선순위 최하)
-    # SPEC-AI-076 Exclusion 10 [HARD, Human 결정 2026-07-09]: 아래 루프가 existing_codes를
-    # 전량 entry_pool_map에 먼저 등록하므로, 이후 existing 병합 필터
-    # ([c for c in existing_codes if c not in entry_pool_map])는 항상 빈 리스트를 반환한다
-    # — 즉 순수 existing 종목은 실제로는 final_universe에 포함된 적이 없는 기존(pre-existing)
-    # 버그다. 본 SPEC의 스캔 범위(A/B/C 배분) 밖이므로 이 동작을 그대로 보존한다(AC-076-004).
+    # SPEC-AI-094 REQ-AI094-001: 등재 루프(existing_codes 전량을 entry_pool_map에 먼저
+    # 등록)는 무수정 유지 — "existing" 태깅은 플래그와 무관하게 계속 정상 동작한다(구조적
+    # 보장, REQ-AI094-002). 병합 필터의 판정 기준만 "entry_pool_map 미등재"에서 "A/B/C/D
+    # 풀 미소속"(_pool_member_codes)으로 교체했다 — 전자는 아래 등재 루프가 먼저 실행되는
+    # 한 어떤 원소에 대해서도 참이 될 수 없어 필터가 구조적으로 무효화되는 근본 원인이었다
+    # (SPEC-AI-076 Exclusion 10, 2026-07-09 Human 결정으로 의도적 보존). 본 SPEC은 그
+    # 유보를 이행한다. `scan_universe_include_existing`(기본 False) 플래그 OFF 경로는
+    # SPEC-AI-076 AC-076-004 계약(existing 미포함)을 그대로 보존한다.
+    # @MX:NOTE: [AUTO] SPEC-AI-094 REQ-AI094-001 — existing 병합 판정 기준을 풀 소속 여부로 교정
+    # @MX:SPEC: SPEC-AI-094 REQ-AI094-001
+    _pool_member_codes = set(pool_a_codes) | set(pool_b_codes) | set(pool_c_codes) | set(pool_d_codes)
     for code in existing_codes:
         if code not in entry_pool_map:
             entry_pool_map[code] = "existing"
+    # REQ-AI094-004: "포함 가능했던 수"는 플래그 상태와 무관하게 항상 계산한다(활성화
+    # 판단 근거 확보). sorted()로 existing_codes(set)의 비결정적 반복 순서를 결정론적으로
+    # 고정한다(plan.md §A.1 순서 안정성 주의 — 절단 경계에 걸리면 종목코드 순으로 생존).
+    _existing_only = sorted(c for c in existing_codes if c not in _pool_member_codes)
+    _existing_tail = _existing_only if config.scan_universe_include_existing else []
 
     # raw pre-truncation 카운트 — SurgeUniversePoolHistory.pool_a/b/c_count가 이 의미로
     # 소비하므로(SPEC-AI-065 REQ-5, evaluate_surge_predictions) 절대 변경하지 않는다.
@@ -4904,7 +4915,7 @@ def build_scan_universe(
         + b_remaining
         + c_remaining
         + d_remaining
-        + [c for c in existing_codes if c not in entry_pool_map]
+        + _existing_tail
     )
     # 중복 제거 (순서 유지)
     seen: set[str] = set()
@@ -4931,9 +4942,13 @@ def build_scan_universe(
 
     # SPEC-AI-086 REQ-AI086-008: 관측성 단일 로그 라인 — 적용 상한(clamp 반영값)/풀별
     # raw·scanned(신규 Pool D 포함)를 한 줄로 기록한다. 신규 스키마 없음, 종목별 상세 없음.
+    # SPEC-AI-094 REQ-AI094-004: existing_only(A/B/C/D 미소속 existing 후보 수, 플래그
+    # 무관 항상 기록)/existing_included(그중 실제 final_universe 포함 수, 플래그 OFF 시
+    # 항상 0)를 추가 필드로 기록한다 — pool_counts 반환값(REQ-AI094-002 바이트 동등 대상)에는
+    # 넣지 않고 로그 라인에만 확장한다.
     logger.info(
         "[스캔유니버스] 최종 유니버스: %d개 (상한=%d, raw: A=%d B=%d C=%d D=%d existing=%d | "
-        "scanned: A=%d B=%d C=%d D=%d)",
+        "scanned: A=%d B=%d C=%d D=%d | existing_only=%d existing_included=%d)",
         len(final_universe),
         max_universe,
         pool_counts["pool_a"],
@@ -4945,6 +4960,8 @@ def build_scan_universe(
         pool_counts["pool_b_scanned"],
         pool_counts["pool_c_scanned"],
         pool_counts["pool_d_scanned"],
+        len(_existing_only),
+        scanned_tally.get("existing", 0),
     )
 
     return final_universe, entry_pool_map, pool_counts

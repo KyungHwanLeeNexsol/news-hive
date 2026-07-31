@@ -562,6 +562,17 @@ class SurgeDetectionConfig(BaseModel):
     # @MX:SPEC: SPEC-AI-086 REQ-AI086-004
     dynamic_scan_universe_caps: dict[str, int] = Field(default_factory=dict)
 
+    # SPEC-AI-094 REQ-AI094-001/002: existing_codes(A/B/C/D 어느 풀에도 속하지 않는, 이미
+    # 다른 탐지기가 잡아낸 후보) 병합 필터 마스터 스위치. 기존 필터가 판정 기준 오류로
+    # 구조적으로 항상 빈 리스트를 반환하던 버그(SPEC-AI-076 Exclusion 10, 2026-07-09 Human
+    # 결정으로 의도적 보존)를 실제로 동작시킨다. 기본값 False — 활성화 시
+    # scannable_recall/coverage/surge_type 라벨의 분모가 이동한다(지표 단절 위험, spec.md
+    # §Context 참조). False이면 build_scan_universe() 반환값 3종이 본 SPEC 적용 이전과
+    # 완전히 동일하다(REQ-AI094-002 바이트 동등 백워드 호환).
+    # @MX:NOTE: [AUTO] SPEC-AI-094 REQ-AI094-001 — existing 병합 필터 마스터 스위치(기본 비활성)
+    # @MX:SPEC: SPEC-AI-094 REQ-AI094-001
+    scan_universe_include_existing: bool = False
+
     # SPEC-AI-089 M1 REQ-AI089-001/003/004: 스캔 유니버스↔탐지망 간극 측정 계측 플래그.
     # 기본값 OFF — 활성화해도 순수 읽기·집계(신규 네트워크 조회/DB 쓰기 없음)이며 탐지
     # 파이프라인 출력에 영향을 주지 않는다(REQ-003 불변식, AC-089-008로 검증).

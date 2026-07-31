@@ -2,9 +2,9 @@
 id: SPEC-AI-094
 title: "스캔 유니버스 existing_codes 병합 필터 무효화 교정"
 version: "0.1.0"
-status: draft
+status: in-progress
 created: 2026-07-30
-updated: 2026-07-30
+updated: 2026-07-31
 author: Nexsol
 priority: Medium
 phase: "backend surge-detection v0.1.0"
@@ -246,7 +246,13 @@ While `scan_universe_include_existing`가 비활성(기본값)이면, `build_sca
 필수 조건:
 
 - `final_universe`의 **순서까지** 동일해야 한다(집합 동등이 아닌 리스트 동등).
-- `entry_pool_map`의 `"existing"` 태깅 동작은 플래그와 무관하게 현행 유지된다.
+- `entry_pool_map`의 `"existing"` 태깅 동작은 플래그와 무관하게 현행 유지된다 — 등재 루프
+  (`:4838-4840`)가 본 SPEC에서 무수정이므로 **구조적으로** 보장되며, 별도 골든 테스트로
+  직접 검증하지 않는다.
+- 검증 방법 범위: AC-094-002가 실제로 커버하는 것은 `final_universe`의 순서
+  (`test_golden_order_and_pool_counts_default_config`)와 `pool_counts`(`test_spec_ai_086.py`)
+  2종뿐이다. `entry_pool_map` 동등성은 위 구조적 보장(등재 루프 무수정)에 근거하며 별도
+  assert로 커버되지 않는다.
 
 ### REQ-AI094-003: 후보 생성 경로 무영향
 
@@ -309,45 +315,47 @@ characterization 단언(`assert not (final_set & existing_codes)`)이 무수정�
 ### AC-094-002 — 플래그 비활성 시 리스트 동등(순서 포함)
 
 **While** `scan_universe_include_existing=False`(기본값)이면, the system **shall** 동일 입력에
-대해 본 SPEC 적용 이전과 **순서까지 동일한** `final_universe` 리스트를 반환해야 하며, 집합
-동등만으로 판정해서는 **shall not**.
+대해 본 SPEC 적용 이전과 멤버십과 순서가 모두 동일한 `final_universe` 리스트를 반환해야 한다.
 
 - 검증 방법: pytest — AC-076-004 골든 순서 테스트(`test_golden_order_and_pool_counts_default_config`)
-  및 `test_spec_ai_086.py` 골든 유니버스 바이트 고정 테스트 무수정 통과
+  및 `test_spec_ai_086.py` 골든 유니버스 바이트 고정 테스트 무수정 통과. 이 검증은 리스트 순서까지
+  비교하므로, 집합 동등(set equality)만으로는 본 AC 충족으로 판정하지 않는다.
 
 ### AC-094-003 — 후보 생성 경로 diff 0
 
-**While** 본 SPEC이 적용된 상태에서(플래그 ON/OFF 무관), the system **shall** `merged` 키 집합과
-bridge 후보 결과를 변경해서는 **shall not** 하며, 다음 grep이 0 매치여야 한다.
+**While** 본 SPEC이 적용된 상태에서(플래그 ON/OFF 무관), the system **shall not** `merged` 키
+집합과 bridge 후보 결과를 변경해서는 안 된다.
+
+- 검증 방법: pytest — `test_spec_ai_092.py` / `test_spec_ai_089.py` / `test_spec_ai_070.py` 무수정
+  통과, 그리고 다음 grep이 0 매치여야 한다:
 
 ```bash
 git diff --name-only | grep -E 'surge_evaluation_service|surge_universe_gap_service|surge_auto_improver|scheduler'
 ```
 
-- 검증 방법: pytest — `test_spec_ai_092.py` / `test_spec_ai_089.py` / `test_spec_ai_070.py` 무수정 통과 + 위 grep
-
 ### AC-094-004 — 절단 압력 하에서 existing은 우선순위 최하로 탈락한다
 
 **When** `scan_universe_include_existing=True`이고 Pool A/B/C만으로 이미 `max_scan_universe`를
 채우는 입력(예: A raw = 232, B raw = 0, C raw = 52, cap = 150)이면, the system **shall**
-`len(final_universe) == 150`을 유지하고 `entry_pool == "existing"`인 코드 수가 0이어야 하며,
-A/B/C의 quota 대표성(SPEC-AI-076 AC-076-001)을 변경해서는 **shall not**.
+`len(final_universe) == 150`을 유지하고 `entry_pool == "existing"`인 코드 수가 0이어야 한다.
+같은 조건에서, the system **shall not** A/B/C의 quota 대표성(SPEC-AI-076 AC-076-001)을 변경한다.
 
 - 검증 방법: pytest — SPEC-AI-076 07-08형 replay fixture에 existing 5개를 추가 주입
 
 ### AC-094-005 — 지표 이동 폭이 로깅된다
 
 **When** `build_scan_universe()`가 완료되면, the system **shall** 최종 유니버스 로그 라인에
-"A/B/C/D 미소속 existing 수"와 "실제 포함 수"를 기록해야 하며, 플래그 비활성 시 후자는 항상
-0이어야 한다.
+"A/B/C/D 미소속 existing 수"와 "실제 포함 수"를 기록해야 한다. **While**
+`scan_universe_include_existing`가 비활성이면, the system **shall** 그 "실제 포함 수" 값을 항상
+`0`으로 기록해야 한다.
 
 - 검증 방법: pytest — `caplog`로 로그 라인 검사(플래그 ON/OFF 2 케이스)
 
 ### AC-094-006 — SPEC-AI-076 characterization 단언 존치
 
 **While** 본 SPEC 적용 후에도, the system **shall** `test_spec_ai_065.py`의
-`assert not (final_set & existing_codes)` 단언을 플래그 OFF 조건에서 그대로 보유해야 하며, 이
-단언을 삭제하거나 완화해서는 **shall not**.
+`assert not (final_set & existing_codes)` 단언을 플래그 OFF 조건에서 그대로 보유해야 한다.
+같은 조건에서, the system **shall not** 이 단언을 삭제하거나 완화한다.
 
 - 검증 방법: grep — 해당 단언 문자열이 테스트 파일에 존재함을 확인
 
