@@ -2,7 +2,7 @@
 id: SPEC-AI-095
 title: "고가 기준(high_change_rate) 평가지표의 공식 평가 리포트 노출"
 version: "0.1.0"
-status: in-progress
+status: completed
 created: 2026-07-31
 updated: 2026-07-31
 author: Nexsol

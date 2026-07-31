@@ -45,4 +45,25 @@ m1_to_mN_commit_strategy: "single-commit"  # Tier M이나 변경 규모가 작�
 
 ## §E.4 Sync-phase Audit-Ready Signal
 
-_<pending sync-phase>_
+```yaml
+sync_complete_at: "2026-07-31"
+sync_commit_sha: "pending-backfill-SPEC-AI-095-sync"
+sync_status: "audit-ready-with-debt"
+b12_self_test_a: "grep -c 'SPEC-AI-095' CHANGELOG.md → 0 (pre-emission), 1 (post-emission)"
+b12_self_test_b: "AC count 9 == acceptance.md §A matrix row count 9"
+b12_self_test_c: "ls backend/alembic/versions/070_surge_pred_eval_high_based.py backend/app/models/surge_prediction_evaluation.py backend/app/services/surge_evaluation_service.py → all exist"
+changelog_entry_position: "[Unreleased] section, above SPEC-AI-093 entry, below SPEC-AI-094 entry"
+frontmatter_status_transitions:
+  spec_md: "in-progress -> completed"
+canary_compliance_check:
+  applicable: false
+  note: "본 SPEC은 forward-looking policy를 정의하지 않음 — canary self-test 해당 없음"
+```
+
+sync-auditor 독립 스코어(4-dimension): Functionality 92, Security 95, Craft 78,
+Consistency 85 — PASS. 보안 스캔 clean(CRITICAL/HIGH 없음). 전체 회귀 2259 passed / 0 failed.
+
+**알려진 Should-Fix (non-blocking, CHANGELOG에도 기록됨)**: `alembic upgrade head`가 실제
+PostgreSQL에 적용되어 성공했는지는 이 세션 환경(로컬 PostgreSQL 미기동)에서 검증되지
+않았다 — `alembic heads`/`alembic history -r 069:070` 정적 리비전 체인 검증으로 대체.
+배포 파이프라인에서 `uv run alembic upgrade head; uv run alembic current` 최종 확인 필요.
