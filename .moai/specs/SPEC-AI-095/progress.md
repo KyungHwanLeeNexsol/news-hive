@@ -47,7 +47,7 @@ m1_to_mN_commit_strategy: "single-commit"  # Tier M이나 변경 규모가 작�
 
 ```yaml
 sync_complete_at: "2026-07-31"
-sync_commit_sha: "pending-backfill-SPEC-AI-095-sync"
+sync_commit_sha: "3651973"
 sync_status: "audit-ready-with-debt"
 b12_self_test_a: "grep -c 'SPEC-AI-095' CHANGELOG.md → 0 (pre-emission), 1 (post-emission)"
 b12_self_test_b: "AC count 9 == acceptance.md §A matrix row count 9"
