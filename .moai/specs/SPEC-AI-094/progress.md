@@ -92,7 +92,7 @@ Route A (Hybrid Trunk main-direct, Tier S) — manager-develop cycle_type=ddd.
 
 ```yaml
 sync_complete_at: "2026-07-31"
-sync_commit_sha: "pending-backfill-SPEC-AI-094-sync"
+sync_commit_sha: "3c7b1a3"
 sync_status: "audit-ready"
 b12_self_test_a: "grep -c 'SPEC-AI-094' CHANGELOG.md → 0 (pre-emission), 1 (post-emission)"
 b12_self_test_b: "AC count 6 == acceptance table row count 6 (spec.md §Acceptance Criteria inline table)"
