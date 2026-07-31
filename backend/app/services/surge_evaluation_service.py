@@ -855,6 +855,72 @@ def evaluate_surge_predictions(
         scannable_actual_count, total_actual_count, scannable_recall, coverage,
     )
 
+    # SPEC-AI-095 REQ-AI095-001: 고가 기준(high_change_rate) 병렬 recall/precision/coverage.
+    # predicted_set(2단계에서 이미 확정, 재조회 금지)과 COALESCE(high_change_rate, change_rate)
+    # >= 10.0(기존 was_surge와 동일 기준, REQ-AI095-002 동결) 기준 실제급등집합의 교차로
+    # 산출한다. 5단계(Scannable Recall)와 동일한 try/except + db.rollback() 격리 패턴을
+    # 재사용해 실패가 6단계 upsert/commit을 방해하지 않도록 한다(REQ-AI095-004).
+    high_based_recall: float | None = None
+    high_based_precision: float | None = None
+    high_based_coverage: float | None = None
+
+    try:
+        high_actual_rows = (
+            db.query(SurgeActualOutcome.stock_code)
+            .filter(
+                SurgeActualOutcome.trading_date == trading_date,
+                sqlfunc.coalesce(
+                    SurgeActualOutcome.high_change_rate, SurgeActualOutcome.change_rate
+                ) >= 10.0,
+            )
+            .all()
+        )
+        high_actual_set: set[str] = {row.stock_code for row in high_actual_rows}
+
+        # high_based_coverage: evaluate_high_based_outcomes()(SPEC-AI-093)와 동일한 정의 —
+        # high_change_rate IS NOT NULL인 행 비율. 해당 거래일 행 자체가 0건이면 0.0(측정
+        # 불가가 아니라 "수집 대상 없음" — 참조 구현과 동일한 폴백).
+        _coverage_row = (
+            db.query(
+                sqlfunc.count().label("total_rows"),
+                sqlfunc.count(SurgeActualOutcome.high_change_rate).label("high_measured_rows"),
+            )
+            .filter(SurgeActualOutcome.trading_date == trading_date)
+            .one()
+        )
+        _total_rows_hb = int(_coverage_row.total_rows or 0)
+        _high_measured_rows = int(_coverage_row.high_measured_rows or 0)
+        high_based_coverage = (_high_measured_rows / _total_rows_hb) if _total_rows_hb else 0.0
+
+        high_based_true_positive = len(predicted_set & high_actual_set)
+        high_based_false_negative = len(high_actual_set - predicted_set)
+
+        # AC-095-008: predicted_count == 0 → precision은 NULL(0.0 아님 — "측정 불가"와 "0%" 구분)
+        if len(predicted_set) > 0:
+            high_based_precision = high_based_true_positive / len(predicted_set)
+
+        # AC-095-009: TP_high + FN_high == 0 → recall은 NULL(0.0 아님 — 분모-0 회피, 기존
+        # scannable_recall EC-1과 동일한 가드 패턴)
+        _high_denom = high_based_true_positive + high_based_false_negative
+        if _high_denom > 0:
+            high_based_recall = high_based_true_positive / _high_denom
+    except Exception as _he:
+        # 고가 기준 지표 계산 실패는 주 평가 결과(precision/recall/f1/scannable_recall/coverage)의
+        # upsert/commit을 방해하지 않는다 — 5단계와 동일한 격리 원칙(REQ-AI095-004).
+        logger.warning("[급등평가] 고가 기준 병렬 지표 계산 실패 (지표 null 처리): %s", _he)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        high_based_recall = None
+        high_based_precision = None
+        high_based_coverage = None
+
+    logger.info(
+        "고가 기준 병렬 지표: high_based_recall=%s, high_based_precision=%s, high_based_coverage=%s",
+        high_based_recall, high_based_precision, high_based_coverage,
+    )
+
     # SPEC-AI-065 REQ-5: pool_counts 정규화
     _pool_a = (pool_counts or {}).get("pool_a", 0)
     _pool_b = (pool_counts or {}).get("pool_b", 0)
@@ -887,6 +953,10 @@ def evaluate_surge_predictions(
         existing.coverage = coverage
         existing.scannable_actual_count = scannable_actual_count
         existing.total_actual_count = total_actual_count
+        # SPEC-AI-095 REQ-AI095-003: idempotent 재실행 시 값 보존(AC-095-002) — 갱신 분기
+        existing.high_based_recall = high_based_recall
+        existing.high_based_precision = high_based_precision
+        existing.high_based_coverage = high_based_coverage
         # SPEC-AI-065 REQ-5: pool_counts 업데이트
         if pool_counts is not None:
             existing.scan_universe_size = _scan_universe_size
@@ -911,6 +981,10 @@ def evaluate_surge_predictions(
             coverage=coverage,
             scannable_actual_count=scannable_actual_count,
             total_actual_count=total_actual_count,
+            # SPEC-AI-095 REQ-AI095-003: 신규 생성 분기
+            high_based_recall=high_based_recall,
+            high_based_precision=high_based_precision,
+            high_based_coverage=high_based_coverage,
             # SPEC-AI-065 REQ-5: pool_counts 초기화
             scan_universe_size=_scan_universe_size,
             pool_a_count=_pool_a,

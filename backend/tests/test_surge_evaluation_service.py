@@ -1153,3 +1153,305 @@ class TestPoolCountsUpdatePath:
         assert result.pool_b_count == 2
         assert result.pool_c_count == 3
         assert result.scan_universe_size == 6
+
+
+# ---------------------------------------------------------------------------
+# SPEC-AI-095: 고가 기준(high_change_rate) 병렬 평가지표 테스트
+#
+# evaluate_surge_predictions()가 predicted_set과 COALESCE(high_change_rate, change_rate)
+# >= 10.0 기준 실제급등집합을 교차하여 high_based_recall/precision/coverage를 산출·영속화한다.
+# 기존 8개 필드(precision/recall/f1_score/true_positive/false_positive/false_negative/
+# scannable_recall/coverage)는 완전히 무변경이어야 한다(REQ-AI095-002/AC-095-007).
+# ---------------------------------------------------------------------------
+
+def _seed_high_based_fixture(
+    db: Session,
+    predicted_codes: list[str],
+    actual_outcomes: list[tuple[str, float, float | None]],
+    trading_date: date,
+) -> date:
+    """FundSignal(T-1 predicted) + SurgeActualOutcome(T actual, change_rate/high_change_rate
+    개별 제어)을 셋업하고 T-1 날짜를 반환한다. SPEC-AI-095 고가 기준 지표 테스트 전용.
+
+    actual_outcomes: [(stock_code, change_rate, high_change_rate|None), ...]
+    was_surge는 기존 모델 정의(change_rate >= 10.0)와 동일하게 파생한다.
+    """
+    from datetime import datetime, timezone
+    from app.models.stock import Stock
+    from app.models.sector import Sector
+    from app.models.fund_signal import FundSignal
+    from app.services.surge_trading_service import _get_prev_business_day
+
+    actual_codes = [row[0] for row in actual_outcomes]
+    stocks: dict[str, int] = {}
+    all_codes = list(set(predicted_codes + actual_codes))
+
+    for i, code in enumerate(all_codes):
+        sector = Sector(name=f"고가기준섹터_{code}_{i}", is_custom=False)
+        db.add(sector)
+        db.flush()
+        stock = Stock(stock_code=code, name=f"주식{code}", sector_id=sector.id, market="KOSPI")
+        db.add(stock)
+        db.flush()
+        stocks[code] = stock.id
+
+    t_minus_1 = _get_prev_business_day(trading_date)
+
+    for code in predicted_codes:
+        db.add(
+            FundSignal(
+                stock_id=stocks[code],
+                signal="buy",
+                signal_type="surge_candidate",
+                confidence=0.7,
+                reasoning="고가 기준 지표 테스트",
+                surge_metadata='{"surge_basis": ["theme_cluster"], "theme_cluster_score": 0.8}',
+                created_at=datetime(
+                    t_minus_1.year, t_minus_1.month, t_minus_1.day, 15, 20, tzinfo=timezone.utc
+                ),
+            )
+        )
+
+    for code, change_rate, high_change_rate in actual_outcomes:
+        db.add(
+            SurgeActualOutcome(
+                trading_date=trading_date,
+                stock_code=code,
+                stock_name=f"주식{code}",
+                change_rate=change_rate,
+                was_surge=change_rate >= 10.0,
+                high_change_rate=high_change_rate,
+                market="KOSPI",
+            )
+        )
+
+    db.commit()
+    return t_minus_1
+
+
+class TestHighBasedMetrics:
+    def _seed(self, db, predicted_codes, actual_outcomes, trading_date):
+        return _seed_high_based_fixture(db, predicted_codes, actual_outcomes, trading_date)
+
+    def test_high_based_recall_precision_intersect_with_predicted_set(self, db: Session):
+        """AC-095-001: predicted_set과 COALESCE(high_change_rate, change_rate)>=10.0 실제급등의
+        교차로 TP_high/FN_high/recall/precision을 산출한다. 종가로는 놓쳤으나 고가로는 맞춘
+        예측(A1, acceptance.md 시나리오 1)도 정확히 편입되어야 한다."""
+        trading_date = date(2026, 7, 1)
+        predicted = ["A1", "A2", "A3"]
+        actual = [
+            ("A1", 7.0, 15.0),   # 종가 기준 놓침(was_surge=False), 고가로는 급등 → high_actual 편입
+            ("A2", 12.0, None),  # 종가 기준 급등, high_change_rate 미측정 → coalesce가 change_rate로 폴백
+            ("A3", 5.0, 8.0),    # 종가/고가 모두 급등 미달
+            ("D1", 3.0, 20.0),   # 예측되지 않았으나 고가 기준 급등
+        ]
+        self._seed(db, predicted, actual, trading_date)
+
+        from app.services.surge_evaluation_service import evaluate_surge_predictions
+        result = evaluate_surge_predictions(db, trading_date)
+
+        # 레거시(종가 기준) 지표는 별도 경로 — A2만 was_surge=True이므로 TP=1
+        assert result.true_positive == 1
+
+        # high_actual_set = {A1, A2, D1} (A3 제외); predicted_set = {A1, A2, A3}
+        # TP_high = |{A1,A2}| = 2, FN_high = |{D1}| = 1
+        assert result.high_based_recall is not None
+        assert abs(result.high_based_recall - (2 / 3)) < 1e-9
+        assert result.high_based_precision is not None
+        assert abs(result.high_based_precision - (2 / 3)) < 1e-9
+
+    def test_idempotent_rerun_preserves_high_based_values_both_branches(self, db: Session):
+        """AC-095-002: 1차(신규 생성 분기) + 2차(기존 갱신 분기) 호출 모두 NULL로 되돌아가지
+        않아야 한다 — plan.md TASK-003 "한쪽 분기만 수정" 실수 회귀 테스트."""
+        trading_date = date(2026, 7, 2)
+        predicted = ["R1"]
+        actual = [("R1", 3.0, 15.0)]
+        self._seed(db, predicted, actual, trading_date)
+
+        from app.services.surge_evaluation_service import evaluate_surge_predictions
+        from app.models.surge_prediction_evaluation import SurgePredictionEvaluation
+
+        first = evaluate_surge_predictions(db, trading_date)
+        assert first.high_based_recall is not None
+        assert first.high_based_precision is not None
+        assert first.high_based_coverage is not None
+
+        second = evaluate_surge_predictions(db, trading_date)
+        assert second.high_based_recall is not None
+        assert second.high_based_precision is not None
+        assert second.high_based_coverage is not None
+        assert abs(second.high_based_recall - first.high_based_recall) < 1e-9
+        assert abs(second.high_based_precision - first.high_based_precision) < 1e-9
+
+        db.expire_all()
+        persisted = (
+            db.query(SurgePredictionEvaluation)
+            .filter(SurgePredictionEvaluation.evaluation_date == trading_date)
+            .one()
+        )
+        assert persisted.high_based_recall is not None
+        assert persisted.high_based_precision is not None
+        assert persisted.high_based_coverage is not None
+
+    def test_persisted_values_match_after_requery(self, db: Session):
+        """AC-095-003: db.expire_all() 이후 재조회한 값이 계산 결과와 일치해야 한다
+        (런타임 속성이 아닌 실제 영속값임을 증명)."""
+        trading_date = date(2026, 7, 3)
+        predicted = ["S1", "S2"]
+        actual = [("S1", 11.0, None), ("S2", 2.0, 20.0)]
+        self._seed(db, predicted, actual, trading_date)
+
+        from app.services.surge_evaluation_service import evaluate_surge_predictions
+        from app.models.surge_prediction_evaluation import SurgePredictionEvaluation
+
+        result = evaluate_surge_predictions(db, trading_date)
+        expected_recall = result.high_based_recall
+        expected_precision = result.high_based_precision
+        expected_coverage = result.high_based_coverage
+
+        db.expire_all()
+        reloaded = (
+            db.query(SurgePredictionEvaluation)
+            .filter(SurgePredictionEvaluation.evaluation_date == trading_date)
+            .one()
+        )
+        assert reloaded.high_based_recall == expected_recall
+        assert reloaded.high_based_precision == expected_precision
+        assert reloaded.high_based_coverage == expected_coverage
+
+    def test_high_based_coverage_matches_high_change_rate_not_null_ratio(self, db: Session):
+        """AC-095-003: high_based_coverage는 evaluate_high_based_outcomes()와 동일한 정의
+        (high_change_rate IS NOT NULL 비율)를 따른다."""
+        trading_date = date(2026, 7, 4)
+        actual = [
+            ("W1", 12.0, 15.0),
+            ("W2", 3.0, None),
+            ("W3", 20.0, 22.0),
+            ("W4", 1.0, None),
+        ]
+        self._seed(db, [], actual, trading_date)
+
+        from app.services.surge_evaluation_service import evaluate_surge_predictions
+        result = evaluate_surge_predictions(db, trading_date)
+
+        assert result.high_based_coverage is not None
+        assert abs(result.high_based_coverage - 0.5) < 1e-9
+
+    def test_exception_during_high_based_calc_nulls_metrics_but_preserves_primary_result(
+        self, db: Session
+    ):
+        """AC-095-004: 고가 기준 계산 예외 시 3개 값만 None 처리되고, 기존 8개 필드는
+        예외 없는 케이스와 동일하게 정상 upsert·commit되며 함수 전체는 예외를 전파하지 않는다."""
+        trading_date = date(2026, 7, 5)
+        predicted = ["E1", "E2"]
+        actual = [("E1", 12.0, None), ("E3", 15.0, None)]
+        self._seed(db, predicted, actual, trading_date)
+
+        from app.services.surge_evaluation_service import evaluate_surge_predictions
+
+        with patch(
+            "app.services.surge_evaluation_service.sqlfunc.coalesce",
+            side_effect=RuntimeError("의도적 고가 지표 계산 실패"),
+        ):
+            result = evaluate_surge_predictions(db, trading_date)
+
+        assert result.high_based_recall is None
+        assert result.high_based_precision is None
+        assert result.high_based_coverage is None
+
+        # 기존 8개 필드: TP=1(E1), FP=1(E2), FN=1(E3) — 예외 없는 케이스와 동일해야 한다
+        assert result.true_positive == 1
+        assert result.false_positive == 1
+        assert result.false_negative == 1
+        assert abs(result.precision - 0.5) < 1e-9
+        assert abs(result.recall - 0.5) < 1e-9
+        assert result.f1_score is not None
+        # 유니버스 미영속화 날짜 → scannable_recall/coverage는 기존 EC-2 동작대로 None(본 예외와 무관)
+        assert result.scannable_recall is None
+        assert result.coverage is None
+
+    def test_log_contains_high_based_field_names(self, db: Session, caplog):
+        """AC-095-005: 로그에 high_based_recall/precision/coverage 필드명이 노출되어야 한다."""
+        import logging
+
+        trading_date = date(2026, 7, 6)
+        predicted = ["L1"]
+        actual = [("L1", 12.0, None)]
+        self._seed(db, predicted, actual, trading_date)
+
+        caplog.set_level(logging.INFO, logger="app.services.surge_evaluation_service")
+
+        from app.services.surge_evaluation_service import evaluate_surge_predictions
+        evaluate_surge_predictions(db, trading_date)
+
+        assert "high_based_recall" in caplog.text
+        assert "high_based_precision" in caplog.text
+        assert "high_based_coverage" in caplog.text
+
+    def test_new_columns_default_null_for_directly_inserted_row(self, db: Session):
+        """AC-095-006: 마이그레이션 컬럼은 nullable + 서버 기본값 없음 — evaluate_surge_predictions()를
+        거치지 않고 직접 삽입한 행은 3개 값이 NULL로 남는다(배포 이전 기존 행 무백필 증명)."""
+        from app.models.surge_prediction_evaluation import SurgePredictionEvaluation
+
+        row = SurgePredictionEvaluation(evaluation_date=date(2026, 1, 1))
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+
+        assert row.high_based_recall is None
+        assert row.high_based_precision is None
+        assert row.high_based_coverage is None
+
+    def test_existing_primary_metrics_completely_unchanged(self, db: Session):
+        """AC-095-007: 동일 fixture에 대해 기존 8개 필드(precision/recall/f1_score/
+        true_positive/false_positive/false_negative/scannable_recall/coverage)가 완전히
+        동일해야 하며 was_surge 판정 기준도 불변이어야 한다."""
+        trading_date = date(2026, 7, 7)
+        predicted = ["P1", "P2", "P3"]
+        actual = [("P2", 12.0, None), ("P3", 15.0, None), ("P4", 11.0, None)]
+        self._seed(db, predicted, actual, trading_date)
+
+        from app.services.surge_evaluation_service import evaluate_surge_predictions
+        result = evaluate_surge_predictions(db, trading_date)
+
+        assert result.true_positive == 2
+        assert result.false_positive == 1
+        assert result.false_negative == 1
+        assert abs(result.precision - (2 / 3)) < 1e-9
+        assert abs(result.recall - (2 / 3)) < 1e-9
+        assert result.f1_score is not None
+        assert result.scannable_recall is None
+        assert result.coverage is None
+
+    def test_predicted_count_zero_yields_precision_none(self, db: Session):
+        """AC-095-008: predicted_set이 빈 집합이면 high_based_precision은 None(0.0 아님)이며
+        ZeroDivisionError를 발생시키지 않는다."""
+        trading_date = date(2026, 7, 8)
+        actual = [("Z1", 12.0, None)]
+        self._seed(db, [], actual, trading_date)
+
+        from app.services.surge_evaluation_service import evaluate_surge_predictions
+        result = evaluate_surge_predictions(db, trading_date)
+
+        assert result.predicted_count == 0
+        assert result.high_based_precision is None
+        # high_actual_set={Z1} 이므로 recall 분모는 1 — 정상 계산되어 0.0(예측 미달성)
+        assert result.high_based_recall is not None
+        assert abs(result.high_based_recall - 0.0) < 1e-9
+
+    def test_high_actual_set_empty_yields_recall_none(self, db: Session):
+        """AC-095-009: TP_high+FN_high=0(고가 기준 급등 실제 종목 0건)이면 high_based_recall은
+        None(0.0 아님)이며 ZeroDivisionError를 발생시키지 않는다."""
+        trading_date = date(2026, 7, 9)
+        predicted = ["Y1"]
+        actual = [("Y1", 3.0, 4.0)]  # coalesce(4.0, 3.0)=4.0 < 10.0 → high_actual_set 공집합
+
+        self._seed(db, predicted, actual, trading_date)
+
+        from app.services.surge_evaluation_service import evaluate_surge_predictions
+        result = evaluate_surge_predictions(db, trading_date)
+
+        assert result.high_based_recall is None
+        # predicted_count=1 > 0이므로 precision은 정상 계산 — TP_high=0이므로 0.0(간접 검증)
+        assert result.high_based_precision is not None
+        assert abs(result.high_based_precision - 0.0) < 1e-9
