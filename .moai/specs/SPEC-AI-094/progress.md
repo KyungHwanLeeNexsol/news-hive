@@ -87,3 +87,24 @@ Route A (Hybrid Trunk main-direct, Tier S) — manager-develop cycle_type=ddd.
 - `scan_universe_include_existing=True` 활성화 시 실제 운영 `scannable_recall`/`coverage` 지표
   이동 폭은 배포 후 로깅(`existing_only`/`existing_included`) 관측이 필요(spec.md Open
   Question 2 — 본 SPEC 범위는 배선까지이며 활성화는 별도 결정)
+
+## §E.4 Sync-phase Audit-Ready Signal
+
+```yaml
+sync_complete_at: "2026-07-31"
+sync_commit_sha: "pending-backfill-SPEC-AI-094-sync"
+sync_status: "audit-ready"
+b12_self_test_a: "grep -c 'SPEC-AI-094' CHANGELOG.md → 0 (pre-emission), 1 (post-emission)"
+b12_self_test_b: "AC count 6 == acceptance table row count 6 (spec.md §Acceptance Criteria inline table)"
+b12_self_test_c: "ls backend/app/surge_config/surge_settings.py backend/app/services/surge_detector.py backend/tests/test_spec_ai_094.py → all exist"
+changelog_entry_position: "[Unreleased] section, above SPEC-AI-093 entry"
+frontmatter_status_transitions:
+  spec_md: "in-progress -> completed"
+canary_compliance_check:
+  applicable: false
+  note: "본 SPEC은 forward-looking policy를 정의하지 않음 — canary self-test 해당 없음"
+```
+
+sync-auditor 독립 스코어(4-dimension): Functionality 92, Security 95, Craft 78,
+Consistency 85 — PASS. 보안 스캔 clean(CRITICAL/HIGH 없음). 전체 회귀 2259 passed / 0 failed
+(SPEC-AI-095과 공유 스위트 기준).

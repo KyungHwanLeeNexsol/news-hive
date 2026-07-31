@@ -2,7 +2,7 @@
 id: SPEC-AI-094
 title: "스캔 유니버스 existing_codes 병합 필터 무효화 교정"
 version: "0.1.0"
-status: in-progress
+status: completed
 created: 2026-07-30
 updated: 2026-07-31
 author: Nexsol

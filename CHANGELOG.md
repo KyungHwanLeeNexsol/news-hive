@@ -4,6 +4,74 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fix — SPEC-AI-094: 스캔 유니버스 existing_codes 병합 필터 무효화 교정 (2026-07-31)
+
+**목적**: SPEC-AI-076이 발견하고 의도적으로 보존한 버그 — `build_scan_universe()`의
+existing 병합 필터(`entry_pool_map` 등재 여부 기준)가 구조적으로 항상 빈 리스트를 반환해,
+A/B/C/D 어느 풀에도 속하지 않는 "이미 탐지된" existing 종목이 `final_universe`에 한 번도
+포함되지 못하던 문제를 교정한다. 후보/시그널 생성 경로에는 영향이 없으나(existing 종목은
+이미 `merged` 소속 탐지 후보), `scannable_recall`/`coverage`/`surge_type` 평가지표의
+분모 원천에는 영향이 있어 **설정 플래그 뒤에 기본 비활성**으로 배선한다.
+
+**핵심 변경 (REQ-AI094-001~005, AC-094-001~006 전량 6개 PASS)**:
+1. **REQ-001** `scan_universe_include_existing`(기본 `False`) 플래그 활성 시,
+   판정 기준을 `entry_pool_map` 등재 여부가 아닌 **A/B/C/D 풀 소속 여부**로 교정 —
+   미소속 existing 종목을 `universe_ordered`의 최후순위로 실제 병합한다.
+2. **REQ-002** 플래그 비활성(기본값) 시 `final_universe`/`entry_pool_map`/`pool_counts`
+   반환값 3종이 **순서까지 완전 동일**(바이트 동등)함을 골든 테스트로 보증.
+3. **REQ-003** 후보/시그널 생성 경로(merged 키 집합, bridge 후보, entry_pool 태깅)는
+   플래그 ON/OFF 무관 완전 무영향 — `surge_evaluation_service`/
+   `surge_universe_gap_service`/`surge_auto_improver`/`scheduler` 무수정 grep 0 매치로 확인.
+4. **REQ-004** 절단 압력 하에서(Pool A/B/C만으로 이미 상한 150 채움) existing은
+   우선순위 최하로 전량 탈락 — quota 미부여(D2) 설계 그대로 검증.
+5. **REQ-005** 최종 유니버스 로그 라인에 "포함 가능했던 existing 수"/"실제 포함 수"를
+   ON/OFF 무관 상시 기록 — 활성화 판단 근거를 사전 확보.
+
+**변경 파일 3개**: `backend/app/surge_config/surge_settings.py`(EXTEND, 신규 플래그 필드),
+`backend/app/services/surge_detector.py`(EXTEND, `build_scan_universe()` 판정 기준
++ 로그 라인), `backend/tests/test_spec_ai_094.py`(신규, 5 tests). `test_spec_ai_065.py`의
+AC-076-004 characterization 단언은 무수정 보존(REQ-005/AC-094-006).
+회귀 2249 passed / 4 skipped / 3 xpassed, `ruff check` 통과. 스키마 변경 없음.
+
+### Feature — SPEC-AI-095: 고가 기준(high_change_rate) 평가지표의 공식 평가 리포트 노출 (2026-07-31)
+
+**목적**: SPEC-AI-093이 도입한 `evaluate_high_based_outcomes()`(거래일 단위 집계 카운트)가
+공식 일일 평가 함수 `evaluate_surge_predictions()`에서 전혀 참조되지 않아, "고가 기준으로
+다시 채점하면 예측이 얼마나 맞았는가"(predicted_set과 교차한 recall/precision)라는 질문에
+답하지 못하던 공백을 해소한다. SPEC-AI-093 Open Question 2의 이행.
+
+**핵심 변경 (REQ-AI095-001~005, AC-095-001~009 전량 9개 PASS)**:
+1. **REQ-001/AC-095-001/008/009** `evaluate_surge_predictions()`의 4단계(주 TP/FP/FN 계산)
+   직후, `COALESCE(high_change_rate, change_rate) >= surge_threshold` 기준
+   `high_actual_set`을 별도 조회해 기존 `predicted_set`과 교차, `high_based_recall`/
+   `high_based_precision`을 산출. `predicted_count==0` 및 `TP_high+FN_high==0` 양쪽 모두
+   `ZeroDivisionError` 대신 NULL 처리("측정 불가"와 "0%" 구분).
+2. **REQ-002/AC-095-007** 기존 `precision`/`recall`/`f1_score`/`true_positive`/
+   `false_positive`/`false_negative`/`scannable_recall`/`coverage` 8개 필드 산출식과
+   `was_surge` 판정 기준은 완전 불변 — `surge_actual_outcome_service.py` diff 0 확인.
+3. **REQ-003/AC-095-002/003/006** `SurgePredictionEvaluation`에 `high_based_recall`/
+   `high_based_precision`/`high_based_coverage` 3개 nullable Float 컬럼 영속화
+   (alembic `070_surge_pred_eval_high_based.py`, down_revision=`069`). 신규 생성·기존
+   갱신 두 upsert 분기 모두 반영(idempotent 재실행 시 값 보존 확인). 과거 행 백필 없음.
+4. **REQ-004/AC-095-004** 계산 실패는 기존 Scannable Recall 블록과 동일한 try/except
+   격리 패턴 재사용 — 3값 모두 None 처리, 주 평가 결과의 upsert/commit은 무방해.
+5. **REQ-005/AC-095-005** 기존 평가 결과 로그 라인에 인접해 3개 값을 별도 로그로 노출
+   (계산 실패 시 None 그대로 로깅).
+
+**변경 파일 5개**: `backend/alembic/versions/070_surge_pred_eval_high_based.py`(신규),
+`backend/app/models/surge_prediction_evaluation.py`(EXTEND, 3 컬럼),
+`backend/app/services/surge_evaluation_service.py`(EXTEND),
+`backend/tests/test_surge_evaluation_service.py`(EXTEND, 9 tests),
+`.moai/specs/SPEC-AI-095/spec.md`(frontmatter). 전체 회귀 2259 passed / 4 skipped /
+3 xpassed / 0 failed, `ruff check` 통과.
+
+**알려진 잔여 갭(Should-Fix, non-blocking)**: `alembic upgrade head`를 실제 PostgreSQL에
+적용해 성공을 확인하지 못했다 — 이 세션 환경에 로컬 PostgreSQL이 기동되어 있지 않아
+`alembic heads`/`alembic history -r 069:070` 정적 리비전 체인 검증으로 대체했다(down_revision
+체인·head 갱신 확인). pytest 전체 스위트는 SQLite `Base.metadata.create_all()` 경로로 3개
+신규 컬럼의 구조적 정합성을 간접 검증했다. 배포 파이프라인 또는 실제 PostgreSQL 접근 가능한
+환경에서 `uv run alembic upgrade head; uv run alembic current` 최종 확인이 필요하다.
+
 ### Feature — SPEC-AI-093: 급등 결과 라벨 재정의 — 장중 고가 기준 등락률(high_change_rate) 실측 수집 (2026-07-30)
 
 **목적**: `surge_actual_outcome.high_change_rate`는 SPEC-AI-041이 명세하고 마이그레이션
