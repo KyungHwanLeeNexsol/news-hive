@@ -79,7 +79,7 @@ Route A (Hybrid Trunk main-direct, Tier S) — manager-develop cycle_type=ddd.
 - 커버리지(수정 파일 대상, 전체 스위트 기준): `surge_detector.py` 81%(전체 파일 기준, 신규 라인 4832-4919/4943-4964는 missing 목록에 없음 — 완전 커버), `surge_settings.py` 99%
 - 정적 검사: `ruff check .` → `All checks passed!` / `mypy` 미검증 — venv에 mypy 미설치(`uv run mypy` 시도 시 `program not found`), SPEC-AI-093과 동일한 기존 환경 Gap 승계
 - 범위 규율 grep(AC-094-003): `git diff --name-only | grep -E 'surge_evaluation_service|surge_universe_gap_service|surge_auto_improver|scheduler'` → 0 매치(exit=1)
-- run_commit_sha: (M1 커밋에서 backfill 예정 — pending-backfill-m1)
+- run_commit_sha: 1cd3d94
 
 ### Gap (미검증)
 
