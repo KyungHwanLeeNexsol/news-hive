@@ -525,11 +525,15 @@ class SurgeDetectionConfig(BaseModel):
     # @MX:SPEC: SPEC-AI-065 REQ-1
     zscore_min_baseline_samples: int = 10
     # SPEC-AI-065: 스캔 유니버스 최대 크기 (Pool A+B+C+기존 합산 상한)
-    # @MX:NOTE: [AUTO] SPEC-AI-065 REQ-2 — 150 초과 시 A > B > C > existing 우선순위로 잘라냄.
+    # @MX:NOTE: [AUTO] SPEC-AI-065 REQ-2 — 초과 시 A > B > C > existing 우선순위로 잘라냄.
     # SPEC-AI-076: 이 상한 값 자체는 불변(스캔 비용 상한, SPEC-AI-065 소유 유지) — 배분
     # 메커니즘만 quota 방식(pool_b_min_slots/pool_c_min_slots)으로 슈퍼시드됨.
-    # @MX:SPEC: SPEC-AI-065 REQ-2
-    max_scan_universe: int = 150
+    # SPEC-AI-096 REQ-AI096-001: 150→250으로 보수적 상향(clamp [50,600] 범위 내, 값만
+    # 변경 — _clamp_scan_universe_cap/_resolve_scan_universe_cap 로직 자체는 무수정).
+    # [HARD] 플래그가 아니다 — scannable_recall/coverage/surge_type 평가지표 분모가
+    # 배포 즉시 이동한다(§Decisions D1). 활성화 기준: 없음(단일 스칼라, 상시 적용).
+    # @MX:SPEC: SPEC-AI-065 REQ-2, SPEC-AI-096 REQ-AI096-001
+    max_scan_universe: int = 250
     # SPEC-AI-076 REQ-AI076-007: 풀별 최소 슬롯 예약(quota floor). 절단 압력 하에서 상위
     # 우선순위 풀(특히 Pool A, 당일 DART 공시량에 의존해 통제 불가)이 하한 풀(B/C)을 0으로
     # 굶기는 것을 방지한다. sum(floors) > max_scan_universe면 비율 축소 + 경고 로그(clamp).
@@ -552,8 +556,18 @@ class SurgeDetectionConfig(BaseModel):
     # SPEC-AI-086 REQ-AI086-003: Pool D(뉴스 언급 기반) 최소 슬롯 예약(quota floor).
     # SPEC-AI-076 pool_b/c_min_slots quota 패턴을 확장한다. 기본값 0 = 완전 비활성
     # (build_scan_universe의 Pool D 소싱 쿼리 자체가 스킵됨 — REQ-AI086-007 백워드 호환).
+    # SPEC-AI-096 REQ-AI096-003 canary→기본활성화 전환 기준(§Decisions D3, 문서화만 —
+    # 이 SPEC은 값을 바꾸지 않는다):
+    #   - canary 값 제안: 10 (최종 스캔 유니버스 250 대비 4%, 관측 목적 최소 침습)
+    #   - 활성화 전 최소 5거래일 동안 SurgeUniversePoolHistory.pool_d_count(REQ-AI096-002로
+    #     영속화됨)가 0이 아닌 값으로 안정적으로 관측되어야 한다.
+    #   - 롤백 트리거: 관측 기간 중 pool_d_count가 지속적으로 0이면(뉴스 매핑 데이터 부재
+    #     확인) canary 전환을 보류한다. canary 전환 자체는 `if config.pool_d_min_slots > 0:`
+    #     게이트(코드 변경 불필요)만으로 즉시 가능하며, 되돌릴 때도 0으로 복귀하면 된다.
+    #   - Pool D는 canary 전환 이후에도 "측정 유니버스"일 뿐이며, 실제 매매 후보 편입은
+    #     bridge(scan_universe_bridge_candidates_enabled) 활성화를 통해서만 가능하다.
     # @MX:NOTE: [AUTO] SPEC-AI-086 REQ-AI086-003 — Pool D 최소 슬롯 floor(기본 OFF)
-    # @MX:SPEC: SPEC-AI-086 REQ-AI086-003
+    # @MX:SPEC: SPEC-AI-086 REQ-AI086-003, SPEC-AI-096 REQ-AI096-003
     pool_d_min_slots: int = 0
     # SPEC-AI-086 REQ-AI086-004: 장중 시간대별 동적 스캔 상한(선택, 기본 비활성).
     # 키는 시간대 라벨(surge_detector._DYNAMIC_CAP_TIME_BINS와 매칭), 값은 해당 시간대 적용
@@ -584,8 +598,20 @@ class SurgeDetectionConfig(BaseModel):
     # 종목을 비용 제한(신규 외부 fetch 없음) 안에서 bridge 후보로 평가하는 기능 토글.
     # 기본값 False — OFF 상태에서는 gather_surge_candidates() 출력이 bridge 도입 이전과
     # 완전히 동일하다(AC-092-003). ON이어도 pool_a/pool_c만 대상이다.
+    # SPEC-AI-096 REQ-AI096-004 canary→기본활성화 전환 기준(§Decisions D4, 문서화만 —
+    # 이 SPEC은 값을 바꾸지 않는다):
+    #   - 선행 조건: max_scan_universe 상향(REQ-AI096-001, 완료) + Pool D 관측 인프라
+    #     (REQ-AI096-002, 완료)가 먼저 배포되어 있어야 한다(bridge는 pool_a/pool_c 소싱
+    #     유니버스에서 후보를 뽑으므로 캡이 작으면 후보 풀 자체가 작다).
+    #   - 활성화 후 최소 10거래일 동안 기존 `_extract_combo_key()`/`surge_basis` 분석
+    #     도구로 "scan_universe_bridge" 접두 조합의 승률/수익률을 앙상블 평균과 비교
+    #     관측한다(신규 계측 코드 불필요, 기존 도구 재사용).
+    #   - 롤백 트리거: 관측 기간 중 precision이 앙상블 평균보다 유의하게 낮거나
+    #     generate_scan_universe_bridge_candidates() 예외율이 상승하면 즉시 False로
+    #     되돌린다(단일 값 변경, 데이터 손실 없음 — bridge_score/bypass_composite_score는
+    #     이미 nullable-safe 런타임 필드).
     # @MX:NOTE: [AUTO] SPEC-AI-092 REQ-AI092-003 — bridge 후보화 토글(기본 비활성)
-    # @MX:SPEC: SPEC-AI-092 REQ-AI092-003
+    # @MX:SPEC: SPEC-AI-092 REQ-AI092-003, SPEC-AI-096 REQ-AI096-004
     scan_universe_bridge_candidates_enabled: bool = False
     # 전체 bridge 후보 수 상한 (REQ-AI092-004 상한 조건)
     # @MX:SPEC: SPEC-AI-092 REQ-AI092-004

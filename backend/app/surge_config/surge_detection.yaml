@@ -231,7 +231,9 @@ surge_detection:
   # SPEC-AI-065 REQ-1: z-score 기준선 설정
   zscore_min_baseline_samples: 10
   # SPEC-AI-065 REQ-2: 스캔 유니버스 최대 크기
-  max_scan_universe: 150
+  # SPEC-AI-096 REQ-AI096-001: 150→250 상향(clamp [50,600] 내, 플래그 아님 — 평가지표
+  # scannable_recall/coverage/surge_type 분모가 배포 즉시 이동한다).
+  max_scan_universe: 250
   # SPEC-AI-076 REQ-AI076-007: 풀별 최소 슬롯 예약(quota floor) — 0이면 레거시 엄격
   # concat-then-slice와 동일(백워드 호환). sum(floors) > max_scan_universe면 안전 축소.
   pool_b_min_slots: 20
@@ -241,6 +243,8 @@ surge_detection:
   pool_a_rank_by_impact: true
   # SPEC-AI-086 REQ-AI086-003: Pool D(뉴스 언급 기반) 최소 슬롯 예약(quota floor).
   # 0(기본)이면 완전 비활성 — Pool D 소싱 쿼리 자체가 스킵된다(백워드 호환).
+  # SPEC-AI-096 REQ-AI096-003: canary 전환 기준(제안 값 10) + 최소 5거래일 pool_d_count>0
+  # 관측 요건은 app/surge_config/surge_settings.py의 pool_d_min_slots 주석 참고.
   pool_d_min_slots: 0
   # SPEC-AI-086 REQ-AI086-004: 장중 시간대별 동적 스캔 상한(선택, 기본 비활성).
   # 예: {premarket_early: 200, close_final: 250} — 빈 dict(기본)면 max_scan_universe

@@ -1830,6 +1830,81 @@ def _apply_relative_scoring(
     return raw, f"z={z:.2f} (disabled, raw={raw:.3f} 유지)", False
 
 
+# SPEC-AI-038 성능 패치 3단계: price_5d_trend 조회(HTTP) 전 상위 N개로 사전 필터.
+# 2026-06-30: 30→50으로 확대 — KOSDAQ 2페이지 추가로 후보 증가, idle_in_transaction 타임아웃
+# 제거로 여유 생김. 이 숫자(50)는 SPEC-AI-096에서도 무수정이다(§Decisions D2 — 배치 HTTP
+# 인프라 없이 숫자를 올리면 과거 300초 타임아웃 재현 위험).
+_MAX_PRICE_FETCH_CANDIDATES = 50
+
+# SPEC-AI-096 REQ-AI096-005 필수 조건: pool 소속(면제 대상) 후보 수가 이 값을 초과하면
+# price_5d_trend HTTP 호출량 급증 조기 감지를 위한 경고 로그를 남긴다.
+_POOL_MEMBER_WARNING_THRESHOLD = 200
+
+
+# @MX:NOTE: [AUTO] SPEC-AI-096 REQ-AI096-005 — SPEC-AI-038 사전절단 정책을 pool 소속
+# 후보(entry_pool in pool_a/b/c/d)는 면제하는 방향으로 재설계했다. SPEC-AI-063이
+# volume_breakout_score 단독으로 앙상블 우회를 허용한 것과 동일 논리: 이미 외부 독립
+# 공급 신호(DART 공시/거래량 폭증/실제 등락률/뉴스 언급)를 가진 후보를 순수 내부 앙상블
+# 사전점수만으로 버리는 것은 근거가 약하다. entry_pool == "existing"(순수 탐지기 전용)인
+# candidate만 기존처럼 사전점수(_pre_score) 상위 _MAX_PRICE_FETCH_CANDIDATES개로 절단한다.
+# _MAX_PRICE_FETCH_CANDIDATES(50)의 숫자와 아래 가중합 산출식 자체는 SPEC-AI-038/065
+# 값 그대로 무수정 — 절단 **대상 집합**만 재정의한다.
+# @MX:SPEC: SPEC-AI-096 REQ-AI096-005
+def _apply_price_fetch_truncation(
+    merged: dict[str, SurgeCandidate],
+) -> dict[str, SurgeCandidate]:
+    """merged가 _MAX_PRICE_FETCH_CANDIDATES를 초과하면 existing 전용 후보만 절단한다.
+
+    entry_pool이 pool_a/pool_b/pool_c/pool_d인 candidate는 절단 대상에서 면제되어
+    그대로 생존하고, entry_pool == "existing"인 candidate만 사전점수(_pre_score)
+    내림차순 상위 _MAX_PRICE_FETCH_CANDIDATES개로 절단된다. entry_pool 태깅은 이 함수
+    호출보다 먼저 실행되므로(SPEC-AI-065 REQ-2) 별도 조회 없이 판별 가능하다.
+    """
+    if len(merged) <= _MAX_PRICE_FETCH_CANDIDATES:
+        return merged
+
+    _original_count = len(merged)
+
+    def _pre_score(c: SurgeCandidate) -> float:
+        # 앙상블 가중치 기준으로 모든 탐지기 반영 (SPEC-AI-065: volume_breakout/momentum_continuation 추가)
+        return (
+            c.theme_cluster_score * 0.19
+            + c.combo_score * 0.25
+            + c.pattern_score * 0.14
+            + c.news_delayed_score * 0.11
+            + c.volume_breakout_score * 0.11
+            + c.momentum_continuation_score * 0.12
+            + c.immediate_disclosure_score * 0.08
+        )
+
+    _pool_codes = [code for code, c in merged.items() if c.entry_pool != "existing"]
+    _existing_codes = [code for code, c in merged.items() if c.entry_pool == "existing"]
+
+    if len(_pool_codes) > _POOL_MEMBER_WARNING_THRESHOLD:
+        logger.warning(
+            "[급등탐지] pool 소속(면제 대상) 후보 수(%d)가 경고 임계값(%d) 초과 — "
+            "price_5d_trend HTTP 호출량 급증 가능성 (SPEC-AI-096 REQ-AI096-005)",
+            len(_pool_codes),
+            _POOL_MEMBER_WARNING_THRESHOLD,
+        )
+
+    _sorted_existing = sorted(
+        _existing_codes, key=lambda code: _pre_score(merged[code]), reverse=True
+    )
+    _kept_codes = _pool_codes + _sorted_existing[:_MAX_PRICE_FETCH_CANDIDATES]
+    result = {code: merged[code] for code in _kept_codes}
+
+    logger.info(
+        "[급등탐지] price_5d_trend 조회 전 상위 %d개로 사전 필터 (성능 패치, 원본=%d개, "
+        "pool소속면제=%d개, existing잔존=%d개)",
+        _MAX_PRICE_FETCH_CANDIDATES,
+        _original_count,
+        len(_pool_codes),
+        min(len(_existing_codes), _MAX_PRICE_FETCH_CANDIDATES),
+    )
+    return result
+
+
 # @MX:NOTE: [AUTO] SPEC-AI-012 앙상블 파이프라인 진입점 — fund_manager._gather_surge_candidates에서 호출
 # @MX:SPEC: SPEC-AI-012
 def gather_surge_candidates(
@@ -1965,6 +2040,9 @@ def gather_surge_candidates(
                     "pool_a": _pool_counts.get("pool_a", 0),
                     "pool_b": _pool_counts.get("pool_b", 0),
                     "pool_c": _pool_counts.get("pool_c", 0),
+                    # SPEC-AI-096 REQ-AI096-002: pool_d 관측 이력 영속화(활성화 아님 —
+                    # pool_d_min_slots=0이면 _pool_counts["pool_d"]는 항상 0).
+                    "pool_d": _pool_counts.get("pool_d", 0),
                     "scan_universe_size": len(_universe_codes),
                 },
             )
@@ -2111,31 +2189,10 @@ def gather_surge_candidates(
     except Exception as _ze:
         logger.debug("[z-score] 기준선 적용 실패 (무시): %s", _ze)
 
-    # SPEC-AI-038 성능 패치 3단계: price_5d_trend 조회(HTTP) 전 상위 N개로 사전 필터
-    # 이유: 테마클러스터가 수백 개 후보 반환 시 모든 종목 HTTP 호출 → 300s 타임아웃 초과
-    # 수정: 기존 점수(HTTP 없음) 기준으로 상위 N개만 남기고 나머지 제거
-    # 2026-06-30: 30→50으로 확대 — KOSDAQ 2페이지 추가로 후보 증가, idle_in_transaction 타임아웃 제거로 여유 생김
-    _MAX_PRICE_FETCH_CANDIDATES = 50
-    if len(merged) > _MAX_PRICE_FETCH_CANDIDATES:
-        _original_count = len(merged)
-        def _pre_score(c: SurgeCandidate) -> float:
-            # 앙상블 가중치 기준으로 모든 탐지기 반영 (SPEC-AI-065: volume_breakout/momentum_continuation 추가)
-            return (
-                c.theme_cluster_score * 0.19
-                + c.combo_score * 0.25
-                + c.pattern_score * 0.14
-                + c.news_delayed_score * 0.11
-                + c.volume_breakout_score * 0.11
-                + c.momentum_continuation_score * 0.12
-                + c.immediate_disclosure_score * 0.08
-            )
-        _sorted_codes = sorted(merged.keys(), key=lambda code: _pre_score(merged[code]), reverse=True)
-        merged = {code: merged[code] for code in _sorted_codes[:_MAX_PRICE_FETCH_CANDIDATES]}
-        logger.info(
-            "[급등탐지] price_5d_trend 조회 전 상위 %d개로 사전 필터 (성능 패치, 원본=%d개)",
-            _MAX_PRICE_FETCH_CANDIDATES,
-            _original_count,
-        )
+    # SPEC-AI-038/096: price_5d_trend 조회(HTTP) 전 상위 N개로 사전 필터 — pool 소속
+    # 후보(entry_pool in pool_a/b/c/d)는 절단 면제(SPEC-AI-096 REQ-AI096-005). 상세
+    # 로직/PRESERVE 상수는 _apply_price_fetch_truncation 참고.
+    merged = _apply_price_fetch_truncation(merged)
 
     # SPEC-AI-018 REQ-005 fix: price_5d_trend를 candidate에 직접 채움
     # legacy_candidates=[]인 run_surge_signal_generation 경로에서도 페널티가 작동하도록

@@ -667,10 +667,12 @@ class TestCostCapPreserved:
 class TestInvariantConstantLiteralsUnchanged:
     """SPEC-AI-076 AC-076-003/AC-076-010: max_scan_universe/_min_ratio 상수 리터럴 불변."""
 
-    def test_max_scan_universe_default_unchanged(self):
-        """max_scan_universe 기본값은 150 그대로여야 한다(SPEC-AI-065 소유, 상향 금지)."""
+    def test_max_scan_universe_default_updated_by_spec_ai_096(self):
+        """max_scan_universe 기본값은 SPEC-AI-096 REQ-AI096-001에 의해 150→250으로
+        의도적으로 상향되었다(clamp [50,600] 범위 내, 값만 변경 — 이 SPEC-AI-065 불변식은
+        SPEC-AI-096이 명시적으로 슈퍼시드한다). clamp 로직 자체는 여전히 무수정이다."""
         cfg = get_surge_config()
-        assert cfg.max_scan_universe == 150
+        assert cfg.max_scan_universe == 250
 
     def test_min_ratio_literal_unchanged_in_source(self):
         """_min_ratio=2.0 리터럴이 변경되면 안 된다(SPEC-AI-074 소유, 불변)."""

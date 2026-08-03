@@ -85,7 +85,9 @@ class TestGoldenUniverseBaseline:
         _make_pool_c_outcomes_named(db, pool_c_codes)
 
         cfg = get_surge_config()  # 신규 설정 전부 기본값 확인용(REQ-007 동시 검증)
-        assert cfg.max_scan_universe == 150
+        # SPEC-AI-096 REQ-AI096-001: 기본값 150→250. 이 테스트의 후보 수(10)는 두 값
+        # 모두보다 훨씬 작아 절단이 발생하지 않으므로 골든 순서/pool_counts 자체는 무영향.
+        assert cfg.max_scan_universe == 250
         assert cfg.pool_d_min_slots == 0
         assert cfg.dynamic_scan_universe_caps == {}
 
@@ -119,12 +121,17 @@ class TestGoldenUniverseBaseline:
         for code in pool_c_codes:
             assert entry_pool_map[code] == "pool_c"
 
-    def test_golden_0708_replay_scenario_unchanged_at_default_config(self, db: Session):
+    def test_golden_0708_replay_scenario_unchanged_at_fixed_cap_150(self, db: Session):
         """SPEC-AI-076 07-08형 재현 시나리오(A=232,B=0,C=52)가 SPEC-AI-086 이후에도
-        기본 설정에서 정확히 동일해야 한다(REQ-007 백워드 호환, 대규모 절단 압력 케이스)."""
+        cap=150 고정 시 정확히 동일해야 한다(REQ-007 백워드 호환, 대규모 절단 압력 케이스).
+
+        SPEC-AI-096 REQ-AI096-001이 max_scan_universe 기본값을 150→250으로 상향했으므로,
+        이 테스트는 원래의 "기본 설정" 대신 cap=150을 명시 오버라이드하여 캡 파라미터
+        자체(clamp 로직 무수정)의 회귀 감지 가치를 그대로 유지한다(AC-096-010 검증 방법).
+        """
         _make_pool_a_disclosures(db, 232)
         _make_pool_c_outcomes(db, 52)
-        cfg = get_surge_config()
+        cfg = get_surge_config().model_copy(update={"max_scan_universe": 150})
 
         with patch(
             "app.services.naver_finance.fetch_volume_leaders_sync",
@@ -615,8 +622,12 @@ class TestDynamicScanUniverseCap:
         assert len(final_universe) == 200
 
     def test_dynamic_cap_unset_falls_back_to_flat_cap(self, db: Session):
-        """미설정(기본 빈 dict)이면 REQ-001의 단일 평탄 상한(max_scan_universe)이 적용된다."""
-        _make_pool_a_disclosures(db, 200)
+        """미설정(기본 빈 dict)이면 REQ-001의 단일 평탄 상한(max_scan_universe)이 적용된다.
+
+        SPEC-AI-096 REQ-AI096-001로 기본 상한이 150→250으로 상향되어, 절단 압력을
+        여전히 재현하려면 후보 수를 250 초과로 늘려야 한다(원본은 200/150 조합).
+        """
+        _make_pool_a_disclosures(db, 300)
         cfg = get_surge_config()  # dynamic_scan_universe_caps={} (기본)
 
         with patch(
@@ -627,13 +638,17 @@ class TestDynamicScanUniverseCap:
                 db, cfg, existing_codes=set()
             )
 
-        assert len(final_universe) == 150  # cfg.max_scan_universe 기본값
+        assert len(final_universe) == 250  # cfg.max_scan_universe 기본값(SPEC-AI-096)
 
     def test_dynamic_cap_current_bin_key_absent_falls_back_to_flat_cap(self, db: Session):
-        """동적 상한 맵에 현재 시간대 키가 없으면 단일 평탄 상한으로 폴백한다."""
+        """동적 상한 맵에 현재 시간대 키가 없으면 단일 평탄 상한으로 폴백한다.
+
+        SPEC-AI-096 REQ-AI096-001로 기본 상한이 150→250으로 상향되어, 절단 압력을
+        여전히 재현하려면 후보 수를 250 초과로 늘려야 한다(원본은 200/150 조합).
+        """
         from datetime import datetime as _dt
 
-        _make_pool_a_disclosures(db, 200)
+        _make_pool_a_disclosures(db, 300)
         cfg = get_surge_config().model_copy(
             update={"dynamic_scan_universe_caps": {"close_final": 100}},
         )
@@ -648,7 +663,7 @@ class TestDynamicScanUniverseCap:
                 db, cfg, existing_codes=set(), now=premarket_time
             )
 
-        assert len(final_universe) == 150  # flat max_scan_universe 폴백
+        assert len(final_universe) == 250  # flat max_scan_universe 폴백(SPEC-AI-096)
 
 
 # ---------------------------------------------------------------------------
