@@ -36,7 +36,9 @@ def persist_pool_counts(
     Args:
         db: SQLAlchemy 세션
         pool_date: 집계 기준 날짜
-        pool_counts: {"pool_a": int, "pool_b": int, "pool_c": int, "scan_universe_size": int}
+        pool_counts: {"pool_a": int, "pool_b": int, "pool_c": int, "pool_d": int,
+            "scan_universe_size": int} — "pool_d" 키는 SPEC-AI-096 REQ-AI096-002 신규
+            항목이며, 없으면 하위 호환으로 0 처리한다.
 
     Returns:
         저장된 SurgeUniversePoolHistory 인스턴스
@@ -45,6 +47,7 @@ def persist_pool_counts(
         "pool_a_count": int(pool_counts.get("pool_a", 0) or 0),
         "pool_b_count": int(pool_counts.get("pool_b", 0) or 0),
         "pool_c_count": int(pool_counts.get("pool_c", 0) or 0),
+        "pool_d_count": int(pool_counts.get("pool_d", 0) or 0),
         "scan_universe_size": int(pool_counts.get("scan_universe_size", 0) or 0),
     }
 
@@ -64,11 +67,12 @@ def persist_pool_counts(
         db.flush()
 
     logger.info(
-        "[스캔유니버스] pool_counts 영속화 완료 — date=%s, A=%d B=%d C=%d size=%d",
+        "[스캔유니버스] pool_counts 영속화 완료 — date=%s, A=%d B=%d C=%d D=%d size=%d",
         pool_date,
         values["pool_a_count"],
         values["pool_b_count"],
         values["pool_c_count"],
+        values["pool_d_count"],
         values["scan_universe_size"],
     )
     return row
@@ -82,7 +86,8 @@ def get_pool_counts_for_date(db: Session, target_date: date) -> dict | None:
         target_date: 조회 대상 날짜 (보통 T-1, 예측일)
 
     Returns:
-        {"pool_a": int, "pool_b": int, "pool_c": int, "scan_universe_size": int}
+        {"pool_a": int, "pool_b": int, "pool_c": int, "pool_d": int,
+        "scan_universe_size": int}
         레코드가 없으면 None (호출부는 fail-open으로 pool_counts=None 처리)
     """
     row = (
@@ -97,6 +102,7 @@ def get_pool_counts_for_date(db: Session, target_date: date) -> dict | None:
         "pool_a": row.pool_a_count or 0,
         "pool_b": row.pool_b_count or 0,
         "pool_c": row.pool_c_count or 0,
+        "pool_d": row.pool_d_count or 0,
         "scan_universe_size": row.scan_universe_size or 0,
     }
 

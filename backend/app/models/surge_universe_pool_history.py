@@ -39,6 +39,13 @@ class SurgeUniversePoolHistory(Base):
     # Pool C (등락률 5%+ 당일) 종목 수 — raw pre-truncation (위 pool_a_count와 동일 의미,
     # SPEC-AI-076 REQ-005 불변). scanned는 pool_c_scanned(스키마 0)로만 노출.
     pool_c_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Pool D (뉴스 언급 기반) 종목 수 — raw pre-truncation (위 pool_a_count와 동일 의미).
+    # pool_d_min_slots=0(기본, 완전 비활성)이면 항상 정확히 0이므로 pool_a/b/c_count와
+    # 동일하게 nullable=False, default=0로 통일한다("관측되지 않음"과 "0개"를 구분할
+    # 필요가 없음 — SPEC-AI-096 §Decisions D5).
+    # @MX:NOTE: [AUTO] SPEC-AI-096 REQ-AI096-002 — Pool D 관측 이력 컬럼
+    # @MX:SPEC: SPEC-AI-096 REQ-AI096-002
+    pool_d_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # 최종 스캔 유니버스 크기 (max_scan_universe로 잘라낸 이후)
     scan_universe_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # 레코드 생성/갱신 시각

@@ -160,10 +160,13 @@ class TestPoolCountsPersistenceRoundTrip:
 
         loaded = get_pool_counts_for_date(db, today)
 
+        # SPEC-AI-096 REQ-AI096-002: 반환 dict에 "pool_d" 키가 신규 추가됨(하위 호환 —
+        # pool_d 미전달 시 0으로 채워진다).
         assert loaded == {
             "pool_a": 3,
             "pool_b": 5,
             "pool_c": 12,
+            "pool_d": 0,
             "scan_universe_size": 40,
         }
 
