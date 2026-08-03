@@ -99,7 +99,7 @@ m1_to_mN_commit_strategy: "Single milestone-grouped commits: M1(migration+persis
 
 ```yaml
 sync_complete_at: 2026-08-03
-sync_commit_sha: pending-backfill-changelog-frontmatter
+sync_commit_sha: b732cf5
 sync_status: PASS
 changelog_entry_position: "prepended directly below '## [Unreleased]', above the SPEC-AI-083 entry — matches this project's newest-inserted-first convention"
 ```
