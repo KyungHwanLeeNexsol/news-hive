@@ -4,6 +4,44 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Feature — SPEC-AI-083: 장중 고빈도 재스캔 + 이벤트드리븐 즉시발화 활성화 (2026-07-21)
+
+**목적**: 최근 10 거래일 급등예측 recall≈0%(TP=0)의 종목 무관 아키텍처 근본원인 —
+당일 신규 후보 생성 잡이 사실상 10:00 KST 단 1회뿐이라 장 초반(09:00~10:00)에 이미
+실현된 급등을 구조적으로 놓치던 문제 — 를 교정한다. 방향 A(장중 고빈도 재스캔 +
+same-day 지평 귀속)와 방향 B(공시 즉시발화 회귀 보호 + 뉴스 기반 이벤트 재스캔
+활성화)로 명세하며, 작업 지시 전제 2건(immediate_surge 기활성/surge_check_exits
+비활성)의 코드 불일치를 read-only 재검증으로 정정한 뒤 사용자 승인을 받아 진행했다.
+예측 기록 모드(SPEC-AI-043)는 계승되어 매수/매매 로직은 무변경이다.
+
+**핵심 변경 (REQ-AI083-001~013)**:
+1. **방향 A(REQ-001~006)** 09:05~BUY_CUTOFF(11:00) 구간에 기존 10:00 단일 스캔 외에
+   조기·추가 당일 후보 생성 잡을 다중 등록(distinct id, `max_instances=1`/
+   `coalesce=True`/`replace_existing=True`로 gather 소요(12~20분) 대비 겹침 방지).
+   장중 재스캔이 생성한 당일 후보는 `surge_metadata`에 `horizon="same_day"`를
+   부여해 `_is_same_day_event_horizon_signal`(SPEC-AI-080 평가 경로 재사용)로
+   표준 T-1→T predicted_set에서 배제하고 별도 same-day 서브지표로 집계 — 스키마
+   변경 없이 recall 지표에 올바르게 반영되도록 배선했다. 탐지기·앙상블·유니버스·
+   BUY_CUTOFF·15:20 T-1→T 배치 로직은 diff 0.
+2. **방향 B(REQ-007~009)** 이미 활성인 공시 즉시발화(`immediate_surge.enabled=true`,
+   2026-07-16 배포)와 그 same_day 평가 경로는 회귀 보호(재플립 없음). 뉴스 기반
+   이벤트 재스캔(`_maybe_trigger_event_rescan`, SPEC-AI-066 인프라)을
+   `catalyst_conviction.event_rescan_enabled: false→true`로 활성화하고, 기존 가드
+   (종목당 쿨다운 30분, 일일 상한 20회)는 값 불변으로 준수.
+3. **공통 불변 회귀 가드(REQ-010~012)** `execute_signal_trade` 미호출, 비활성
+   매수/청산 잡(`surge_execute_buys`/`surge_check_exits`) 미복구 — 예측 기록 모드
+   계승. 신규 테이블/마이그레이션/과거 데이터 백필 없음(전진 적용만).
+
+**변경 파일**: `backend/app/services/scheduler.py`(EXTEND, 재스캔 cron 잡 다중 등록),
+`backend/app/services/fund_manager.py` 또는 `run_surge_signal_generation` 경로
+(EXTEND, same-day 지평 귀속 배선), `backend/app/surge_config/surge_detection.yaml`
+(1줄, `event_rescan_enabled` 플립), `backend/tests/test_surge_ai083_intraday_rescan.py`
+(신규, 19 tests). 전체 회귀 스위트 2027 passed 0 failed(기본+xdist), `ruff` clean.
+TRUST5 PASS(Critical 0), 독립평가 4차원 전부 PASS(Functionality 94/Security 96/
+Craft 90/Consistency 95), same-day 체인 완전추적 확인. commit `c474728`(main, direct
+commit). 프로덕션 배포 후 재스캔 잡 로그·same-day 서브지표 편입·이벤트 재스캔
+발화 로그의 실측 관찰이 후속 과제로 남는다.
+
 ### Fix — SPEC-AI-094: 스캔 유니버스 existing_codes 병합 필터 무효화 교정 (2026-07-31)
 
 **목적**: SPEC-AI-076이 발견하고 의도적으로 보존한 버그 — `build_scan_universe()`의

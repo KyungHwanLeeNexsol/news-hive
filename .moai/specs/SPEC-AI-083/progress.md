@@ -10,3 +10,19 @@
 - Phase 2.8a (evaluator-active, 독립평가): PASS 전 차원(Functionality 94/Security 96/Craft 90/Consistency 95), AC-004 same-day 체인 완전추적 확인
 - Phase 3 (manager-git): commit c474728 (main, direct commit, no push) — 오케스트레이터 독립 검증 완료(git log/status/show)
 - Status: **완료**. `/moai sync SPEC-AI-083`으로 문서화 대기 중.
+
+## §E.4 Sync-phase Audit-Ready Signal
+
+```yaml
+sync_status: "audit-ready"
+sync_complete_at: "2026-08-03"
+sync_commit_sha: "pending-backfill-20260803"
+changelog_entry_position: "top-of-Unreleased (above SPEC-AI-094)"
+frontmatter_status_transitions:
+  spec_md: "draft -> completed"
+```
+
+- CHANGELOG.md `[Unreleased]` 섹션에 SPEC-AI-083 항목 추가 완료(위치: SPEC-AI-094 바로 위).
+- spec.md frontmatter `status: draft → completed`, `updated: 2026-07-21 → 2026-08-03` 갱신 완료.
+- `sync_commit_sha`는 이 커밋 자신의 SHA를 알 수 없어 `pending-backfill-*` placeholder로
+  기록(spec-frontmatter-schema.md § SHA placeholder backfill exemption). 후속 커밋에서 백필 예정.
