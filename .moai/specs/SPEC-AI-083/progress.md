@@ -16,7 +16,7 @@
 ```yaml
 sync_status: "audit-ready"
 sync_complete_at: "2026-08-03"
-sync_commit_sha: "pending-backfill-20260803"
+sync_commit_sha: "b610257"
 changelog_entry_position: "top-of-Unreleased (above SPEC-AI-094)"
 frontmatter_status_transitions:
   spec_md: "draft -> completed"
