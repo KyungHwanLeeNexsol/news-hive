@@ -2,7 +2,7 @@
 id: SPEC-AI-096
 title: "급등예측 스캔 유니버스 파이프라인 — 캡·절단·단계적 활성화 정책"
 version: "0.1.0"
-status: in-progress
+status: completed
 created: 2026-08-03
 updated: 2026-08-03
 author: Nexsol

@@ -97,4 +97,20 @@ m1_to_mN_commit_strategy: "Single milestone-grouped commits: M1(migration+persis
 
 ## §E.4 Sync-phase Audit-Ready Signal
 
-_<pending sync-phase>_
+```yaml
+sync_complete_at: 2026-08-03
+sync_commit_sha: pending-backfill-changelog-frontmatter
+sync_status: PASS
+changelog_entry_position: "prepended directly below '## [Unreleased]', above the SPEC-AI-083 entry — matches this project's newest-inserted-first convention"
+```
+
+CHANGELOG.md `[Unreleased]` 섹션에 REQ-AI096-006 필수 3항목 (a) `max_scan_universe`
+150→250 변경 + 평가지표 분모 이동 경고, (b) Pool D 관측 인프라 추가(활성화 아님),
+(c) price-fetch 절단 면제 정책 변경을 모두 포함한 신규 항목을 추가했다.
+
+**run-phase 완료 보고서의 부정확한 주장 정정**: run-phase §E.2 말미 "이 프로젝트에는
+현재 CHANGELOG.md 파일 자체가 존재하지 않는다"는 주장은 사실이 아니다 — 프로젝트
+루트에 `CHANGELOG.md`가 이미 존재하며 `[Unreleased]` 섹션에 SPEC-AI-083 등 선행
+SPEC 항목이 기록되어 있었다. sync-phase 시작 시 `grep -c "SPEC-AI-096" CHANGELOG.md`로
+사전 확인한 결과 `0`(중복 없음)이었으며, 기존 파일의 `[Unreleased]` 섹션에 새 항목을
+추가하는 방식으로 처리했다(신규 파일 생성 아님).

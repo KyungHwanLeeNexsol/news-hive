@@ -4,6 +4,56 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Feature — SPEC-AI-096: 급등예측 스캔 유니버스 파이프라인 — 캡·절단·단계적 활성화 정책 (2026-08-03)
+
+**목적**: GPT 외부 구조진단 + 내부 코드검증이 공통으로 지목한 스캔 유니버스 파이프라인의
+4개 항목(스캔 유니버스 상한, Pool D 관측 갭, bridge 후보 활성화 기준, price-fetch
+사전절단 정책)을 하나의 SPEC으로 묶어 조정한다. Pool D/bridge 후보의 실제 프로덕션
+활성화(flag flip)는 이 SPEC의 범위가 아니며, 관측 인프라와 활성화 기준 문서화까지만
+다룬다.
+
+**핵심 변경 (REQ-AI096-001~006, AC-096-001~010 전량 10개 PASS)**:
+
+1. **(a) `max_scan_universe` 기본값 150→250 상향 — 평가지표 분모 이동 경고**
+   `surge_settings.py`의 `SurgeDetectionConfig.max_scan_universe` 기본값과
+   `surge_detection.yaml`의 `max_scan_universe`를 `150`에서 `250`으로 변경했다(SPEC-AI-086
+   clamp `[50, 600]` 범위 내, clamp 로직 자체는 무수정). **⚠️ 이 변경은 배포일 이후
+   `scannable_recall`/`coverage`/`surge_type`(SPEC-AI-068) 평가지표의 분모를 즉시
+   이동시킨다 — 배포일 이전/이후 수치는 직접 비교할 수 없다.**
+2. **(b) Pool D(뉴스 언급 기반 후보 풀) 관측 인프라 추가 — 활성화 아님**
+   신규 alembic 리비전 `071_surge_universe_pool_history_pool_d`(down_revision=
+   `070_surge_pred_eval_high_based`)로 `SurgeUniversePoolHistory.pool_d_count`
+   컬럼(Integer, nullable=False, default=0)을 추가하고, `persist_pool_counts()`/
+   `get_pool_counts_for_date()`가 `"pool_d"` 키를 대칭적으로 저장/조회하도록 확장해
+   Pool D 실측 이력이 여러 거래일에 걸쳐 축적되도록 배선했다. **`pool_d_min_slots`는
+   여전히 `0`으로 유지되며 실제 활성화는 이 SPEC의 범위가 아니다** — 관측 배선만
+   추가했을 뿐, canary 전환(제안값 10, 최소 5거래일 관측)은 별도 운영 판단으로 결정한다.
+   bridge 후보(`scan_universe_bridge_candidates_enabled`) 역시 `False`로 유지되며
+   동일한 원칙(활성화 기준 문서화만, 실제 플립은 별도 결정)이 적용된다.
+3. **(c) price-fetch 사전절단(`_MAX_PRICE_FETCH_CANDIDATES=50`) 정책 변경 — pool 소속
+   후보 면제** `entry_pool`이 `pool_a`/`pool_b`/`pool_c`/`pool_d` 중 하나인 candidate는
+   `merged`가 50개를 초과해도 사전점수(`_pre_score`) 절단 대상에서 면제되어 전원
+   생존한다. `entry_pool == "existing"`(순수 탐지기 전용, 외부 풀 미소속) candidate만
+   기존처럼 사전점수 내림차순 상위 50개로 절단된다. 숫자(50)와 `_pre_score()` 가중합
+   산출식 자체는 무변경 — 절단 **대상 집합**만 재정의했다(SPEC-AI-063의
+   `volume_breakout_score` 단독 우회 패턴과 동일 논리). pool 소속 candidate가 200개를
+   초과하면 HTTP 호출량 급증 조기 감지를 위한 경고 로그를 남긴다.
+
+**변경 파일**: `backend/alembic/versions/071_surge_universe_pool_history_pool_d.py`(신규),
+`backend/app/models/surge_universe_pool_history.py`(EXTEND, `pool_d_count` 컬럼),
+`backend/app/services/surge_universe_pool_service.py`(EXTEND, `pool_d` 키 하위 호환
+읽기/쓰기), `backend/app/services/surge_detector.py`(EXTEND, 절단 대상 재정의 +
+경고 로그), `backend/app/surge_config/surge_settings.py` +
+`backend/app/surge_config/surge_detection.yaml`(값 변경, `max_scan_universe`
+150→250), `backend/tests/test_spec_ai_096.py`(신규, 10개 AC 커버). 전체 회귀 스위트
+2276 passed, 4 skipped, 3 xpassed(기존 캡=150 고정 골든 테스트 포함) 0 failed,
+`ruff` clean(신규 이슈 0). Pool D/bridge 소싱 로직, `existing_codes` 병합 필터
+(SPEC-AI-094), quota 배분(`pool_b/c_min_slots`), 7개 핵심 탐지기 판정 로직은 전부
+무변경(코드 diff 0 확인). commit `e603d23`/`666844c`/`f3914f9`/`d00a255`(main, direct
+commit, Route A Hybrid Trunk). 마이그레이션은 로컬 환경에 접속 가능한 PostgreSQL이
+없어 `alembic upgrade head` 실측 적용은 미검증(정적 리비전 체인 검증으로 대체) —
+프로덕션 배포 시 최초 적용 확인이 후속 과제로 남는다.
+
 ### Feature — SPEC-AI-083: 장중 고빈도 재스캔 + 이벤트드리븐 즉시발화 활성화 (2026-07-21)
 
 **목적**: 최근 10 거래일 급등예측 recall≈0%(TP=0)의 종목 무관 아키텍처 근본원인 —
