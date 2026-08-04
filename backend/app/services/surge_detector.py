@@ -1608,6 +1608,144 @@ def compute_ensemble_score(candidate: SurgeCandidate, config: SurgeDetectionConf
     return final_score
 
 
+# @MX:ANCHOR: [AUTO] compute_horizon_signature — 후보의 지평(horizon) 시그니처 산출 진입점
+# @MX:REASON: gather_surge_candidates 메인 루프 + 섀도우 모드 관측 경로 2곳 이상에서 호출
+# @MX:SPEC: SPEC-AI-100 REQ-AI100-002
+def compute_horizon_signature(
+    candidate: SurgeCandidate, config: SurgeDetectionConfig
+) -> str:
+    """후보에 대해 실제로 발화한(0 초과 스코어) 탐지기들의 지평 라벨을 조합해
+    단일 지평 시그니처를 산출한다 (SPEC-AI-100 REQ-AI100-002).
+
+    `compute_ensemble_score`가 사용하는 것과 동일한 탐지기 키 집합(가중치 키)을
+    재사용하되, `compute_ensemble_score` 자체는 무수정으로 유지한다
+    (REQ-AI100-003 필수 조건). 지평 라벨이 설정되지 않은 탐지기 키는 안전 기본값
+    `multi_day`로 처리한다(REQ-AI100-001).
+
+    Args:
+        candidate: SurgeCandidate 객체
+        config: SurgeDetectionConfig 설정
+
+    Returns:
+        `same_day_dominant` / `next_day_dominant` / `multi_day_dominant` / `mixed`
+        중 하나. 발화한 탐지기가 없으면 보수적으로 `multi_day_dominant`를 반환한다
+        (예외를 발생시키지 않음, spec.md §D Edge Cases).
+
+    # @MX:SPEC: SPEC-AI-100 REQ-AI100-002
+    """
+    horizon_labels = config.ensemble.horizon_aware_thresholds.horizon_labels
+    best_disclosure_score = max(candidate.pattern_score, candidate.immediate_disclosure_score)
+    detector_scores = {
+        "theme_cluster": candidate.theme_cluster_score,
+        "volume_news_combo": candidate.combo_score,
+        "disclosure_pattern": best_disclosure_score,
+        "legacy_detectors": candidate.legacy_score,
+        "news_delayed": candidate.news_delayed_score,
+        "volume_breakout": candidate.volume_breakout_score,
+        "momentum_continuation": candidate.momentum_continuation_score,
+    }
+
+    active_labels: set[str] = set()
+    for detector_key, score in detector_scores.items():
+        if score > 0:
+            active_labels.add(horizon_labels.get(detector_key, "multi_day"))
+
+    if not active_labels:
+        return "multi_day_dominant"
+    if len(active_labels) > 1:
+        return "mixed"
+    (only_label,) = active_labels
+    return f"{only_label}_dominant"
+
+
+def select_effective_threshold(
+    market_regime: str,
+    horizon_signature: str | None,
+    config: SurgeDetectionConfig,
+) -> float:
+    """레짐과 지평 시그니처의 조합으로 임계값을 조회한다 (SPEC-AI-100 REQ-AI100-003).
+
+    `horizon_signature`가 `None`이면(플래그 비활성 상태) 기존 `regime_thresholds`
+    단일 레짐 조회 경로만 사용한다 — REQ-AI100-003의 바이트 동일 동작 요구사항.
+    조회 실패(레짐/시그니처 키 없음) 시 기존 단일 레짐 임계값으로 안전하게
+    폴백한다.
+
+    Args:
+        market_regime: 시장 레짐 (BULL/SIDEWAYS/BEAR 등)
+        horizon_signature: `compute_horizon_signature` 반환값, 또는 플래그 비활성 시 None
+        config: SurgeDetectionConfig 설정
+
+    Returns:
+        적용할 임계값
+
+    # @MX:SPEC: SPEC-AI-100 REQ-AI100-003
+    """
+    _regime_fallback = config.ensemble.regime_thresholds.get(
+        market_regime, config.ensemble.min_score_for_signal
+    )
+    if horizon_signature is None:
+        return _regime_fallback
+
+    horizon_table = config.ensemble.horizon_aware_thresholds.thresholds.get(
+        market_regime, {}
+    )
+    return horizon_table.get(horizon_signature, _regime_fallback)
+
+
+def run_horizon_shadow_comparison(
+    merged: dict[str, SurgeCandidate],
+    qualified_codes: set[str],
+    market_regime: str,
+    config: SurgeDetectionConfig,
+) -> None:
+    """섀도우 모드 비교 로깅 (SPEC-AI-100 REQ-AI100-006).
+
+    `horizon_aware_thresholds.enabled`가 false(기본값)인 동안, 신규 지평 인식
+    임계값 경로를 병행 계산해 기존 경로의 `qualified_codes`와의 차이를 구조화
+    로그로 남긴다. 부가 관측 경로이며, 계산 실패가 기존 시그널 생성 흐름에
+    영향을 주지 않도록 예외를 이 함수 내부에서 격리한다(REQ-AI100-007).
+
+    Args:
+        merged: 앙상블 스코어링 대상 후보 dict (stock_code → SurgeCandidate)
+        qualified_codes: 기존 임계값 경로의 qualified 종목 코드 집합
+        market_regime: 시장 레짐
+        config: SurgeDetectionConfig 설정
+
+    # @MX:SPEC: SPEC-AI-100 REQ-AI100-006, REQ-AI100-007
+    """
+    if config.ensemble.horizon_aware_thresholds.enabled:
+        return
+    if not config.ensemble.horizon_aware_thresholds.shadow_mode_enabled:
+        return
+
+    try:
+        shadow_qualified_codes: set[str] = set()
+        for candidate in merged.values():
+            score = compute_ensemble_score(candidate, config)
+            score = _recent_surge_penalty(score, candidate.price_5d_trend)
+            signature = compute_horizon_signature(candidate, config)
+            threshold = select_effective_threshold(market_regime, signature, config)
+            if score >= threshold:
+                shadow_qualified_codes.add(candidate.stock_code)
+
+        added = sorted(shadow_qualified_codes - qualified_codes)
+        removed = sorted(qualified_codes - shadow_qualified_codes)
+        if added or removed:
+            logger.info(
+                "[SPEC-AI-100 섀도우] 레짐=%s 기존qualified=%d 신규qualified=%d "
+                "added=%s removed=%s",
+                market_regime,
+                len(qualified_codes),
+                len(shadow_qualified_codes),
+                added,
+                removed,
+            )
+    except Exception as shadow_exc:
+        logger.warning(
+            "[SPEC-AI-100 섀도우] 계산 실패 (무시, 기존 흐름 영향 없음): %s", shadow_exc
+        )
+
+
 def _recent_surge_penalty(score: float, price_5d_trend: float | None) -> float:
     """5일 수익률 기반 최근 급등 페널티를 적용한다 (REQ-AI018-005).
 
@@ -2214,7 +2352,11 @@ def gather_surge_candidates(
 
     # SPEC-AI-030 Gate 4 (REQ-AI030-004): combo 단독 신호 buy-pool 미포함
     # @MX:NOTE: [AUTO] SPEC-AI-030 — combo_score > 0이고 다른 탐지기 점수가 모두 0이면 buy-pool 제외
-    # @MX:SPEC: SPEC-AI-030 REQ-AI030-004
+    # SPEC-AI-100 REQ-AI100-004: Gate 4는 지평 시그니처 계산(compute_horizon_signature) 및
+    # 임계값 선택(select_effective_threshold)보다 먼저 실행된다 — 여기서 merged에서 제거된
+    # 후보는 아래 메인 스코어링 루프에서 지평 시그니처 계산 대상에서 자연히 제외된다.
+    # Gate 4의 판정 로직(companion-detector 조건) 자체는 SPEC-AI-100 적용 전후 무수정이다.
+    # @MX:SPEC: SPEC-AI-030 REQ-AI030-004, SPEC-AI-100 REQ-AI100-004
     _guard = config.combo_chase_guard
     if _guard.enabled and _guard.require_companion_detector:
         _combo_only_codes: list[str] = []
@@ -2245,14 +2387,27 @@ def gather_surge_candidates(
         "[앙상블] 레짐=%s 유효임계=%.2f (기본=%.2f)",
         market_regime, effective_threshold, config.ensemble.min_score_for_signal,
     )
+    # SPEC-AI-100 REQ-AI100-003: 플래그 비활성(기본값) 시 아래 분기는 전혀 실행되지 않으며
+    # 기존 단일 레짐 임계값(effective_threshold)만 사용한다 — 바이트 동일 동작.
+    _horizon_aware_enabled = config.ensemble.horizon_aware_thresholds.enabled
 
     for candidate in merged.values():
         score = compute_ensemble_score(candidate, config)
         # SPEC-AI-018 REQ-005: 최근 급등 페널티 적용 (앙상블 경로)
         score = _recent_surge_penalty(score, candidate.price_5d_trend)
-        if score >= effective_threshold:
+        if _horizon_aware_enabled:
+            _horizon_signature = compute_horizon_signature(candidate, config)
+            _candidate_threshold = select_effective_threshold(
+                market_regime, _horizon_signature, config
+            )
+        else:
+            _candidate_threshold = effective_threshold
+        if score >= _candidate_threshold:
             qualified.append(candidate)
             qualified_codes.add(candidate.stock_code)
+
+    # SPEC-AI-100 REQ-AI100-006/007: 섀도우 모드 비교 로깅 (부가 관측 경로, 예외 자체 격리).
+    run_horizon_shadow_comparison(merged, qualified_codes, market_regime, config)
 
     # P3: 즉각 공시 이벤트 강도 >= config 임계값이면 앙상블 임계값 우회 포함
     # SPEC-AI-018 REQ-001: 하드코딩(0.70) → config.ensemble.immediate_disclosure_bypass_threshold (0.85)

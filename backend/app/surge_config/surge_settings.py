@@ -164,6 +164,28 @@ class EnsembleWeightsConfig(BaseModel):
     momentum_continuation: float = 0.0
 
 
+class EnsembleHorizonAwareThresholdsConfig(BaseModel):
+    """탐지기 지평(horizon) 인식 임계값 설정 (SPEC-AI-100).
+
+    # @MX:NOTE: [AUTO] SPEC-AI-100 REQ-AI100-001 — enabled=False가 기본값.
+    #           비활성 시 이 필드는 전혀 조회되지 않으며(REQ-AI100-003), 기존
+    #           regime_thresholds 단일 레짐 조회 경로만 동작한다(바이트 동일 동작).
+    # @MX:SPEC: SPEC-AI-100 REQ-AI100-001, REQ-AI100-003
+    """
+
+    enabled: bool = False
+    # 탐지기 키(ensemble.weights와 동일 키) → 지평 라벨("same_day"|"next_day"|"multi_day").
+    # 라벨이 없는 키는 안전 기본값 "multi_day"로 처리한다(REQ-AI100-001).
+    horizon_labels: dict[str, str] = {}
+    # 레짐 → 지평 시그니처("same_day_dominant"|"next_day_dominant"|"multi_day_dominant"|"mixed")
+    # → 임계값. Open Question 2에 따라 초기값은 regime_thresholds와 동일하게 시작한다.
+    thresholds: dict[str, dict[str, float]] = {}
+    # SPEC-AI-100 REQ-AI100-006: enabled=False이고 이 값이 True일 때만 매 사이클
+    # 신규 경로를 병행 계산해 qualified 집합 diff를 구조화 로그로 남긴다(부가 관측
+    # 경로, 예외 격리). 기본 False — 관측을 시작하려면 명시적으로 켜야 한다.
+    shadow_mode_enabled: bool = False
+
+
 class EnsembleConfig(BaseModel):
     """앙상블 스코어링 설정."""
 
@@ -182,6 +204,10 @@ class EnsembleConfig(BaseModel):
     # @MX:NOTE: [AUTO] SPEC-AI-018 REQ-001: 즉각 공시 우회 임계값 — 하드코딩(0.70)에서 설정값으로 이전
     # @MX:SPEC: SPEC-AI-018
     immediate_disclosure_bypass_threshold: float = 0.85
+    # SPEC-AI-100 REQ-AI100-001: 탐지기 지평 분리 — 기존 weights와 독립된 신규 필드.
+    horizon_aware_thresholds: EnsembleHorizonAwareThresholdsConfig = (
+        EnsembleHorizonAwareThresholdsConfig()
+    )
 
 
 class PriceQueryConfig(BaseModel):

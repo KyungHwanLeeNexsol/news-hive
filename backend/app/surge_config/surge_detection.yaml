@@ -90,6 +90,41 @@ surge_detection:
     # SPEC-AI-018 REQ-001: 즉각 공시 우회 임계값 (하드코딩 0.70에서 설정값으로 이전)
     # immediate_disclosure_score >= 이 값이면 앙상블 임계값 우회 허용
     immediate_disclosure_bypass_threshold: 0.85
+    # SPEC-AI-100 REQ-AI100-001~003: 탐지기 지평(horizon) 인식 임계값 (기본 비활성).
+    # enabled=false인 동안 이 섹션은 전혀 조회되지 않으며, 기존 regime_thresholds
+    # 단일 레짐 조회 경로만 동작한다(바이트 동일 동작, REQ-AI100-003).
+    horizon_aware_thresholds:
+      enabled: false
+      # REQ-AI100-006: 섀도우 모드 관측 스위치 — 관측을 시작하려면 명시적으로 true로 전환.
+      shadow_mode_enabled: false
+      # Open Question 1(잠정값) — volume_news_combo는 구현 시 도메인 검증 후 확정.
+      horizon_labels:
+        theme_cluster: multi_day
+        volume_news_combo: same_day
+        disclosure_pattern: same_day
+        legacy_detectors: multi_day
+        news_delayed: multi_day
+        weekend_gap_up: multi_day
+        volume_breakout: same_day
+        momentum_continuation: next_day
+      # Open Question 2: 최종 확정 전까지 기존 regime_thresholds와 동일 값으로 초기화
+      # (플래그가 켜져도 당장은 동작 변화가 없도록, 안전한 초기 배포).
+      thresholds:
+        BULL:
+          same_day_dominant: 0.38
+          next_day_dominant: 0.38
+          multi_day_dominant: 0.38
+          mixed: 0.38
+        SIDEWAYS:
+          same_day_dominant: 0.45
+          next_day_dominant: 0.45
+          multi_day_dominant: 0.45
+          mixed: 0.45
+        BEAR:
+          same_day_dominant: 0.42
+          next_day_dominant: 0.42
+          multi_day_dominant: 0.42
+          mixed: 0.42
   # DEPRECATED by SPEC-AI-020 — schema preserved for future use, filter removed
   # (REQ-AI020-005: 스키마 보존, 필터링 미적용 — 모멘텀-가치 시간축 불일치 교정)
   valuation_disqualifiers:
