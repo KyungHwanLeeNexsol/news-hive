@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from statistics import median
 
 from sqlalchemy.orm import Session
 
@@ -29,6 +31,7 @@ from app.models.news import NewsArticle
 from app.models.news_relation import NewsStockRelation
 from app.models.stock import Stock
 from app.services.ai_classifier import _count_keyword_matches
+from app.surge_config.surge_settings import ThemeNewsCarryConfig
 
 logger = logging.getLogger(__name__)
 
@@ -243,3 +246,148 @@ def refresh_stock_keywords(
         logger.info("[keyword_tagging] 지속 태깅 갱신: %d개 종목", updated)
 
     return updated
+
+
+def _compute_keyword_distribution_metrics(db: Session) -> tuple[float, float, int]:
+    """AC-AI091-009와 동일한 정의로 stocks.keywords 분포 지표를 계산한다.
+
+    Returns:
+        (10개 보유 종목 비율(%), 키워드 개수 중앙값, 태깅된 종목 수) 튜플.
+        태깅된 종목이 없으면 (0.0, 0.0, 0)을 반환한다.
+    """
+    stocks = db.query(Stock).all()
+    tagged = [s for s in stocks if s.keywords]
+    if not tagged:
+        return 0.0, 0.0, 0
+
+    lengths = sorted(len(s.keywords) for s in tagged)
+    full_cap_count = sum(1 for n in lengths if n == DEFAULT_MAX_KEYWORDS_PER_STOCK)
+    full_cap_pct = full_cap_count / len(tagged) * 100.0
+    median_length = median(lengths)
+    return full_cap_pct, median_length, len(tagged)
+
+
+def _compute_theme_news_carry_contribution_ratio(db: Session) -> float | None:
+    """SPEC-AI-098 REQ-AI098-005: 당일 surge_candidate 시그널 중 surge_basis에
+    theme_news_carry가 포함된 비율을 계산한다.
+
+    당일 시그널이 0건이면(분모 0) None(측정 불가)을 반환한다 — spec.md §D Edge Cases와
+    동일하게 ZeroDivisionError를 발생시키지 않는다.
+    """
+    from app.models.fund_signal import FundSignal
+    from app.services.surge_backtest import _extract_combo_key
+
+    kst = timezone(timedelta(hours=9))
+    today_start_kst = datetime.now(kst).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start_utc = today_start_kst.astimezone(timezone.utc)
+
+    signals = (
+        db.query(FundSignal)
+        .filter(
+            FundSignal.signal_type == "surge_candidate",
+            FundSignal.created_at >= today_start_utc,
+        )
+        .all()
+    )
+    if not signals:
+        return None
+
+    contributing = sum(
+        1 for s in signals if "theme_news_carry" in _extract_combo_key(s).split("+")
+    )
+    return contributing / len(signals)
+
+
+def run_theme_news_carry_observability_check(
+    db: Session, config: ThemeNewsCarryConfig | None = None
+) -> dict:
+    """SPEC-AI-098 REQ-AI098-004/005: theme_news_carry 재발 감지 관측 체크.
+
+    AC-AI091-009와 동일한 정의로 stocks.keywords 분포 지표(10개 보유 비율, 중앙값)를
+    계산해 로그로 남기고, 당일 surge_candidate 시그널 중 theme_news_carry 기여 비율을
+    계산해 로그로 남긴다. 두 계산은 서로 독립적으로 격리된다 — 한쪽이 실패해도 다른
+    쪽은 계속 진행하며, 이 함수 자체의 예외는 호출자(스케줄러 잡)에게 전파되지 않는다.
+
+    Args:
+        config: ThemeNewsCarryConfig(detect_theme_news_carry가 소비하는 것과 동일한
+            설정 객체 — fund_manager.py의 `ThemeNewsCarryConfig()` 인스턴스화 관례를
+            따른다. SurgeDetectionConfig의 필드가 아니다, 독립 config 클래스다).
+
+    Should-Pass(REQ-AI098-005): config가 주어지고 config.observability_alert_threshold가
+    설정되어 있으며 기여 비율이 그 값을 초과하면 기존 Telegram admin 채널로 경보를
+    발송한다(TELEGRAM_ADMIN_CHAT_ID 미설정 시 fail-open — 경보 스킵 + warning 로그만
+    남긴다, surge_evaluation_service.py 관례 계승).
+
+    Returns:
+        {"full_cap_pct": float, "median_length": float, "tagged_stock_count": int,
+         "theme_news_carry_ratio": float | None, "alert_sent": bool}
+    """
+    result: dict = {
+        "full_cap_pct": 0.0,
+        "median_length": 0.0,
+        "tagged_stock_count": 0,
+        "theme_news_carry_ratio": None,
+        "alert_sent": False,
+    }
+
+    try:
+        full_cap_pct, median_length, tagged_count = _compute_keyword_distribution_metrics(db)
+        result["full_cap_pct"] = full_cap_pct
+        result["median_length"] = median_length
+        result["tagged_stock_count"] = tagged_count
+        logger.info(
+            "[theme_news_carry관측] 10개보유비율=%.2f%% 중앙값=%s (태깅종목=%d)",
+            full_cap_pct, median_length, tagged_count,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.error("[theme_news_carry관측] 키워드 분포 계산 실패: %s", e)
+
+    try:
+        ratio = _compute_theme_news_carry_contribution_ratio(db)
+        result["theme_news_carry_ratio"] = ratio
+        if ratio is None:
+            logger.info("[theme_news_carry관측] 당일 시그널 0건 — 기여비율 측정 불가")
+        else:
+            logger.info(
+                "[theme_news_carry관측] 당일 시그널 중 theme_news_carry 기여비율=%.2f%%",
+                ratio * 100.0,
+            )
+            threshold = config.observability_alert_threshold if config else None
+            if threshold is not None and ratio > threshold:
+                result["alert_sent"] = _send_theme_news_carry_alert(ratio, threshold)
+    except Exception as e:  # noqa: BLE001
+        logger.error("[theme_news_carry관측] 기여비율 계산 실패: %s", e)
+
+    return result
+
+
+def _send_theme_news_carry_alert(ratio: float, threshold: float) -> bool:
+    """REQ-AI098-005 Should절: 기존 Telegram admin 채널로 재발 조짐 경보를 발송한다.
+
+    TELEGRAM_ADMIN_CHAT_ID 미설정 시 fail-open — 경보를 스킵하고 warning 로그만 남긴다
+    (surge_evaluation_service.py `_send_missing_evaluation_alert` 관례 계승).
+    """
+    import asyncio
+    import os
+
+    from app.services.telegram_service import send_telegram_message
+
+    chat_id = os.environ.get("TELEGRAM_ADMIN_CHAT_ID")
+    if not chat_id:
+        logger.warning(
+            "[theme_news_carry관측] TELEGRAM_ADMIN_CHAT_ID 미설정 — 경보 발송 스킵"
+            "(비율=%.2f%%, 임계값=%.2f%%)",
+            ratio * 100.0, threshold * 100.0,
+        )
+        return False
+
+    text = (
+        "<b>⚠️ [theme_news_carry 재발 감지]</b>\n"
+        f"당일 기여 비율: {ratio * 100.0:.2f}%\n"
+        f"임계값: {threshold * 100.0:.2f}%"
+    )
+    try:
+        return asyncio.run(send_telegram_message(chat_id=chat_id, text=text, parse_mode="HTML"))
+    except Exception as e:  # noqa: BLE001
+        logger.error("[theme_news_carry관측] 텔레그램 발송 예외: %s", e)
+        return False

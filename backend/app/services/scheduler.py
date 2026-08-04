@@ -500,6 +500,36 @@ def _run_keyword_backfill():
 
 
 @retry_with_backoff(max_attempts=3)
+def _run_theme_news_carry_observability():
+    """SPEC-AI-098 REQ-AI098-004/005: theme_news_carry 재발 감지 관측 체크를 실행한다.
+
+    stocks.keywords 분포 지표(10개 보유 비율, 중앙값)와 당일 surge_candidate 시그널
+    중 theme_news_carry 기여 비율을 로그로 남긴다. 실행 주기는 spec.md §Open Questions
+    1(일 1회 vs 스캔 사이클마다) 잠정 설계에 따라 24시간 주기다.
+    """
+    _start = _time.monotonic()
+    from app.services.keyword_tagging_service import run_theme_news_carry_observability_check
+    from app.surge_config.surge_settings import ThemeNewsCarryConfig
+
+    db = SessionLocal()
+    try:
+        # fund_manager.py의 detect_theme_news_carry 호출 관례와 동일하게 인스턴스화한다
+        # (ThemeNewsCarryConfig는 SurgeDetectionConfig의 필드가 아닌 독립 config).
+        result = run_theme_news_carry_observability_check(db, config=ThemeNewsCarryConfig())
+        logger.info(
+            "[theme_news_carry관측] 완료: full_cap_pct=%.2f%% median=%s ratio=%s alert_sent=%s",
+            result["full_cap_pct"], result["median_length"],
+            result["theme_news_carry_ratio"], result["alert_sent"],
+        )
+    except Exception as e:
+        logger.error(f"theme_news_carry observability check failed: {e}")
+        raise
+    finally:
+        _record_job_duration("theme_news_carry_observability", _time.monotonic() - _start)
+        db.close()
+
+
+@retry_with_backoff(max_attempts=3)
 def _run_signal_verification():
     """과거 시그널의 적중 여부를 검증한다."""
     _start = _time.monotonic()
@@ -2167,6 +2197,15 @@ def start_scheduler():
         "interval",
         hours=24,
         id="keyword_backfill",
+        replace_existing=True,
+    )
+    # SPEC-AI-098 REQ-AI098-004/005: theme_news_carry 재발 감지 관측 — 1일 1회
+    # (spec.md §Open Questions 1 잠정 설계, keyword_backfill과 동일 패턴)
+    scheduler.add_job(
+        _run_theme_news_carry_observability,
+        "interval",
+        hours=24,
+        id="theme_carry_observability",
         replace_existing=True,
     )
     # 데일리 브리핑 + 매수/매도 시그널 생성: 매일 08:30 KST (장 시작 전, 평일만)

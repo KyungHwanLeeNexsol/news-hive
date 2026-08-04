@@ -24,6 +24,7 @@ from app.models.fund_signal import FundSignal
 from app.models.news import NewsArticle
 from app.models.sector import Sector
 from app.models.stock import Stock
+from app.services.keyword_matcher import _keyword_in_text
 
 logger = logging.getLogger(__name__)
 
@@ -399,6 +400,9 @@ def detect_theme_news_cluster(
     # @MX:NOTE: [AUTO] 종목 수준 개인화: stock_article_score를 40%로 theme_base_score에 블렌딩
     # @MX:SPEC: SPEC-AI-014 REQ-001/002/003
     results: list[SurgeCandidate] = []
+    # SPEC-AI-098 REQ-AI098-003: 섹터 전용(직접 언급 없음) 후보의 results 인덱스를 추적한다.
+    # 직접 언급 종목(stock_specific_count >= 1)은 sector_only_max_candidates 절단 대상이 아니다.
+    _sector_only_indices: list[int] = []
     for stock in stocks:
         stock_sector_name = sector_id_to_name.get(stock.sector_id, "")
 
@@ -431,12 +435,17 @@ def detect_theme_news_cluster(
 
         # REQ-AI014-001: 종목 전용 기사 카운트 계산
         # 종목명(별칭 포함) 또는 종목코드가 제목/본문에 포함된 기사를 종목 전용 기사로 판별
+        # @MX:SPEC: SPEC-AI-098 REQ-AI098-001 — keyword_matcher._keyword_in_text 경계 가드 재사용
+        # (조사 활용형/영문·숫자 앞뒤 경계 인식). article_text는 _keyword_in_text의 소문자
+        # 입력 가정(keyword_matcher.py:53)에 맞춰 명시적으로 lower() 처리한다.
         _name_variants = _get_name_variants(stock.name)
-        stock_articles = [
-            a for a in window_news
-            if any(v in (a.title or "") + " " + (a.content or "") for v in _name_variants)
-            or stock.stock_code in (a.title or "") + " " + (a.content or "")
-        ]
+        stock_articles = []
+        for a in window_news:
+            _article_text_lower = ((a.title or "") + " " + (a.content or "")).lower()
+            if any(_keyword_in_text(v, _article_text_lower) for v in _name_variants) or (
+                _keyword_in_text(stock.stock_code, _article_text_lower)
+            ):
+                stock_articles.append(a)
         stock_specific_count = len(stock_articles)
         stock_article_score = min(1.0, stock_specific_count / 5)
 
@@ -445,8 +454,9 @@ def detect_theme_news_cluster(
             # 종목 전용 기사 있음: 60%/40% 블렌딩
             theme_cluster_score = (best_theme_base * 0.6) + (stock_article_score * 0.4)
         else:
-            # 섹터 전용(종목 기사 없음): 0.5× 페널티
-            theme_cluster_score = best_theme_base * 0.5
+            # 섹터 전용(종목 기사 없음): 설정 가능한 페널티 배수 적용
+            # SPEC-AI-098 REQ-AI098-003: 기본값(0.5)에서는 현행과 바이트 동등
+            theme_cluster_score = best_theme_base * cfg.sector_only_penalty
 
         # sector_relevance 곱하기 (기존과 동일)
         theme_cluster_score *= best_sector_relevance
@@ -497,6 +507,31 @@ def detect_theme_news_cluster(
                 per=_per,
                 pbr=_pbr,
             )
+        )
+        if stock_specific_count < 1:
+            _sector_only_indices.append(len(results) - 1)
+
+    # SPEC-AI-098 REQ-AI098-003: 섹터 전용 후보 수 상한 절단.
+    # theme_cluster_score 내림차순 상위 N개만 유지 — 직접 언급 종목은 영향받지 않는다.
+    if (
+        cfg.sector_only_max_candidates is not None
+        and len(_sector_only_indices) > cfg.sector_only_max_candidates
+    ):
+        _keep_indices = set(
+            sorted(
+                _sector_only_indices,
+                key=lambda i: results[i].theme_cluster_score,
+                reverse=True,
+            )[: cfg.sector_only_max_candidates]
+        )
+        _drop_count = len(_sector_only_indices) - len(_keep_indices)
+        results = [
+            r for i, r in enumerate(results)
+            if i not in _sector_only_indices or i in _keep_indices
+        ]
+        logger.debug(
+            "[테마클러스터] 섹터 전용 후보 절단: %d개 제외 (상한=%d)",
+            _drop_count, cfg.sector_only_max_candidates,
         )
 
     # SPEC-AI-066 REQ-004: 뉴스 공동언급 기반 임시 테마 자동 확장 (기본 비활성).

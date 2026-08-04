@@ -44,6 +44,13 @@ class ThemeClusterConfig(BaseModel):
     min_article_count: int
     # @MX:NOTE: 시총 단위는 원(KRW) — 100억 = 100_000_000_000
     min_market_cap_krw: int
+    # SPEC-AI-098 REQ-AI098-003: 섹터 전용(직접 언급 없음) 후보 점수 배수.
+    # 기본값 변경 없이는 현행과 바이트 동등 — 이 값을 바꾸면 섹터 전용 후보 점수가 변한다.
+    sector_only_penalty: float = 0.5
+    # SPEC-AI-098 REQ-AI098-003: 섹터 전용 후보 수 상한(theme_cluster_score 내림차순 절단).
+    # 기본값 None = 현행처럼 상한 없음. 활성화 시 섹터 전용 후보 수가 줄어들 수 있다.
+    # (직접 언급 종목은 이 절단의 영향을 받지 않는다.)
+    sector_only_max_candidates: int | None = None
 
 
 class VolumeNewsComboConfig(BaseModel):
@@ -822,6 +829,10 @@ class ThemeNewsCarryConfig(BaseModel):
     max_signals_per_basket: int = 5
     # EC-1: 이 미만 멤버 수의 바스켓은 전파 대상 없음(no-op)
     min_basket_size: int = 2
+    # SPEC-AI-098 REQ-AI098-005: 당일 surge_candidate 시그널 중 theme_news_carry 기여
+    # 비율이 이 값(0.0~1.0)을 초과하면 Telegram 경보를 발송한다. 기본값 None = 경보
+    # 비활성(로깅만 수행) — spec.md Open Question 2, "정상" 기준선 관측 전까지 미확정.
+    observability_alert_threshold: float | None = None
 
 
 class NewsUrgencyRecalibrationConfig(BaseModel):
