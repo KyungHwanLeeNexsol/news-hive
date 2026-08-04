@@ -52,7 +52,7 @@ git diff app/services/surge_detector.py | grep -c "detect_theme_news_carry" → 
 ```yaml
 run_status: audit-ready
 run_complete_at: 2026-08-04
-run_commit_sha: pending-backfill-m1
+run_commit_sha: 6f2512342cf6df4cc6f77f767b364c77bfc831da
 ac_pass_count: 10
 ac_fail_count: 0
 preserve_list_post_run_count: 4  # extract_theme_keywords, backfill_stock_keywords, _count_keyword_matches, detect_theme_news_carry propagation
