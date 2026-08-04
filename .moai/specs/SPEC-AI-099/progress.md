@@ -123,7 +123,7 @@ m1_to_mN_commit_strategy: single M1 commit (Tier M, all 6 TASKs delivered in one
 ```yaml
 sync_status: audit-ready
 sync_complete_at: 2026-08-04
-sync_commit_sha: pending-backfill-sync
+sync_commit_sha: 4518a4c
 b12_self_test_a: PASS  # grep -c 'SPEC-AI-099' CHANGELOG.md == 0 before emission
 b12_self_test_b: PASS  # AC row count (9, §B ### headers) matches CHANGELOG claim (9)
 b12_self_test_c: PASS  # all file paths in CHANGELOG entry verified via commit f100c07 --stat
