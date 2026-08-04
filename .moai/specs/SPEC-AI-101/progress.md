@@ -41,7 +41,7 @@ plan_audit_tier_threshold: 0.85 (Tier L)
 ## §E.3 Run-phase Audit-Ready Signal
 
 run_complete_at: 2026-08-04
-run_commit_sha: pending-backfill-spec-ai-101
+run_commit_sha: 3ae28ae1addd35f705beac782e75bb27715dead0
 run_status: implemented
 ac_pass_count: 12
 ac_fail_count: 0
