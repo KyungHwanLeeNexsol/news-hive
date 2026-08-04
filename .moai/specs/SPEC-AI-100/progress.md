@@ -112,7 +112,34 @@ mypy_skipped_reason: venv에 mypy 모듈 미설치 (SPEC-AI-100 이전부터의 
 
 ## §E.4 Sync-phase Audit-Ready Signal
 
-_<pending sync-phase>_
+```yaml
+sync_status: audit-ready
+sync_complete_at: 2026-08-04
+sync_commit_sha: pending-backfill-spec-ai-100-sync
+b12_self_test_a_dup_grep: "grep -c 'SPEC-AI-100' CHANGELOG.md → 0 (pre-emission, no duplicate) → 1 (post-emission, single entry confirmed)"
+b12_self_test_b_ac_count_match: "acceptance.md SSOT AC rows = 12 (AC-100-001~004, 005a, 005b, 006~011) — CHANGELOG entry states '12개 PASS', 일치"
+b12_self_test_c_file_path_verification: "ls backend/app/services/surge_detector.py backend/app/surge_config/surge_settings.py backend/app/surge_config/surge_detection.yaml backend/tests/test_spec_ai_100.py → 전체 존재 확인"
+changelog_entry_position: "CHANGELOG.md [Unreleased] 최상단(SPEC-AI-096 entry 바로 위) — 시간순 최신 배치"
+frontmatter_status_transitions:
+  spec_md: "in-progress → completed (updated: 2026-08-03 → 2026-08-04)"
+  plan_md: "no independent frontmatter — status not tracked at file level, body untouched"
+  acceptance_md: "no independent frontmatter — status not tracked at file level, body untouched (DoD checkboxes left as-is, body content out of manager-docs scope)"
+canary_compliance_check:
+  applicable: true
+  reason: "REQ-AI100-009/AC-100-011이 섀도우→프로덕션 전환 게이트 구조적 최소 요건 3가지를 계획 단계에서 확정 — 이 SPEC 자신의 후속 sync가 테스트할 forward-looking policy"
+  status: "not-yet-observed — shadow_mode_enabled: false(기본값), 섀도우 관측 미시작. 전환 게이트 3요건(관측 거래일≥10, 3개 레짐 전량 관측, qualified 집합 변화폭 ±30% 이내) 충족 여부는 관측 시작 이후 별도 확인 대상 — progress.md §G 런북 참고. 본 sync-phase는 게이트 구조(3요건 존재)가 §G에 문서화되어 있음만 확인했다(코드 리뷰, AC-100-011 검증 방법과 동일)."
+```
+
+### Sync verification evidence
+
+- **CHANGELOG.md**: `[Unreleased]` 섹션에 SPEC-AI-100 feature entry 추가 (핵심 변경
+  6항목, REQ-AI100-001~009 전체 커버, 변경 파일 목록 + 회귀 테스트 결과 인용).
+- **spec.md frontmatter**: `status: in-progress → completed`, `updated: 2026-08-03 → 2026-08-04`.
+  body content(REQ/Decisions/Open Questions)는 무수정 — frontmatter 2개 필드만 편집.
+- **plan.md / acceptance.md**: 개별 frontmatter 없음(파일 최상단이 `# SPEC-AI-100 Plan`
+  / `# SPEC-AI-100 Acceptance Criteria`로 시작, YAML 블록 없음) — 확인 후 무편집.
+  body content(§A~§E, AC 매트릭스, DoD 체크박스) 전부 무수정.
+- **B12 CHANGELOG 발행 규율 3-self-test**: 위 YAML 블록 참고, 전부 통과.
 
 ## §G 전환 게이트 체크리스트 (REQ-AI100-009 / AC-100-011)
 

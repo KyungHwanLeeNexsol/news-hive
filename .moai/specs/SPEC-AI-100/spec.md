@@ -2,9 +2,9 @@
 id: SPEC-AI-100
 title: "급등예측 스코어링 아키텍처: 탐지기 지평(horizon) 분리"
 version: "0.1.0"
-status: in-progress
+status: completed
 created: 2026-08-03
-updated: 2026-08-03
+updated: 2026-08-04
 author: Nexsol
 priority: High
 phase: "backend surge-detection v0.1.0"

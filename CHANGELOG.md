@@ -4,6 +4,66 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Feature — SPEC-AI-100: 급등예측 스코어링 아키텍처 — 탐지기 지평(horizon) 분리 (2026-08-04)
+
+**목적**: 급등예측 앙상블이 서로 다른 예측 지평(당일 즉시 발화, 48시간 뉴스 윈도우,
+전일 T-1 가격 모멘텀, 당일 장중 이벤트)을 가진 7개 탐지기를 단일 가중합 + 단일
+레짐별 임계값으로 게이팅하던 아키텍처 문제를 교정한다. 평가 계층(SPEC-AI-075/080/083)
+은 이미 same-day 시그널을 별도 분리했으나, 후보가 **생성/게이팅되는 시점**의
+스코어링·임계값 로직 자체는 무수정이었다 — 본 SPEC은 이 지점에 지평 인식 임계값
+선택 단계를 신규 도입한다. **신규 경로는 기본 비활성(`enabled: false`)이며,
+플래그가 꺼진 상태에서는 바이트 동일 동작을 보장한다 — 매매/시그널 로직에 대한
+즉시 영향은 없다.**
+
+**핵심 변경 (REQ-AI100-001~009, AC-100-001~011 전량 12개 PASS)**:
+
+1. **지평 라벨 맵 + 신규 설정 스키마 신설(REQ-AI100-001)** `surge_settings.py`에
+   `EnsembleHorizonAwareThresholdsConfig`(가칭)를 신설해 `enabled: bool = False`,
+   탐지기별 지평 라벨 맵(`horizon_labels`, 미설정 키는 안전 기본값 `multi_day`로
+   처리), 레짐×지평 시그니처 임계값 표(`thresholds`), 섀도우 모드 플래그
+   (`shadow_mode_enabled: bool = False`)를 추가했다. 기존 `ensemble.weights`
+   dataclass 구조는 완전 무수정 — 독립된 신규 필드다.
+2. **지평 시그니처 계산 + 임계값 선택 배선(REQ-AI100-002/003)** `compute_ensemble_score()`
+   자체는 무수정 유지하고, `compute_horizon_signature()`/`select_effective_threshold()`
+   신규 헬퍼로 후보별 지평 시그니처(`same_day_dominant`/`next_day_dominant`/
+   `multi_day_dominant`/`mixed`)를 산출한 뒤 레짐×시그니처 2축으로
+   `effective_threshold` 조회를 확장했다. 플래그 비활성 시 신규 로직은 전혀
+   실행되지 않고 기존 레짐별 단일 표 조회 경로만 동작한다.
+3. **`combo_chase_guard`(Gate 4) 평가 순서 명문화, 판정 로직 무변경(REQ-AI100-004)**
+   Gate 4가 지평 시그니처 계산보다 먼저 실행됨을 문서화했다 — 실제 실행 순서는
+   기존과 동일(merged 딕셔너리 필터링 → 메인 루프 스코어링)하므로 코드 로직
+   변경은 없다.
+4. **섀도우 모드 비교 로깅(REQ-AI100-006/007)** `run_horizon_shadow_comparison()`
+   신규 헬퍼로 플래그 비활성 + 섀도우 모드 활성 상태에서 매 사이클 기존/신규
+   임계값 경로의 qualified 집합 차이를 구조화 로그로 기록한다. 예외 발생 시
+   `try/except` + 로그로 격리해 기존 시그널 생성 흐름에 영향을 주지 않는다.
+5. **PRESERVE 경계 검증(REQ-AI100-005/008~010)** `compute_ensemble_score`의
+   가중합·컨센서스 배율 본체, 3개 bypass 루프, `sector_contagion` 게이트,
+   `surge_threshold_service.py`(매수 실행 전용 적응형 임계값, SPEC-AI-092 분리
+   유지), 평가 계층(`_is_same_day_event_horizon_signal`), 재스캔 메커니즘
+   (`_maybe_trigger_event_rescan`, SPEC-AI-066), 고아 탐지기
+   (`detect_weekend_gap_up_signals`/`detect_bollinger_squeeze_signals`, 신규
+   배선 없음)가 이번 SPEC 적용 전후 완전 무변경임을 `git diff` + pytest로
+   검증했다.
+6. **섀도우→프로덕션 전환 게이트 구조적 최소 요건(REQ-AI100-009)** 플래그를
+   `false`→`true`로 전환하기 전 (1) 섀도우 관측 거래일 ≥10일(잠정), (2)
+   BULL/SIDEWAYS/BEAR 3개 레짐 각 1회 이상 관측, (3) qualified 후보 집합
+   변화폭 ±30%(잠정) 이내라는 3요건을 `progress.md §G`에 런북으로 확정했다 —
+   2026-07-28 `theme_news_carry` 자기강화 피드백 루프 사고(오탐률 77% 도달 후
+   롤백)의 재발 방지 조치.
+
+**변경 파일**: `backend/app/services/surge_detector.py`(EXTEND),
+`backend/app/surge_config/surge_settings.py`(EXTEND, 신규 설정 클래스),
+`backend/app/surge_config/surge_detection.yaml`(EXTEND, 신규 섹션),
+`backend/tests/test_spec_ai_100.py`(신규, 20개 테스트 — AC 12개 전량 커버).
+전체 회귀 스위트 2296 passed, 4 skipped, 3 xpassed, 0 failed. `ruff check` clean
+(신규 이슈 0) — `mypy`는 이 venv에 모듈 미설치로 스킵(SPEC-AI-100 이전부터의
+환경 갭, 잔여 위험으로 기록). commit `f64ecdc`(main, direct commit, Route A
+Hybrid Trunk 1-person OSS). **섀도우 모드 관측은 아직 시작되지 않았고
+(`shadow_mode_enabled: false`), 플래그를 실제로 `true`로 전환하는 결정은 이
+SPEC의 범위 밖이다** — 별도 관찰 기간 후 전환 게이트 3요건 충족을 확인한 뒤
+판단한다.
+
 ### Feature — SPEC-AI-096: 급등예측 스캔 유니버스 파이프라인 — 캡·절단·단계적 활성화 정책 (2026-08-03)
 
 **목적**: GPT 외부 구조진단 + 내부 코드검증이 공통으로 지목한 스캔 유니버스 파이프라인의
