@@ -113,7 +113,7 @@ mypy 검증은 이 세션에서 수행하지 못함(환경 제약, 코드 변경
 ```yaml
 sync_status: audit-ready
 sync_complete_at: 2026-08-04
-sync_commit_sha: pending-backfill-sync
+sync_commit_sha: bf3b588
 changelog_entry_position: after-header-before-SPEC-AI-100
 frontmatter_status_transitions:
   spec_md: "in-progress -> completed"
