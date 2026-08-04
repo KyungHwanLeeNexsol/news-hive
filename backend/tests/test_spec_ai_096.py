@@ -74,7 +74,12 @@ class TestPoolDCountPersistence:
         rev = script.get_revision("071_surge_universe_pool_history_pool_d")
         assert rev is not None
         assert rev.down_revision == "070_surge_pred_eval_high_based"
-        assert "071_surge_universe_pool_history_pool_d" in script.get_heads()
+        # 071 이후 후속 마이그레이션(SPEC-AI-099 등)이 추가될 수 있으므로 "head" 자체가
+        # 아니라 단일 head 체인(브랜치 없음)에 071이 조상으로 포함되는지만 검증한다.
+        heads = script.get_heads()
+        assert len(heads) == 1
+        ancestor_ids = {r.revision for r in script.walk_revisions(base="base", head=heads[0])}
+        assert "071_surge_universe_pool_history_pool_d" in ancestor_ids
 
 
 class TestPoolDKeyBackwardCompat:

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import statistics
@@ -2078,6 +2079,115 @@ def _apply_price_fetch_truncation(
     return result
 
 
+# @MX:ANCHOR: [AUTO] _persist_feature_snapshots — 종목별·사이클별 불변 피처 스냅샷 배치 영속화
+# @MX:REASON: gather_surge_candidates 메인 루프+3개 우회 루프 종료 직후 1회 호출되는 부가
+#   관측 경로. 실패해도 상위 함수의 기존 반환값(FundSignal 생성 등)에 영향을 주지 않는다.
+# @MX:SPEC: SPEC-AI-099 REQ-AI099-001, REQ-AI099-002
+def _persist_feature_snapshots(
+    db: Session,
+    scanned_at: datetime,
+    merged: dict[str, SurgeCandidate],
+    scores: dict[str, float],
+    qualified_codes: set[str],
+) -> None:
+    """SPEC-AI-099: 그 사이클에 고려된 모든 후보(승격/비승격 무관)의 피처를
+    SurgeFeatureSnapshot 배치 삽입(단일 db.add_all()+db.commit())으로 영속화한다.
+
+    예외 발생 시 db.rollback() 후 로그만 남기고 상위 함수의 반환값에는 영향을 주지
+    않는다(REQ-AI099-002 필수 조건 — 부가 관측 경로).
+    """
+    if not merged:
+        return
+    try:
+        from app.models.surge_feature_snapshot import SurgeFeatureSnapshot
+        from app.services.naver_finance import fetch_current_price_with_change_sync
+
+        stock_codes = list(merged.keys())
+        market_cap_map: dict[str, int | None] = {
+            row.stock_code: row.market_cap
+            for row in db.query(Stock.stock_code, Stock.market_cap)
+            .filter(Stock.stock_code.in_(stock_codes))
+            .all()
+        }
+
+        # price_at_signal: qualified 후보만 신규 조회 (fund_manager.py가 승격 후보에만
+        # 호출하는 것과 동일 규모 — 전체 merged에 대해 조회 시 스캔 사이클 지연 위험, D2 제약)
+        price_map: dict[str, int | None] = {}
+        for code in qualified_codes:
+            if code not in merged:
+                continue
+            try:
+                _price = fetch_current_price_with_change_sync(code)
+            except Exception:
+                _price = None
+            if _price:
+                price_map[code] = _price.get("current_price")
+
+        snapshots = []
+        for code, candidate in merged.items():
+            score = scores.get(code)
+            if score is None:
+                continue
+            best_disclosure_score = max(
+                candidate.pattern_score, candidate.immediate_disclosure_score
+            )
+            detector_groups = {
+                "news": [candidate.theme_cluster_score, candidate.combo_score],
+                "disclosure": [best_disclosure_score],
+                "technical": [
+                    candidate.legacy_score,
+                    candidate.volume_breakout_score,
+                    candidate.momentum_continuation_score,
+                ],
+            }
+            active_groups = sum(
+                1 for group_scores in detector_groups.values() if any(s > 0 for s in group_scores)
+            )
+            snapshots.append(
+                SurgeFeatureSnapshot(
+                    stock_code=code,
+                    scanned_at=scanned_at,
+                    theme_cluster_score=candidate.theme_cluster_score,
+                    combo_score=candidate.combo_score,
+                    best_disclosure_score=best_disclosure_score,
+                    legacy_score=candidate.legacy_score,
+                    news_delayed_score=candidate.news_delayed_score,
+                    volume_breakout_score=candidate.volume_breakout_score,
+                    momentum_continuation_score=candidate.momentum_continuation_score,
+                    squeeze_score=candidate.squeeze_score,
+                    active_groups=active_groups,
+                    surge_score=score,
+                    price_5d_trend=candidate.price_5d_trend,
+                    entry_pool=candidate.entry_pool,
+                    active_detectors_json=(
+                        json.dumps(candidate.active_detectors)
+                        if candidate.active_detectors
+                        else None
+                    ),
+                    market_cap_eok=market_cap_map.get(code),
+                    price_at_signal=price_map.get(code),
+                    qualified=code in qualified_codes,
+                )
+            )
+
+        if not snapshots:
+            return
+
+        db.add_all(snapshots)
+        db.commit()
+        logger.info(
+            "[피처스냅샷] 영속화 완료 — count=%d, qualified=%d",
+            len(snapshots),
+            len(qualified_codes),
+        )
+    except Exception as e:
+        logger.warning("[피처스냅샷] 영속화 실패 (무시): %s", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
 # @MX:NOTE: [AUTO] SPEC-AI-012 앙상블 파이프라인 진입점 — fund_manager._gather_surge_candidates에서 호출
 # @MX:SPEC: SPEC-AI-012
 def gather_surge_candidates(
@@ -2410,6 +2520,10 @@ def gather_surge_candidates(
     # 앙상블 점수 계산 및 임계값 필터링
     qualified: list[SurgeCandidate] = []
     qualified_codes: set[str] = set()
+    # SPEC-AI-099 REQ-AI099-001: 메인 루프에서 계산된 모든 후보의 점수를 임시 저장
+    # (아직 최종 qualified 여부는 모름 — 4개 루프 종료 후 스냅샷 구성 시 사용)
+    _snapshot_scores: dict[str, float] = {}
+    _snapshot_scanned_at = datetime.now(timezone.utc)
 
     # SPEC-AI-017 REQ-001: 레짐별 임계값 적용 (없으면 min_score_for_signal 사용)
     # SPEC-AI-092 REQ-AI092-005: 이 예측 생성 게이트는 surge_threshold_service의 적응형
@@ -2430,6 +2544,8 @@ def gather_surge_candidates(
         score = compute_ensemble_score(candidate, config)
         # SPEC-AI-018 REQ-005: 최근 급등 페널티 적용 (앙상블 경로)
         score = _recent_surge_penalty(score, candidate.price_5d_trend)
+        # SPEC-AI-099 REQ-AI099-001: 임계값 적용 전, 페널티 적용 후 점수를 스냅샷용으로 저장
+        _snapshot_scores[candidate.stock_code] = score
         if _horizon_aware_enabled:
             _horizon_signature = compute_horizon_signature(candidate, config)
             _candidate_threshold = select_effective_threshold(
@@ -2523,6 +2639,14 @@ def gather_surge_candidates(
                     candidate.volume_breakout_score,
                     _vb_bypass_threshold,
                 )
+
+    # SPEC-AI-099 REQ-AI099-001, REQ-AI099-002: 메인 루프 + 3개 우회 루프 종료 직후,
+    # 그 사이클에 고려된 모든 후보(승격/비승격 무관)의 피처 스냅샷을 배치 영속화한다.
+    # bridge 후보 합류(아래) 이전 — bridge 후보는 compute_ensemble_score를 거치지 않으므로
+    # 스냅샷 대상에서 제외한다(§Decisions D3).
+    _persist_feature_snapshots(
+        db, _snapshot_scanned_at, merged, _snapshot_scores, qualified_codes
+    )
 
     # SPEC-AI-092 REQ-AI092-003/004: bridge 후보 합류 (merged에 없던 pool_a/pool_c 종목).
     # flag OFF 또는 조건 미충족이면 _bridge_candidates가 빈 리스트라 완전 무회귀(AC-092-003).

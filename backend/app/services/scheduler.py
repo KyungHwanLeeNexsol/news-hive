@@ -530,6 +530,32 @@ def _run_theme_news_carry_observability():
 
 
 @retry_with_backoff(max_attempts=3)
+def _run_surge_feature_snapshot_backfill():
+    """SPEC-AI-099 REQ-AI099-003: 피처 스냅샷 정답 라벨(outcome_*) 백필.
+
+    SurgeActualOutcome이 장 마감 후 채워지는 시점과 정렬해 매일 새벽 1회
+    실행한다(spec.md §Open Questions 2 확정, keyword_backfill과 동일 패턴).
+    """
+    _start = _time.monotonic()
+    from app.services.surge_feature_snapshot_service import backfill_outcome_labels
+
+    db = SessionLocal()
+    try:
+        result = backfill_outcome_labels(db)
+        logger.info(
+            "[피처스냅샷백필] 완료 — 대상=%d개, 채움=%d개",
+            result["scanned"],
+            result["filled"],
+        )
+    except Exception as e:
+        logger.error(f"Surge feature snapshot backfill failed: {e}")
+        raise
+    finally:
+        _record_job_duration("surge_feature_snapshot_backfill", _time.monotonic() - _start)
+        db.close()
+
+
+@retry_with_backoff(max_attempts=3)
 def _run_signal_verification():
     """과거 시그널의 적중 여부를 검증한다."""
     _start = _time.monotonic()
@@ -2206,6 +2232,15 @@ def start_scheduler():
         "interval",
         hours=24,
         id="theme_carry_observability",
+        replace_existing=True,
+    )
+    # SPEC-AI-099 REQ-AI099-003: 피처 스냅샷 정답 라벨 백필 — 매일 새벽 1회
+    # (spec.md §Open Questions 2 확정, keyword_backfill과 동일 패턴)
+    scheduler.add_job(
+        _run_surge_feature_snapshot_backfill,
+        "interval",
+        hours=24,
+        id="surge_feature_snapshot_backfill",
         replace_existing=True,
     )
     # 데일리 브리핑 + 매수/매도 시그널 생성: 매일 08:30 KST (장 시작 전, 평일만)
