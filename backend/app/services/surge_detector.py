@@ -4517,7 +4517,10 @@ def detect_volume_breakout(
         return []
 
     from app.models.stock import Stock
-    from app.services.naver_finance import fetch_volume_leaders_sync, fetch_stock_price_history_sync
+    from app.services.naver_finance import (
+        fetch_volume_leaders_sync,
+        fetch_stock_price_history_batch_sync,
+    )
 
     try:
         leader_codes = fetch_volume_leaders_sync(limit=cfg.max_candidates // 2)
@@ -4537,6 +4540,10 @@ def detect_volume_breakout(
         except Exception as _ue:
             logger.debug("[거래량폭발] 촉매 유니버스 확장 실패 (무시): %s", _ue)
 
+    # SPEC-AI-097 REQ-002/AC-097-005: 순차 개별 호출을 배치 동시조회로 전환 — 종목당
+    # 반환값(빈 리스트 포함)은 fetch_stock_price_history_sync와 동일하므로 후속 로직 불변.
+    history_by_code = fetch_stock_price_history_batch_sync(universe, pages=3)
+
     candidates: list[SurgeCandidate] = []
     for code in universe:
         try:
@@ -4544,7 +4551,7 @@ def detect_volume_breakout(
             if not stock:
                 continue
 
-            history = fetch_stock_price_history_sync(code, pages=3)
+            history = history_by_code.get(code, [])
             if len(history) < cfg.min_history_days + 1:
                 continue
 

@@ -417,9 +417,11 @@ class TestPriceHistoryCacheTTL:
         import app.services.naver_finance as nf
         nf._price_cache.data.pop("TTLTEST", None)
         nf._price_cache.last_updated.pop("TTLTEST", None)
+        nf._price_cache.pages_fetched.pop("TTLTEST", None)
         yield
         nf._price_cache.data.pop("TTLTEST", None)
         nf._price_cache.last_updated.pop("TTLTEST", None)
+        nf._price_cache.pages_fetched.pop("TTLTEST", None)
 
     def test_market_closed_uses_long_ttl(self):
         """AC-8.2: 장외 TTL(300초) — 30초 전 캐시는 fresh → 캐시 반환."""
@@ -428,6 +430,9 @@ class TestPriceHistoryCacheTTL:
         rec = nf.PriceRecord(date="2026.07.01", close=1000, volume=5000)
         nf._price_cache.data["TTLTEST"] = [rec]
         nf._price_cache.last_updated["TTLTEST"] = time.time() - 30
+        # SPEC-AI-097 REQ-003: pages 인지형 히트 판정 — 요청 pages(1) 이상으로 채워진
+        # 상태여야 TTL 판정(AC-8.2 검증 대상)만으로 히트가 결정된다.
+        nf._price_cache.pages_fetched["TTLTEST"] = 1
 
         with patch("app.services.naver_finance._is_market_open", return_value=False):
             result = nf.fetch_stock_price_history_sync("TTLTEST", pages=1)

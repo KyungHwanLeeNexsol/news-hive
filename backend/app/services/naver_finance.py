@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -669,6 +670,9 @@ PRICE_CACHE_MAX_SIZE = 500
 class _PriceHistoryCache:
     data: dict[str, list[PriceRecord]] = field(default_factory=dict)
     last_updated: dict[str, float] = field(default_factory=dict)
+    # SPEC-AI-097 REQ-003: 캐시된 데이터가 몇 페이지 분량인지 기록 — stock_code만으로 히트를
+    # 판정하면 짧은 이력(pages=1)이 더 긴 이력(pages=3)을 요구하는 호출에 잘못 재사용될 수 있다.
+    pages_fetched: dict[str, int] = field(default_factory=dict)
 
     def evict_expired(self, ttl: float, max_size: int) -> None:
         now = time.time()
@@ -676,11 +680,26 @@ class _PriceHistoryCache:
         for k in expired:
             self.data.pop(k, None)
             self.last_updated.pop(k, None)
+            self.pages_fetched.pop(k, None)
         if len(self.data) > max_size:
             oldest = sorted(self.last_updated, key=lambda k: self.last_updated[k])
             for k in oldest[: len(self.data) - max_size]:
                 self.data.pop(k, None)
                 self.last_updated.pop(k, None)
+                self.pages_fetched.pop(k, None)
+
+    def is_fresh_hit(self, stock_code: str, pages: int, ttl: float) -> bool:
+        """SPEC-AI-097 REQ-003: TTL 유효 + pages_fetched >= 요청 pages일 때만 히트로 판정한다.
+
+        pages_fetched가 없는 레거시 상태(코드 배포 직후 재시작 전 캐시)는 0으로 취급해
+        항상 미스로 처리한다 — 과소 이력의 조용한 재사용보다 재조회 1회 추가가 안전하다.
+        """
+        if stock_code not in self.data:
+            return False
+        now = time.time()
+        if (now - self.last_updated.get(stock_code, 0)) >= ttl:
+            return False
+        return self.pages_fetched.get(stock_code, 0) >= pages
 
 
 _price_cache = _PriceHistoryCache()
@@ -693,11 +712,13 @@ async def fetch_stock_price_history(stock_code: str, pages: int = 5) -> list[Pri
     """
     now = time.time()
     # SPEC-AI-067 REQ-008: 장중 인지형 TTL (_cache_ttl) — 형제 캐시와 일관.
-    if (stock_code in _price_cache.data
-            and (now - _price_cache.last_updated.get(stock_code, 0)) < _cache_ttl()):
+    # SPEC-AI-097 REQ-003: pages 인지형 조건을 기존 TTL 판정에 AND로 추가.
+    if _price_cache.is_fresh_hit(stock_code, pages, _cache_ttl()):
         return _price_cache.data[stock_code]
 
-    # 인메모리 미스 시 Redis 복구 시도
+    # 인메모리 미스 시 Redis 복구 시도.
+    # SPEC-AI-097: Redis 저장 데이터는 pages 메타데이터가 없으므로 pages_fetched를 기록하지
+    # 않는다 — 다음 호출에서 pages 부족(0)으로 취급되어 안전한 방향(재조회)으로 수렴한다.
     if stock_code not in _price_cache.data:
         try:
             from app.cache import cache_get
@@ -760,6 +781,7 @@ async def fetch_stock_price_history(stock_code: str, pages: int = 5) -> list[Pri
             _price_cache.evict_expired(_cache_ttl(), PRICE_CACHE_MAX_SIZE)
             _price_cache.data[stock_code] = results
             _price_cache.last_updated[stock_code] = now
+            _price_cache.pages_fetched[stock_code] = pages
             # Redis write-through (TTL=PRICE_CACHE_TTL초, 인메모리 TTL과 독립)
             try:
                 from app.cache import cache_set
@@ -813,10 +835,10 @@ def fetch_stock_price_history_sync(stock_code: str, pages: int = 3) -> list[Pric
     pages=3 → 약 30 거래일(volume_baseline_days=20 충족).
     """
     now = time.time()
-    cached = _price_cache.data.get(stock_code)
     # SPEC-AI-067 REQ-008: 장중 인지형 TTL (_cache_ttl) — 형제 캐시와 일관.
-    if cached and (now - _price_cache.last_updated.get(stock_code, 0)) < _cache_ttl():
-        return cached
+    # SPEC-AI-097 REQ-003: pages 인지형 조건을 기존 TTL 판정에 AND로 추가.
+    if _price_cache.is_fresh_hit(stock_code, pages, _cache_ttl()):
+        return _price_cache.data[stock_code]
 
     results: list[PriceRecord] = []
     try:
@@ -832,7 +854,87 @@ def fetch_stock_price_history_sync(stock_code: str, pages: int = 3) -> list[Pric
     if results:
         _price_cache.data[stock_code] = results
         _price_cache.last_updated[stock_code] = now
-        logger.debug("[가격캐시] %s %d개 일봉 동기 캐싱 완료", stock_code, len(results))
+        _price_cache.pages_fetched[stock_code] = pages
+        logger.debug("[가격캐시] %s %d개 일봉 동기 캐싱 완료(pages=%d)", stock_code, len(results), pages)
+
+    return results
+
+
+def fetch_stock_price_history_batch_sync(
+    stock_codes: list[str],
+    pages: int = 3,
+    batch_size: int = 10,
+    delay_sec: float = 0.5,
+) -> dict[str, list[PriceRecord]]:
+    """N개 종목의 가격이력을 배치 단위로 동시 조회한다 (SPEC-AI-097 REQ-002).
+
+    concurrent.futures.ThreadPoolExecutor로 배치당 batch_size개를 동시에 조회하고
+    배치 사이에 delay_sec만큼 대기한다 — fetch_current_prices_batch(SPEC-AI-016, asyncio
+    기반)와 동일한 배치/딜레이 패턴을 동기 시그니처로 재현한다. surge_detector.py 전체가
+    동기 함수이므로(spec.md Decision D1) asyncio.gather 대신 스레드풀을 사용한다.
+
+    워커 스레드는 종목당 fetch_stock_price_history_sync를 그대로 호출한다(중복 구현
+    없음) — 이 함수 자체가 캐시 히트 판정 + HTTP 조회 + 캐시 갱신을 이미 담당하므로,
+    기존 fetch_stock_price_history_sync를 대상으로 한 테스트 mock과의 호환성도
+    자연히 유지된다(AC-097-005).
+
+    스레드 안전성: 이 함수 호출 1회 안에서 stock_codes는 중복 제거되므로, 어떤 두
+    스레드도 동일한 stock_code(=동일 캐시 dict 키)를 동시에 쓰지 않는다. 서로 다른
+    키에 대한 dict 쓰기는 CPython GIL 하에서 개별 연산이 원자적이므로 잠금 없이도
+    경합이 발생하지 않는다(AC-097-007). evict_expired()는 스레드 스폰 이전에 메인
+    스레드에서 1회만 수행한다.
+
+    개별 종목 조회 실패는 예외를 전파하지 않고 빈 리스트로 결과에 포함한다(기존
+    fetch_stock_price_history_sync의 실패 격리 관례를 승계).
+
+    Args:
+        stock_codes: 조회할 종목 코드 목록.
+        pages: 종목별 요청 페이지 수.
+        batch_size: 배치당 동시 조회 종목 수.
+        delay_sec: 배치 간 대기 시간(초).
+
+    Returns:
+        {stock_code: list[PriceRecord]} — 실패하거나 데이터가 없는 종목은 빈 리스트.
+    """
+    _measure_start = time.time()
+    ttl = _cache_ttl()
+
+    # 순서 보존 dedup — 동일 종목이 두 스레드에 동시 배정되는 것을 원천 차단한다.
+    codes = list(dict.fromkeys(stock_codes))
+    # SPEC-AI-097 REQ-005 측정용: 캐시 히트 vs HTTP 조회 필요 종목 수를 사전 구분한다
+    # (실제 조회/캐시갱신은 fetch_stock_price_history_sync가 스레드 내부에서 재수행).
+    cache_hit_count = sum(1 for c in codes if _price_cache.is_fresh_hit(c, pages, ttl))
+
+    if not codes:
+        return {}
+
+    _price_cache.evict_expired(ttl, PRICE_CACHE_MAX_SIZE)
+
+    results: dict[str, list[PriceRecord]] = {}
+    for batch_start in range(0, len(codes), batch_size):
+        batch = codes[batch_start: batch_start + batch_size]
+        with ThreadPoolExecutor(max_workers=len(batch)) as executor:
+            future_to_code = {
+                executor.submit(fetch_stock_price_history_sync, code, pages): code
+                for code in batch
+            }
+            for future in as_completed(future_to_code):
+                code = future_to_code[future]
+                try:
+                    results[code] = future.result()
+                except Exception as e:
+                    logger.debug("배치 가격이력 조회 실패 %s: %s", code, e)
+                    results[code] = []
+
+        if batch_start + batch_size < len(codes):
+            time.sleep(delay_sec)
+
+    # SPEC-AI-097 REQ-005: 캐시 히트를 제외한 HTTP 조회 종목 수 + 조회 단계 소요시간(초) 기록.
+    logger.info(
+        "[가격이력배치] %d개 종목 조회 완료 (캐시히트 %d, HTTP조회 %d, 소요 %.2f초)",
+        len(codes), cache_hit_count, len(codes) - cache_hit_count,
+        time.time() - _measure_start,
+    )
 
     return results
 
