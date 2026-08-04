@@ -4,6 +4,51 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Feature — SPEC-AI-097: 급등 후보 스코어링 가격이력 조회 배치·캐싱 성능개선 (2026-08-04)
+
+**목적**: GPT 급등예측 구조진단 보고서 핵심주장 #2("종목별 순차 HTTP 호출이 top-50
+사전필터의 근본원인")의 후속 조치. `surge_detector.py`의 8개 이상 지점에서 종목당
+개별 순차 HTTP 호출로 이뤄지던 가격이력(OHLCV) 조회의 **메커니즘**(HTTP 비용 자체)을
+낮춘다 — top-50 절단 정책 자체나 스캔 유니버스 배분은 건드리지 않는다(별도 형제 SPEC
+소관).
+
+**핵심 변경 (REQ-AI097-001~005, AC-097-001~008 전량 8개 PASS)**:
+
+1. **벌크 엔드포인트 부재 확인(REQ-AI097-001)** 가격이력(`sise_day.naver`)은 종목당
+   단일 코드 파라미터만 지원 — 진짜 벌크(다종목-1요청) 엔드포인트가 없음을 실측
+   확인했다. 현재가/펀더멘털 전용 벌크 엔드포인트(`fetch_stock_fundamentals_batch`)
+   및 매수 주문 실행 경로의 동시성-배치(`fetch_current_prices_batch`, SPEC-AI-016)와
+   명확히 구분해 기록했다.
+2. **캐시 히트 판정의 pages 인지형 전환(REQ-AI097-003)** `naver_finance.py`
+   `_PriceHistoryCache`에 `pages_fetched` 필드를 추가하고 `is_fresh_hit()` 헬퍼로
+   기존 TTL 판정에 `cached_pages >= requested_pages` 조건을 AND로 결합했다 — 짧은
+   이력으로 캐시된 결과가 더 긴 이력을 요구하는 후속 호출에 잘못 재사용되는 문제를
+   제거한다. 레거시 캐시(필드 없음)는 항상 미스로 처리(안전한 방향).
+3. **가격이력 동시조회 배치 함수 신설(REQ-AI097-002)** `ThreadPoolExecutor` 기반
+   `fetch_stock_price_history_batch_sync()` 신규 함수를 추가했다. 개별 종목 실패는
+   예외를 전파하지 않고 빈 리스트로 격리하며, 입력 dedup으로 캐시 쓰기 경합을
+   방지(락 불필요)한다. `detect_volume_breakout`의 순차 for-loop 호출부를 이 배치
+   함수로 전환해 실사용 경로에서 검증했다 — 전환된 탐지기의 신호 생성 결과는 기존
+   characterization 테스트(40개, 무수정) 통과로 순차 방식과 완전 동일함을 확인했다.
+4. **성능 측정 로깅(REQ-AI097-005)** 배치 조회 경로에 캐시히트/HTTP조회 종목 수와
+   조회 단계 소요 시간(초)을 기존 로그 체계(`logger.info`)로 확장 기록해, top-50
+   사전필터 완화 여부를 판단할 형제 SPEC의 근거 자료로 삼을 수 있게 했다.
+5. **매수 주문 실행 경로 무영향(REQ-AI097-004)** `fetch_current_prices_batch()`,
+   `fetch_current_price_with_change()`, `surge_trading_service.py` 전체가 diff 0임을
+   확인했다(`git diff --name-only | grep surge_trading_service.py` 매치 0건).
+
+**변경 파일**: `backend/app/services/naver_finance.py`(EXTEND — `_PriceHistoryCache`
+pages 인지형 확장, `fetch_stock_price_history_batch_sync` 신규),
+`backend/app/services/surge_detector.py`(EXTEND — `detect_volume_breakout` 배치
+함수 전환), `backend/tests/test_spec_ai_097.py`(신규, AC 검증 테스트 8종),
+`backend/tests/test_surge_ai067.py`(레거시 픽스처에 `pages_fetched` 필드 보강 1줄).
+전체 회귀 스위트 2304 passed, 4 skipped, 3 xpassed, 0 failed. `ruff check` clean.
+`mypy`는 이 venv에 모듈 미설치로 스킵(SPEC-AI-097 이전부터의 환경 갭, 잔여 위험으로
+기록). commit `7c258d0`(main, direct commit, Route A Hybrid Trunk 1-person OSS).
+로컬 영속 OHLCV 테이블 신설 여부(spec.md D3)는 Option A(신규 테이블 없음, 기존
+인메모리+Redis 캐시 확장으로 충분)로 확정됨 — 운영 스캔 사이클이 동일 장기실행
+프로세스(APScheduler + FastAPI/uvicorn) 내에서 구동됨을 확인한 근거에 기반한다.
+
 ### Feature — SPEC-AI-100: 급등예측 스코어링 아키텍처 — 탐지기 지평(horizon) 분리 (2026-08-04)
 
 **목적**: 급등예측 앙상블이 서로 다른 예측 지평(당일 즉시 발화, 48시간 뉴스 윈도우,

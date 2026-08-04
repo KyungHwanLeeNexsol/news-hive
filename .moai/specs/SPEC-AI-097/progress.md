@@ -110,4 +110,28 @@ mypy 검증은 이 세션에서 수행하지 못함(환경 제약, 코드 변경
 
 ## §E.4 Sync-phase Audit-Ready Signal
 
-_<pending sync-phase>_
+```yaml
+sync_status: audit-ready
+sync_complete_at: 2026-08-04
+sync_commit_sha: pending-backfill-sync
+changelog_entry_position: after-header-before-SPEC-AI-100
+frontmatter_status_transitions:
+  spec_md: "in-progress -> completed"
+```
+
+- **CHANGELOG.md**: `[Unreleased]` 섹션에 SPEC-AI-097 항목 추가(REQ 5개, AC 8개
+  전량 PASS 요약). 사전 중복 검사(`grep -c 'SPEC-AI-097' CHANGELOG.md`) 0건 확인 후
+  삽입.
+- **AC count 대조**: `acceptance.md`(SSOT) `### AC-097-` 헤딩 8개 ↔ progress.md
+  §E.3 AC 매트릭스 8개 ↔ CHANGELOG 서술 8개 — 일치 확인.
+- **파일 경로 검증**: CHANGELOG에 인용된 4개 파일(`naver_finance.py`,
+  `surge_detector.py`, `test_spec_ai_097.py`, `test_surge_ai067.py`) 전부
+  `ls` 존재 확인 완료.
+- **README.md**: 이번 SPEC은 사용자 대면 기능/버전/배지 변경이 없어(내부 성능
+  메커니즘 개선) 갱신 불필요로 판단.
+- **spec.md frontmatter**: `status: in-progress` → `status: completed`,
+  `updated: 2026-08-04` 갱신(이 sync 커밋에서 병합 3단계 종료).
+- **PRESERVE-list 재확인**: §E.3에서 이미 검증된 6개 대상 diff 0(변경 없음) — sync
+  단계에서 추가 접촉 없음.
+- **B12 self-test 결과**: (1) pre-emission grep 0건 통과, (2) AC count 일치(8=8=8),
+  (3) 파일 경로 4/4 검증 완료.

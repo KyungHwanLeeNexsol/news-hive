@@ -2,7 +2,7 @@
 id: SPEC-AI-097
 title: "급등 후보 스코어링 가격이력 조회 배치·캐싱 성능개선"
 version: "0.1.0"
-status: in-progress
+status: completed
 created: 2026-08-03
 updated: 2026-08-04
 author: Nexsol
