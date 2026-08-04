@@ -16,6 +16,7 @@ from statistics import mean
 from typing import Any
 
 from sqlalchemy import func as sqlfunc
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.models.disclosure import Disclosure
@@ -25,6 +26,7 @@ from app.models.news_relation import NewsStockRelation
 from app.models.stock import Stock
 from app.models.surge_actual_outcome import SurgeActualOutcome
 from app.models.surge_prediction_evaluation import SurgePredictionEvaluation
+from app.models.surge_signal_forward_outcome import SurgeSignalForwardOutcome
 from app.services.ai_client import ask_ai_with_openai_fallback
 from app.services.surge_trading_service import _get_prev_business_day
 
@@ -655,6 +657,158 @@ def restore_predicted_codes(evaluation: SurgePredictionEvaluation) -> list[str] 
     return codes
 
 
+# @MX:NOTE: [AUTO] SPEC-AI-101 REQ-AI101-001 — 신호가 기준 EOD(장마감) 최대수익률
+# 근사 계산(순수 함수). day_high_price = prev_close_price × (1 + high_change_rate/100),
+# forward_max_return_pct = (day_high_price − price_at_signal) / price_at_signal × 100
+# (design.md §B.1). 입력 중 하나라도 없거나 유효하지 않으면 (None, None) — 평가 잡
+# 전체를 실패시키지 않는다(AC-101-003).
+# @MX:SPEC: SPEC-AI-101 REQ-AI101-001
+def _compute_forward_max_return(
+    price_at_signal: int | None,
+    high_change_rate: float | None,
+    prev_close_price: float | None,
+) -> tuple[int | None, float | None]:
+    """신호가 기준 EOD 최대수익률을 계산한다 (design.md §B.1 계산식, 순수 함수).
+
+    Args:
+        price_at_signal: 신호 발행 시점 주가 (FundSignal.price_at_signal)
+        high_change_rate: T당일 고가 등락률(%) — SurgeActualOutcome.high_change_rate
+        prev_close_price: T-1 종가 절대가
+
+    Returns:
+        (day_high_price, forward_max_return_pct). 입력 중 하나라도 없거나 0 이하이면
+        (None, None).
+    """
+    if price_at_signal is None or price_at_signal <= 0:
+        return None, None
+    if high_change_rate is None:
+        return None, None
+    if prev_close_price is None or prev_close_price <= 0:
+        return None, None
+
+    day_high_price = prev_close_price * (1 + high_change_rate / 100)
+    forward_max_return_pct = round(
+        (day_high_price - price_at_signal) / price_at_signal * 100, 4
+    )
+    return round(day_high_price), forward_max_return_pct
+
+
+# @MX:ANCHOR: [AUTO] _persist_signal_forward_outcomes — evaluate_surge_predictions 및
+# test_spec_ai_101.py에서 호출되는 신호가 기준 EOD 최대수익률 upsert 진입점
+# @MX:REASON: REQ-AI101-001의 신규 테이블 upsert + REQ-AI101-002의 병렬 recall/precision
+# 입력(forward_actual_codes) 산출을 동시에 담당하는 단일 진입점
+# @MX:SPEC: SPEC-AI-101 REQ-AI101-001, REQ-AI101-002
+def _persist_signal_forward_outcomes(
+    db: Session,
+    trading_date: date,
+    prev_business_day: date,
+    signal_rows: list[Any],
+) -> set[str]:
+    """T-1 surge_candidate 신호별 EOD 최대수익률을 계산해 upsert한다.
+
+    predicted_set을 재조회하지 않는다 — evaluate_surge_predictions가 이미 조회한
+    signal_rows(2단계)를 그대로 재사용한다(D1, design.md §D).
+
+    Args:
+        db: SQLAlchemy 동기 세션
+        trading_date: 평가 기준 날짜 (T당일, high_change_rate 조회 기준)
+        prev_business_day: T-1 영업일 (T-1 종가 조회 기준)
+        signal_rows: evaluate_surge_predictions 2단계에서 조회한 신호 행
+                     (.fund_signal_id, .stock_code, .price_at_signal 보유)
+
+    Returns:
+        forward_max_return_pct >= 10.0인 신호의 stock_code 집합(REQ-AI101-002 입력).
+    """
+    from app.services.naver_finance import fetch_stock_price_history_sync
+
+    if not signal_rows:
+        return set()
+
+    forward_actual_codes: set[str] = set()
+
+    stock_codes = sorted({row.stock_code for row in signal_rows})
+    high_rows = (
+        db.query(SurgeActualOutcome.stock_code, SurgeActualOutcome.high_change_rate)
+        .filter(
+            SurgeActualOutcome.trading_date == trading_date,
+            SurgeActualOutcome.stock_code.in_(stock_codes),
+        )
+        .all()
+    )
+    high_change_by_code = {row.stock_code: row.high_change_rate for row in high_rows}
+
+    prev_close_cache: dict[str, float | None] = {}
+
+    def _prev_close(stock_code: str) -> float | None:
+        if stock_code in prev_close_cache:
+            return prev_close_cache[stock_code]
+        value: float | None = None
+        try:
+            # @MX:NOTE: [AUTO] SPEC-AI-101 — T-1 종가는 인덱스가 아닌 date 매칭으로
+            # 특정한다(SPEC-AI-072 선례 재사용, D2).
+            records = fetch_stock_price_history_sync(stock_code)
+            key = prev_business_day.strftime("%Y.%m.%d")
+            by_date = {r.date.strip(): r for r in records if r.date}
+            t1_record = by_date.get(key)
+            if t1_record is not None and t1_record.close > 0:
+                value = float(t1_record.close)
+        except Exception as _pe:
+            logger.debug(
+                "[급등평가] %s T-1 종가 조회 실패 (forward_max_return NULL 처리): %s",
+                stock_code, _pe,
+            )
+        prev_close_cache[stock_code] = value
+        return value
+
+    rows_to_upsert: list[dict] = []
+    for row in signal_rows:
+        high_change_rate = high_change_by_code.get(row.stock_code)
+        prev_close_price: float | None = None
+        # price_at_signal이 없으면 forward_max_return_pct는 항상 NULL이므로 불필요한
+        # 네트워크 조회를 스킵한다(plan.md §D 롤백 트리거 — 평가 잡 소요 시간 완화).
+        if row.price_at_signal is not None:
+            prev_close_price = _prev_close(row.stock_code)
+
+        day_high_price, forward_max_return_pct = _compute_forward_max_return(
+            row.price_at_signal, high_change_rate, prev_close_price
+        )
+        if forward_max_return_pct is not None and forward_max_return_pct >= 10.0:
+            forward_actual_codes.add(row.stock_code)
+
+        rows_to_upsert.append({
+            "trading_date": trading_date,
+            "stock_code": row.stock_code,
+            "fund_signal_id": row.fund_signal_id,
+            "price_at_signal": row.price_at_signal,
+            "prev_close_price": (
+                int(prev_close_price) if prev_close_price is not None else None
+            ),
+            "day_high_price": day_high_price,
+            "forward_max_return_pct": forward_max_return_pct,
+        })
+
+    # AC-101-002: (trading_date, fund_signal_id) UNIQUE upsert — 평가 잡 재실행 시 멱등.
+    _ins = pg_insert(SurgeSignalForwardOutcome)
+    stmt = (
+        _ins
+        .values(rows_to_upsert)
+        .on_conflict_do_update(
+            index_elements=["trading_date", "fund_signal_id"],
+            set_={
+                "stock_code": _ins.excluded.stock_code,
+                "price_at_signal": _ins.excluded.price_at_signal,
+                "prev_close_price": _ins.excluded.prev_close_price,
+                "day_high_price": _ins.excluded.day_high_price,
+                "forward_max_return_pct": _ins.excluded.forward_max_return_pct,
+            },
+        )
+    )
+    db.execute(stmt)
+    db.commit()
+
+    return forward_actual_codes
+
+
 def evaluate_surge_predictions(
     db: Session,
     trading_date: date,
@@ -710,8 +864,20 @@ def evaluate_surge_predictions(
     # surge_metadata(OQ-5 마커 포함)를 기록하지 않으면 signal_type·날짜가 맞아도 여기서
     # 조용히 배제된다(EC-8) — _create_immediate_surge_signal은 항상 non-None을 기록한다.
     # @MX:SPEC: SPEC-AI-080 REQ-AI080-004
+    # @MX:NOTE: [AUTO] SPEC-AI-101 REQ-AI101-001 — fund_signal_id/price_at_signal을
+    # 추가로 select한다(필터/조인/조건은 무수정). REQ-AI101-002가 "predicted_set은
+    # 이미 확정, 재조회 금지" 원칙을 지키려면 이 단일 쿼리 결과(signal_rows)를 신호가
+    # 기준 EOD 최대수익률 계산에도 재사용해야 하므로, 신호 단위 식별을 위한 두 컬럼을
+    # 여기서 함께 조회한다.
+    # @MX:SPEC: SPEC-AI-101 REQ-AI101-001
     signal_rows = (
-        db.query(FundSignal.stock_id, Stock.stock_code, FundSignal.surge_metadata)
+        db.query(
+            FundSignal.stock_id,
+            FundSignal.id.label("fund_signal_id"),
+            FundSignal.price_at_signal,
+            Stock.stock_code,
+            FundSignal.surge_metadata,
+        )
         .join(Stock, FundSignal.stock_id == Stock.id)
         .filter(
             FundSignal.signal_type == "surge_candidate",
@@ -855,11 +1021,13 @@ def evaluate_surge_predictions(
         scannable_actual_count, total_actual_count, scannable_recall, coverage,
     )
 
-    # SPEC-AI-095 REQ-AI095-001: 고가 기준(high_change_rate) 병렬 recall/precision/coverage.
-    # predicted_set(2단계에서 이미 확정, 재조회 금지)과 COALESCE(high_change_rate, change_rate)
-    # >= 10.0(기존 was_surge와 동일 기준, REQ-AI095-002 동결) 기준 실제급등집합의 교차로
-    # 산출한다. 5단계(Scannable Recall)와 동일한 try/except + db.rollback() 격리 패턴을
-    # 재사용해 실패가 6단계 upsert/commit을 방해하지 않도록 한다(REQ-AI095-004).
+    # @MX:NOTE: [AUTO] SPEC-AI-095 REQ-AI095-001 — 고가 기준(high_change_rate) 병렬
+    # recall/precision/coverage. predicted_set(2단계에서 이미 확정, 재조회 금지)과
+    # COALESCE(high_change_rate, change_rate) >= 10.0(기존 was_surge와 동일 기준,
+    # REQ-AI095-002 동결) 기준 실제급등집합의 교차로 산출한다. 5단계(Scannable Recall)와
+    # 동일한 try/except + db.rollback() 격리 패턴을 재사용해 실패가 6단계 upsert/commit을
+    # 방해하지 않도록 한다(REQ-AI095-004).
+    # @MX:SPEC: SPEC-AI-095 REQ-AI095-001, REQ-AI095-002, REQ-AI095-004
     high_based_recall: float | None = None
     high_based_precision: float | None = None
     high_based_coverage: float | None = None
@@ -919,6 +1087,47 @@ def evaluate_surge_predictions(
     logger.info(
         "고가 기준 병렬 지표: high_based_recall=%s, high_based_precision=%s, high_based_coverage=%s",
         high_based_recall, high_based_precision, high_based_coverage,
+    )
+
+    # @MX:NOTE: [AUTO] SPEC-AI-101 REQ-AI101-001/002 — 신호가(price_at_signal) 기준 EOD
+    # 최대수익률 근사. 표준 T-1→T predicted_set/actual_set과 독립된 신호 단위
+    # (fund_signal_id) 신규 테이블(SurgeSignalForwardOutcome)에 저장하고,
+    # forward_max_return_pct >= 10.0인 신호 집합을 predicted_set과 비교해 병렬
+    # recall/precision을 산출한다. predicted_set은 이미 확정(2단계)되어 있으므로
+    # 재조회하지 않는다(D1, design.md §D). high_based 블록(위)과 동일한
+    # try/except + db.rollback() 격리 패턴을 재사용한다(REQ-AI095-004 원칙 재사용).
+    # @MX:SPEC: SPEC-AI-101 REQ-AI101-001, REQ-AI101-002
+    forward_based_recall: float | None = None
+    forward_based_precision: float | None = None
+
+    try:
+        forward_actual_set = _persist_signal_forward_outcomes(
+            db, trading_date, prev_business_day, signal_rows
+        )
+        forward_true_positive = len(predicted_set & forward_actual_set)
+        forward_false_negative = len(forward_actual_set - predicted_set)
+
+        # AC-101-004와 동일한 분모-0 가드(high_based_precision/recall과 동일 패턴)
+        if len(predicted_set) > 0:
+            forward_based_precision = forward_true_positive / len(predicted_set)
+
+        _forward_denom = forward_true_positive + forward_false_negative
+        if _forward_denom > 0:
+            forward_based_recall = forward_true_positive / _forward_denom
+    except Exception as _fwe:
+        logger.warning(
+            "[급등평가] 신호가 기준 EOD 최대수익률 지표 계산 실패 (지표 null 처리): %s", _fwe
+        )
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        forward_based_recall = None
+        forward_based_precision = None
+
+    logger.info(
+        "신호가 기준 병렬 지표: forward_based_recall=%s, forward_based_precision=%s",
+        forward_based_recall, forward_based_precision,
     )
 
     # SPEC-AI-065 REQ-5: pool_counts 정규화
@@ -1025,6 +1234,11 @@ def evaluate_surge_predictions(
             db.rollback()
         except Exception:
             pass
+
+    # SPEC-AI-101 REQ-AI101-002: forward_based_recall/precision — SPEC-AI-086
+    # scannable_denominator_expanded 선례와 동일한 비영속 런타임 속성(신규 DB 컬럼 없음).
+    evaluation.forward_based_recall = forward_based_recall
+    evaluation.forward_based_precision = forward_based_precision
 
     # 8. SPEC-AI-086 REQ-AI086-006: scannable_denominator_expanded 명명 토큰(선택, 비영속).
     # prior_scannable_metrics가 제공된 경우에만 계산 — 미제공 시 None(REQ-AI086-007 백워드

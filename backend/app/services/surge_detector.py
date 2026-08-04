@@ -1733,21 +1733,29 @@ def run_horizon_shadow_comparison(
     qualified_codes: set[str],
     market_regime: str,
     config: SurgeDetectionConfig,
+    db: "Session | None" = None,
 ) -> None:
-    """섀도우 모드 비교 로깅 (SPEC-AI-100 REQ-AI100-006).
+    """섀도우 모드 비교 로깅 + 영속화 (SPEC-AI-100 REQ-AI100-006, SPEC-AI-101 REQ-AI101-004).
 
     `horizon_aware_thresholds.enabled`가 false(기본값)인 동안, 신규 지평 인식
     임계값 경로를 병행 계산해 기존 경로의 `qualified_codes`와의 차이를 구조화
     로그로 남긴다. 부가 관측 경로이며, 계산 실패가 기존 시그널 생성 흐름에
     영향을 주지 않도록 예외를 이 함수 내부에서 격리한다(REQ-AI100-007).
 
+    SPEC-AI-101 D3: `db`가 제공되면(REQ-AI101-004) 변화 유무와 무관하게 매 사이클
+    SurgeHorizonShadowObservation에 1행을 무조건 적재한다 — 기존 logger.info는
+    added/removed가 있을 때만 찍혀 "변화 없는 날"이 관측 거래일 수에서 누락되는
+    구조적 버그가 있었다. 영속화 실패도 REQ-AI100-007과 동일하게 이 함수 내부에서
+    격리한다.
+
     Args:
         merged: 앙상블 스코어링 대상 후보 dict (stock_code → SurgeCandidate)
         qualified_codes: 기존 임계값 경로의 qualified 종목 코드 집합
         market_regime: 시장 레짐
         config: SurgeDetectionConfig 설정
+        db: SQLAlchemy 동기 세션. None이면 영속화를 건너뛴다(하위 호환 기본값).
 
-    # @MX:SPEC: SPEC-AI-100 REQ-AI100-006, REQ-AI100-007
+    # @MX:SPEC: SPEC-AI-100 REQ-AI100-006, REQ-AI100-007; SPEC-AI-101 REQ-AI101-004
     """
     if config.ensemble.horizon_aware_thresholds.enabled:
         return
@@ -1776,10 +1784,42 @@ def run_horizon_shadow_comparison(
                 added,
                 removed,
             )
+
+        # @MX:NOTE: [AUTO] SPEC-AI-101 REQ-AI101-004/D3 — 변화 없는 사이클에도 무조건
+        # 1행 적재. logger.info는 added/removed 존재 시에만 찍히므로 로그 스크래핑
+        # 방식이었다면 이 날이 관측 거래일 수에서 누락됐을 것이다.
+        # @MX:SPEC: SPEC-AI-101 REQ-AI101-004
+        if db is not None:
+            from app.models.surge_horizon_shadow_observation import (
+                SurgeHorizonShadowObservation,
+            )
+
+            existing_count = len(qualified_codes)
+            change_pct = (
+                (len(added) + len(removed)) / existing_count * 100
+                if existing_count > 0
+                else 0.0
+            )
+            db.add(
+                SurgeHorizonShadowObservation(
+                    market_regime=market_regime,
+                    existing_qualified_count=existing_count,
+                    shadow_qualified_count=len(shadow_qualified_codes),
+                    added_codes_json=json.dumps(added, ensure_ascii=False),
+                    removed_codes_json=json.dumps(removed, ensure_ascii=False),
+                    change_pct=round(change_pct, 4),
+                )
+            )
+            db.commit()
     except Exception as shadow_exc:
         logger.warning(
             "[SPEC-AI-100 섀도우] 계산 실패 (무시, 기존 흐름 영향 없음): %s", shadow_exc
         )
+        if db is not None:
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
 
 def _recent_surge_penalty(score: float, price_5d_trend: float | None) -> float:
@@ -2558,7 +2598,8 @@ def gather_surge_candidates(
             qualified_codes.add(candidate.stock_code)
 
     # SPEC-AI-100 REQ-AI100-006/007: 섀도우 모드 비교 로깅 (부가 관측 경로, 예외 자체 격리).
-    run_horizon_shadow_comparison(merged, qualified_codes, market_regime, config)
+    # SPEC-AI-101 REQ-AI101-004: db를 전달해 섀도우 비교 결과를 영속화한다.
+    run_horizon_shadow_comparison(merged, qualified_codes, market_regime, config, db=db)
 
     # P3: 즉각 공시 이벤트 강도 >= config 임계값이면 앙상블 임계값 우회 포함
     # SPEC-AI-018 REQ-001: 하드코딩(0.70) → config.ensemble.immediate_disclosure_bypass_threshold (0.85)

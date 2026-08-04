@@ -95,8 +95,10 @@ surge_detection:
     # 단일 레짐 조회 경로만 동작한다(바이트 동일 동작, REQ-AI100-003).
     horizon_aware_thresholds:
       enabled: false
-      # REQ-AI100-006: 섀도우 모드 관측 스위치 — 관측을 시작하려면 명시적으로 true로 전환.
-      shadow_mode_enabled: false
+      # REQ-AI100-006/SPEC-AI-101 REQ-AI101-003: 섀도우 모드 관측 스위치. SPEC-AI-101이
+      # REQ-AI101-004 영속화(SurgeHorizonShadowObservation) 구현 완료 후 true로 전환한다
+      # (design.md §E 순서 제약). enabled는 이 전환과 무관하게 계속 false로 유지된다.
+      shadow_mode_enabled: true
       # Open Question 1(잠정값) — volume_news_combo는 구현 시 도메인 검증 후 확정.
       horizon_labels:
         theme_cluster: multi_day
