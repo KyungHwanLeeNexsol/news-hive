@@ -68,4 +68,33 @@ full_regression: "2319 passed, 4 skipped, 3 xpassed, 0 failed (m -m 'not slow')"
 
 ## §E.4 Sync-phase Audit-Ready Signal
 
-_<pending sync-phase>_
+```yaml
+sync_status: audit-ready
+sync_complete_at: 2026-08-04
+sync_commit_sha: pending-backfill-sync-ai-098
+sync_b12_self_test_a: "grep -c 'SPEC-AI-098' CHANGELOG.md before emission = 0 (no duplicate)"
+sync_b12_self_test_b: "AC row count (grep -cE '^\\| AC-098-[0-9]+ \\|' acceptance.md) = 10, CHANGELOG references 10 AC (전량 10개 PASS, AC-098-005/009 Should-Pass)"
+sync_b12_self_test_c: "all 6 changed-file paths verified via ls before CHANGELOG emission"
+changelog_entry_position: "top of [Unreleased] (newest-first)"
+frontmatter_status_transitions:
+  spec_md: "in-progress -> completed"
+  updated_field: "2026-08-04"
+canary_compliance_check:
+  applicable: false
+```
+
+**독립 재검증 (manager-docs, 오케스트레이터로부터 위임 재확인)**:
+
+| 항목 | 검증 명령 | 결과 |
+|------|-----------|------|
+| SPEC-AI-098 대상 테스트 | `pytest tests/test_spec_ai_098.py tests/test_keyword_tagging_service.py -q` | 29 passed |
+| 전체 회귀 | `pytest tests/ -q -m "not slow"` | 2319 passed, 4 skipped, 3 xpassed, 0 failed(run-phase 기록과 정확히 일치) |
+| lint | `ruff check .` | All checks passed! |
+| PRESERVE 대상 diff (전파 로직) | `git diff 3d97f4d 6f25123 -- app/services/surge_detector.py \| grep -c "detect_theme_news_carry"` | 0 |
+| PRESERVE 대상 diff (ai_classifier.py) | `git diff 3d97f4d 6f25123 --name-only -- app/services/ai_classifier.py \| wc -l` | 0 (파일 자체가 diff에 등장하지 않음) |
+| keyword_tagging_service.py 변경 형태 | `git diff 3d97f4d 6f25123 -- app/services/keyword_tagging_service.py` | 신규 import 2줄 + 파일 끝 신규 함수 4종 추가만 확인, 기존 `extract_theme_keywords`/`refresh_stock_keywords` 본문 무변경 |
+| 사전 중복 발행 검사 | `grep -c 'SPEC-AI-098' CHANGELOG.md` (발행 전) | 0 |
+
+**Gaps**: mypy는 이 venv에 미설치 상태로 스킵(run-phase §E.3와 동일 환경 갭, SPEC-AI-098 신규 아님). Telegram 경보 임계값(Open Question 2)과 `sector_only_max_candidates` 활성화 여부(Open Question 3)는 의도적으로 미확정 — acceptance.md §E DoD가 이를 non-blocking으로 이미 규정함.
+
+**Residual-risk**: `theme_news_carry` 재발 감지는 재활성화 당일(오늘) 기준선 관측이 아직 없어, 관측 잡이 실제로 재발을 조기에 포착할지는 며칠간의 로그 축적 후에만 확인 가능하다(spec.md §Decisions D4).

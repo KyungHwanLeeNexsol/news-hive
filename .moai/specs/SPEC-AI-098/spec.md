@@ -2,7 +2,7 @@
 id: SPEC-AI-098
 title: "테마 클러스터 뉴스-종목 매칭 일원화, 종목명 별칭 확장, theme_news_carry 재활성화 관측성"
 version: "0.1.0"
-status: in-progress
+status: completed
 created: 2026-08-03
 updated: 2026-08-04
 author: Nexsol

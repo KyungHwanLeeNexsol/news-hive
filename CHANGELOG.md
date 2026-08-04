@@ -4,6 +4,76 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Feature — SPEC-AI-098: 테마 클러스터 뉴스-종목 매칭 일원화, 종목명 별칭 확장, theme_news_carry 재활성화 관측성 (2026-08-04)
+
+**목적**: `detect_theme_news_cluster()`의 종목별 기사 매칭이 경계 검사 없는 순수
+substring 매칭(가드 없음)이었던 문제, 종목명 별칭이 11개 대형주 전용 하드코딩
+딕셔너리에만 의존해 자회사/제품명 언급을 놓치던 문제, 섹터 전용 스코어링(0.5× 페널티)
+이 섹터 크기와 무관하게 균일 적용되던 문제, 그리고 오늘 재활성화된
+`theme_news_carry`(commit `63de7f6`) 플래그의 재발 감지 관측성 공백을 함께 다룬다.
+`theme_news_carry`의 전파 로직(테마 활성 게이트, 앵커 자기제외, 바스켓당 최대 시그널
+수) 및 기존 검증된 키워드 태깅 매칭 로직(SPEC-AI-091 소유)은 재구현하지 않고 완전
+무변경으로 보존한다 — 본 SPEC은 그 위에 관측성만 추가한다.
+
+**핵심 변경 (REQ-AI098-001~006, AC-098-001~010 전량 10개 PASS, AC-098-005/009는
+Should-Pass)**:
+
+1. **테마 클러스터 종목-기사 매칭 경계 가드 적용(REQ-AI098-001)**
+   `detect_theme_news_cluster()`의 종목명 변형·종목코드 매칭을 가드 없는
+   `v in text` substring에서 `keyword_matcher._keyword_in_text`(완전 양방향 경계
+   가드, 한글 조사 활용형 + 영문/숫자 앞뒤 경계 인식) 재사용으로 교체했다.
+   `_keyword_in_text`의 소문자 입력 가정에 맞춰 기사 텍스트를 명시적으로
+   `.lower()` 처리해, 영문 별칭(예: "SKT")이 대소문자와 무관하게 매칭되도록
+   보장했다. 기존 키워드 태깅 매칭 로직(`ai_classifier._count_keyword_matches`,
+   선행문자 전용 가드)은 완전히 별개 소비처로 남겨 재사용하지 않았다.
+2. **섹터 전용 스코어링 설정화, 기본값 바이트 동등(REQ-AI098-003)**
+   `ThemeClusterConfig`에 `sector_only_penalty: float = 0.5`,
+   `sector_only_max_candidates: int | None = None` 필드를 신설했다. 기본값에서는
+   `theme_cluster_score`가 본 SPEC 적용 이전과 완전히 동일하며(골든 값 비교로
+   검증), 값을 지정하면 섹터 전용 후보에만 반영되고 직접 언급 종목(60/40 블렌딩
+   경로)은 영향받지 않는다. `sector_only_max_candidates` 설정 시
+   `theme_cluster_score` 내림차순 상위 N개 섹터 전용 후보만 유지하며, 직접 언급
+   종목 수는 이 절단의 영향을 받지 않는다.
+3. **별칭 후보 제안 스크립트 신설(REQ-AI098-002)** 신규
+   `backend/scripts/suggest_stock_name_aliases.py`(dry-run 전용)가 기존 11개
+   별칭에서 관찰되는 "한글 음역 영문 접미어" 패턴(에스=S, 케이=K, 엘지=LG, 디=D 등)
+   에 해당하는 미등록 종목명을 후보로 콘솔 출력한다. `_STOCK_NAME_ALIASES`
+   딕셔너리는 자동 수정하지 않으며, 사람이 후보를 검토해 수동으로 추가한다.
+4. **`theme_news_carry` 재발 감지 관측성(REQ-AI098-004/005)**
+   `keyword_tagging_service.py`에 신규 함수 4종
+   (`_compute_keyword_distribution_metrics`,
+   `_compute_theme_news_carry_contribution_ratio`,
+   `run_theme_news_carry_observability_check`, `_send_theme_news_carry_alert`)를
+   추가해 AC-AI091-009와 동일한 정의로 "10개 보유 종목 비율"과 "키워드 개수
+   중앙값"을 로깅하고, `surge_backtest.py::_extract_combo_key()`를 재사용해
+   당일 `surge_candidate` 시그널 중 `theme_news_carry` 기여 비율을 로깅한다.
+   `scheduler.py`에 24시간 주기 잡(`theme_carry_observability`)으로 등록했다 —
+   실행 주기는 재발 감지(실시간 대응 아님) 목적을 고려해 낮은 빈도로 시작하는
+   판단이다(spec.md Open Question 1 확정). 임계값 초과 시 기존
+   `send_telegram_message`/`TELEGRAM_ADMIN_CHAT_ID` 채널로 경보를 발송하되,
+   임계값 자체는 미확정 상태이므로 Should-Pass로 다루며 미설정 시 fail-open으로
+   안전하게 스킵된다(Telegram 경보 임계값은 spec.md Open Question 2로 남김).
+5. **기존 검증된 경로 완전 무변경 확인(REQ-AI098-006)**
+   `detect_theme_news_carry()`의 전파 로직, `keyword_tagging_service.py`의
+   `extract_theme_keywords()`/`refresh_stock_keywords()`,
+   `ai_classifier._count_keyword_matches()` 4개 함수 본문에 diff 0줄임을 코드
+   리뷰와 grep으로 확인했다.
+
+**변경 파일**: `backend/app/services/surge_detector.py`(EXTEND — 경계 가드 매칭 교체,
+섹터 전용 스코어링 설정 배선), `backend/app/surge_config/surge_settings.py`(EXTEND —
+`ThemeClusterConfig` 신규 필드), `backend/app/services/keyword_tagging_service.py`
+(EXTEND — 관측 함수 4종 추가, 기존 함수 본문 무변경), `backend/app/services/scheduler.py`
+(EXTEND — 관측 잡 등록), `backend/scripts/suggest_stock_name_aliases.py`(신규),
+`backend/tests/test_spec_ai_098.py`(신규 15건). 전체 회귀 스위트 2319 passed, 4
+skipped, 3 xpassed, 0 failed. `ruff check` clean. `mypy`는 이 venv에 모듈
+미설치로 스킵(SPEC-AI-098 이전부터의 환경 갭, 잔여 위험으로 기록). commit
+`6f25123`(M1 구현) → `90429a3`(run_commit_sha 백필), main 직접 커밋(Route A
+Hybrid Trunk 1-person OSS). 구현 중 Edit 도구 호출 경계 문제로
+`refresh_stock_keywords()`의 `return updated` 문이 일시적으로 파일 끝으로 이동된
+사고가 있었으나, 회귀 테스트 실패(2건)로 즉시 발견해 원위치 복구 후 재검증
+완료했다(progress.md §E.2 Gap 참고) — PRESERVE 대상 함수의 본문 로직 자체는
+처음부터 무변경이었다.
+
 ### Feature — SPEC-AI-097: 급등 후보 스코어링 가격이력 조회 배치·캐싱 성능개선 (2026-08-04)
 
 **목적**: GPT 급등예측 구조진단 보고서 핵심주장 #2("종목별 순차 HTTP 호출이 top-50
