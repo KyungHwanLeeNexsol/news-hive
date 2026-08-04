@@ -115,7 +115,7 @@ mypy_skipped_reason: venv에 mypy 모듈 미설치 (SPEC-AI-100 이전부터의 
 ```yaml
 sync_status: audit-ready
 sync_complete_at: 2026-08-04
-sync_commit_sha: pending-backfill-spec-ai-100-sync
+sync_commit_sha: 2ad722e
 b12_self_test_a_dup_grep: "grep -c 'SPEC-AI-100' CHANGELOG.md → 0 (pre-emission, no duplicate) → 1 (post-emission, single entry confirmed)"
 b12_self_test_b_ac_count_match: "acceptance.md SSOT AC rows = 12 (AC-100-001~004, 005a, 005b, 006~011) — CHANGELOG entry states '12개 PASS', 일치"
 b12_self_test_c_file_path_verification: "ls backend/app/services/surge_detector.py backend/app/surge_config/surge_settings.py backend/app/surge_config/surge_detection.yaml backend/tests/test_spec_ai_100.py → 전체 존재 확인"
