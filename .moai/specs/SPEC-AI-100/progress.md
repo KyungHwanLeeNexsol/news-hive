@@ -90,6 +90,7 @@ OK
 ```yaml
 run_status: audit-ready
 run_complete_at: 2026-08-03
+run_commit_sha: f64ecdccb1baba613049cb0f17d1cd4bb37f3f0e
 ac_pass_count: 12
 ac_fail_count: 0
 preserve_list_post_run_count: 8
