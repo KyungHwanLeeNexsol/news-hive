@@ -71,7 +71,7 @@ full_regression: "2319 passed, 4 skipped, 3 xpassed, 0 failed (m -m 'not slow')"
 ```yaml
 sync_status: audit-ready
 sync_complete_at: 2026-08-04
-sync_commit_sha: pending-backfill-sync-ai-098
+sync_commit_sha: b1023ab
 sync_b12_self_test_a: "grep -c 'SPEC-AI-098' CHANGELOG.md before emission = 0 (no duplicate)"
 sync_b12_self_test_b: "AC row count (grep -cE '^\\| AC-098-[0-9]+ \\|' acceptance.md) = 10, CHANGELOG references 10 AC (전량 10개 PASS, AC-098-005/009 Should-Pass)"
 sync_b12_self_test_c: "all 6 changed-file paths verified via ls before CHANGELOG emission"
