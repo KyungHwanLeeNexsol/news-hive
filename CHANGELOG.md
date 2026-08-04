@@ -4,6 +4,64 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Feature — SPEC-AI-099: 급등예측 피처 스냅샷 데이터 인프라 (모델 학습 미포함) (2026-08-04)
+
+**목적**: 급등예측 최종 후보 점수가 학습된 분류기/랭커가 아닌 수동 튜닝
+가중합(`compute_ensemble_score()`)이고, 그 뒤에 미래 모델을 학습시킬 종목별/
+사이클별 피처 데이터셋 자체가 존재하지 않는 문제를 다룬다. 본 SPEC의 범위는
+데이터 인프라(피처 스냅샷 저장소) 구축까지이며, 모델 학습/서빙은 명시적으로
+범위 밖이다(REQ-AI099-006).
+
+**핵심 변경 (REQ-AI099-001~006, AC-099-001~009 전량 9개 PASS)**:
+
+1. **종목별·사이클별 불변 피처 스냅샷 모델 신설(REQ-AI099-001)**
+   신규 `SurgeFeatureSnapshot` 모델(`surge_feature_snapshots` 테이블,
+   마이그레이션 072) — 탐지기별 스코어, 최종 앙상블 점수, 최종 승격 여부를
+   사이클마다 새 행으로 저장한다(재스캔 시 기존 행 UPDATE 아닌 INSERT).
+   기존 일 단위 집계(`MLFeatureSnapshot`, SPEC-AI-025)와는 다른 그레인이며
+   이를 대체하지 않는다.
+2. **배치 삽입 캡처 경로(REQ-AI099-002)**
+   `surge_detector.py`의 앙상블 스코어링 메인 루프 + 3개 우회 루프 종료
+   직후, 그 사이클에서 평가된 모든 후보(승격/비승격 무관)를 단일
+   `db.add_all()` + `db.commit()` 1회로 영속화한다. 예외는 `try/except`로
+   격리해 기존 `FundSignal` 생성/갱신 흐름에 영향을 주지 않는다.
+3. **정답 라벨 백필 잡(REQ-AI099-003)**
+   `SurgeActualOutcome`이 채워지면 `(stock_code, 다음 거래일)` 키로 조인해
+   `outcome_change_rate`/`outcome_was_surge`를 백필하는 신규 잡을 매일 새벽
+   1회 등록했다. 정답이 아직 없으면 `NULL`을 유지하며 임의값으로 채우지
+   않는다(AC-099-006). 거래일 계산은 최소 구현(주말만 처리, 공휴일
+   캘린더 미통합)이며, 공휴일이 낀 주는 라벨이 영구히 `NULL`로 남는
+   fail-safe 동작이다(progress.md §E.2 Open Question으로 기록, 후속 SPEC
+   대상).
+4. **무기한 보존 정책 배선(REQ-AI099-004)**
+   신규 테이블에 자동 삭제/정리 잡을 등록하지 않았다 — 미래 학습
+   코퍼스라는 목적 자체가 짧은 보존과 상충하기 때문이다. 행 수 관리
+   임계치는 미확정(Open Question)이며 실제 축적 데이터 관찰 후 재검토
+   대상이다.
+5. **신규 병렬 축적 카운터(REQ-AI099-005)**
+   `check_feature_snapshot_readiness()` 신규 함수가 `SurgeFeatureSnapshot`의
+   축적 상태를 기존 `check_ml_readiness()`(`MLFeatureSnapshot` 소유)와
+   완전히 독립적으로 계측한다. 기존 함수의 시그니처/반환값/로그 메시지는
+   무수정이다.
+6. **앙상블 계산·후보 승격·`FundSignal` 경로 완전 무변경(REQ-AI099-006)**
+   `compute_ensemble_score()`의 가중합/컨센서스 배율, 메인 루프 + 3개
+   우회 루프의 임계값 판정 로직에 삭제 라인 0줄(순수 추가만), `fund_manager.py`
+   변경 0매치를 `git diff`로 확인했다. 본 SPEC이 캡처하는 데이터는 저장·조회
+   가능한 상태로만 존재하며 어떤 점수도 후보 승격/매매 실행에 영향을 주지
+   않는다.
+
+**변경 파일**: `backend/app/models/surge_feature_snapshot.py`(신규),
+`backend/alembic/versions/072_surge_feature_snapshot.py`(신규),
+`backend/app/services/surge_feature_snapshot_service.py`(신규 — 백필 잡 +
+독립 카운터), `backend/app/services/surge_detector.py`(EXTEND — 캡처 배선),
+`backend/app/services/scheduler.py`(EXTEND — 백필 잡 등록),
+`backend/tests/test_spec_ai_099.py`(신규 13건). 전체 회귀 스위트 2332
+passed, 4 skipped, 3 xpassed, 0 failed(마이그레이션 체인 헤드 하드코딩
+테스트 1건은 072 추가에 따른 예상된 갱신 — `test_spec_ai_096.py`). `ruff
+check` clean. `mypy`는 이 venv에 모듈 미설치로 스킵(이번 배치 이전부터의
+환경 갭, 잔여 위험으로 기록). commit `f100c07`(M1 구현), main 직접 커밋
+(Route A Hybrid Trunk 1-person OSS).
+
 ### Feature — SPEC-AI-098: 테마 클러스터 뉴스-종목 매칭 일원화, 종목명 별칭 확장, theme_news_carry 재활성화 관측성 (2026-08-04)
 
 **목적**: `detect_theme_news_cluster()`의 종목별 기사 매칭이 경계 검사 없는 순수

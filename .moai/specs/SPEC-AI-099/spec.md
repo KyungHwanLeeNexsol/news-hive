@@ -2,7 +2,7 @@
 id: SPEC-AI-099
 title: "급등예측 피처 스냅샷 데이터 인프라 (모델 학습 미포함)"
 version: "0.1.0"
-status: in-progress
+status: completed
 created: 2026-08-03
 updated: 2026-08-04
 author: Nexsol

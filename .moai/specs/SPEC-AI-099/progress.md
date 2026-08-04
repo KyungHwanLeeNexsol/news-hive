@@ -120,4 +120,55 @@ m1_to_mN_commit_strategy: single M1 commit (Tier M, all 6 TASKs delivered in one
 
 ## §E.4 Sync-phase Audit-Ready Signal
 
-_<pending sync-phase>_
+```yaml
+sync_status: audit-ready
+sync_complete_at: 2026-08-04
+sync_commit_sha: pending-backfill-sync
+b12_self_test_a: PASS  # grep -c 'SPEC-AI-099' CHANGELOG.md == 0 before emission
+b12_self_test_b: PASS  # AC row count (9, §B ### headers) matches CHANGELOG claim (9)
+b12_self_test_c: PASS  # all file paths in CHANGELOG entry verified via commit f100c07 --stat
+changelog_entry_position: top of [Unreleased] (newest of the 4-SPEC batch 097/098/099/100 to sync-close)
+frontmatter_status_transitions:
+  spec_md: "in-progress -> completed"
+canary_compliance_check: n/a — this SPEC defines no forward-looking policy requiring its own sync-phase self-test
+```
+
+### Sync-phase verification evidence
+
+- `grep -c "SPEC-AI-099" CHANGELOG.md` → 0 (before this sync commit; confirms no
+  duplicate entry from a parallel BATCH-SYNC session)
+- AC row count cross-check: `acceptance.md` §B has 9 `### AC-099-` headings
+  (AC-099-001~009); CHANGELOG entry states "9개 전량 PASS" — matches
+- File-path verification: all 6 files named in the CHANGELOG entry
+  (`surge_feature_snapshot.py` model, `072_surge_feature_snapshot.py`
+  migration, `surge_feature_snapshot_service.py`, `surge_detector.py`,
+  `scheduler.py`, `test_spec_ai_099.py`) confirmed present via
+  `git show f100c07 --stat`
+- PRESERVE-list re-confirmation (sync-phase, no new drift since §E.2):
+  `compute_ensemble_score()` / main+bypass-loop threshold logic / `fund_manager.py`
+  / `ml_feature_engineering.py` / `surge_calibrator.py` — all 0 unexpected
+  diff, per §E.2 already-verified table (no re-run needed; no code changed
+  between run-phase close and this sync commit)
+- Migration chain integrity: `alembic/versions/072_surge_feature_snapshot.py`
+  `down_revision = "071_surge_universe_pool_history_pool_d"`, single head
+  confirmed at run-phase (§E.2); unchanged at sync time (no new migration
+  landed in the interim)
+
+### Gaps
+
+- `mypy` was not re-run at sync-phase (already noted as a pre-existing venv
+  gap at run-phase, §E.2) — sync-phase does not introduce a new gap here,
+  it inherits the same residual-risk statement.
+- Open Questions 1 (row-count management threshold) and 3 (post-calibration
+  value storage) remain unresolved by design — spec.md §Open Questions and
+  acceptance.md §E Definition of Done both state these do not block this
+  SPEC's DoD.
+
+### Residual risk
+
+- Trading-day utility minimal implementation (weekend-only skip, no KRX
+  holiday calendar) — documented fail-safe per §E.2; carried forward
+  unchanged into sync-phase, no mitigation added in this commit.
+- Storage growth from unlimited retention (D4) is an intentional decision
+  with no automated safeguard; first observation point is a future SPEC
+  triggered by Open Question 1, not this sync commit.
