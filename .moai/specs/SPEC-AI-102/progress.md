@@ -76,7 +76,7 @@ wrapper가 두 내부 함수를 순서대로 호출하는 얇은 껍데기임을
 ## §E.3 Run-phase Audit-Ready Signal
 
 run_complete_at: 2026-08-05
-run_commit_sha: pending-backfill-m1
+run_commit_sha: 21d563e
 run_status: implemented
 ac_pass_count: 10
 ac_fail_count: 0
