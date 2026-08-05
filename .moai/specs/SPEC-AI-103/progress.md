@@ -223,4 +223,23 @@ stash_restore_verified: >-
 
 ## §E.4 Sync-phase Audit-Ready Signal
 
-_<pending sync-phase>_
+```yaml
+sync_complete_at: 2026-08-05
+sync_commit_sha: pending-backfill-SPEC-AI-103-sync
+sync_status: completed
+changelog_entry_position: "top of [Unreleased] (before SPEC-AI-099 entry)"
+changelog_dedup_check: "grep -c 'SPEC-AI-103' CHANGELOG.md → 0 (pre-emission) → 1 (post-emission)"
+frontmatter_status_transitions:
+  spec_md: "in-progress -> completed"
+  plan_md: "no frontmatter block (body-only file, no status field)"
+  acceptance_md: "no frontmatter block (body-only file, no status field)"
+sync_scope: "CHANGELOG-only (GATE 2 approved — no README/tech.md/structure.md/product.md changes)"
+```
+
+**Note (plan.md / acceptance.md frontmatter)**: neither `plan.md` nor
+`acceptance.md` carries a YAML frontmatter block in this SPEC — both are
+body-only markdown files (verified by reading line 1 of each: `# Plan — ...`
+and `# Acceptance Criteria — ...` respectively, no `---` delimiter). The
+canonical `status:`/`updated:` frontmatter lives solely in `spec.md`. The
+`completed` transition is therefore recorded in `spec.md` frontmatter only;
+this is not a scope omission.

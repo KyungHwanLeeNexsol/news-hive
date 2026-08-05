@@ -2,7 +2,7 @@
 id: SPEC-AI-103
 title: "테마 클러스터 뉴스 신선도/중복(dedup) 가드"
 version: "0.1.0"
-status: in-progress
+status: completed
 created: 2026-08-05
 updated: 2026-08-05
 author: Nexsol

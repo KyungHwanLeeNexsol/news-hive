@@ -4,6 +4,66 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Feature — SPEC-AI-103: 테마 클러스터 뉴스 신선도/중복(dedup) 가드 (2026-08-05)
+
+**목적**: `detect_theme_news_cluster()`(`theme_cluster` 탐지기)가 48시간 창 뉴스를
+raw article count로만 집계해, 재보도(syndication) 인플레이션과 진부화된 테마의
+지속 트리거를 방어하지 못하던 문제를 다룬다. 형제 탐지기 `volume_news_combo`의
+`combo_chase_guard`(SPEC-AI-030)를 모델로 삼되, SPEC-AI-038이 제거한 가격 API
+호출 제약을 재위반하지 않는 시간축(기사 발행 시각) 기반 설계로 조정했다. 전
+기능 기본 비활성으로, 기본값에서는 적용 이전과 바이트 동등하다(REQ-AI103-002).
+
+**핵심 변경 (REQ-AI103-001~007, AC-AI103-001~007 전량 7개 PASS — 6 Must-Pass +
+1 Should-Pass)**:
+
+1. **근접 중복 기사 단일 집계(REQ-AI103-001)**
+   신규 `_dedup_near_duplicate_articles()`가 제목 유사도(`difflib.SequenceMatcher`,
+   신규 서드파티 의존성 없음)와 발행 시각 근접도를 AND 조건으로 판정해 근접
+   중복 기사를 대표 건(가장 이른 발행)으로 단일 집계한다. 비교 범위는 이미
+   형성된 부분집합(키워드별 매칭 기사, 종목별 귀속 기사) 내부로 한정하고,
+   `dedup_max_comparison_batch`(기본 200) 하드 캡으로 비교 비용을 구조적으로
+   O(캡²)까지만 허용한다 — 캡 초과분은 비교 없이 개별 집계로 안전 열화.
+2. **진부화된 테마 점수 감쇠(REQ-AI103-003)**
+   신규 `_compute_theme_freshness_ratio()`가 중복 제거된 기사의 신선 구간 내
+   비율을 계산하고, `min_theme_freshness_ratio` 미달 시 `theme_base`에
+   `freshness_discount_factor`(기본 0.5) 감쇠를 적용한다(완전 배제 아님).
+   기본값 `min_theme_freshness_ratio=0.0`으로 "활성화"와 "감쇠 발동"을 분리하는
+   2단 스위치를 구성했다.
+3. **유계된 가격 과열 방어(REQ-AI103-004, Should-Pass)**
+   `_apply_price_overheat_discount()`가 `sector_only_max_candidates` 절단
+   이후의 유계 후보 집합에만, 단일 배치 가격 조회(`fetch_stock_price_history_batch_sync`)
+   1회 호출로 과열 감쇠를 적용한다. `sector_only_max_candidates`가 설정되지
+   않으면 이 서브기능은 완전히 스킵된다.
+4. **SPEC-AI-038 제약 준수(REQ-AI103-005, Must-Pass)**
+   종목 순회 루프 내 개별 동기 가격 호출을 추가하지 않는다 — 가드 비활성 /
+   가드 활성+가격과열 비활성 / 가드 활성+가격과열 활성 3가지 설정 조합 전부에서
+   `_fetch_price_change_sync`류 개별-종목 호출 카운트 0을 spy 테스트로 확인.
+5. **기본값 바이트 동등(REQ-AI103-002, Must-Pass)**
+   신규 `ThemeFreshnessGuardConfig`(10필드) 마스터 스위치 기본값은 비활성이며,
+   `surge_detection.yaml`에 `theme_freshness_guard: enabled: false`로 명시
+   배포했다 — 활성화 이전에는 본 SPEC 적용 이전과 완전히 동일한 테마 활성
+   판정 결과와 `theme_cluster_score`를 산출한다.
+6. **관측성 로깅(REQ-AI103-007, Must-Pass)**
+   가드 활성화 시 활성 테마별로 중복 제거로 축소된 기사 수와 계산된 신선
+   비율을 디버그 레벨 로그로 남긴다(`caplog` 자동 검증).
+
+**변경 파일**: `backend/app/services/surge_detector.py`(EXTEND — 헬퍼 4개 +
+`detect_theme_news_cluster()` 배선), `backend/app/surge_config/surge_settings.py`
+(EXTEND — `ThemeFreshnessGuardConfig` 신설 + 등록), `backend/app/surge_config/surge_detection.yaml`
+(EXTEND — `theme_freshness_guard` 블록), `backend/tests/test_spec_ai_103.py`(신규
+39건, 특성화 테스트 7건 포함). 신규/수정 구간 커버리지 92.4%(신규 헬퍼 4개
+100%). 전체 회귀 스위트 2387 passed / 0 failed(동시 진행 중이던 SPEC-AI-102
+미커밋 작업을 일시 분리한 클린 트리 기준). `plan.md §G` PRESERVE 목록 9개
+심볼 HEAD 대비 diff 0. `ruff` clean.
+
+**알려진 갭(정직 기록)**: REQ-AI103-006(특성화 테스트 선행 순서 프로세스 게이트)은
+특성화 테스트 작성·통과 자체는 완료했으나, 동시 진행 중이던 SPEC-AI-102의
+미커밋 작업이 동일 파일(`surge_detector.py`)에 존재해 계획된 "특성화 테스트
+선행 커밋 → 구현 커밋" 2단계 분리가 단일 커밋으로 귀결되었다(사용자 승인
+Option 1, stash 기반 클린 커밋 경위는 progress.md §E.2.3 참고). 사후에 커밋을
+인위적으로 쪼개 이력을 만들어내는 것은 검증 무결성 위반이므로 수행하지
+않았다. mypy 미설치 환경으로 해당 품질 게이트는 미실행(환경 갭).
+
 ### Feature — SPEC-AI-099: 급등예측 피처 스냅샷 데이터 인프라 (모델 학습 미포함) (2026-08-04)
 
 **목적**: 급등예측 최종 후보 점수가 학습된 분류기/랭커가 아닌 수동 튜닝
