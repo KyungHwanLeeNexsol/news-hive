@@ -161,7 +161,8 @@ deletions, `build_scan_universe()` → `_source_scan_universe_pools()` +
 
 ```yaml
 run_complete_at: 2026-08-05
-run_commit_sha: <backfill>        # 다음 chore 커밋에서 백필 (SPEC-AI-098/099/101 관례)
+run_commit_sha: 02098cb5d927937d0b364176898994ba082c8472
+run_push_result: "ddf1f0f..02098cb  main -> main (origin/main 반영 확인)"
 run_status: implemented
 ac_pass_count: 7          # AC-AI103-001 ~ AC-AI103-007 전부 PASS
 ac_fail_count: 0
@@ -204,7 +205,16 @@ preserve_verification: >-
   ComboChaseGuardConfig는 신규 클래스의 @MX 헤더 주석이 인접해 슬라이서상
   차이로 보이나, 필드/로직 라인은 HEAD와 완전 동일함을 별도 확인했다.
 flaky_check: "test_spec_ai_103.py 3회 반복 실행 전부 동일 통과 (시각 의존 경계 테스트 결정화 수정 후)"
-stash_restore_verified: <backfill>   # SPEC-AI-102 원상 복원 sha256 대조 결과 (chore 커밋에서 백필)
+stash_restore_verified: >-
+  PASS — 커밋 직전 상태(ddf1f0f)에 세션 시작 시점의 원본 통합 패치를 독립 재적용해
+  복원 기대본을 재구성한 뒤, 현재 워킹트리와 sha256 대조했다.
+  surge_detector.py = 47b2c9d2…1f30, surge_prediction_evaluation.py = 616c9553…cb45
+  양쪽 모두 일치(LF 정규화 기준 — `core.autocrlf=true` 환경이라 워킹트리는 CRLF,
+  git blob은 LF이므로 정규화 후 비교가 정확한 대조다).
+  `git status` 델타도 SPEC-AI-103 항목 4건이 커밋되어 사라진 것뿐이고 신규 항목은 0건.
+  기능적 충실성도 확인: 복원 후 test_spec_ai_065::test_min_ratio_literal_unchanged_in_source가
+  다시 실패(SPEC-AI-102 변경이 복귀했다는 증거)하고, 본 SPEC 39건은 그대로 통과한다.
+  SPEC-AI-102 작업은 미커밋 상태 그대로 보존되며 본 세션은 이를 수정/해결하지 않았다.
 ```
 
 **Note (mypy)**: acceptance.md §C는 `uv run mypy app/`을 품질 게이트로 명시하나,
