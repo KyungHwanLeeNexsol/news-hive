@@ -674,14 +674,30 @@ class TestInvariantConstantLiteralsUnchanged:
         cfg = get_surge_config()
         assert cfg.max_scan_universe == 250
 
-    def test_min_ratio_literal_unchanged_in_source(self):
-        """_min_ratio=2.0 리터럴이 변경되면 안 된다(SPEC-AI-074 소유, 불변)."""
+    def test_min_ratio_literal_unchanged_in_pool_sourcing(self):
+        """_min_ratio=2.0 리터럴이 변경되면 안 된다(SPEC-AI-074 소유, 값 자체는 불변).
+
+        SPEC-AI-102 REQ-AI102-001이 build_scan_universe()를 Pool 소싱
+        (_source_scan_universe_pools) + existing 병합·최종조립(_assemble_scan_universe)
+        으로 분리하면서, 이 리터럴이 들어있는 Pool B 소싱 블록이 wrapper 밖으로
+        옮겨졌다. 따라서 inspect 대상만 _source_scan_universe_pools로 이동한다 —
+        지켜야 할 불변식(값 2.0 불변)은 그대로다. 이는 위
+        test_max_scan_universe_default_updated_by_spec_ai_096가 SPEC-AI-096의
+        슈퍼시드를 명시적으로 기록한 것과 동일한 패턴의 의도된 갱신이며,
+        사고로 깨진 것이 아니다.
+        """
         import inspect
 
         from app.services import surge_detector as _mod
 
-        source = inspect.getsource(_mod.build_scan_universe)
+        source = inspect.getsource(_mod._source_scan_universe_pools)
         assert "_min_ratio = 2.0" in source
+
+        # 분리 이후 wrapper는 두 내부 함수를 순서대로 호출하는 얇은 껍데기여야 한다 —
+        # Pool 소싱 로직(및 그 리터럴)이 wrapper로 되돌아오면 분리가 무의미해진다.
+        wrapper_source = inspect.getsource(_mod.build_scan_universe)
+        assert "_source_scan_universe_pools(" in wrapper_source
+        assert "_assemble_scan_universe(" in wrapper_source
 
 
 # ---------------------------------------------------------------------------

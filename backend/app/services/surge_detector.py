@@ -2791,6 +2791,19 @@ def gather_surge_candidates(
 
     # SPEC-AI-018 REQ-005 fix: price_5d_trend를 candidate에 직접 채움
     # legacy_candidates=[]인 run_surge_signal_generation 경로에서도 페널티가 작동하도록
+    # @MX:NOTE: [AUTO] SPEC-AI-102 TASK-006 — 바로 위 _apply_price_fetch_truncation()의
+    # _MAX_PRICE_FETCH_CANDIDATES(=50) 상한이 실제로 게이팅하는 유일한 지점이 이 순차
+    # for-loop다. SPEC-AI-097 배치 함수(fetch_stock_price_history_batch_sync)로 전환되지
+    # 않은 채 종목당 1회 HTTP를 순차 호출한다 — 즉 "배치 인프라가 생겼으니 50을 올려도
+    # 안전하다"는 논거는 이 지점이 배치로 전환되기 전까지는 성립하지 않는다.
+    # spec.md §Context 검증된 사실 4의 순차 호출 지점 표(6곳)는 이 지점을 누락했는데,
+    # 원인은 import 별칭(_fetch_ph)이라 `grep "fetch_stock_price_history_sync("`에 걸리지
+    # 않았기 때문이다(실제 잔여 순차 지점은 7곳).
+    # SPEC-AI-102는 TASK-001 실측 후 Option B(50 유지)를 채택했으므로 이 지점은 순차로
+    # 남는다. 향후 상한 상향(Option A)을 재검토하는 작업자는 (a) 이 루프의 배치 전환과
+    # (b) 프로덕션 코어 수 확인을 선행 조건으로 삼을 것 — 1코어 환경에서는 배치 전환이
+    # 오히려 느려진다는 실측이 plan.md TASK-001 결과표에 있다.
+    # @MX:SPEC: SPEC-AI-102 REQ-AI102-003, REQ-AI102-004
     from app.services.naver_finance import fetch_stock_price_history_sync as _fetch_ph
     for code, candidate in merged.items():
         if code in legacy_lookup:
@@ -5302,11 +5315,46 @@ def build_scan_universe(
           "pool_a_scanned"/"pool_b_scanned"/"pool_c_scanned": N(post-truncation,
           SPEC-AI-076 REQ-005)} 집계
     """
+    existing_codes = existing_codes or set()
+    (
+        pool_a_codes,
+        pool_b_codes,
+        pool_c_codes,
+        pool_d_codes,
+        entry_pool_map,
+        max_universe,
+    ) = _source_scan_universe_pools(db, config, now=now)
+    return _assemble_scan_universe(
+        config,
+        pool_a_codes,
+        pool_b_codes,
+        pool_c_codes,
+        pool_d_codes,
+        entry_pool_map,
+        max_universe,
+        existing_codes,
+    )
+
+
+# @MX:NOTE: [AUTO] SPEC-AI-102 REQ-AI102-001 — build_scan_universe()에서 existing_codes를
+# 전혀 참조하지 않는 Pool A/B/C/D 소싱 로직만 추출한 내부 함수. existing_codes=set()으로
+# 이 함수를 단독 호출해도 build_scan_universe() 전체 호출과 동일한 Pool A/B/C/D 리스트가
+# 산출된다(spec.md §Context 검증된 사실 1) — 공개 계약이 아닌 내부 헬퍼.
+# @MX:SPEC: SPEC-AI-102 REQ-AI102-001
+def _source_scan_universe_pools(
+    db: "Session",
+    config: "SurgeDetectionConfig",
+    now: datetime | None = None,
+) -> tuple[list[str], list[str], list[str], list[str], dict[str, str], int]:
+    """existing_codes를 참조하지 않는 Pool A/B/C/D 소싱만 수행한다.
+
+    Returns:
+        (pool_a_codes, pool_b_codes, pool_c_codes, pool_d_codes, entry_pool_map, max_universe)
+    """
     from datetime import date as _date
 
     from sqlalchemy import func as sqlfunc
 
-    existing_codes = existing_codes or set()
     today = _date.today()
     today_str = today.strftime("%Y%m%d")
     # SPEC-AI-086 REQ-AI086-001/004: clamp [50,600] + 선택적 시간대별 동적 상한.
@@ -5374,7 +5422,10 @@ def build_scan_universe(
     # Pool B: 거래량 200%+ 당일 종목
     # SurgeActualOutcome에서 오늘 데이터를 활용하거나 naver_finance에서 직접 조회
     try:
-        from app.services.naver_finance import fetch_volume_leaders_sync, fetch_stock_price_history_sync
+        from app.services.naver_finance import (
+            fetch_volume_leaders_sync,
+            fetch_stock_price_history_batch_sync,
+        )
         from app.services.stock_registry_service import fetch_tracked_stock_codes
 
         # SPEC-AI-074 REQ-002: 유계 오버페치 — 레버리지/인버스 ETF·ETN이 절대 거래량 순위
@@ -5408,11 +5459,22 @@ def build_scan_universe(
         _baseline_days = 20
         _min_ratio = 2.0  # 200% = 2배
 
+        # SPEC-AI-102 REQ-AI102-004/TASK-005: 순차 개별 fetch_stock_price_history_sync 호출을
+        # detect_volume_breakout(SPEC-AI-097, :4745)과 동일 패턴의 배치 동시조회로 전환한다 —
+        # baseline 계산·필터링 로직(_resolve_today_volume/_baseline_days/_min_ratio 판정)은
+        # 완전히 동일하게 유지, 조회 방식만 배치로 바뀐다(AC-102-007). 이미 다른 풀에 태깅된
+        # 코드는 기존과 동일하게 배치 조회 대상에서도 제외해 HTTP 호출량을 늘리지 않는다.
+        # 개별 종목 조회 실패는 예외를 전파하지 않고 빈 리스트로 처리되므로(AC-102-008) 기존
+        # try/except continue의 실패 격리 의미가 그대로 보존된다.
+        # @MX:SPEC: SPEC-AI-102 REQ-AI102-004
+        _pool_b_fetch_codes = [c for c in volume_leader_codes if c not in entry_pool_map]
+        history_by_code = fetch_stock_price_history_batch_sync(_pool_b_fetch_codes, pages=3)
+
         for code in volume_leader_codes:
             if code in entry_pool_map:
                 continue
             try:
-                history = fetch_stock_price_history_sync(code, pages=3)
+                history = history_by_code.get(code, [])
                 if len(history) < _baseline_days + 1:
                     continue
                 # SPEC-AI-067 REQ-004: 당일(history[0]) 거래량만 장중 실시간 값으로 교정.
@@ -5520,6 +5582,29 @@ def build_scan_universe(
             except Exception:
                 pass
 
+    return pool_a_codes, pool_b_codes, pool_c_codes, pool_d_codes, entry_pool_map, max_universe
+
+
+# @MX:NOTE: [AUTO] SPEC-AI-102 REQ-AI102-001 — build_scan_universe()에서 existing_codes를
+# 참조하는 나머지 절반(existing 태깅, quota 배분, 최종 조립)만 추출한 내부 함수.
+# _source_scan_universe_pools()가 만든 Pool A/B/C/D 리스트 + entry_pool_map을 그대로
+# 이어받는다 — 공개 계약이 아닌 내부 헬퍼.
+# @MX:SPEC: SPEC-AI-102 REQ-AI102-001
+def _assemble_scan_universe(
+    config: "SurgeDetectionConfig",
+    pool_a_codes: list[str],
+    pool_b_codes: list[str],
+    pool_c_codes: list[str],
+    pool_d_codes: list[str],
+    entry_pool_map: dict[str, str],
+    max_universe: int,
+    existing_codes: set[str],
+) -> tuple[list[str], dict[str, str], dict[str, int]]:
+    """existing 병합, quota 배분, 최종 조립만 수행한다.
+
+    Returns:
+        (universe_codes, entry_pool_map, pool_counts) — build_scan_universe()와 동일 계약.
+    """
     # 기존 탐지기 결과 추가 (우선순위 최하)
     # SPEC-AI-094 REQ-AI094-001: 등재 루프(existing_codes 전량을 entry_pool_map에 먼저
     # 등록)는 무수정 유지 — "existing" 태깅은 플래그와 무관하게 계속 정상 동작한다(구조적
@@ -5664,6 +5749,19 @@ def build_scan_universe(
 # 조정은 재배포만으로 가능하다.
 _BRIDGE_MIN_SCORE = 0.3
 
+# SPEC-AI-102 REQ-AI102-002: pool_b bridge 전용 상수 2종.
+# _BRIDGE_POOL_B_DEFAULT_LIMIT — scan_universe_bridge_pool_limits에 "pool_b" 키가 없는
+#   레거시 config에 pool_a/pool_c의 "키 부재 == 무제한" 관례를 그대로 적용하면 명시적
+#   설정 없이 신규 HTTP 호출 경로가 무제한 열린다. pool_b만은 키 부재를 무제한이 아니라
+#   이 보수적 기본값으로 해석한다(acceptance.md §D Edge Case).
+# _BRIDGE_POOL_B_FULL_RATIO — 거래량 비율(ratio)을 0~1 점수로 정규화할 때의 만점 기준.
+#   pool_c가 "진입 기준(5%)의 3배(15%)를 만점"으로 잡은 기존 관례를 그대로 따라 Pool B
+#   진입 기준(_min_ratio=2.0)의 3배를 만점으로 둔다 — 신규 산출식 발명 없음. 진입 하한과
+#   같은 ratio=2.0은 2.0/6.0=0.333으로 _BRIDGE_MIN_SCORE(0.3)를 갓 넘는데, 이는 pool_c의
+#   5%→0.333과 동일한 구조다.
+_BRIDGE_POOL_B_DEFAULT_LIMIT = 5
+_BRIDGE_POOL_B_FULL_RATIO = 6.0
+
 
 def generate_scan_universe_bridge_candidates(
     db: "Session",
@@ -5677,14 +5775,21 @@ def generate_scan_universe_bridge_candidates(
     # impact_score, SurgeActualOutcome.change_rate)만으로 점수화해 bridge 후보로 승격한다.
     # 신규 외부 fetch(Naver/DART) 호출 없음(AC-092-005) — 순수 DB 재조회 + 인메모리 연산.
     # merged는 절대 변경하지 않는다(호출부에서 qualified 리스트에만 append).
+    # SPEC-AI-102 REQ-AI102-002: pool_b가 하위 플래그(scan_universe_bridge_pool_b_enabled,
+    # 기본 False) 아래에서만 대상에 추가된다 — pool_b 경로에 한해 "신규 외부 fetch 없음"
+    # 원칙의 예외로 가격이력 배치 조회가 발생하며, 그래서 마스터 스위치와 분리된 별도
+    # 플래그를 쓴다. 플래그 OFF(기본)면 위 SPEC-AI-092 불변식이 그대로 유지된다.
     # @MX:SPEC: SPEC-AI-092 REQ-AI092-003, REQ-AI092-004, REQ-AI092-005
-    """스캔 유니버스 bridge 후보를 생성한다 (SPEC-AI-092).
+    # @MX:SPEC: SPEC-AI-102 REQ-AI102-002
+    """스캔 유니버스 bridge 후보를 생성한다 (SPEC-AI-092, SPEC-AI-102).
 
     build_scan_universe()가 이미 산출한 universe_codes/entry_pool_map과, 기존 탐지기가
     채운 merged 딕셔너리만 입력으로 받는다. merged에 없는 pool_a/pool_c 종목을 이미
     수집된 DB 자료(공시 impact_score, 전일 등락률)로 점수화하여
     scan_universe_bridge_pool_limits/scan_universe_bridge_max_candidates 상한 안에서
-    SurgeCandidate 목록으로 반환한다.
+    SurgeCandidate 목록으로 반환한다. scan_universe_bridge_pool_b_enabled가 True이면
+    pool_b 종목도 대상에 포함되며, 이 경로만 가격이력 배치 조회를 수행한다
+    (SPEC-AI-102 REQ-AI102-002).
 
     Args:
         db: SQLAlchemy 동기 세션
@@ -5700,10 +5805,17 @@ def generate_scan_universe_bridge_candidates(
     if not config.scan_universe_bridge_candidates_enabled:
         return []
 
+    # SPEC-AI-102 REQ-AI102-002: pool_b는 마스터 스위치 + 하위 플래그가 **둘 다** True일
+    # 때만 대상 pool 집합에 들어간다. 하위 플래그 OFF(기본)면 대상 집합이 SPEC-AI-092와
+    # 완전히 동일한 (pool_a, pool_c)라서 이하 모든 경로가 바이트 동등하다(AC-102-004).
+    _target_pools: tuple[str, ...] = ("pool_a", "pool_c")
+    if config.scan_universe_bridge_pool_b_enabled:
+        _target_pools = ("pool_a", "pool_c", "pool_b")
+
     candidate_codes = [
         code
         for code in universe_codes
-        if code not in merged and entry_pool_map.get(code) in ("pool_a", "pool_c")
+        if code not in merged and entry_pool_map.get(code) in _target_pools
     ]
     if not candidate_codes:
         return []
@@ -5712,6 +5824,15 @@ def generate_scan_universe_bridge_candidates(
 
     pool_a_codes = [c for c in candidate_codes if entry_pool_map.get(c) == "pool_a"]
     pool_c_codes = [c for c in candidate_codes if entry_pool_map.get(c) == "pool_c"]
+    pool_b_codes = [c for c in candidate_codes if entry_pool_map.get(c) == "pool_b"]
+
+    pool_limits = config.scan_universe_bridge_pool_limits
+
+    def _pool_limit(pool: str) -> int | None:
+        """pool별 상한. pool_b만 키 부재를 '무제한'이 아닌 보수적 기본값으로 해석한다."""
+        if pool == "pool_b":
+            return pool_limits.get("pool_b", _BRIDGE_POOL_B_DEFAULT_LIMIT)
+        return pool_limits.get(pool)
 
     # Pool A 점수: 오늘 공시 최대 impact_score를 0~1로 정규화(100 스케일, disclosure_impact_scorer
     # 관례와 동일 — score_disclosure_impact 확신도 정규화와 동일 분모).
@@ -5771,10 +5892,67 @@ def generate_scan_universe_bridge_candidates(
             except Exception:
                 pass
 
+    # Pool B 점수 (SPEC-AI-102 REQ-AI102-002): 하위 플래그가 켜졌을 때만 실행된다.
+    # pool_a(공시 impact_score)/pool_c(전일 등락률)와 달리 DB에 점수 원천이 없으므로,
+    # SPEC-AI-097 배치 함수로 가격이력을 조회해 build_scan_universe() Pool B 소싱과
+    # **동일한** 거래량 비율 산출식을 재사용한다 — 새 계산식을 발명하지 않는다.
+    # 두 리터럴(_baseline_days=20 / _min_ratio=2.0)은 _source_scan_universe_pools()의
+    # Pool B 소싱 블록이 원본이며(SPEC-AI-074 소유, PRESERVE 대상이라 그쪽을 상수로
+    # 치환하지 않는다) 여기서는 같은 값을 그대로 따라 쓴다.
+    # 조회 대상은 pool 상한 × 전체 상한의 최솟값까지 **미리** 잘라내므로, 상한을 넘는
+    # 신규 HTTP 호출은 구조적으로 발생하지 않는다(AC-102-006).
+    # @MX:SPEC: SPEC-AI-102 REQ-AI102-002
+    pool_b_scores: dict[str, float] = {}
+    if pool_b_codes:
+        try:
+            from app.services.naver_finance import fetch_stock_price_history_batch_sync
+
+            _pool_b_budget = max(
+                0,
+                min(
+                    _pool_limit("pool_b") or 0,
+                    config.scan_universe_bridge_max_candidates,
+                ),
+            )
+            _pool_b_fetch = pool_b_codes[:_pool_b_budget]
+            if _pool_b_fetch:
+                _baseline_days = 20
+                _min_ratio = 2.0  # 200% = 2배 (Pool B 소싱과 동일 값)
+                history_by_code = fetch_stock_price_history_batch_sync(
+                    _pool_b_fetch, pages=3
+                )
+                for code in _pool_b_fetch:
+                    history = history_by_code.get(code, [])
+                    if len(history) < _baseline_days + 1:
+                        continue
+                    today_vol = _resolve_today_volume(code, history[0].volume, config)
+                    if today_vol <= 0:
+                        continue
+                    baseline_vols = [
+                        r.volume for r in history[1:_baseline_days + 1] if r.volume > 0
+                    ]
+                    if len(baseline_vols) < 5:
+                        continue
+                    mean_vol = sum(baseline_vols) / len(baseline_vols)
+                    if mean_vol <= 0:
+                        continue
+                    ratio = today_vol / mean_vol
+                    if ratio >= _min_ratio:
+                        pool_b_scores[code] = min(
+                            1.0, max(0.0, ratio) / _BRIDGE_POOL_B_FULL_RATIO
+                        )
+        except Exception as e:
+            logger.warning("[브리지후보] Pool B 점수 조회 실패 (무시): %s", e)
+
     scored: dict[str, tuple[str, float]] = {}
     for code in candidate_codes:
         pool = entry_pool_map.get(code, "")
-        score = pool_a_scores.get(code) if pool == "pool_a" else pool_c_scores.get(code)
+        if pool == "pool_a":
+            score = pool_a_scores.get(code)
+        elif pool == "pool_b":
+            score = pool_b_scores.get(code)
+        else:
+            score = pool_c_scores.get(code)
         if score is not None and score >= _BRIDGE_MIN_SCORE:
             scored[code] = (pool, score)
 
@@ -5786,11 +5964,10 @@ def generate_scan_universe_bridge_candidates(
     for code, (pool, score) in scored.items():
         by_pool.setdefault(pool, []).append((code, score))
 
-    pool_limits = config.scan_universe_bridge_pool_limits
     selected: list[tuple[str, str, float]] = []
     for pool, items in by_pool.items():
         items.sort(key=lambda x: x[1], reverse=True)
-        limit = pool_limits.get(pool)
+        limit = _pool_limit(pool)
         if limit is not None:
             items = items[:limit]
         for code, score in items:
@@ -5825,9 +6002,10 @@ def generate_scan_universe_bridge_candidates(
         )
 
     logger.info(
-        "[브리지후보] 생성: %d개 (pool_a=%d, pool_c=%d, 상한=%d)",
+        "[브리지후보] 생성: %d개 (pool_a=%d, pool_b=%d, pool_c=%d, 상한=%d)",
         len(bridge_candidates),
         sum(1 for c in bridge_candidates if c.entry_pool == "pool_a"),
+        sum(1 for c in bridge_candidates if c.entry_pool == "pool_b"),
         sum(1 for c in bridge_candidates if c.entry_pool == "pool_c"),
         config.scan_universe_bridge_max_candidates,
     )

@@ -697,10 +697,26 @@ class SurgeDetectionConfig(BaseModel):
     # 전체 bridge 후보 수 상한 (REQ-AI092-004 상한 조건)
     # @MX:SPEC: SPEC-AI-092 REQ-AI092-004
     scan_universe_bridge_max_candidates: int = 20
+    # SPEC-AI-102 REQ-AI102-002: pool_b bridge 하위 플래그. 마스터 스위치
+    # (scan_universe_bridge_candidates_enabled)와 **둘 다** True일 때만 pool_b 소속 미탐지
+    # 종목이 bridge 후보로 평가된다. pool_a/pool_c 경로는 "이미 조회된 DB 자료만 재사용,
+    # 신규 외부 fetch 없음"(SPEC-AI-092 REQ-AI092-005)인 반면 pool_b 경로는 가격이력 배치
+    # 조회(SPEC-AI-097 fetch_stock_price_history_batch_sync)라는 신규 HTTP 호출을 동반한다 —
+    # 리스크 프로필이 다르므로 마스터 스위치와 별개 플래그로 분리해 롤백 단위를 좁힌다
+    # (spec.md §Decisions D2). 기본값 False이므로 마스터 스위치가 이미 True인 배포에서도
+    # pool_a/pool_c만 대상인 SPEC-AI-092 동작과 완전히 동일하다(AC-102-004).
+    # @MX:NOTE: [AUTO] SPEC-AI-102 REQ-AI102-002 — pool_b bridge 하위 플래그(기본 비활성)
+    # @MX:SPEC: SPEC-AI-102 REQ-AI102-002
+    scan_universe_bridge_pool_b_enabled: bool = False
     # pool별 bridge 후보 수 상한. 키에 없는 pool은 무제한(설계상 pool_a/pool_c만 사용).
-    # @MX:SPEC: SPEC-AI-092 REQ-AI092-004
+    # SPEC-AI-102 REQ-AI102-002: "pool_b" 키 추가(기본 5) — pool_a/c 각 10보다 보수적인
+    # 시작값이다(spec.md §Open Questions 2 확정, 신규 HTTP 호출 비용 때문).
+    # 예외: pool_b만은 "키 부재 == 무제한" 관례를 따르지 않는다. 레거시 config(배포 직후
+    # 미갱신)에서 명시적 설정 없이 신규 HTTP 경로가 무제한 열리는 것을 막기 위해
+    # surge_detector._BRIDGE_POOL_B_DEFAULT_LIMIT로 폴백한다(acceptance.md §D Edge Case).
+    # @MX:SPEC: SPEC-AI-092 REQ-AI092-004, SPEC-AI-102 REQ-AI102-002
     scan_universe_bridge_pool_limits: dict[str, int] = Field(
-        default_factory=lambda: {"pool_a": 10, "pool_c": 10}
+        default_factory=lambda: {"pool_a": 10, "pool_b": 5, "pool_c": 10}
     )
 
     # @MX:ANCHOR: [AUTO] 앙상블 가중치 합산 검증 — 8개 탐지기 가중치 합산 반드시 1.0
