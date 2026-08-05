@@ -57,7 +57,7 @@ m1_to_mN_commit_strategy: single-commit (Tier L이나 TASK 간 강한 순서 의
 
 sync_complete_at: 2026-08-05
 sync_status: completed
-sync_commit_sha: pending-backfill-3ae28ae1
+sync_commit_sha: e9d685d
 changelog_entry_position: top of [Unreleased] (SPEC-AI-101 entry precedes SPEC-AI-103)
 frontmatter_status_transitions:
   spec.md: in-progress -> completed (updated: 2026-08-05)
