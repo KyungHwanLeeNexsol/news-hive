@@ -319,6 +319,50 @@ class ComboChaseGuardConfig(BaseModel):
     require_companion_detector: bool = True
 
 
+# @MX:ANCHOR: [AUTO] SPEC-AI-103 — theme_cluster 신선도/중복 가드 설정 계약.
+# @MX:REASON: detect_theme_news_cluster()의 dedup·신선도·과열 3경로가 모두 이 클래스를 읽는다.
+# enabled/min_theme_freshness_ratio 기본값이 바뀌면 REQ-AI103-002 바이트 동등 계약이 깨진다.
+class ThemeFreshnessGuardConfig(BaseModel):
+    """SPEC-AI-103: theme_cluster 뉴스 신선도/중복(dedup) 가드 설정.
+
+    ComboChaseGuardConfig(SPEC-AI-030)를 모델로 삼되, 대상 축을 거래량에서
+    "기사 발행 시각"으로 치환한 시간축 기반 가드다. SPEC-AI-038이 제거한
+    종목별 동기 가격 API 호출은 재도입하지 않는다(REQ-AI103-005).
+
+    2단 스위치 구조(SPEC-AI-066/079 관례 계승):
+      1단 `enabled` — 가드 전체 마스터 스위치 (기본 False)
+      2단 `min_theme_freshness_ratio` — 감쇠 발동 임계 (기본 0.0 = 미발동)
+    두 값이 모두 기본값이면 본 SPEC 적용 이전과 바이트 동등하다(REQ-AI103-002).
+    """
+
+    # @MX:NOTE: [AUTO] SPEC-AI-103 — 신선도/중복 가드 마스터 스위치. False이면 모든 경로 비활성(바이트 동등)
+    # @MX:SPEC: SPEC-AI-103 REQ-AI103-002
+    enabled: bool = False
+    # REQ-AI103-001: 근접 중복 판정 조건 1 — difflib.SequenceMatcher 제목 유사도 임계
+    duplicate_title_similarity_threshold: float = 0.85
+    # REQ-AI103-001: 근접 중복 판정 조건 2 — 두 기사 발행 시각 차이 상한(시간). 경계값은 포함(<=)
+    duplicate_dedup_window_hours: float = 6.0
+    # @MX:NOTE: [AUTO] SPEC-AI-103 D4 — dedup 쌍대 비교 비용을 O(캡²)로 묶는 구조적 하드 캡.
+    # 부분집합이 이 값을 초과하면 발행 시각 내림차순 상위 N건만 비교하고, 나머지(더 오래된
+    # 기사)는 비교 없이 개별 집계로 안전하게 열화한다 — 경험적 관측이 아닌 코드 강제 상한.
+    # @MX:SPEC: SPEC-AI-103 REQ-AI103-001
+    dedup_max_comparison_batch: int = 200
+    # REQ-AI103-003: 신선 비율이 이 값 미만이면 theme_base 감쇠. 기본 0.0 = 감쇠 미발동
+    # (ratio >= 0.0은 항상 참이므로, enabled=True로 켜도 이 값이 0.0이면 감쇠가 발동하지 않는다)
+    min_theme_freshness_ratio: float = 0.0
+    # REQ-AI103-003: 신선 구간 길이(시간). None이면 cluster_window_hours / 2로 파생
+    fresh_window_hours: float | None = None
+    # REQ-AI103-003: 진부화 판정 시 theme_base에 곱할 감쇠 배수 (완전 배제 아님)
+    freshness_discount_factor: float = 0.5
+    # REQ-AI103-004: 가격 과열 서브기능 스위치. sector_only_max_candidates가 None이면 무조건 스킵
+    price_overheat_enabled: bool = False
+    # REQ-AI103-004: 테마 활동 시작 이후 상승률(%)이 이 값 이상이면 과열로 판정
+    # (combo_chase_guard.overheat_change_pct_high_conviction와 정합)
+    price_overheat_change_pct: float = 15.0
+    # REQ-AI103-004: 과열 판정 후보의 theme_cluster_score에 곱할 감쇠 배수 (완전 배제 아님)
+    price_overheat_discount_factor: float = 0.5
+
+
 class AdaptiveThresholdConfig(BaseModel):
     """SPEC-AI-029: 적응형 surge_probability 임계값 설정.
 
@@ -506,6 +550,10 @@ class SurgeDetectionConfig(BaseModel):
     adaptive_threshold: AdaptiveThresholdConfig = Field(default_factory=AdaptiveThresholdConfig)
     # SPEC-AI-030: volume_news_combo 추격매수 방지 게이트 설정
     combo_chase_guard: ComboChaseGuardConfig = Field(default_factory=ComboChaseGuardConfig)
+    # SPEC-AI-103: theme_cluster 뉴스 신선도/중복(dedup) 가드 설정 (기본 비활성)
+    theme_freshness_guard: ThemeFreshnessGuardConfig = Field(
+        default_factory=ThemeFreshnessGuardConfig
+    )
     # SPEC-AI-066: 촉매 확신도 기반 조건부 완화 설정
     catalyst_conviction: CatalystConvictionConfig = Field(default_factory=CatalystConvictionConfig)
     # SPEC-AI-067: 장중 실시간 당일 거래량 소스 설정 (combo/breakout/PoolB 공유)

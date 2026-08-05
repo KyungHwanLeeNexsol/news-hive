@@ -210,6 +210,24 @@ surge_detection:
     # price 조회 실패 = overheat 게이트 스킵 (price_at_signal=null로 기록됨)
     exclude_on_price_unavailable: false
     require_companion_detector: true
+  # SPEC-AI-103 REQ-AI103-001~004: theme_cluster 뉴스 신선도/중복(dedup) 가드
+  # enabled=false이면 모든 경로 비활성 — 본 SPEC 적용 이전과 바이트 동등 (REQ-AI103-002)
+  # 활성화는 REQ-AI103-007 디버그 로그를 최소 5거래일 관측한 뒤 별도 판단 (spec.md D5)
+  theme_freshness_guard:
+    enabled: false
+    duplicate_title_similarity_threshold: 0.85
+    duplicate_dedup_window_hours: 6.0
+    # D4 하드 캡: dedup 쌍대 비교 비용을 O(200²)로 구조적 유계화
+    dedup_max_comparison_batch: 200
+    # 0.0 = 감쇠 미발동 (enabled=true로 켜도 이 값이 0.0이면 theme_base 감쇠 없음)
+    min_theme_freshness_ratio: 0.0
+    # null이면 cluster_window_hours / 2 (=24h)로 파생
+    fresh_window_hours: null
+    freshness_discount_factor: 0.5
+    # REQ-AI103-004: sector_only_max_candidates가 null이면 이 서브기능은 무조건 스킵
+    price_overheat_enabled: false
+    price_overheat_change_pct: 15.0
+    price_overheat_discount_factor: 0.5
   # SPEC-AI-039 REQ-039-003: 고임팩트 뉴스 키워드 가중치 설정
   # 기술이전/임상/수주 등 급등 트리거 이벤트를 일반 뉴스보다 차별화 탐지
   high_impact_news:

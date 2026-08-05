@@ -6,9 +6,11 @@
 
 from __future__ import annotations
 
+import difflib
 import json
 import logging
 import math
+import re
 import statistics
 import time
 from dataclasses import dataclass, field
@@ -19,7 +21,7 @@ from typing import Any, Callable
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
-from app.surge_config.surge_settings import SurgeDetectionConfig
+from app.surge_config.surge_settings import SurgeDetectionConfig, ThemeFreshnessGuardConfig
 from app.models.disclosure import Disclosure
 from app.models.fund_signal import FundSignal
 from app.models.news import NewsArticle
@@ -280,6 +282,201 @@ def compute_catalyst_conviction(
 
 
 # ---------------------------------------------------------------------------
+# SPEC-AI-103: 테마 클러스터 뉴스 신선도/중복(dedup) 가드 헬퍼
+# ---------------------------------------------------------------------------
+
+def _normalize_article_title(title: str | None) -> str:
+    """제목 유사도 비교용 경량 정규화 — 공백 축약 + 소문자화.
+
+    형태소 분석 등 무거운 NLP는 도입하지 않는다(SPEC-AI-103 plan.md §C Simplicity Ladder).
+    """
+    return re.sub(r"\s+", " ", (title or "").strip()).lower()
+
+
+def _as_naive_utc(dt: datetime | None) -> datetime | None:
+    """tz-aware/naive 혼재를 naive UTC로 정규화한다.
+
+    NewsArticle.published_at은 DB 백엔드(SQLite/PostgreSQL)에 따라 naive/aware가
+    섞일 수 있어, 시각 차 연산 전에 반드시 한쪽으로 정규화해야 한다.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+# @MX:ANCHOR: [AUTO] SPEC-AI-103 REQ-AI103-001 — 근접 중복 기사 단일 집계 계약.
+# @MX:REASON: 테마 활성 판정(keyword_counts)과 종목별 기사 귀속(stock_articles) 양쪽이
+# 이 함수를 호출한다. 반환 길이가 곧 집계 카운트이므로 판정 규칙이 바뀌면 두 경로의
+# 점수가 동시에 변한다. dedup_max_comparison_batch 하드 캡은 O(캡²) 구조적 상한이다.
+# @MX:SPEC: SPEC-AI-103 REQ-AI103-001
+def _dedup_near_duplicate_articles(
+    articles: list[NewsArticle],
+    cfg: "ThemeFreshnessGuardConfig",
+) -> list[NewsArticle]:
+    """동일 근본 사건을 다루는 근접 중복 기사를 단일 건으로 축약한다.
+
+    판정 조건(AND): 정규화 제목 유사도 >= duplicate_title_similarity_threshold
+    **그리고** 두 기사 발행 시각 차이 <= duplicate_dedup_window_hours(경계값 포함).
+    중복군의 대표는 가장 이른 발행 기사다(REQ-AI103-001).
+
+    하드 캡(spec.md §Decisions D4): 부분집합 크기가 dedup_max_comparison_batch를
+    초과하면 발행 시각 내림차순 상위 N건만 비교하고, 캡을 초과하는 나머지(더 오래된
+    기사)는 비교 없이 개별 건으로 그대로 통과시킨다 — 가드 도입 이전의 raw-count
+    방향으로 안전하게 열화할 뿐, 비교 연산량은 항상 O(캡²)로 유계된다.
+
+    원본 NewsArticle 레코드나 DB 상태는 변경하지 않는다 — 집계 시점 필터일 뿐이다.
+    """
+    if len(articles) <= 1:
+        return list(articles)
+
+    cap = max(0, cfg.dedup_max_comparison_batch)
+    ordered = sorted(
+        articles,
+        key=lambda a: (_as_naive_utc(a.published_at) or datetime.min),
+        reverse=True,
+    )
+    comparable, passthrough = ordered[:cap], ordered[cap:]
+
+    window = timedelta(hours=cfg.duplicate_dedup_window_hours)
+    threshold = cfg.duplicate_title_similarity_threshold
+
+    kept: list[NewsArticle] = []
+    # (정규화 제목, naive 발행 시각) — 이미 채택된 대표 건만 비교 대상으로 삼는다.
+    representatives: list[tuple[str, datetime | None]] = []
+
+    # comparable은 내림차순이므로 reversed()는 오름차순(가장 이른 기사부터) 순회가 된다
+    # — 먼저 채택되는 기사가 곧 가장 이른 대표 건이 된다.
+    for article in reversed(comparable):
+        norm_title = _normalize_article_title(article.title)
+        published = _as_naive_utc(article.published_at)
+
+        # difflib 권고 패턴: 한쪽 시퀀스를 고정(set_seq2)하고 다른 쪽만 교체(set_seq1)해
+        # 내부 캐시를 재사용하고, real_quick_ratio/quick_ratio 상한으로 조기 탈락시킨다.
+        matcher = difflib.SequenceMatcher(None)
+        matcher.set_seq2(norm_title)
+
+        is_duplicate = False
+        for rep_title, rep_published in representatives:
+            if published is None or rep_published is None:
+                # 발행 시각이 없으면 근접도를 판정할 수 없다 — 중복으로 보지 않는다.
+                continue
+            if abs(published - rep_published) > window:
+                continue
+            matcher.set_seq1(rep_title)
+            if (
+                matcher.real_quick_ratio() >= threshold
+                and matcher.quick_ratio() >= threshold
+                and matcher.ratio() >= threshold
+            ):
+                is_duplicate = True
+                break
+
+        if not is_duplicate:
+            kept.append(article)
+            representatives.append((norm_title, published))
+
+    return kept + passthrough
+
+
+def _compute_theme_freshness_ratio(
+    deduped_articles: list[NewsArticle],
+    cfg: "ThemeFreshnessGuardConfig",
+    cluster_window_hours: int,
+    now: datetime | None = None,
+) -> float:
+    """중복 제거된 기사 중 신선 구간 이내에 발행된 비율을 계산한다 (REQ-AI103-003).
+
+    신선 구간 길이는 fresh_window_hours이며, None이면 cluster_window_hours / 2로
+    파생한다. 분모 0(기사 없음)은 감쇠 대상이 아니므로 1.0(완전 신선)으로 방어한다.
+    """
+    if not deduped_articles:
+        return 1.0
+
+    fresh_hours = cfg.fresh_window_hours
+    if fresh_hours is None:
+        fresh_hours = cluster_window_hours / 2
+
+    reference = _as_naive_utc(now) or datetime.now(timezone.utc).replace(tzinfo=None)
+    fresh_cutoff = reference - timedelta(hours=fresh_hours)
+
+    fresh_count = sum(
+        1
+        for a in deduped_articles
+        if (_as_naive_utc(a.published_at) or datetime.min) >= fresh_cutoff
+    )
+    return fresh_count / len(deduped_articles)
+
+
+def _apply_price_overheat_discount(
+    results: list["SurgeCandidate"],
+    target_codes: set[str],
+    cfg_guard: "ThemeFreshnessGuardConfig",
+    activity_start: datetime | None,
+) -> int:
+    """테마 활동 시작 이후 이미 과열된 후보의 점수를 감쇠한다 (REQ-AI103-004).
+
+    가격 조회는 fetch_stock_price_history_batch_sync 단일 배치 호출만 사용한다 —
+    종목별 개별 동기 호출은 어떤 경우에도 추가하지 않는다(REQ-AI103-005,
+    SPEC-AI-038 회귀 방지). 호출 대상은 이미 sector_only_max_candidates로 상한이
+    걸린 소수 후보 집합뿐이다.
+
+    Returns:
+        감쇠가 적용된 후보 수.
+    """
+    if not target_codes or activity_start is None:
+        return 0
+
+    from app.services.naver_finance import fetch_stock_price_history_batch_sync
+
+    try:
+        history_by_code = fetch_stock_price_history_batch_sync(sorted(target_codes), pages=1)
+    except Exception as e:
+        logger.debug("[테마클러스터] 과열가드 배치 가격 조회 실패 (감쇠 스킵): %s", e)
+        return 0
+
+    activity_date = (_as_naive_utc(activity_start) or datetime.min).date()
+    discounted = 0
+
+    for candidate in results:
+        if candidate.stock_code not in target_codes:
+            continue
+        history = history_by_code.get(candidate.stock_code) or []
+        if len(history) < 2:
+            continue
+
+        latest_close = history[0].close
+        # history는 최신순 내림차순 — 테마 활동 시작일 이전(또는 당일)의 첫 종가가 기준가다.
+        base_close = 0
+        for record in history:
+            try:
+                record_date = datetime.strptime(record.date, "%Y.%m.%d").date()
+            except (ValueError, TypeError):
+                continue
+            if record_date <= activity_date:
+                base_close = record.close
+                break
+
+        if base_close <= 0 or latest_close <= 0:
+            continue
+
+        change_pct = (latest_close - base_close) / base_close * 100
+        if change_pct >= cfg_guard.price_overheat_change_pct:
+            candidate.theme_cluster_score *= cfg_guard.price_overheat_discount_factor
+            discounted += 1
+            logger.debug(
+                "[테마클러스터] 과열가드 감쇠 code=%s change=%.2f%% (임계 %.2f%%) → score=%.4f",
+                candidate.stock_code,
+                change_pct,
+                cfg_guard.price_overheat_change_pct,
+                candidate.theme_cluster_score,
+            )
+
+    return discounted
+
+
+# ---------------------------------------------------------------------------
 # 탐지기 1: 테마 뉴스 클러스터링
 # ---------------------------------------------------------------------------
 
@@ -322,12 +519,30 @@ def detect_theme_news_cluster(
         return []
 
     # 2. 키워드별 기사 수 카운트
-    keyword_counts: dict[str, int] = {kw: 0 for kw in cfg.keywords}
+    # SPEC-AI-103 REQ-AI103-001: 카운터 증가 대신 키워드별 매칭 기사 부분집합을
+    # materialize한다 — 가드 비활성 시 len()은 기존 카운터와 동일하므로 바이트 동등이다.
+    _guard = config.theme_freshness_guard
+    keyword_to_articles: dict[str, list[NewsArticle]] = {kw: [] for kw in cfg.keywords}
     for article in window_news:
         text = (article.title or "") + " " + (article.content or "") + " " + (article.summary or "")
         for kw in cfg.keywords:
             if kw in text:
-                keyword_counts[kw] += 1
+                keyword_to_articles[kw].append(article)
+
+    # SPEC-AI-103 REQ-AI103-001: 활성 판정 카운트를 중복 제거 후 값으로 대체한다.
+    # 비교 범위는 "키워드별 매칭 기사 부분집합" 내부로만 한정한다(전체 창 전수 비교 없음).
+    keyword_to_deduped: dict[str, list[NewsArticle]] = keyword_to_articles
+    if _guard.enabled:
+        keyword_to_deduped = {}
+        for kw, arts in keyword_to_articles.items():
+            # dedup은 카운트를 줄이기만 하므로, raw가 이미 min_article_count 미만이면
+            # 어떤 결과가 나와도 활성 테마가 될 수 없다 — 비교 자체를 생략한다.
+            if len(arts) < cfg.min_article_count:
+                keyword_to_deduped[kw] = arts
+            else:
+                keyword_to_deduped[kw] = _dedup_near_duplicate_articles(arts, _guard)
+
+    keyword_counts: dict[str, int] = {kw: len(arts) for kw, arts in keyword_to_deduped.items()}
 
     # 3. 활성 테마 식별 (min_article_count 이상)
     active_themes: dict[str, int] = {
@@ -340,6 +555,37 @@ def detect_theme_news_cluster(
         return _comention_supplement(db, window_news, config)
 
     logger.info("[테마클러스터] 활성 테마 %d개: %s", len(active_themes), list(active_themes.keys()))
+
+    # SPEC-AI-103 REQ-AI103-003/007: 활성 테마별 신선 비율 산출 + 감쇠 배수 결정 + 관측성 로깅.
+    # 신선도는 테마 단위 속성이므로 종목 순회 밖에서 1회만 계산한다(종목×테마 재계산 방지).
+    # 가드 비활성 시 이 dict는 비어 있고 아래 조회는 항상 1.0(무영향)을 돌려준다.
+    theme_freshness_discount: dict[str, float] = {}
+    _theme_activity_start: datetime | None = None
+    if _guard.enabled:
+        for _theme in active_themes:
+            _deduped = keyword_to_deduped.get(_theme, [])
+            _ratio = _compute_theme_freshness_ratio(_deduped, _guard, cfg.cluster_window_hours)
+            _discount = (
+                _guard.freshness_discount_factor
+                if _ratio < _guard.min_theme_freshness_ratio
+                else 1.0
+            )
+            theme_freshness_discount[_theme] = _discount
+            for _a in _deduped:
+                _pub = _as_naive_utc(_a.published_at)
+                if _pub is not None and (
+                    _theme_activity_start is None or _pub < _theme_activity_start
+                ):
+                    _theme_activity_start = _pub
+            logger.debug(
+                "[테마클러스터] 신선도가드 theme=%s raw_articles=%d deduped_articles=%d "
+                "freshness_ratio=%.3f discount=%.2f",
+                _theme,
+                len(keyword_to_articles.get(_theme, [])),
+                len(_deduped),
+                _ratio,
+                _discount,
+            )
 
     # 4. 활성 테마의 관련 섹터 목록 수집
     theme_to_sectors: dict[str, list[str]] = {}
@@ -404,6 +650,8 @@ def detect_theme_news_cluster(
     # SPEC-AI-098 REQ-AI098-003: 섹터 전용(직접 언급 없음) 후보의 results 인덱스를 추적한다.
     # 직접 언급 종목(stock_specific_count >= 1)은 sector_only_max_candidates 절단 대상이 아니다.
     _sector_only_indices: list[int] = []
+    # SPEC-AI-103 REQ-AI103-004: 절단 이후 생존한 섹터 전용 후보를 코드로 식별하기 위한 집합.
+    _sector_only_codes: set[str] = set()
     for stock in stocks:
         stock_sector_name = sector_id_to_name.get(stock.sector_id, "")
 
@@ -424,6 +672,9 @@ def detect_theme_news_cluster(
                 sector_relevance = 0.5
 
             theme_base = min(1.0, cnt / 10)
+            # SPEC-AI-103 REQ-AI103-003: 진부화된 테마(신선 비율 < min_theme_freshness_ratio)
+            # 감쇠. 완전 배제가 아닌 점수 조정이며, 가드 비활성 시 배수 1.0으로 무영향이다.
+            theme_base *= theme_freshness_discount.get(theme, 1.0)
             # 임시 점수로 가장 높은 테마 선택 (sector_relevance 반영 전 base로 비교)
             temp_score = theme_base * sector_relevance
             if temp_score > best_score:
@@ -447,6 +698,10 @@ def detect_theme_news_cluster(
                 _keyword_in_text(stock.stock_code, _article_text_lower)
             ):
                 stock_articles.append(a)
+        # SPEC-AI-103 REQ-AI103-001: 종목별 귀속 기사도 근접 중복을 단일 건으로 집계한다.
+        # 비교 범위는 이미 종목별로 좁혀진 stock_articles 내부로만 한정된다.
+        if _guard.enabled:
+            stock_articles = _dedup_near_duplicate_articles(stock_articles, _guard)
         stock_specific_count = len(stock_articles)
         stock_article_score = min(1.0, stock_specific_count / 5)
 
@@ -511,6 +766,7 @@ def detect_theme_news_cluster(
         )
         if stock_specific_count < 1:
             _sector_only_indices.append(len(results) - 1)
+            _sector_only_codes.add(stock.stock_code)
 
     # SPEC-AI-098 REQ-AI098-003: 섹터 전용 후보 수 상한 절단.
     # theme_cluster_score 내림차순 상위 N개만 유지 — 직접 언급 종목은 영향받지 않는다.
@@ -534,6 +790,22 @@ def detect_theme_news_cluster(
             "[테마클러스터] 섹터 전용 후보 절단: %d개 제외 (상한=%d)",
             _drop_count, cfg.sector_only_max_candidates,
         )
+
+    # SPEC-AI-103 REQ-AI103-004: 유계된 가격 과열 방어 (SHOULD-PASS 서브기능, 기본 비활성).
+    # 적용 대상은 위 sector_only_max_candidates 절단을 통과한 섹터 전용 후보뿐이다 —
+    # sector_only_max_candidates가 None(무제한)이면 유계 후보 집합이 없으므로 무조건 스킵한다
+    # (SPEC-AI-038 성능 제약 재위반 방지). 가격 조회는 단일 배치 호출 1회로 한정된다.
+    if (
+        _guard.enabled
+        and _guard.price_overheat_enabled
+        and cfg.sector_only_max_candidates is not None
+    ):
+        _overheat_targets = {r.stock_code for r in results} & _sector_only_codes
+        _discounted = _apply_price_overheat_discount(
+            results, _overheat_targets, _guard, _theme_activity_start
+        )
+        if _discounted:
+            logger.debug("[테마클러스터] 과열가드 감쇠 적용: %d개 후보", _discounted)
 
     # SPEC-AI-066 REQ-004: 뉴스 공동언급 기반 임시 테마 자동 확장 (기본 비활성).
     # 키워드→섹터 맵에 없는 이벤트 촉매(M&A 클러스터 등)를 co-mention으로 보강한다.
