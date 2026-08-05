@@ -4,6 +4,81 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Feature — SPEC-AI-101: 급등예측 정답 라벨 재정의(신호가 대비 EOD 최대수익률) + SPEC-AI-100 섀도우 전환 게이트 실행 (2026-08-05)
+
+**목적**: `SurgeActualOutcome.was_surge`(종가 기준 단일 라벨)가 "장중에는 잡았으나
+종가에 반납한" 정당한 예측 적중을 거짓음성으로 오분류하는 문제(문제 1)와,
+SPEC-AI-100이 완성한 지평 인식 임계값 아키텍처가 `shadow_mode_enabled=false`로
+완전히 비활성 상태로 방치되어 온 문제(문제 2)를 함께 다룬다. SPEC-AI-095 선례를
+따라 `was_surge`/`SurgeActualOutcome`은 재정의하지 않고 동결하며, 신호 발행가
+(`price_at_signal`) 대비 EOD 최대수익률을 신규 additive 지표로 병렬 추가했다.
+
+**핵심 변경 (REQ-AI101-001~006, AC-101-001~012 전량 12개 PASS)**:
+
+1. **신호 단위 EOD 최대수익률 근사 테이블 신설(REQ-AI101-001)**
+   신규 `SurgeSignalForwardOutcome` 모델(마이그레이션 073) — `day_high_price`
+   (T-1 종가 절대가 × (1 + `high_change_rate`/100))와 `forward_max_return_pct`를
+   신호 단위(`fund_signal_id` FK)로 저장한다. `price_at_signal` NULL 또는 T-1
+   종가 조회 실패 시 파생값을 NULL로 남기고 평가 잡 전체를 실패시키지 않는다
+   (SPEC-AI-095 `high_based_*` 격리 패턴 재사용). 동일 신호 재실행은 멱등적으로
+   upsert된다.
+2. **신호가 기준 병렬 recall/precision 노출(REQ-AI101-002)**
+   `evaluate_surge_predictions()`가 `forward_max_return_pct >= 10.0` 기준
+   집합을 병렬 recall/precision으로 노출한다. 표준 T-1→T
+   `legacy_recall`/`scannable_recall`/`coverage` 산출 로직은 `git diff` 확인
+   결과 라인 무변경(신규 컬럼 select만 추가) — 종가 기준 FN 재분류 사례에서
+   forward 기준 metric은 TP로 정상 반영됨을 테스트로 확인했다.
+3. **SPEC-AI-100 섀도우 관측 활성화(REQ-AI101-003)**
+   `surge_detection.yaml`의 `shadow_mode_enabled`를 `false → true`로 전환했다
+   (`git diff` 1줄 변경만 확인). `horizon_aware_thresholds.enabled`는 무수정
+   유지(SPEC-AI-100 REQ-AI100-003 바이트 동일 동작 보장).
+4. **섀도우 비교 결과 영속화(REQ-AI101-004)**
+   `run_horizon_shadow_comparison()`에 `db: Session` 인자를 추가해 매
+   스코어링 사이클마다 신규 `SurgeHorizonShadowObservation` 테이블(마이그레이션
+   074)에 1행씩 무조건 적재한다 — `added`/`removed`가 모두 빈 변화 없는
+   사이클에도 반드시 적재해 기존 로그 기반 판정의 "변화 없는 날 누락" 구조적
+   버그를 원천 차단한다(D3). 영속화 실패는 예외 격리되어 기존 시그널 생성
+   흐름에 영향을 주지 않는다. `compute_ensemble_score`/`compute_horizon_signature`/
+   `select_effective_threshold` 판정 로직은 `git diff` 확인 결과 무변경(D4).
+5. **전환 게이트 3요건 판정 함수(REQ-AI101-005)**
+   `check_horizon_transition_readiness()`가 `SurgeHorizonShadowObservation`을
+   집계해 관측 거래일 수·관측 레짐 집합·qualified 집합 최대 변화폭을 참고
+   정보로 반환한다. 3요건 충족 여부와 무관하게 `horizon_aware_thresholds.enabled`
+   를 자동 전환하는 코드 경로는 없음을 전체 소스 스캔(순수 Python, grep 대체)
+   으로 확인했다(D5 — 2026-07-28 `theme_news_carry` 자동전환 사고 이후 이
+   프로젝트가 명시적으로 경계해 온 원칙 재적용).
+6. **`enabled=true` 전환은 본 SPEC의 완료 조건이 아니다(REQ-AI101-006)**
+   관측 인프라 정상 동작까지가 DoD이며, 실제 전환 결정은 관측 데이터 축적
+   후 별도 세션에서 사람이 판정 함수 출력을 검토해 내린다.
+
+**변경 파일**: `backend/app/models/surge_signal_forward_outcome.py`(신규),
+`backend/app/models/surge_horizon_shadow_observation.py`(신규),
+`backend/alembic/versions/073_surge_signal_forward_outcome.py`(신규),
+`backend/alembic/versions/074_surge_horizon_shadow_observation.py`(신규),
+`backend/app/services/surge_evaluation_service.py`(EXTEND, +226줄),
+`backend/app/services/surge_detector.py`(EXTEND, +47/-11줄),
+`backend/app/services/surge_horizon_readiness_service.py`(신규),
+`backend/app/surge_config/surge_detection.yaml`(EXTEND, 1줄),
+`backend/tests/test_spec_ai_101.py`(신규 16건). 둘 다 additive 마이그레이션,
+기존 테이블 스키마 무수정. 전체 회귀 스위트 2348 passed / 4 skipped / 3
+xpassed(0 failed). `ruff check` clean. `mypy`는 이 venv에 모듈 미설치로
+스킵(이전 SPEC들과 동일한 기존 환경 갭). commit `3ae28ae`(M1 구현, 단일
+커밋 — TASK 간 강한 순서 의존성으로 Tier L임에도 M1 단일 커밋 통합), main
+직접 커밋(Route A Hybrid Trunk 1-person OSS, 이 SPEC 자신의 run-phase
+선례를 sync-phase도 동일하게 따름 — 브랜치/PR 없음).
+
+**알려진 갭(정직 기록)**: `price_at_signal`의 프로덕션 실측 채움률(OQ2)이
+**미확인 상태로 잔여 리스크 이월**되었다 — 이번 세션에서 프로덕션 DB 접근용
+SSH 키(`news-hive-key.key`) 파일 부재로 도메인 검증 쿼리를 실행하지 못했다.
+REQ-AI101-001의 NULL-safety 설계(AC-101-003)는 채움률과 무관하게 항상
+안전하게 동작하므로 코드 자체의 결함은 아니나, 신규 forward 기준 지표의
+실효 표본 크기는 다음 세션에서 프로덕션 데이터로 별도 확인이 필요하다. 이
+갭은 `completed` 전환을 막는 코드 결함이 아닌, 향후 관측이 필요한 모니터링
+항목으로 판단해 sync-phase 승인을 받았다(progress.md §E.4 참고). DB 스키마
+문서(`.moai/project/db/`) 동기화는 `.moai/config/sections/db.yaml`의
+`db.enabled: false` 설정에 따라 이번 sync에서 명시적으로 스킵했다(opt-in
+미설정, 침묵 누락 아님).
+
 ### Feature — SPEC-AI-103: 테마 클러스터 뉴스 신선도/중복(dedup) 가드 (2026-08-05)
 
 **목적**: `detect_theme_news_cluster()`(`theme_cluster` 탐지기)가 48시간 창 뉴스를

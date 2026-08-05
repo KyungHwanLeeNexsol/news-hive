@@ -2,9 +2,9 @@
 id: SPEC-AI-101
 title: "급등예측 정답 라벨 재정의(신호가 대비 EOD 최대수익률) + SPEC-AI-100 섀도우 전환 게이트 실행"
 version: "0.1.0"
-status: in-progress
+status: completed
 created: 2026-08-04
-updated: 2026-08-04
+updated: 2026-08-05
 author: Nexsol
 priority: High
 phase: "backend surge-detection v0.1.0"

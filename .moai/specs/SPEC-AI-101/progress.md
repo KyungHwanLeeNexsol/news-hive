@@ -55,4 +55,40 @@ m1_to_mN_commit_strategy: single-commit (Tier L이나 TASK 간 강한 순서 의
 
 ## §E.4 Sync-phase Audit-Ready Signal
 
-_<pending sync-phase>_
+sync_complete_at: 2026-08-05
+sync_status: completed
+sync_commit_sha: pending-backfill-3ae28ae1
+changelog_entry_position: top of [Unreleased] (SPEC-AI-101 entry precedes SPEC-AI-103)
+frontmatter_status_transitions:
+  spec.md: in-progress -> completed (updated: 2026-08-05)
+  plan.md: no frontmatter block (unaffected — matches SPEC-AI-103 sibling precedent)
+  acceptance.md: no frontmatter block (unaffected)
+  design.md: no frontmatter block (unaffected)
+  research.md: no frontmatter block (unaffected)
+
+### 잔여 리스크 이월 — OQ2 (production price_at_signal 채움률)
+
+OQ2(§Open Questions 해소 상태, 위 §E.2)는 sync-phase에서도 **미확인 상태로 이월**된다.
+GATE 2에서 사용자가 `status: completed` 전환을 승인하며 함께 검토·수용한 판단 근거:
+REQ-AI101-001의 NULL-safety 설계(AC-101-003)는 채움률과 무관하게 항상 안전하므로 이
+갭은 코드 결함이 아니라 향후 프로덕션 데이터로 확인이 필요한 모니터링 항목이다
+(mypy 미가용을 잔여 위험으로 수용한 이 프로젝트의 기존 선례와 동일한 패턴). SSH 키
+(`news-hive-key.key`) 파일이 확보되는 다음 세션에서 도메인 쿼리로 확인할 것.
+
+### DB 스키마 문서 동기화 스킵 근거
+
+`.moai/config/sections/db.yaml`의 `db.enabled: false`(opt-in 미설정)에 따라
+`.moai/project/db/{schema.md,erd.mmd,migrations.md}` 동기화를 이번 sync에서 명시적으로
+스킵했다 — 신규 테이블 2개(`surge_signal_forward_outcome`, `surge_horizon_shadow_observation`)
+가 이 문서들에 반영되지 않은 상태로 남는다. 침묵 누락이 아니라 GATE 2에서 사용자에게
+명시적으로 플래그한 config 갭이며, `db.enabled`가 향후 `true`로 전환되면 이 SPEC을
+포함한 과거 마이그레이션 일괄 반영이 필요하다.
+
+### B12 CHANGELOG 방출 자가검증 (사전 체크 3종)
+
+1. 방출 전 grep: `grep -c 'SPEC-AI-101' CHANGELOG.md` → 0 (사전) → 1 (방출 후, 본 섹션
+   작성 시점 재확인 예정)
+2. AC 개수 일치: `acceptance.md` SSOT AC 행 수 12개(`grep -cE '^### AC-101-[0-9]+'`)
+   = CHANGELOG 엔트리의 "AC-101-001~012 전량 12개 PASS" 명시 개수 일치
+3. 파일 경로 검증: CHANGELOG 엔트리에 언급된 9개 변경 파일 전부 `git show --stat 3ae28ae`
+   출력과 대조 확인 완료(§E.3 run_commit_sha 기준)
