@@ -225,7 +225,8 @@ stash_restore_verified: >-
 
 ```yaml
 sync_complete_at: 2026-08-05
-sync_commit_sha: pending-backfill-SPEC-AI-103-sync
+sync_commit_sha: 6a3e00057e149c9ea1d1272c26409fc0c492e132
+sync_push_result: "256d091..6a3e000  main -> main (origin/main 반영 확인)"
 sync_status: completed
 changelog_entry_position: "top of [Unreleased] (before SPEC-AI-099 entry)"
 changelog_dedup_check: "grep -c 'SPEC-AI-103' CHANGELOG.md → 0 (pre-emission) → 1 (post-emission)"
