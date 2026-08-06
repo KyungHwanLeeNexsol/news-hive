@@ -2,7 +2,7 @@
 id: SPEC-AI-108
 title: "급등예측 지평 시그니처별 정밀도 분리 측정 — SPEC-AI-100 임계값 아키텍처 실증 근거 확립"
 version: "0.1.0"
-status: in-progress
+status: completed
 created: 2026-08-06
 updated: 2026-08-06
 author: Nexsol
