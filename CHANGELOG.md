@@ -4,6 +4,40 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Feature — SPEC-AI-107: 급등예측 confidence 캘리브레이터 — 섀도우 학습 배선(프로모션은 보류) (2026-08-06)
+
+**목적**: `surge_calibrator.py`의 재학습 진입점 `retrain_calibrator()`가 이미 구현되어
+있으나 어디에서도 호출되지 않는 "죽은 경로"였다. **⚠️ 섀도우 학습 배선만 추가 — active
+`data/surge_calibrator.pkl`은 이 SPEC의 어떤 코드 경로도 건드리지 않는다.** 실제
+프로모션(활성화)은 이 SPEC의 범위가 아니며, plan.md §C에 수동 절차만 문서화했다.
+
+**핵심 변경 (REQ-AI107-001~009, AC-107-001~011)**:
+
+1. **walk-forward 분할 + Brier 게이트(REQ-AI107-001/003)** — `signal_verifier.py`에
+   시간 인지형 캘리브레이션 페어 조회 함수 `get_surge_calibration_pairs_with_time()`을
+   기존 함수의 sibling으로 추가. `surge_calibrator.py`에 `created_at` 기준 시간순
+   walk-forward 분할(`split_walk_forward`, 무작위 분할 아님 — lookahead bias 방지),
+   순수 Python Brier 점수 계산(`compute_brier_score`), 오케스트레이션 함수
+   `run_shadow_training()`을 추가했다.
+2. **active pkl 무변경(REQ-AI107-002)** — 섀도우 학습은 결과를 날짜별 candidate
+   아티팩트(`data/surge_calibrator/candidate_{YYYYMMDD}.pkl`)로만 저장하며, active
+   경로나 in-process 싱글턴은 절대 건드리지 않는다.
+3. **파일 기반 실행 로그(REQ-AI107-005)** — 신규 DB 테이블/마이그레이션 없이
+   `data/surge_calibrator/runs.jsonl`(append-only)에 실행마다 1줄 기록.
+4. **최소 positive 표본 가드(REQ-AI107-007)** — `train_isotonic()`에 선택적 인자
+   `min_positive_samples: int | None = None`을 추가(기본값 생략 시 기존 호출부와
+   바이트 단위로 동일 동작).
+5. **표본 수 floor 설정 연결(REQ-AI107-009)** — 이전까지 어떤 코드에서도 참조되지
+   않던 `SurgeEnsembleConfig.min_calibration_samples`를 신규 게이트의 표본 수
+   floor로 연결.
+6. **스케줄러 배선(REQ-AI107-008)** — `scheduler.py`에
+   `_run_surge_calibrator_shadow_training()`을 추가해 매주 일요일 03:00 KST에
+   실행하도록 등록. 관측 전용 잡이므로 예외를 격리해 경고 로그만 남기고
+   재발생시키지 않는다 — 다른 스케줄러 잡에 영향을 주지 않는다.
+7. **프로모션/롤백 절차 문서화(REQ-AI107-006)** — 실제 활성화 시 사람이 따를
+   체크리스트(게이트 통과 확인, `promote_candidate()` 수동 실행, 롤백 경로)를
+   plan.md §C에 문서화했다(실행은 이 SPEC의 범위가 아님).
+
 ### Feature — SPEC-AI-106: 지평 인식 임계값 섀도우 전환 게이트 가시성 확립 — 일일 평가 잡 통합 (2026-08-06)
 
 **목적**: SPEC-AI-101이 이미 구현한 전환 게이트 3요건 판정 함수

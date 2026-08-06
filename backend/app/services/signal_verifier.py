@@ -567,3 +567,39 @@ def get_surge_calibration_pairs(
     )
 
     return [(float(r.confidence), int(r.is_correct)) for r in rows]
+
+
+def get_surge_calibration_pairs_with_time(
+    db: Session,
+    lookback_days: int = 90,
+) -> list[tuple[float, int, datetime]]:
+    """SPEC-AI-107 REQ-AI107-001: walk-forward 분할용 시간 인지형 캘리브레이션 페어 조회.
+
+    get_surge_calibration_pairs()와 동일한 필터를 사용하되 created_at을 추가로
+    노출하는 sibling 함수다. 기존 함수는 무수정 — walk-forward 분할에 필요한
+    시간 정보만 추가로 반환한다.
+
+    Args:
+        db: SQLAlchemy Session
+        lookback_days: 조회 기간 (일), 기본 90
+
+    Returns:
+        [(raw_confidence, is_correct, created_at), ...] 리스트.
+        is_correct ∈ {0, 1}.
+    """
+    from datetime import timedelta
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+
+    rows = (
+        db.query(FundSignal.confidence, FundSignal.is_correct, FundSignal.created_at)
+        .filter(
+            FundSignal.signal_type == "surge_candidate",
+            FundSignal.is_correct.isnot(None),
+            FundSignal.verified_at.isnot(None),
+            FundSignal.created_at >= cutoff,
+        )
+        .all()
+    )
+
+    return [(float(r.confidence), int(r.is_correct), r.created_at) for r in rows]

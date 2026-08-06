@@ -814,6 +814,32 @@ def _run_relation_inference():
         db.close()
 
 
+def _run_surge_calibrator_shadow_training():
+    """SPEC-AI-107: 캘리브레이터 섀도우 학습 (매주 일요일 03:00 KST).
+
+    active data/surge_calibrator.pkl은 절대 건드리지 않는 관측 전용 잡이다
+    (REQ-AI107-002). _run_relation_inference()와 달리 예외를 격리해 경고
+    로그만 남기고 재발생시키지 않는다 — 다른 스케줄러 잡의 실행에 영향을
+    주지 않기 위함이다(REQ-AI107-008).
+    """
+    _start = _time.monotonic()
+    from app.services.surge_calibrator import run_shadow_training
+
+    db = SessionLocal()
+    try:
+        run = run_shadow_training(db)
+        logger.info(
+            "[캘리브레이터섀도우학습] run_date=%s sample_count=%d positive_count=%d "
+            "gate_passed=%s",
+            run.run_date, run.sample_count, run.positive_count, run.gate_passed,
+        )
+    except Exception as e:
+        logger.warning("[캘리브레이터섀도우학습] 실패 (무시): %s", e)
+    finally:
+        _record_job_duration("surge_calibrator_shadow_training", _time.monotonic() - _start)
+        db.close()
+
+
 # ---------------------------------------------------------------------------
 # SPEC-AI-013: 급등예측 모의투자 포트폴리오 스케줄 작업
 # ---------------------------------------------------------------------------
@@ -2414,6 +2440,18 @@ def start_scheduler():
         minute=0,
         timezone="Asia/Seoul",
         id="relation_inference",
+        replace_existing=True,
+    )
+    # SPEC-AI-107: 캘리브레이터 섀도우 학습 (관측 전용): 매주 일요일 03:00 KST
+    # (relation_inference 04:00 KST와 겹치지 않는 저부하 시간대)
+    scheduler.add_job(
+        _run_surge_calibrator_shadow_training,
+        "cron",
+        day_of_week="sun",
+        hour=3,
+        minute=0,
+        timezone="Asia/Seoul",
+        id="surge_calibrator_shadow_training",
         replace_existing=True,
     )
     # REQ-AI-013: 페이퍼 트레이딩 청산 체크 (장중 1시간 간격)
