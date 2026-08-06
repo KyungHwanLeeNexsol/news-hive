@@ -2700,6 +2700,43 @@ def gather_surge_candidates(
                 db.rollback()
             except Exception:
                 pass
+
+        # SPEC-AI-105 REQ-AI105-001/002: bridge shadow 계측(기본 비활성, 순수 관측).
+        # 마스터 스위치만 True로 override한 config 사본으로 기존 함수를 그대로 재호출한다
+        # (재구현/복제 금지, §Decisions D1). 반환값은 절대 _bridge_candidates/qualified에
+        # 대입하지 않고 별도 지역 변수(_shadow_candidates)로만 받는다(AC-105-004).
+        # @MX:NOTE: [AUTO] SPEC-AI-105 REQ-AI105-001 — bridge shadow 계측 훅
+        # @MX:SPEC: SPEC-AI-105 REQ-AI105-001, REQ-AI105-002
+        if config.scan_universe_bridge_shadow_enabled:
+            try:
+                from app.services.surge_bridge_shadow_service import (
+                    persist_bridge_shadow_candidates,
+                )
+
+                # 마스터 스위치만 override — scan_universe_bridge_pool_b_enabled 등
+                # 나머지 필드는 원본 config 값을 그대로 유지한다.
+                _shadow_config = config.model_copy(
+                    update={"scan_universe_bridge_candidates_enabled": True}
+                )
+                # SPEC-AI-105 §Decisions D4: pool_b는 원본 config의
+                # scan_universe_bridge_pool_b_enabled 값과 무관하게 shadow 계측 대상에서
+                # 하드코딩으로 배제한다 — pool_b bridge 경로는 신규 HTTP 호출(가격이력
+                # 배치 조회)을 동반해 "관측 전용, 비용 최소" 목적에 맞지 않는다.
+                _shadow_entry_pool_map = {
+                    code: pool
+                    for code, pool in _entry_pool_map.items()
+                    if pool != "pool_b"
+                }
+                _shadow_candidates = generate_scan_universe_bridge_candidates(
+                    db, _shadow_config, _universe_codes, _shadow_entry_pool_map, merged
+                )
+                persist_bridge_shadow_candidates(db, date.today(), _shadow_candidates)
+            except Exception as _se:
+                logger.warning("[브리지섀도우] shadow 계측 실패 (무시): %s", _se)
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
     except Exception as _ue:
         logger.warning("[스캔유니버스] 유니버스 빌드 실패 (무시): %s", _ue)
         try:

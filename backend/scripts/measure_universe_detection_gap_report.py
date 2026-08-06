@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from app.database import SessionLocal
 from app.models.surge_actual_outcome import SurgeActualOutcome
 from app.services.surge_universe_gap_service import (
+    analyze_bridge_shadow_precision_by_date,
     analyze_no_signal_pool_attribution,
     analyze_pool_precision_by_date,
 )
@@ -65,6 +66,8 @@ def _fmt_precision_cell(pool_stat: dict[str, int | float | None]) -> str:
 def _render_report(
     results: list[dict],
     precision_results: list[tuple[date, dict[str, dict[str, int | float | None]]]],
+    bridge_shadow_results: list[tuple[date, dict[str, dict[str, int | float | None]]]]
+    | None = None,
 ) -> str:
     lines = [
         "# SPEC-AI-089 M1 측정 리포트 — 스캔 유니버스↔탐지망 간극",
@@ -139,6 +142,29 @@ def _render_report(
     if not precision_results:
         lines.append("| (표본 데이터 없음) | - | - | - | - |")
 
+    # SPEC-AI-105 REQ-AI105-005: bridge shadow 정밀도 — pool_a/pool_c를 절대 blended
+    # 합산하지 않고 별도 행으로 병기한다(§Decisions D2, AC-105-007). 위 Pool별 정밀도
+    # 섹션(스캔 유니버스 전체 소속 기준)과는 소스가 다르다 — 이 섹션은 bridge shadow
+    # 계측이 실제로 점수화·승격시켰을 후보만 대상이다.
+    lines.append("")
+    lines.append("## Bridge Shadow 정밀도")
+    lines.append("")
+    lines.append(
+        "REQ-AI105-003: bridge shadow 계측(`scan_universe_bridge_shadow_enabled`)이 "
+        "pool_a/pool_c 한정으로 점수화한 후보 중 실제 급등 비율. pool_b는 shadow 계측 "
+        "대상에서 하드코딩으로 배제된다(§Decisions D4). 셀 형식 `total/surge_count/precision%`."
+    )
+    lines.append("")
+    lines.append("| T | pool_a | pool_c |")
+    lines.append("|---|---|---|")
+    for trading_date, bridge_shadow in bridge_shadow_results or []:
+        lines.append(
+            f"| {trading_date} | {_fmt_precision_cell(bridge_shadow['pool_a'])} | "
+            f"{_fmt_precision_cell(bridge_shadow['pool_c'])} |"
+        )
+    if not bridge_shadow_results:
+        lines.append("| (표본 데이터 없음) | - | - |")
+
     lines.append("")
     return "\n".join(lines)
 
@@ -156,12 +182,19 @@ def main() -> None:
         precision_results = [
             (d, analyze_pool_precision_by_date(db, d)) for d in sample_dates
         ]
+        # SPEC-AI-105 REQ-AI105-005: bridge shadow 정밀도를 동일 표본 거래일 집합에 대해 병기.
+        bridge_shadow_results = [
+            (d, analyze_bridge_shadow_precision_by_date(db, d)) for d in sample_dates
+        ]
     finally:
         db.close()
 
     _REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     out_path = _REPORTS_DIR / f"{date.today().isoformat()}.md"
-    out_path.write_text(_render_report(results, precision_results), encoding="utf-8")
+    out_path.write_text(
+        _render_report(results, precision_results, bridge_shadow_results),
+        encoding="utf-8",
+    )
     print(f"리포트 생성 완료: {out_path}")
 
 

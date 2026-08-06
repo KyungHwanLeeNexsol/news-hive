@@ -4,6 +4,43 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Feature — SPEC-AI-105: 급등예측 스캔 유니버스 bridge 후보 활성화 검증 — Shadow 정밀도 측정 게이트 (2026-08-06)
+
+**목적**: `scan_universe_bridge_candidates_enabled`(SPEC-AI-092 도입, 2026-07-28)가 단 한 번도
+활성화된 적이 없는 상태에서, 실제로 켜지 않고도 pool_a/pool_c별 정밀도(실제 급등 적중률)를
+측정할 수 있는 shadow 계측 인프라를 배포한다. **⚠️ bridge shadow 계측 전환
+(`scan_universe_bridge_shadow_enabled: true`) — 매매/탐지 경로 무영향, 관측 전용.** 실제
+bridge 마스터 스위치(`scan_universe_bridge_candidates_enabled`)는 여전히 `false`로 유지된다
+(REQ-AI105-006 무회귀 보장).
+
+**핵심 변경 (REQ-AI105-001~007, AC-105-001~010)**:
+
+1. **shadow bridge 후보 계측(REQ-AI105-001)** — 마스터 스위치만 `true`로 override한 config
+   사본으로 기존 `generate_scan_universe_bridge_candidates()`(SPEC-AI-092/102)를 그대로
+   재호출한다(재구현/복제 없음, §Decisions D1). 반환값은 `qualified`/`merged`에 절대 합류하지
+   않고 별도 지역 변수로만 받는다.
+2. **shadow 후보 영속화(REQ-AI105-002)** — 신규 `surge_bridge_shadow_candidates` 테이블
+   (composite PK `(trading_date, stock_code)`, `SurgeUniverseMember` 일자당 replace semantics
+   계승), migration `075_surge_bridge_shadow_candidate`. 백필 없음(전진 적용만).
+3. **pool_b 하드코딩 배제(§Decisions D4)** — shadow 계측 대상 pool은 원본 config의
+   `scan_universe_bridge_pool_b_enabled` 값과 무관하게 항상 `(pool_a, pool_c)`로 고정한다 —
+   pool_b bridge 경로(가격이력 배치 조회, 신규 HTTP 호출)를 shadow 경로가 유발하지 않도록
+   entry_pool_map을 사전 필터링한다.
+4. **pool별 shadow 정밀도 분석 함수(REQ-AI105-003)** — `analyze_bridge_shadow_precision_by_date()`
+   (`surge_universe_gap_service.py`, `analyze_pool_precision_by_date()`의 자매 함수). pool_a/pool_c를
+   **절대 blended 합산하지 않고 분리** 반환한다(§Decisions D2 — pool_c의 bridge 점수 기준(4.5%)이
+   pool_c 자신의 유니버스 진입 기준(5%)보다 느슨해 사실상 무필터에 가까운 정밀도 리스크 방지).
+5. **리포트 병기(REQ-AI105-005)** — `measure_universe_detection_gap_report.py`에 "Bridge Shadow
+   정밀도" 섹션을 추가해 pool_a/pool_c를 별도 행으로 병기한다.
+6. **전제조건 정정(REQ-AI105-004)** — SPEC-AI-096 §Decisions D4의 "Pool D 관측 인프라 선행 배포
+   필요" 서술을 문서로 정정한다: `generate_scan_universe_bridge_candidates()`의 `_target_pools`는
+   `pool_d`를 포함한 적이 없어(코드 직접 확인), bridge 활성화 게이트는 SPEC-AI-104의 배포 상태와
+   무관하게 진행 가능하다.
+7. **활성화 게이트 절차(REQ-AI105-007)** — 최소 10거래일 관측 + 기존
+   `SurgePredictionEvaluation.precision`(시스템 전체 일일 정밀도) 대비 pool_a/pool_c 독립 비교 +
+   `scan_universe_bridge_pool_limits`의 0-값 메커니즘을 이용한 좁은 범위 우선 활성화 절차를
+   plan.md §C에 문서화했다(실제 활성화 실행은 이 SPEC의 배포 범위가 아님).
+
 ### Feature — SPEC-AI-104: 급등예측 Pool D 활성화 검증 — 관측 canary 전환 + 정밀도 측정 게이트 (2026-08-06)
 
 **목적**: SPEC-AI-096 §Decisions D3가 "임의 제안값 — Open Questions에 최종 확정 필요"로

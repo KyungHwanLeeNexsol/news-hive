@@ -721,6 +721,16 @@ class SurgeDetectionConfig(BaseModel):
     scan_universe_bridge_pool_limits: dict[str, int] = Field(
         default_factory=lambda: {"pool_a": 10, "pool_b": 5, "pool_c": 10}
     )
+    # SPEC-AI-105 REQ-AI105-001: bridge shadow 계측 토글(기본 비활성). True이면 실제
+    # 마스터 스위치(scan_universe_bridge_candidates_enabled)를 건드리지 않고, 마스터
+    # 스위치만 True로 override한 config 사본으로 generate_scan_universe_bridge_candidates()를
+    # 재호출해 shadow 후보를 계산·영속화한다(순수 관측, qualified/merged 무영향).
+    # shadow 대상 pool은 원본 config의 scan_universe_bridge_pool_b_enabled 값과 무관하게
+    # 항상 (pool_a, pool_c)로 하드코딩 배제된다(§Decisions D4 — pool_b 가격이력 배치
+    # 조회라는 신규 HTTP 호출을 shadow 경로가 유발하지 않도록 안전 우선).
+    # @MX:NOTE: [AUTO] SPEC-AI-105 REQ-AI105-001 — bridge shadow 계측 토글(기본 비활성)
+    # @MX:SPEC: SPEC-AI-105 REQ-AI105-001
+    scan_universe_bridge_shadow_enabled: bool = False
 
     # @MX:ANCHOR: [AUTO] 앙상블 가중치 합산 검증 — 8개 탐지기 가중치 합산 반드시 1.0
     # @MX:REASON: 가중치 합산 != 1.0 이면 앙상블 스코어 범위가 0~1을 벗어나 시그널 임계값 판정이 왜곡됨

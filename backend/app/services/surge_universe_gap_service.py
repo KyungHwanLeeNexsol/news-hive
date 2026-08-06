@@ -242,3 +242,77 @@ def analyze_pool_precision_by_date(
         }
 
     return result
+
+
+# SPEC-AI-105 REQ-AI105-003: shadow 계측은 pool_a/pool_c 한정(§Decisions D4 — pool_b는
+# 하드코딩 배제). analyze_pool_precision_by_date()의 _POOL_NAMES(pool_a/b/c/d)와 달리
+# 이 함수는 shadow 저장 자체가 pool_a/pool_c만 있을 수 있으므로 대상 풀을 좁게 고정한다.
+_BRIDGE_SHADOW_POOL_NAMES: tuple[str, ...] = ("pool_a", "pool_c")
+
+
+def analyze_bridge_shadow_precision_by_date(
+    db: "Session", trading_date: date
+) -> dict[str, dict[str, int | float | None]]:
+    """REQ-AI105-003: 특정 거래일 bridge shadow 후보의 pool별(A/C) 정밀도를 계산한다.
+
+    `analyze_pool_precision_by_date()`(SPEC-AI-104)의 자매 함수 — 대상 소스가
+    `SurgeUniverseMember`(스캔 유니버스 전체 소속)가 아니라
+    `SurgeBridgeShadowCandidate`(bridge shadow 계측이 실제로 점수화·승격시켰을 후보만)라는
+    점이 다르다. `pool_a`/`pool_c`를 **절대 blended 합산하지 않고 분리** 반환한다
+    (§Decisions D2 — pool_c의 bridge scoring이 사실상 무필터에 가까워 강한 pool_a
+    정밀도가 약한 pool_c를 가릴 위험 방지).
+
+    `SurgeBridgeShadowCandidate.entry_pool` × `SurgeActualOutcome.was_surge` 조인만
+    사용한다. 신규 DB 쓰기·마이그레이션 없음(REQ-AI105-003 순수 읽기).
+
+    Args:
+        db: SQLAlchemy 동기 세션 (읽기 전용 조회만 수행, 쓰기 없음).
+        trading_date: 평가 기준 날짜 (해당일 `SurgeBridgeShadowCandidate.trading_date` +
+            해당일 `SurgeActualOutcome.trading_date` — T-1 오프셋 없음).
+
+    Returns:
+        {"pool_a"|"pool_c": {"total": int, "surge_count": int, "precision": float | None}} —
+        해당 풀 소속 shadow 후보가 0건이면 precision은 None(division-by-zero guard,
+        `analyze_pool_precision_by_date()`의 None-guard 관례 계승, AC-105-006).
+    """
+    from app.models.surge_actual_outcome import SurgeActualOutcome
+    from app.models.surge_bridge_shadow_candidate import SurgeBridgeShadowCandidate
+
+    member_rows = (
+        db.query(
+            SurgeBridgeShadowCandidate.stock_code,
+            SurgeBridgeShadowCandidate.entry_pool,
+        )
+        .filter(
+            SurgeBridgeShadowCandidate.trading_date == trading_date,
+            SurgeBridgeShadowCandidate.entry_pool.in_(_BRIDGE_SHADOW_POOL_NAMES),
+        )
+        .all()
+    )
+    pool_codes: dict[str, set[str]] = {name: set() for name in _BRIDGE_SHADOW_POOL_NAMES}
+    for row in member_rows:
+        pool_codes[row.entry_pool].add(row.stock_code)
+
+    surge_rows = (
+        db.query(SurgeActualOutcome.stock_code)
+        .filter(
+            SurgeActualOutcome.trading_date == trading_date,
+            SurgeActualOutcome.was_surge.is_(True),
+        )
+        .all()
+    )
+    surge_codes = {row.stock_code for row in surge_rows}
+
+    result: dict[str, dict[str, int | float | None]] = {}
+    for pool in _BRIDGE_SHADOW_POOL_NAMES:
+        codes = pool_codes[pool]
+        total = len(codes)
+        surge_count = len(codes & surge_codes)
+        # division-by-zero guard (AC-105-006 / 시나리오 2: 해당 풀 shadow 후보 0건인 날)
+        result[pool] = {
+            "total": total,
+            "surge_count": surge_count,
+            "precision": (surge_count / total) if total > 0 else None,
+        }
+
+    return result

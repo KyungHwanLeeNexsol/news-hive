@@ -311,6 +311,11 @@ surge_detection:
   # measure_universe_detection_gap()이 매 스캔 사이클마다 실행되도록 활성화한다. 순수
   # 읽기·집계이며 탐지 파이프라인 출력에 영향을 주지 않는다(REQ-AI089-003 [HARD] 불변식).
   universe_gap_measurement_enabled: true
+  # SPEC-AI-105 REQ-AI105-001: bridge shadow 계측 토글. false(기본) → true — 이 SPEC의
+  # 배포 산출물이다. 실제 마스터 스위치(scan_universe_bridge_candidates_enabled)는 여전히
+  # false 유지 — shadow 계측은 관측 전용이며 qualified/merged/매매 실행 경로에 영향을
+  # 주지 않는다(REQ-AI105-006 무회귀 보장).
+  scan_universe_bridge_shadow_enabled: true
   # SPEC-AI-066 REQ-AI066-001/006: 촉매 확신도 기반 조건부 완화 설정
   # enabled=false이면 REQ-002/003 완화 전면 비활성 → SPEC-AI-030/028 레거시 동작 복원
   catalyst_conviction:
