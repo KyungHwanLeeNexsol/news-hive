@@ -42,13 +42,13 @@ test; Scenario 3 (bypass-only signal safely multi_day_dominant) ⊂
 
 ```yaml
 run_complete_at: 2026-08-06
-run_commit_sha: pending-backfill-spec-ai-108
+run_commit_sha: 7ff98ce46e83954a93d3b4c9c469513b6e32ac06
 run_status: PASS
 ac_pass_count: 10
 ac_fail_count: 0
 preserve_list_post_run_count: 8
 l44_pre_commit_fetch: PASS (git fetch origin main; git rev-list --count --left-right origin/main...HEAD = "0 0" before commit)
-l44_post_push_fetch: PASS (verified post-push; see chore backfill commit for confirmation)
+l44_post_push_fetch: PASS (git push origin main succeeded 3a12f97..7ff98ce; post-push fetch confirms "0 0" — local main == origin/main)
 new_warnings_or_lints_introduced: 0 (ruff check app/services/surge_evaluation_service.py tests/test_spec_ai_108.py: All checks passed)
 cross_platform_build:
   note: "Python project — no GOOS/GOARCH cross-compile applicable; app boot verified via `python -c \"from app.main import app\"` -> OK"
