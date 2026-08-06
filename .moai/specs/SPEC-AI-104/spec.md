@@ -2,7 +2,7 @@
 id: SPEC-AI-104
 title: "급등예측 Pool D 활성화 검증 — 관측 canary 전환 + 정밀도 측정 게이트"
 version: "0.1.0"
-status: in-progress
+status: completed
 created: 2026-08-06
 updated: 2026-08-06
 author: Nexsol
