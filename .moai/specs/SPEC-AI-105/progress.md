@@ -46,7 +46,7 @@ before run-phase start (per plan.md TASK-001 mandatory pre-check), advanced to
 
 ```yaml
 run_complete_at: 2026-08-06
-run_commit_sha: pending-backfill-spec-ai-105
+run_commit_sha: 07ad2edee552b893501968642041d62a969fcdcd
 run_status: implemented
 ac_pass_count: 10
 ac_fail_count: 0
