@@ -37,13 +37,13 @@ isolation) ⊂ AC-107-006 test. All 3 reproduced.
 
 ```yaml
 run_complete_at: 2026-08-06
-run_commit_sha: pending-backfill-spec-ai-107-m1
+run_commit_sha: 26a37bccf950480ff479c3cc599cc7c8a16d310b
 run_status: PASS
 ac_pass_count: 11
 ac_fail_count: 0
 preserve_list_post_run_count: 6
-l44_pre_commit_fetch: n/a (Route A Hybrid Trunk main-direct, no pre-spawn conflict detected — HEAD unchanged at 279a166e0f975e1a4dcf91c15299d7e26d9770b0 through this session)
-l44_post_push_fetch: pending (push not yet performed — see E6 in final report)
+l44_pre_commit_fetch: PASS (git fetch origin main; git rev-list --count --left-right origin/main...HEAD = "0 0" before commit)
+l44_post_push_fetch: PASS (git push origin main succeeded 279a166e0..26a37bccf; post-push fetch confirms "0 0" — local main == origin/main)
 new_warnings_or_lints_introduced: 0 (ruff check: All checks passed; 1 self-caught unused-import warning fixed before final run)
 cross_platform_build:
   note: "Python project — no GOOS/GOARCH cross-compile applicable; app boot verified via `python -c \"from app.main import app\"`"
