@@ -4,6 +4,35 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Feature — SPEC-AI-106: 지평 인식 임계값 섀도우 전환 게이트 가시성 확립 — 일일 평가 잡 통합 (2026-08-06)
+
+**목적**: SPEC-AI-101이 이미 구현한 전환 게이트 3요건 판정 함수
+`check_horizon_transition_readiness()`가 자신의 테스트 파일에서만 호출되고
+프로덕션의 어떤 스케줄러 잡·API·리포트에서도 호출되지 않는 "죽은 관측 경로"였다.
+**⚠️ 배선(wiring)만 추가 — `horizon_aware_thresholds.enabled`는 `false`,
+`.shadow_mode_enabled`는 `true`로 그대로 유지된다.** 실제 전환 실행은 이 SPEC의
+범위가 아니다.
+
+**핵심 변경 (REQ-AI106-001~006, AC-106-001~008)**:
+
+1. **readiness 로그 통합(REQ-AI106-001)** — 기존 일일 평가 잡
+   `_run_surge_verify_predictions()`(`scheduler.py`, 평일 18:30 KST)에
+   `check_horizon_transition_readiness()` 호출을 핵심 평가 결과(precision/recall/f1)
+   `db.commit()` 이후 격리된 `try/except` 블록으로 추가한다. 4개 필드
+   (`observed_trading_days`, `regimes_observed`, `max_change_pct`,
+   `all_criteria_met`)를 `[지평임계값전환게이트]` 태그의 INFO 로그 1줄로 남긴다 —
+   하루 1회(잡 사이클당 1회)만 호출된다.
+2. **예외 격리(REQ-AI106-004)** — readiness 조회 실패는 경고 로그만 남기고
+   무시되며, 핵심 평가 결과 저장에 영향을 주지 않는다.
+3. **판정 로직 무수정(REQ-AI106-003)** — `check_horizon_transition_readiness()`,
+   `run_horizon_shadow_comparison()`, `compute_horizon_signature()`,
+   `select_effective_threshold()`의 내부 로직은 호출만 하며 전혀 수정하지 않는다.
+4. **활성화 검토 절차 문서화(REQ-AI106-005)** — 실제 `enabled=true` 전환 시 사람이
+   따를 체크리스트(관측 완료 확인 방법, per-horizon 임계값 재검토 기준, 승인/롤백
+   경로)를 plan.md §C에 문서화했다(실행은 이 SPEC의 배포 범위가 아님).
+5. **신규 DB 테이블/마이그레이션 없음(REQ-AI106-006)** — 기존
+   `SurgeHorizonShadowObservation` 테이블과 기존 판정 함수만 재사용한다.
+
 ### Feature — SPEC-AI-105: 급등예측 스캔 유니버스 bridge 후보 활성화 검증 — Shadow 정밀도 측정 게이트 (2026-08-06)
 
 **목적**: `scan_universe_bridge_candidates_enabled`(SPEC-AI-092 도입, 2026-07-28)가 단 한 번도

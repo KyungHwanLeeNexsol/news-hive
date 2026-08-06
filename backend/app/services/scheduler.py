@@ -978,6 +978,27 @@ def _run_surge_verify_predictions():
         except Exception as _dge:
             logger.warning("[급등평가] non_scannable 원인 진단 실패 (무시): %s", _dge)
 
+        # SPEC-AI-106 REQ-AI106-001/004: 지평 인식 임계값 전환 게이트 3요건 판정
+        # (SPEC-AI-101 check_horizon_transition_readiness) 관측 로그를 하루 1회(본 잡
+        # 사이클당 1회) 남긴다 — 핵심 평가 결과(위 commit) 저장 이후 격리된 블록이므로
+        # 이 블록의 실패는 precision/recall/f1 저장에 영향을 주지 않는다.
+        try:
+            from app.services.surge_horizon_readiness_service import (
+                check_horizon_transition_readiness,
+            )
+
+            readiness = check_horizon_transition_readiness(db)
+            logger.info(
+                "[지평임계값전환게이트] observed_trading_days=%d regimes=%s "
+                "max_change_pct=%.2f all_criteria_met=%s",
+                readiness["observed_trading_days"],
+                sorted(readiness["regimes_observed"]),
+                readiness["max_change_pct"],
+                readiness["all_criteria_met"],
+            )
+        except Exception as _hre:
+            logger.warning("[지평임계값전환게이트] readiness 조회 실패 (무시): %s", _hre)
+
         # FN 분석 블록 — 예외 격리 (precision/recall/f1 결과는 위 commit으로 이미 보존)
         # SPEC-AI-061 REQ-AI061-B02
         try:
