@@ -60,7 +60,7 @@ m1_to_mN_commit_strategy: single M1 commit (Tier M, DDD single-cycle scope — A
 
 ```yaml
 sync_complete_at: 2026-08-06
-sync_commit_sha: pending-backfill-SPEC-AI-108
+sync_commit_sha: 9bc3c63
 sync_status: PASS
 changelog_entry_position: CHANGELOG.md [Unreleased] top entry (line 7)
 frontmatter_status_transitions:
