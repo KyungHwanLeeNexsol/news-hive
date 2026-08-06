@@ -64,7 +64,7 @@ m1_to_mN_commit_strategy: single-commit (no formal milestone split; TASK-001~006
 
 ```yaml
 sync_complete_at: 2026-08-06
-sync_commit_sha: pending-backfill-spec-ai-105-sync
+sync_commit_sha: d94fcf1
 sync_status: completed
 changelog_entry_position: "[Unreleased] > Feature — SPEC-AI-105 (verified against implementation files, no edits required)"
 readme_update: not-applicable (internal observability/shadow-measurement change, no new user-facing feature/CLI/API surface — consistent with SPEC-AI-104 precedent)
