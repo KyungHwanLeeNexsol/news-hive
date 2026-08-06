@@ -39,13 +39,13 @@ diff는 배포 config 기본값 변경(REQ-AI104-002/004)으로 legitimately sta
 
 ```yaml
 run_complete_at: "2026-08-06"
-run_commit_sha: "pending-backfill-spec-ai-104-run"
+run_commit_sha: "949997494752ab837942884c21c184f353af64ba"
 run_status: complete
 ac_pass_count: 8
 ac_fail_count: 0
 preserve_list_post_run_count: 7   # plan.md §A.1 PRESERVE 목록 7항목 전부 무변경 확인
 l44_pre_commit_fetch: "0 0 (synced)"
-l44_post_push_fetch: "pending-post-push"
+l44_post_push_fetch: "0 0 (synced, confirmed after push)"
 new_warnings_or_lints_introduced: 0   # ruff check: All checks passed (mypy not installed in env — pre-existing gap, see Gaps)
 cross_platform_build:
   windows: "n/a — Python project, no build-tag concerns (B1 N/A)"
