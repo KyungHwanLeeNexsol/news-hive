@@ -647,8 +647,11 @@ class SurgeDetectionConfig(BaseModel):
     #     게이트(코드 변경 불필요)만으로 즉시 가능하며, 되돌릴 때도 0으로 복귀하면 된다.
     #   - Pool D는 canary 전환 이후에도 "측정 유니버스"일 뿐이며, 실제 매매 후보 편입은
     #     bridge(scan_universe_bridge_candidates_enabled) 활성화를 통해서만 가능하다.
+    # SPEC-AI-104 REQ-AI104-002: 위 canary 값(10)을 실제로 배포 config(surge_detection.yaml)에
+    # 적용했다 — 이 Pydantic 모델 기본값(0)은 §Decisions D1에 따라 무변경 유지한다
+    # (test_spec_ai_086.py/test_spec_ai_096.py가 이 기본값을 단언).
     # @MX:NOTE: [AUTO] SPEC-AI-086 REQ-AI086-003 — Pool D 최소 슬롯 floor(기본 OFF)
-    # @MX:SPEC: SPEC-AI-086 REQ-AI086-003, SPEC-AI-096 REQ-AI096-003
+    # @MX:SPEC: SPEC-AI-086 REQ-AI086-003, SPEC-AI-096 REQ-AI096-003, SPEC-AI-104 REQ-AI104-002
     pool_d_min_slots: int = 0
     # SPEC-AI-086 REQ-AI086-004: 장중 시간대별 동적 스캔 상한(선택, 기본 비활성).
     # 키는 시간대 라벨(surge_detector._DYNAMIC_CAP_TIME_BINS와 매칭), 값은 해당 시간대 적용

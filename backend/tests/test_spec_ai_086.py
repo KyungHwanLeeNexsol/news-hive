@@ -88,7 +88,10 @@ class TestGoldenUniverseBaseline:
         # SPEC-AI-096 REQ-AI096-001: 기본값 150→250. 이 테스트의 후보 수(10)는 두 값
         # 모두보다 훨씬 작아 절단이 발생하지 않으므로 골든 순서/pool_counts 자체는 무영향.
         assert cfg.max_scan_universe == 250
-        assert cfg.pool_d_min_slots == 0
+        # SPEC-AI-104 REQ-AI104-002: 배포 config(get_surge_config())의 pool_d_min_slots가
+        # canary 값 10으로 전환됨(§Decisions D1 — Pydantic 모델 기본값 자체는 0으로 무변경,
+        # SurgeDetectionConfig() 바로 인스턴스화 시에는 여전히 0 — AC-104-001).
+        assert cfg.pool_d_min_slots == 10
         assert cfg.dynamic_scan_universe_caps == {}
 
         p1, p2, p3 = _pool_b_patches(pool_b_codes)
@@ -109,7 +112,9 @@ class TestGoldenUniverseBaseline:
         assert pool_counts["pool_b_scanned"] == 2
         assert pool_counts["pool_c_scanned"] == 3
 
-        # SPEC-AI-086: Pool D 기본 비활성 — raw/scanned 0(또는 부재), entry_pool에 'pool_d' 없음
+        # SPEC-AI-104: pool_d_min_slots가 canary 값(10)이라 Pool D 소싱 쿼리는 실행되지만,
+        # 이 테스트는 뉴스 언급 데이터를 시딩하지 않으므로 raw/scanned 0(또는 부재),
+        # entry_pool에 'pool_d' 없음 — 골든 순서/pool_counts 자체는 여전히 무영향.
         assert pool_counts.get("pool_d", 0) == 0
         assert pool_counts.get("pool_d_scanned", 0) == 0
         assert "pool_d" not in entry_pool_map.values()
@@ -457,9 +462,15 @@ def _seed_pool_d_news_mentions(db: Session, codes: list[str]) -> None:
 
 class TestPoolDQuotaIntegration:
     def test_pool_d_disabled_by_default_no_query_no_tagging(self, db: Session):
-        """기본 설정(pool_d_min_slots=0)이면 Pool D 소싱 쿼리 자체가 스킵된다."""
+        """pool_d_min_slots=0이면 Pool D 소싱 쿼리 자체가 스킵된다.
+
+        SPEC-AI-104 REQ-AI104-002: 배포 config의 pool_d_min_slots 기본값이 canary(10)로
+        전환되어 get_surge_config()만으로는 더 이상 0이 아니다 — 이 테스트가 검증하려는
+        불변식("0이면 스킵된다")을 명시적으로 재현하려면 pool_d_min_slots=0을 명시
+        오버라이드해야 한다(§Decisions D1 — Pydantic 모델 기본값은 여전히 0).
+        """
         _seed_pool_d_news_mentions(db, ["d00000", "d00001"])
-        cfg = get_surge_config()
+        cfg = get_surge_config().model_copy(update={"pool_d_min_slots": 0})
         assert cfg.pool_d_min_slots == 0
 
         with patch(

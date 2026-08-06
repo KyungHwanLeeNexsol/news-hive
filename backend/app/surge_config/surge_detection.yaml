@@ -297,14 +297,20 @@ surge_detection:
   # 정렬할지 여부 — false면 레거시 DB-순서(무순위) 거동으로 복귀(백워드 호환).
   pool_a_rank_by_impact: true
   # SPEC-AI-086 REQ-AI086-003: Pool D(뉴스 언급 기반) 최소 슬롯 예약(quota floor).
-  # 0(기본)이면 완전 비활성 — Pool D 소싱 쿼리 자체가 스킵된다(백워드 호환).
-  # SPEC-AI-096 REQ-AI096-003: canary 전환 기준(제안 값 10) + 최소 5거래일 pool_d_count>0
-  # 관측 요건은 app/surge_config/surge_settings.py의 pool_d_min_slots 주석 참고.
-  pool_d_min_slots: 0
+  # SPEC-AI-104 REQ-AI104-002: 0(비활성) → 10(canary 값, SPEC-AI-096 D3 제안값 계승)으로
+  # 관측 목적 최소 침습 전환. Pydantic 모델 기본값(surge_settings.py)은 0으로 무변경 —
+  # 이 canary 전환은 배포 config에만 적용된다(§Decisions D1). 탐지·매매 경로 무영향
+  # 불변식은 REQ-AI104-003 [HARD] 참고 — merged(1차 탐지기 후보)로 재투입되지 않는다.
+  pool_d_min_slots: 10
   # SPEC-AI-086 REQ-AI086-004: 장중 시간대별 동적 스캔 상한(선택, 기본 비활성).
   # 예: {premarket_early: 200, close_final: 250} — 빈 dict(기본)면 max_scan_universe
   # 단일 평탄 상한으로 폴백한다.
   dynamic_scan_universe_caps: {}
+  # SPEC-AI-089 REQ-AI089-001 / SPEC-AI-104 REQ-AI104-004: 스캔 유니버스↔탐지망 간극
+  # 실시간 측정 계측 토글. false(기본)→true — Pool D canary 관측 창(위 pool_d_min_slots) 동안
+  # measure_universe_detection_gap()이 매 스캔 사이클마다 실행되도록 활성화한다. 순수
+  # 읽기·집계이며 탐지 파이프라인 출력에 영향을 주지 않는다(REQ-AI089-003 [HARD] 불변식).
+  universe_gap_measurement_enabled: true
   # SPEC-AI-066 REQ-AI066-001/006: 촉매 확신도 기반 조건부 완화 설정
   # enabled=false이면 REQ-002/003 완화 전면 비활성 → SPEC-AI-030/028 레거시 동작 복원
   catalyst_conviction:

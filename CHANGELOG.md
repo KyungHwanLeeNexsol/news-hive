@@ -4,6 +4,68 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Feature — SPEC-AI-104: 급등예측 Pool D 활성화 검증 — 관측 canary 전환 + 정밀도 측정 게이트 (2026-08-06)
+
+**목적**: SPEC-AI-096 §Decisions D3가 "임의 제안값 — Open Questions에 최종 확정 필요"로
+남긴 Pool D canary 전환 기준(값 10, 최소 5거래일)을 데이터 기반으로 확정하고, 현재
+`pool_d_min_slots=0`인 한 원천적으로 불가능한 Pool D 관측을 가능하게 한다. **⚠️ Pool D
+canary 관측 전환(`pool_d_min_slots: 10`, `universe_gap_measurement_enabled: true`) —
+매매/탐지 경로 무영향, 관측 전용.** Pool D 코드는 `_assemble_scan_universe()`의 측정
+전용 경로(`_universe_codes`/`entry_pool_map`/`SurgeUniverseMember` 영속화)에만 사용되며
+8개 1차 탐지기의 병합 후보(`merged`)에는 어떤 경로로도 재투입되지 않는다 —
+`scan_universe_bridge_candidates_enabled`(Pool D를 `merged`로 승격시키는 유일한 경로)는
+`False`로 무변경 유지된다(REQ-AI104-003 [HARD]).
+
+**핵심 변경 (REQ-AI104-001~008, AC-104-001~008 전량 8개 PASS)**:
+
+1. **측정 리포트 `pool_d` 열 누락 결함 수정(REQ-AI104-001)** — `scripts/measure_universe_detection_gap_report.py`의
+   거래일별 표가 `pool_a`/`pool_b`/`pool_c`/`absent`만 렌더링하고 `pool_d`를 누락하던
+   결함을 수정했다. "표본 합산" 섹션(기존에 이미 `pool_d`를 올바르게 포함)과의 합계
+   일치를 characterization 테스트로 검증했다.
+2. **`pool_d_min_slots` canary 전환(REQ-AI104-002)** — `surge_detection.yaml`의
+   `pool_d_min_slots`를 `0 → 10`으로 전환했다. `surge_settings.py`의 Pydantic 모델
+   기본값(`int = 0`)은 SPEC-AI-079 선례(YAML 값만 flip, 모델 기본값 유지)를 계승해
+   무변경 유지했다.
+3. **탐지·매매 경로 무영향 불변식(REQ-AI104-003 [HARD])** — canary 전환이 적용되는
+   동안 Pool D 소싱 결과가 8개 1차 탐지기의 병합 후보, 앙상블 점수, 발행 시그널, 매매
+   실행 경로(`surge_trading_service.py`)에 유입되지 않음을 구조 확인 + 단위 테스트로
+   증명했다.
+4. **gap 계측 활성화(REQ-AI104-004)** — `surge_detection.yaml`에 신규 키
+   `universe_gap_measurement_enabled: true`를 추가했다(기존에는 이 키 자체가 yaml에
+   부재해 Pydantic 기본값 `False`로 폴백하고 있었다). SPEC-AI-089의
+   `measure_universe_detection_gap()`이 canary 관측 창 동안 매 스캔 사이클마다
+   실행되도록 활성화한다 — 함수 자체는 무수정.
+5. **Pool D precision 측정 신규 함수(REQ-AI104-005)** — `surge_universe_gap_service.py`에
+   `analyze_pool_precision_by_date()`를 `analyze_no_signal_pool_attribution()`의 자매
+   함수로 추가했다. `SurgeUniverseMember.entry_pool` × `SurgeActualOutcome.was_surge`
+   조인만 사용(신규 DB 쓰기·마이그레이션 없음)해 pool_a/b/c/d 각각의
+   `{total, surge_count, precision}`을 반환하며, 해당 풀 소속 종목이 0건이면
+   `precision=None`(division-by-zero guard).
+6. **통합 관측 리포트 확장(REQ-AI104-006)** — 측정 리포트에 recall측(수정된 `pool_d`
+   열)과 precision측(신규 "Pool별 정밀도" 섹션, pool_d 및 pool_a/b/c baseline 병기)을
+   함께 표시하도록 확장했다. 신규 정량 임계값은 하드코딩하지 않는다 — 활성화 여부
+   판단은 사람이 수행한다.
+7. **데이터 기반 활성화 게이트 문서화(REQ-AI104-007)** — SPEC-AI-096 D3의 "5거래일
+   pool_d_count > 0"(존재 여부만 확인)를 recall측 unique-catch + precision측 baseline
+   비교의 복합 기준으로 재정의해 `plan.md §C`에 절차로 문서화했다(실제 판단/플래그
+   전환은 이 SPEC의 배포 산출물이 아니다).
+8. **기존 파이프라인 회귀 없음 보장(REQ-AI104-008 [HARD])** — 8개 탐지기 스코어링,
+   앙상블 가중치, quota 배분(SPEC-AI-076/096), bridge 후보화(SPEC-AI-092/102), existing
+   병합 필터(SPEC-AI-094), Pool A/B/C 소싱 로직(SPEC-AI-065/074/076/078)을 변경하지
+   않았다. 기존 회귀 스위트(`test_spec_ai_086/089/094/096/102.py`) 5개 파일이 canary
+   전환 후에도 전량 통과함을 확인했다 — 그중 4곳은 배포 config의 `pool_d_min_slots`/
+   `universe_gap_measurement_enabled` 기본값이 canary 전환으로 legitimately 바뀌면서
+   깨졌던 stale 단언을 명시적 오버라이드(Pydantic 모델 기본값 재확인 또는
+   `.model_copy(update=...)`)로 갱신했다 — 탐지·quota·bridge 로직 자체는 diff에
+   포함되지 않는다.
+
+**변경 파일**: `backend/app/services/surge_universe_gap_service.py`(EXTEND,
+`analyze_pool_precision_by_date()` 신규 함수), `backend/scripts/measure_universe_detection_gap_report.py`(EXTEND,
+`pool_d` 열 수정 + precision 섹션 병기), `backend/app/surge_config/surge_detection.yaml`(config,
+`pool_d_min_slots: 10`, `universe_gap_measurement_enabled: true` 신규), `backend/app/surge_config/surge_settings.py`(주석만,
+Pydantic 기본값 무변경), `backend/tests/test_spec_ai_104.py`(신규), `backend/tests/test_spec_ai_086.py`
++ `test_spec_ai_089.py` + `test_spec_ai_096.py`(stale 단언 갱신), `.moai/specs/SPEC-AI-104/`(SPEC 문서).
+
 ### Feature — SPEC-AI-101: 급등예측 정답 라벨 재정의(신호가 대비 EOD 최대수익률) + SPEC-AI-100 섀도우 전환 게이트 실행 (2026-08-05)
 
 **목적**: `SurgeActualOutcome.was_surge`(종가 기준 단일 라벨)가 "장중에는 잡았으나

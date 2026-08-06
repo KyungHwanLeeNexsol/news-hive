@@ -346,8 +346,13 @@ class TestNoRegressionAtFixedCap150:
     """
 
     def test_default_pool_d_and_bridge_flags_remain_off(self):
+        """bridge 플래그는 SPEC-AI-104 이후에도 여전히 배포 config 기본값이 False다
+        (REQ-AI104-003 [HARD] — 본 SPEC이 canary 전환 시에도 무변경 유지).
+        pool_d_min_slots는 SPEC-AI-104 REQ-AI104-002로 배포 config 기본값이 canary(10)로
+        전환되었으므로, "0" 불변식은 Pydantic 모델 기본값(§Decisions D1)에 대해서만
+        여전히 성립한다."""
         cfg = get_surge_config()
-        assert cfg.pool_d_min_slots == 0
+        assert cfg.pool_d_min_slots == 10
         assert cfg.scan_universe_bridge_candidates_enabled is False
 
     def test_price_fetch_truncation_is_no_op_below_cap(self):

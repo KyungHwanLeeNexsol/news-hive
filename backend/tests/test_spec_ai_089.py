@@ -218,7 +218,10 @@ class TestNoSignalPoolAttribution:
 
 class TestEnsembleWeightInvariantUnchanged:
     def test_flag_defaults_to_false(self):
-        cfg = get_surge_config()
+        """SPEC-AI-104 REQ-AI104-004: 배포 config는 canary 관측 창 동안 True로 전환되므로,
+        "flag=False" 상태를 명시적으로 재현하려면 오버라이드가 필요하다(Pydantic 모델
+        기본값 자체는 여전히 False — surge_settings.py 무변경)."""
+        cfg = get_surge_config().model_copy(update={"universe_gap_measurement_enabled": False})
         assert cfg.universe_gap_measurement_enabled is False
 
     def test_flag_true_still_validates_ensemble_weights(self):

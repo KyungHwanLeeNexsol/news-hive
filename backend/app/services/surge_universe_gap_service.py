@@ -178,3 +178,67 @@ def analyze_no_signal_pool_attribution(db: "Session", trading_date: date) -> dic
         "attribution": attribution,
         "attribution_summary": attribution_summary,
     }
+
+
+def analyze_pool_precision_by_date(
+    db: "Session", trading_date: date
+) -> dict[str, dict[str, int | float | None]]:
+    """REQ-AI104-005: 특정 거래일 풀별(A/B/C/D) 소속 전체 종목 중 실제 급등 비율(precision)을 계산한다.
+
+    `analyze_no_signal_pool_attribution()`의 자매 함수 — 그 함수는 "무시그널 실제급등
+    종목"이라는 이미 좁혀진 부분집합의 recall측 귀속만 다루는 반면, 본 함수는 pool_d
+    "노이즈가 많은가"라는 원 우려에 직접 답하는 precision측(그 풀에 있는 종목 중 실제로
+    몇 %가 진짜 급등이었는가)을 다룬다 — 두 지표는 서로 다른 질문이다(spec.md §Decisions D3).
+
+    `SurgeUniverseMember.entry_pool` × `SurgeActualOutcome.was_surge` 조인만 사용한다.
+    신규 DB 쓰기·마이그레이션 없음(REQ-AI104-005).
+
+    Args:
+        db: SQLAlchemy 동기 세션 (읽기 전용 조회만 수행, 쓰기 없음).
+        trading_date: 평가 기준 날짜 (해당일 `SurgeUniverseMember.trading_date` +
+            해당일 `SurgeActualOutcome.trading_date` — T-1 오프셋 없음).
+
+    Returns:
+        {"pool_a"|"pool_b"|"pool_c"|"pool_d": {"total": int, "surge_count": int,
+        "precision": float | None}} — 해당 풀 소속 종목이 0건이면 precision은 None
+        (division-by-zero guard, `measure_universe_detection_gap()`의 `*_gap_ratio`
+        None-guard 관례 계승, AC-104-004).
+    """
+    from app.models.surge_actual_outcome import SurgeActualOutcome
+    from app.models.surge_universe_member import SurgeUniverseMember
+
+    member_rows = (
+        db.query(SurgeUniverseMember.stock_code, SurgeUniverseMember.entry_pool)
+        .filter(
+            SurgeUniverseMember.trading_date == trading_date,
+            SurgeUniverseMember.entry_pool.in_(_POOL_NAMES),
+        )
+        .all()
+    )
+    pool_codes: dict[str, set[str]] = {name: set() for name in _POOL_NAMES}
+    for row in member_rows:
+        pool_codes[row.entry_pool].add(row.stock_code)
+
+    surge_rows = (
+        db.query(SurgeActualOutcome.stock_code)
+        .filter(
+            SurgeActualOutcome.trading_date == trading_date,
+            SurgeActualOutcome.was_surge.is_(True),
+        )
+        .all()
+    )
+    surge_codes = {row.stock_code for row in surge_rows}
+
+    result: dict[str, dict[str, int | float | None]] = {}
+    for pool in _POOL_NAMES:
+        codes = pool_codes[pool]
+        total = len(codes)
+        surge_count = len(codes & surge_codes)
+        # division-by-zero guard (AC-104-004 / 시나리오 2: 해당 풀 소속 종목 0건인 날)
+        result[pool] = {
+            "total": total,
+            "surge_count": surge_count,
+            "precision": (surge_count / total) if total > 0 else None,
+        }
+
+    return result
