@@ -62,7 +62,25 @@ m1_to_mN_commit_strategy: single-commit (no formal milestone split; TASK-001~006
 
 ## §E.4 Sync-phase Audit-Ready Signal
 
-_<pending sync-phase>_
+```yaml
+sync_complete_at: 2026-08-06
+sync_commit_sha: pending-backfill-spec-ai-105-sync
+sync_status: completed
+changelog_entry_position: "[Unreleased] > Feature — SPEC-AI-105 (verified against implementation files, no edits required)"
+readme_update: not-applicable (internal observability/shadow-measurement change, no new user-facing feature/CLI/API surface — consistent with SPEC-AI-104 precedent)
+frontmatter_status_transitions:
+  spec_md: "in-progress -> implemented -> completed (single sync commit)"
+```
+
+CHANGELOG.md `[Unreleased]` entry (added during run-phase) verified against actual
+implementation files: `app/models/surge_bridge_shadow_candidate.py`,
+`app/services/surge_bridge_shadow_service.py` (`persist_bridge_shadow_candidates()`),
+`alembic/versions/075_surge_bridge_shadow_candidate.py`, `surge_detector.py:2707-2733`
+wiring block, `surge_settings.py:733` (`scan_universe_bridge_shadow_enabled: bool = False`),
+`surge_detection.yaml:318` (`scan_universe_bridge_shadow_enabled: true`),
+`surge_universe_gap_service.py:253` (`analyze_bridge_shadow_precision_by_date()`).
+All claims accurate — no CHANGELOG edit required. `grep -c "SPEC-AI-105" CHANGELOG.md`
+returned 1 (single entry, no duplication) before this sync commit.
 
 ## §F Phase 4 Mode Selection
 

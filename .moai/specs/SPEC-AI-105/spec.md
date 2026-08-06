@@ -2,7 +2,7 @@
 id: SPEC-AI-105
 title: "급등예측 스캔 유니버스 bridge 후보 활성화 검증 — Shadow 정밀도 측정 게이트"
 version: "0.1.0"
-status: in-progress
+status: completed
 created: 2026-08-06
 updated: 2026-08-06
 author: Nexsol
