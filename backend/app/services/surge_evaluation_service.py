@@ -809,6 +809,170 @@ def _persist_signal_forward_outcomes(
     return forward_actual_codes
 
 
+# @MX:NOTE: [AUTO] SPEC-AI-108 REQ-AI108-001 — surge_basis 문자열을 앙상블 키로
+# 정규화하는 확정 매핑. compute_horizon_signature()(surge_detector.py)의 앙상블 키와
+# 신호 생성 경로가 active_detectors(=surge_basis)에 append하는 문자열이 2건 불일치한다
+# (spec.md §Context [E-6], 코드 대조로 확정): immediate_disclosure 경로는
+# "immediate_disclosure"를 append하지만 앙상블 키는 "disclosure_pattern" 1개뿐이고,
+# 레거시 탐지기 병합 경로는 "legacy"를 append하지만 앙상블 키는 "legacy_detectors"다.
+# 나머지 5개 앙상블 키는 surge_basis 문자열과 1:1 동일하므로 매핑에 없다(원문자열 유지).
+_SURGE_BASIS_TO_ENSEMBLE_KEY: dict[str, str] = {
+    "immediate_disclosure": "disclosure_pattern",
+    "legacy": "legacy_detectors",
+}
+
+# @MX:NOTE: [AUTO] SPEC-AI-108 §Decisions D2 — 재구성 범위는 compute_horizon_signature()가
+# 실제로 보는 앙상블 가중합 7개 키로 한정한다. 우회/독립 탐지기(near_limit_up_carry 등)는
+# 라이브 함수 자체가 구조적으로 볼 수 없으므로 사후 재구성도 동등하게 무시해야 한다.
+_ENSEMBLE_HORIZON_KEYS: frozenset[str] = frozenset(
+    {
+        "theme_cluster",
+        "volume_news_combo",
+        "disclosure_pattern",
+        "legacy_detectors",
+        "news_delayed",
+        "volume_breakout",
+        "momentum_continuation",
+    }
+)
+
+
+# @MX:ANCHOR: [AUTO] _reconstruct_horizon_signature_from_basis — SPEC-AI-108 지평
+# 시그니처 사후 재구성 진입점. evaluate_surge_predictions의 신규 진단 블록에서 호출된다.
+# @MX:REASON: compute_horizon_signature()(SPEC-AI-100)는 7개 앙상블 키 전부의
+# 컴포넌트 점수를 동시 입력으로 요구하나, 그 중 3개(news_delayed_score/
+# volume_breakout_score/momentum_continuation_score)는 영속화되지 않아 평가 시점
+# 재호출이 불가능하다(spec.md §Context [E-2]). SPEC-AI-070의 attribution-not-re-score
+# 원칙을 재사용해 surge_basis 멤버십을 "점수>0"의 대리 신호로 취급한다.
+# @MX:SPEC: SPEC-AI-108 REQ-AI108-001, REQ-AI108-002
+def _reconstruct_horizon_signature_from_basis(
+    surge_basis: list[str] | None, horizon_labels: dict[str, str]
+) -> str:
+    """surge_basis 리스트 멤버십으로 지평 시그니처를 사후 재구성한다.
+
+    compute_horizon_signature()(surge_detector.py, SPEC-AI-100)와 동일한 반환값
+    규칙(다중 라벨 시 mixed, 라벨 없음 시 multi_day_dominant, 단일 라벨 시
+    {label}_dominant)을 재현하되, 컴포넌트 점수 대신 surge_basis 멤버십만을 입력으로
+    한다(REQ-AI108-002 — 원 점수 값 재구성/추정 금지).
+
+    Args:
+        surge_basis: FundSignal.surge_metadata의 "surge_basis" 리스트(신호 발화에
+                     기여한 탐지기 이름 목록). None 또는 빈 리스트는 미발화로 취급한다.
+        horizon_labels: ensemble.horizon_aware_thresholds.horizon_labels 설정
+                        (탐지기 키 → "same_day"|"next_day"|"multi_day").
+
+    Returns:
+        `same_day_dominant` / `next_day_dominant` / `multi_day_dominant` / `mixed`
+        중 하나 — compute_horizon_signature()와 동일한 반환값 규칙(REQ-AI108-001).
+    """
+    if not surge_basis:
+        return "multi_day_dominant"
+
+    normalized = {_SURGE_BASIS_TO_ENSEMBLE_KEY.get(name, name) for name in surge_basis}
+    ensemble_members = normalized & _ENSEMBLE_HORIZON_KEYS
+
+    if not ensemble_members:
+        return "multi_day_dominant"
+
+    active_labels = {horizon_labels.get(key, "multi_day") for key in ensemble_members}
+    if len(active_labels) > 1:
+        return "mixed"
+    (only_label,) = active_labels
+    return f"{only_label}_dominant"
+
+
+_HORIZON_SIGNATURE_BUCKETS: tuple[str, ...] = (
+    "same_day_dominant",
+    "next_day_dominant",
+    "multi_day_dominant",
+    "mixed",
+)
+
+
+# @MX:ANCHOR: [AUTO] _analyze_precision_by_horizon_signature — SPEC-AI-108 지평
+# 시그니처별 정밀도 집계 진입점. evaluate_surge_predictions의 신규 진단 블록에서 호출된다.
+# @MX:REASON: SPEC-AI-100의 지평 taxonomy가 실제로 서로 다른 예측 정밀도와
+# 상관관계가 있는지를 측정하는 최초의 코드 — SPEC-AI-100 Open Question 2의 증거 입력.
+# @MX:SPEC: SPEC-AI-108 REQ-AI108-003, REQ-AI108-004
+def _analyze_precision_by_horizon_signature(
+    db: Session,
+    trading_date: date,
+    signal_rows: list[Any],
+    horizon_labels: dict[str, str],
+) -> dict[str, dict[str, Any]]:
+    """predicted_set 신호를 지평 시그니처 4개 버킷으로 분류해 정밀도를 산출한다.
+
+    2단계에서 이미 조회한 signal_rows를 재사용한다 — predicted_set을 재조회하지
+    않는다(REQ-AI108-003). SurgeSignalForwardOutcome은
+    (trading_date, signal_rows의 fund_signal_id 집합)으로 독립 재조회한다
+    (_persist_signal_forward_outcomes의 시그니처/반환값은 무변경, §Decisions D3).
+
+    Args:
+        db: SQLAlchemy 동기 세션
+        trading_date: 평가 기준 날짜 (T당일, SurgeSignalForwardOutcome 조회 기준)
+        signal_rows: evaluate_surge_predictions 2단계에서 조회한 신호 행
+                     (.fund_signal_id, .surge_metadata 보유)
+        horizon_labels: ensemble.horizon_aware_thresholds.horizon_labels 설정
+
+    Returns:
+        4개 버킷(same_day_dominant/next_day_dominant/multi_day_dominant/mixed) 각각에
+        대한 {signal_count, forward_positive_count, precision} dict.
+        signal_count==0인 버킷은 precision=None(0으로 나누기 금지, REQ-AI108-004).
+    """
+    fund_signal_ids = [row.fund_signal_id for row in signal_rows]
+    forward_return_by_id: dict[int, float | None] = {}
+    if fund_signal_ids:
+        outcome_rows = (
+            db.query(
+                SurgeSignalForwardOutcome.fund_signal_id,
+                SurgeSignalForwardOutcome.forward_max_return_pct,
+            )
+            .filter(
+                SurgeSignalForwardOutcome.trading_date == trading_date,
+                SurgeSignalForwardOutcome.fund_signal_id.in_(fund_signal_ids),
+            )
+            .all()
+        )
+        forward_return_by_id = {
+            row.fund_signal_id: row.forward_max_return_pct for row in outcome_rows
+        }
+
+    buckets: dict[str, dict[str, Any]] = {
+        name: {"signal_count": 0, "forward_positive_count": 0, "precision": None}
+        for name in _HORIZON_SIGNATURE_BUCKETS
+    }
+
+    for row in signal_rows:
+        # spec.md §D Edge Cases — surge_metadata JSON 파싱 실패 시 surge_basis=None으로
+        # 안전하게 취급한다(개별 신호 파싱 실패가 전체 진단을 중단시키지 않음).
+        surge_basis: list[str] | None = None
+        try:
+            metadata = json.loads(row.surge_metadata) if row.surge_metadata else None
+            if isinstance(metadata, dict):
+                candidate_basis = metadata.get("surge_basis")
+                if isinstance(candidate_basis, list):
+                    surge_basis = candidate_basis
+        except (TypeError, ValueError):
+            surge_basis = None
+
+        signature = _reconstruct_horizon_signature_from_basis(surge_basis, horizon_labels)
+        bucket = buckets[signature]
+        bucket["signal_count"] += 1
+
+        # forward_max_return_pct가 NULL(SurgeSignalForwardOutcome 행 부재 포함)인 신호는
+        # signal_count에는 포함하되 forward_positive_count 판정에서는 False(양성 아님)로
+        # 취급한다 — SPEC-AI-101의 기존 forward_actual_codes 판정과 동일 기준(edge case).
+        forward_max_return_pct = forward_return_by_id.get(row.fund_signal_id)
+        if forward_max_return_pct is not None and forward_max_return_pct >= 10.0:
+            bucket["forward_positive_count"] += 1
+
+    for bucket in buckets.values():
+        if bucket["signal_count"] > 0:
+            bucket["precision"] = bucket["forward_positive_count"] / bucket["signal_count"]
+
+    return buckets
+
+
 def evaluate_surge_predictions(
     db: Session,
     trading_date: date,
@@ -1129,6 +1293,33 @@ def evaluate_surge_predictions(
         "신호가 기준 병렬 지표: forward_based_recall=%s, forward_based_precision=%s",
         forward_based_recall, forward_based_precision,
     )
+
+    # @MX:NOTE: [AUTO] SPEC-AI-108 REQ-AI108-001/003/006/007 — 지평 시그니처별 정밀도
+    # 진단(순수 관측, 신규 쓰기 없음). surge_basis attribution으로 지평 시그니처를 사후
+    # 재구성(compute_horizon_signature() 재호출 불가 — §Context [E-2])하고,
+    # SurgeSignalForwardOutcome을 독립 재조회해 4개 버킷 정밀도를 계산한다. 이 진단은
+    # 신호 생성/게이팅/앙상블/매매 실행 경로에 어떤 영향도 주지 않으며, 예외는 격리되어
+    # 핵심 평가 결과(SurgePredictionEvaluation)/REQ-AI101-001의 EOD upsert에 영향을
+    # 주지 않는다(REQ-AI108-005, REQ-AI108-007).
+    # @MX:SPEC: SPEC-AI-108 REQ-AI108-001, REQ-AI108-003, REQ-AI108-006, REQ-AI108-007
+    try:
+        from app.surge_config.surge_settings import get_surge_config
+
+        _horizon_config = get_surge_config()
+        horizon_labels = _horizon_config.ensemble.horizon_aware_thresholds.horizon_labels
+        horizon_precision = _analyze_precision_by_horizon_signature(
+            db, trading_date, signal_rows, horizon_labels
+        )
+        logger.info(
+            "[지평시그니처정밀도] %s",
+            {k: v for k, v in horizon_precision.items()},
+        )
+    except Exception as _hpe:
+        logger.warning("[지평시그니처정밀도] 진단 실패 (무시): %s", _hpe)
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
     # SPEC-AI-065 REQ-5: pool_counts 정규화
     _pool_a = (pool_counts or {}).get("pool_a", 0)

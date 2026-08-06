@@ -4,6 +4,45 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Feature — SPEC-AI-108: 급등예측 지평 시그니처별 정밀도 분리 측정 — 순수 관측 진단 (2026-08-06)
+
+**목적**: SPEC-AI-100이 도입한 지평 시그니처(`same_day_dominant`/`next_day_dominant`/
+`multi_day_dominant`/`mixed`) taxonomy가 실제로 서로 다른 예측 정밀도를 갖는지
+단 한 번도 측정된 적이 없었다. **⚠️ 순수 읽기 진단만 추가 —
+`horizon_aware_thresholds.enabled`는 `false`, `.shadow_mode_enabled`는 `true`로
+그대로 유지되며, 신호 생성·게이팅·앙상블·매매 실행 경로는 전혀 건드리지 않는다.**
+측정 결과는 SPEC-AI-100 Open Question 2(지평별 임계값 수치 확정)의 증거 입력으로만
+쓰이며, 본 SPEC 자신은 어떤 결정도 내리지 않는다.
+
+**핵심 변경 (REQ-AI108-001~008, AC-108-001~010)**:
+
+1. **지평 시그니처 사후 재구성(REQ-AI108-001/002)** — `surge_evaluation_service.py`에
+   신규 사설 함수 `_reconstruct_horizon_signature_from_basis()`를 추가. 라이브
+   `compute_horizon_signature()`(SPEC-AI-100)는 7개 앙상블 키 전부의 컴포넌트
+   점수를 동시 입력으로 요구하나 그 중 3개는 영속화되지 않아 평가 시점 재호출이
+   불가능하므로, SPEC-AI-070의 attribution-not-re-score 원칙을 재사용해
+   `surge_metadata.surge_basis` 멤버십만으로 재구성한다. `surge_basis` 문자열-앙상블
+   키 정규화 매핑(`{"immediate_disclosure": "disclosure_pattern", "legacy":
+   "legacy_detectors"}`)을 코드 대조로 확정해 적용했다.
+2. **지평 시그니처별 정밀도 집계(REQ-AI108-003/004)** — 신규 함수
+   `_analyze_precision_by_horizon_signature()`가 `SurgeSignalForwardOutcome`을
+   독립 재조회(SPEC-AI-101, 시그니처/반환값 무변경)해 4개 버킷의
+   `{signal_count, forward_positive_count, precision}`을 산출한다. 신호 수 0인
+   버킷은 `precision=None`(0으로 나누기 금지, "측정 불가"와 "0%" 구분).
+3. **격리된 구조화 로그 배선(REQ-AI108-006/007)** — `evaluate_surge_predictions()`
+   내부, `_persist_signal_forward_outcomes()` 호출 직후에 `try/except` 격리 블록으로
+   배선. `[지평시그니처정밀도]` 태그의 INFO 로그 1줄로 4개 버킷 결과를 남기며,
+   예외는 경고 로그만 남기고 핵심 평가 결과(`SurgePredictionEvaluation`)/
+   `SurgeSignalForwardOutcome` upsert에 영향을 주지 않는다.
+4. **게이팅·신규 테이블 무변경(REQ-AI108-005)** — 신규 DB 테이블/컬럼/마이그레이션
+   없음. `compute_horizon_signature()`, `select_effective_threshold()`,
+   `run_horizon_shadow_comparison()`, `check_horizon_transition_readiness()`,
+   `evaluate_high_based_outcomes()`, `_persist_signal_forward_outcomes()` 본체
+   무수정.
+5. **증거 활용 절차 문서화(REQ-AI108-008)** — plan.md §C에 SPEC-AI-100 Open
+   Question 2 판단 참고 방법과 §Decisions D1("완전 분리 기각") 재검토 참고 방법을
+   문서화했다(본 SPEC은 어느 결정도 내리지 않음).
+
 ### Feature — SPEC-AI-107: 급등예측 confidence 캘리브레이터 — 섀도우 학습 배선(프로모션은 보류) (2026-08-06)
 
 **목적**: `surge_calibrator.py`의 재학습 진입점 `retrain_calibrator()`가 이미 구현되어
