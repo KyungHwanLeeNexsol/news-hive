@@ -59,7 +59,7 @@ m1_to_mN_commit_strategy: single-commit (no formal milestone split; TASK-001~003
 
 ```yaml
 sync_complete_at: 2026-08-06
-sync_commit_sha: pending-backfill-SPEC-AI-106
+sync_commit_sha: 4deddbb
 sync_status: completed
 changelog_entry_position: CHANGELOG.md [Unreleased] 최상단 (SPEC-AI-106 섹션, grep count 1)
 frontmatter_status_transitions:
