@@ -57,7 +57,15 @@ m1_to_mN_commit_strategy: single-commit (no formal milestone split; TASK-001~003
 
 ## §E.4 Sync-phase Audit-Ready Signal
 
-_<pending sync-phase>_
+```yaml
+sync_complete_at: 2026-08-06
+sync_commit_sha: pending-backfill-SPEC-AI-106
+sync_status: completed
+changelog_entry_position: CHANGELOG.md [Unreleased] 최상단 (SPEC-AI-106 섹션, grep count 1)
+frontmatter_status_transitions:
+  spec_md: "in-progress -> completed"
+readme_disposition: "변경 불요 — 내부 관측 배선(scheduler.py try/except 1블록), 사용자 대면 표면 없음"
+```
 
 ## §F Phase 4 Mode Selection
 

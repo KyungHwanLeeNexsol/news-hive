@@ -2,7 +2,7 @@
 id: SPEC-AI-106
 title: "지평 인식 임계값 섀도우 전환 게이트 가시성 확립 — 일일 평가 잡 통합"
 version: "0.1.0"
-status: in-progress
+status: completed
 created: 2026-08-06
 updated: 2026-08-06
 author: Nexsol
