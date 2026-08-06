@@ -53,7 +53,26 @@ m1_to_mN_commit_strategy: single M1 commit (Tier M, DDD single-cycle scope — A
 
 ## §E.4 Sync-phase Audit-Ready Signal
 
-_<pending sync-phase>_
+```yaml
+sync_complete_at: 2026-08-06
+sync_commit_sha: pending-backfill-SPEC-AI-107
+sync_status: PASS
+changelog_verified: true (cross-checked against get_surge_calibration_pairs_with_time(),
+  split_walk_forward()/compute_brier_score()/run_shadow_training()/promote_candidate() in
+  surge_calibrator.py, _run_surge_calibrator_shadow_training() cron Sunday 03:00 KST in
+  scheduler.py — all function names, file paths, and cron schedule confirmed accurate;
+  no CHANGELOG edit required)
+readme_disposition: no update (internal shadow-training infrastructure, no user-facing
+  surface — consistent with SPEC-AI-104/105/106 judgment)
+b12_self_test_a: PASS (grep -c 'SPEC-AI-107' CHANGELOG.md == 1 before this commit — no
+  duplicate entry)
+b12_self_test_b: PASS (acceptance.md SSOT AC row count == 11 matches CHANGELOG's stated
+  REQ-AI107-001~009 + AC-107-001~011 coverage)
+b12_self_test_c: PASS (backend/app/services/surge_calibrator.py, signal_verifier.py,
+  scheduler.py all verified present via grep of actual function definitions)
+test_evidence: "pytest tests/test_spec_ai_107.py tests/test_surge_calibrator.py -q -m
+  \"not slow\" -> 47 passed"
+```
 
 ## §F Phase 4 Mode Selection
 

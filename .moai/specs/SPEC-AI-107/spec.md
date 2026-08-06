@@ -2,7 +2,7 @@
 id: SPEC-AI-107
 title: "급등예측 confidence 캘리브레이터 — 섀도우 학습 배선(프로모션은 보류)"
 version: "0.1.0"
-status: in-progress
+status: completed
 created: 2026-08-06
 updated: 2026-08-06
 author: Nexsol
