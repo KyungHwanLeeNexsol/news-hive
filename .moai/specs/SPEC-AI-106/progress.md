@@ -41,7 +41,7 @@ FN/TP 분석) 무수정 — 신규 블록만 두 블록 사이에 삽입.
 
 ```yaml
 run_complete_at: 2026-08-06
-run_commit_sha: pending-backfill-spec-ai-106-m1
+run_commit_sha: ef041218a3a1ca2d454f425a90632d1afbfda3eb
 run_status: implemented
 ac_pass_count: 8
 ac_fail_count: 0
