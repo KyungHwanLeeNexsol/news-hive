@@ -55,7 +55,7 @@ m1_to_mN_commit_strategy: single M1 commit (Tier M, DDD single-cycle scope — A
 
 ```yaml
 sync_complete_at: 2026-08-06
-sync_commit_sha: pending-backfill-SPEC-AI-107
+sync_commit_sha: 40ac9f4
 sync_status: PASS
 changelog_verified: true (cross-checked against get_surge_calibration_pairs_with_time(),
   split_walk_forward()/compute_brier_score()/run_shadow_training()/promote_candidate() in
