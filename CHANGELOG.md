@@ -4,6 +4,12 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fix — Deploy: Alembic revision id 길이 호환성 (2026-08-10)
+
+- 운영 DB의 `alembic_version.version_num`이 기존 `varchar(32)`인 상태에서
+  `071_surge_universe_pool_history_pool_d` 같은 긴 revision id로 upgrade가 실패하던
+  문제를 배포 preflight에서 `varchar(255)`로 확장하도록 수정했다.
+
 ### Feature — SPEC-AI-112~116: 급등예측 회복 관측/Shadow 개선 배치 (2026-08-10)
 
 **목적**: 최근 급등예측력이 낮아진 원인을 후보 표면 부재, bridge NO-GO, same-day/T-1

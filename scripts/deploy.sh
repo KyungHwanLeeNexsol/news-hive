@@ -20,6 +20,21 @@ cd backend
 source venv/bin/activate
 pip install --quiet -r requirements.txt
 
+echo ">>> alembic version table compatibility..."
+python - <<'PY'
+from sqlalchemy import text
+
+from app.database import engine
+
+with engine.begin() as conn:
+    conn.execute(
+        text(
+            "ALTER TABLE IF EXISTS alembic_version "
+            "ALTER COLUMN version_num TYPE VARCHAR(255)"
+        )
+    )
+PY
+
 echo ">>> alembic upgrade..."
 alembic upgrade head
 
