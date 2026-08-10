@@ -101,3 +101,8 @@ uv run mypy app/         # 타입 체크
 | SPEC-AI-075 | near_limit_up_carry 평가 지평 불일치 교정 | 완료 (2026-07-08) |
 | SPEC-AI-076 | 스캔 유니버스 풀 절단 크라우딩아웃 교정 | 완료 (2026-07-09) |
 | SPEC-AI-077 | near_limit_up NULL 시총 후보 굶주림 교정 | 완료 (2026-07-09) |
+| SPEC-AI-112 | 급등예측 후보 표면 회복 attribution | 구현 (2026-08-10) |
+| SPEC-AI-113 | Pool A bridge readiness/canary guardrail | 구현-NO-GO (2026-08-10) |
+| SPEC-AI-114 | same-day catalyst lane 분리 | 구현 (2026-08-10) |
+| SPEC-AI-115 | gate/drop attribution 및 relaxed gate shadow | 구현 (2026-08-10) |
+| SPEC-AI-116 | missing trigger shadow detector pack | 구현 (2026-08-10) |

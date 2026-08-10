@@ -316,3 +316,193 @@ def analyze_bridge_shadow_precision_by_date(
         }
 
     return result
+
+
+def evaluate_bridge_activation_readiness(
+    db: "Session",
+    *,
+    target_pool: str = "pool_a",
+    min_trading_days: int = 10,
+    min_precision_floor: float = 0.05,
+    max_zero_precision_streak: int = 4,
+) -> dict[str, object]:
+    # @MX:NOTE: [AUTO] SPEC-AI-111 REQ-AI111-002/003 — bridge 실제 활성화 전
+    # readiness gate. shadow 후보, 실제 outcome, non-null 평가 precision이 모두 있는 날짜만
+    # eligible로 인정한다. DB 쓰기·네트워크 호출 없이 기존 계측 테이블만 읽는다.
+    # @MX:SPEC: SPEC-AI-111 REQ-AI111-002, REQ-AI111-003
+    """Pool A bridge canary 활성화 가능 여부를 읽기 전용으로 판단한다.
+
+    Eligible day는 다음 세 가지를 모두 만족해야 한다.
+    1. target_pool의 bridge shadow 후보가 존재한다.
+    2. 같은 날짜의 `SurgeActualOutcome` 행이 존재한다.
+    3. 같은 날짜의 `SurgePredictionEvaluation.precision`이 non-null이다.
+
+    Pool A와 Pool C 정밀도는 `analyze_bridge_shadow_precision_by_date()`를 재사용해
+    일자별로 분리 계산하며, target_pool 통과 여부에 다른 pool을 절대 blend하지 않는다.
+    """
+    if target_pool not in _BRIDGE_SHADOW_POOL_NAMES:
+        return {
+            "ready": False,
+            "reason": "unsupported_pool",
+            "target_pool": target_pool,
+            "required_days": min_trading_days,
+            "eligible_days": 0,
+            "shadow_outcome_days": 0,
+            "pool_total": 0,
+            "pool_surge_count": 0,
+            "pool_precision": None,
+            "baseline_precision": None,
+            "precision_threshold": None,
+            "zero_precision_streak": 0,
+            "daily": [],
+        }
+    if min_trading_days <= 0:
+        raise ValueError("min_trading_days must be positive")
+
+    from app.models.surge_actual_outcome import SurgeActualOutcome
+    from app.models.surge_bridge_shadow_candidate import SurgeBridgeShadowCandidate
+    from app.models.surge_prediction_evaluation import SurgePredictionEvaluation
+
+    shadow_rows = (
+        db.query(SurgeBridgeShadowCandidate.trading_date)
+        .filter(SurgeBridgeShadowCandidate.entry_pool == target_pool)
+        .distinct()
+        .order_by(SurgeBridgeShadowCandidate.trading_date.desc())
+        .all()
+    )
+    shadow_dates = [row.trading_date for row in shadow_rows]
+
+    if shadow_dates:
+        outcome_rows = (
+            db.query(SurgeActualOutcome.trading_date)
+            .filter(SurgeActualOutcome.trading_date.in_(shadow_dates))
+            .distinct()
+            .all()
+        )
+        outcome_dates = {row.trading_date for row in outcome_rows}
+    else:
+        outcome_dates = set()
+
+    shadow_outcome_dates = [d for d in shadow_dates if d in outcome_dates]
+    if len(shadow_outcome_dates) < min_trading_days:
+        return {
+            "ready": False,
+            "reason": "insufficient_shadow_days",
+            "target_pool": target_pool,
+            "required_days": min_trading_days,
+            "eligible_days": 0,
+            "shadow_outcome_days": len(shadow_outcome_dates),
+            "pool_total": 0,
+            "pool_surge_count": 0,
+            "pool_precision": None,
+            "baseline_precision": None,
+            "precision_threshold": None,
+            "zero_precision_streak": 0,
+            "daily": [],
+        }
+
+    baseline_rows = (
+        db.query(
+            SurgePredictionEvaluation.evaluation_date,
+            SurgePredictionEvaluation.precision,
+        )
+        .filter(
+            SurgePredictionEvaluation.evaluation_date.in_(shadow_outcome_dates),
+            SurgePredictionEvaluation.precision.isnot(None),
+        )
+        .order_by(SurgePredictionEvaluation.evaluation_date.desc())
+        .all()
+    )
+    baseline_by_date = {
+        row.evaluation_date: float(row.precision)
+        for row in baseline_rows
+        if row.precision is not None
+    }
+    eligible_dates = [d for d in shadow_outcome_dates if d in baseline_by_date]
+
+    if len(eligible_dates) < min_trading_days:
+        return {
+            "ready": False,
+            "reason": "insufficient_baseline_days",
+            "target_pool": target_pool,
+            "required_days": min_trading_days,
+            "eligible_days": len(eligible_dates),
+            "shadow_outcome_days": len(shadow_outcome_dates),
+            "pool_total": 0,
+            "pool_surge_count": 0,
+            "pool_precision": None,
+            "baseline_precision": None,
+            "precision_threshold": None,
+            "zero_precision_streak": 0,
+            "daily": [],
+        }
+
+    selected_dates = eligible_dates[:min_trading_days]
+    pool_total = 0
+    pool_surge_count = 0
+    daily: list[dict[str, object]] = []
+    target_precisions_by_date: dict[date, float | None] = {}
+
+    for trading_date in selected_dates:
+        pool_results = analyze_bridge_shadow_precision_by_date(db, trading_date)
+        target_stats = pool_results[target_pool]
+        target_total = int(target_stats["total"] or 0)
+        target_surge_count = int(target_stats["surge_count"] or 0)
+        pool_total += target_total
+        pool_surge_count += target_surge_count
+        target_precisions_by_date[trading_date] = (
+            float(target_stats["precision"])
+            if target_stats["precision"] is not None
+            else None
+        )
+        daily.append(
+            {
+                "trading_date": trading_date,
+                "baseline_precision": baseline_by_date[trading_date],
+                "pools": pool_results,
+            }
+        )
+
+    pool_precision = (pool_surge_count / pool_total) if pool_total > 0 else None
+    baseline_precision = sum(baseline_by_date[d] for d in selected_dates) / len(
+        selected_dates
+    )
+    precision_threshold = max(min_precision_floor, baseline_precision)
+
+    current_zero_streak = 0
+    max_seen_zero_streak = 0
+    for trading_date in reversed(selected_dates):
+        if target_precisions_by_date[trading_date] == 0.0:
+            current_zero_streak += 1
+            max_seen_zero_streak = max(max_seen_zero_streak, current_zero_streak)
+        else:
+            current_zero_streak = 0
+
+    ready = True
+    reason = "ready"
+    if pool_precision is None:
+        ready = False
+        reason = "no_pool_candidates"
+    elif max_seen_zero_streak > max_zero_precision_streak:
+        ready = False
+        reason = "zero_precision_streak"
+    elif pool_precision < precision_threshold:
+        ready = False
+        reason = "low_precision"
+
+    return {
+        "ready": ready,
+        "reason": reason,
+        "target_pool": target_pool,
+        "required_days": min_trading_days,
+        "eligible_days": len(selected_dates),
+        "eligible_dates": selected_dates,
+        "shadow_outcome_days": len(shadow_outcome_dates),
+        "pool_total": pool_total,
+        "pool_surge_count": pool_surge_count,
+        "pool_precision": pool_precision,
+        "baseline_precision": baseline_precision,
+        "precision_threshold": precision_threshold,
+        "zero_precision_streak": max_seen_zero_streak,
+        "daily": daily,
+    }

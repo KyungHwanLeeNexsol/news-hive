@@ -2,9 +2,9 @@
 id: SPEC-AI-102
 title: "급등예측 후보군 손실 구조 개선: 유니버스-탐지기 의존성 분리 + bridge 대상 확장 + 가격조회 배치 전환 완결"
 version: "0.1.0"
-status: in-progress
+status: implemented
 created: 2026-08-04
-updated: 2026-08-05
+updated: 2026-08-10
 author: Nexsol
 priority: High
 phase: "backend surge-detection v0.1.0"

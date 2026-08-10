@@ -133,6 +133,22 @@ Phase 6: SPEC-AI-006                                ⏳ PLANNED (100건+ 거래 
 Phase 7: SPEC-FOLLOW-001                             ⏳ PLANNED
 ```
 
+## Phase 9: Surge Prediction Recall Recovery (2026-08-10)
+
+This phase was added after operating evidence showed that low surge prediction power is primarily
+caused by candidate-surface absence, disabled bridge promotion, horizon mixing, conservative gate
+drops, and missing trigger classes.
+
+| Order | SPEC ID | Title | Status | Dependencies |
+|---:|---|---|---|---|
+| 1 | SPEC-AI-112 | 급등예측 후보 표면 회복 - absent actual attribution and source-pool discovery | implemented | SPEC-AI-092, 096, 104, 105, 109, 110 |
+| 2 | SPEC-AI-113 | 급등예측 Pool A bridge NO-GO 해소 및 운영 canary 전환 | implemented-no-go | SPEC-AI-105, 109, 110, 111 |
+| 3 | SPEC-AI-114 | 급등예측 same-day catalyst lane 분리 및 horizon별 평가 | implemented | SPEC-AI-083, 101, 109, 110 |
+| 4 | SPEC-AI-115 | 급등예측 gate/drop attribution 및 보수 필터 완화 shadow | implemented | SPEC-AI-096, 100, 102, 110, 112 |
+| 5 | SPEC-AI-116 | 급등예측 missing trigger detector pack | implemented | SPEC-AI-112, 114, 115 |
+
+Cleanup record: `.moai/reports/surge-prediction-recovery/2026-08-10-spec-cleanup.md`.
+
 ## Usage
 
 To implement any SPEC:

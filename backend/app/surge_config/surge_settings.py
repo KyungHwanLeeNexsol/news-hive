@@ -731,6 +731,34 @@ class SurgeDetectionConfig(BaseModel):
     # @MX:NOTE: [AUTO] SPEC-AI-105 REQ-AI105-001 — bridge shadow 계측 토글(기본 비활성)
     # @MX:SPEC: SPEC-AI-105 REQ-AI105-001
     scan_universe_bridge_shadow_enabled: bool = False
+    # SPEC-AI-115 REQ-AI115-001: gate/drop attribution 관측 토글. 기본값은 False로
+    # 유지해 공식 surge_candidate 산출과 무관한 side effect 경로를 명시 opt-in으로 둔다.
+    # @MX:NOTE: [AUTO] SPEC-AI-115 REQ-AI115-001 — drop observation side-effect only
+    # @MX:SPEC: SPEC-AI-115 REQ-AI115-001, REQ-AI115-002
+    gate_drop_observation_enabled: bool = False
+    # SPEC-AI-115 REQ-AI115-003: 보수 gate 완화 shadow. 공식 후보/FundSignal 생성에는
+    # 절대 합류하지 않고, 아래 threshold_delta 범위 안의 비승격 후보만 observation에
+    # shadow_candidate=True로 남긴다.
+    # @MX:NOTE: [AUTO] SPEC-AI-115 REQ-AI115-003 — relaxed gate shadow measurement
+    # @MX:SPEC: SPEC-AI-115 REQ-AI115-003
+    relaxed_gate_shadow_enabled: bool = False
+    relaxed_gate_shadow_threshold_delta: float = 0.05
+    # SPEC-AI-116: missing trigger detector pack. 전체 shadow runner와 family별 shadow
+    # runner는 모두 production emission과 분리된다. family 플래그가 False여도
+    # attribution selection이 GO이면 operator script에서 해당 family를 shadow로 실행할 수
+    # 있다. production enablement 플래그는 의도적으로 제공하지 않는다.
+    # @MX:NOTE: [AUTO] SPEC-AI-116 REQ-AI116-001/005 — shadow-first only
+    # @MX:SPEC: SPEC-AI-116 REQ-AI116-001, REQ-AI116-005
+    missing_trigger_shadow_enabled: bool = False
+    missing_trigger_contract_mna_shadow_enabled: bool = False
+    missing_trigger_volume_spike_shadow_enabled: bool = False
+    missing_trigger_low_liquidity_shadow_enabled: bool = False
+    missing_trigger_attribution_activation_threshold: float = 0.10
+    missing_trigger_min_eligible_days: int = 10
+    missing_trigger_volume_ratio_threshold: float = 3.0
+    missing_trigger_volume_baseline_days: int = 20
+    missing_trigger_low_liquidity_market_cap_eok: int = 1000
+    missing_trigger_low_liquidity_min_change_rate: float = 5.0
 
     # @MX:ANCHOR: [AUTO] 앙상블 가중치 합산 검증 — 8개 탐지기 가중치 합산 반드시 1.0
     # @MX:REASON: 가중치 합산 != 1.0 이면 앙상블 스코어 범위가 0~1을 벗어나 시그널 임계값 판정이 왜곡됨

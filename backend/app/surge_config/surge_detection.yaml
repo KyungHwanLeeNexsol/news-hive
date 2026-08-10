@@ -316,6 +316,23 @@ surge_detection:
   # false 유지 — shadow 계측은 관측 전용이며 qualified/merged/매매 실행 경로에 영향을
   # 주지 않는다(REQ-AI105-006 무회귀 보장).
   scan_universe_bridge_shadow_enabled: true
+  # SPEC-AI-115: gate/drop attribution + relaxed threshold shadow. 관측 전용이며
+  # 공식 surge_candidate/FundSignal 산출에는 합류하지 않는다.
+  gate_drop_observation_enabled: true
+  relaxed_gate_shadow_enabled: true
+  relaxed_gate_shadow_threshold_delta: 0.05
+  # SPEC-AI-116: missing trigger detector pack. Shadow/report only; no production
+  # `surge_candidate` emission flag exists in this rollout.
+  missing_trigger_shadow_enabled: true
+  missing_trigger_contract_mna_shadow_enabled: false
+  missing_trigger_volume_spike_shadow_enabled: false
+  missing_trigger_low_liquidity_shadow_enabled: false
+  missing_trigger_attribution_activation_threshold: 0.10
+  missing_trigger_min_eligible_days: 10
+  missing_trigger_volume_ratio_threshold: 3.0
+  missing_trigger_volume_baseline_days: 20
+  missing_trigger_low_liquidity_market_cap_eok: 1000
+  missing_trigger_low_liquidity_min_change_rate: 5.0
   # SPEC-AI-066 REQ-AI066-001/006: 촉매 확신도 기반 조건부 완화 설정
   # enabled=false이면 REQ-002/003 완화 전면 비활성 → SPEC-AI-030/028 레거시 동작 복원
   catalyst_conviction:

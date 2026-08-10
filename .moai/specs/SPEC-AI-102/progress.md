@@ -102,3 +102,10 @@ m1_to_mN_commit_strategy: single-commit (TASK-002/003/005 전부 동일 파일 `
 ## §E.4 Sync-phase Audit-Ready Signal
 
 _<pending sync-phase>_
+
+## §E.5 Residual Cleanup Note
+
+2026-08-10 cleanup pass: `spec.md` frontmatter was corrected from
+`in-progress` to `implemented` because §E.3 records run-phase completion and
+all ACs passing. Sync remains pending; do not mark this SPEC `completed` until
+`moai sync SPEC-AI-102` closes the documentation/changelog phase.

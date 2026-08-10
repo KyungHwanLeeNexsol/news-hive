@@ -4,6 +4,92 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Feature — SPEC-AI-112~116: 급등예측 회복 관측/Shadow 개선 배치 (2026-08-10)
+
+**목적**: 최근 급등예측력이 낮아진 원인을 후보 표면 부재, bridge NO-GO, same-day/T-1
+지평 혼합, 보수 gate drop, missing trigger 부재로 분리하고, production 예측을 성급히
+확대하지 않는 shadow-first 회복 장치를 추가한다.
+
+**핵심 변경**:
+
+1. `SPEC-AI-112` — absent actual attribution 리포트 추가. 실제 급등주가 공식 후보 표면에
+   없었던 이유를 source-pool, same-day catalyst, near-limit carry 등으로 분류한다.
+2. `SPEC-AI-113` — Pool A bridge readiness/canary guardrail 추가. 현재 상태는
+   `implemented-no-go`이며, 운영 DB의 shadow precision 조건 충족 전까지 production bridge는
+   켜지지 않는다.
+3. `SPEC-AI-114` — same-day catalyst lane 분리. 장중/당일 이벤트 후보가 표준 T-1 예측
+   지표를 오염하지 않도록 별도 lane metric으로 분리한다.
+4. `SPEC-AI-115` — `surge_gate_drop_observations` 테이블과 gate/drop attribution 리포트 추가.
+   보수 필터 완화는 `regime_threshold_minus_0_05` shadow profile로만 측정하며 official
+   `FundSignal` 출력은 유지한다.
+5. `SPEC-AI-116` — contract/M&A, volume spike, low-liquidity missing-trigger detector pack을
+   shadow-only로 추가. detector family별 GO/NO-GO readiness, same-day/next-day shadow lane,
+   candidate-count inflation과 added TP/FP를 보고한다.
+
+**검증**:
+
+- `tests/test_spec_ai_112.py`~`tests/test_spec_ai_116.py` 및 관련 회귀 묶음 통과:
+  `112 passed, 3 warnings`.
+- `ruff check` 통과.
+- `moai spec lint` for `SPEC-AI-112`~`SPEC-AI-116` 통과.
+
+**Deployment Notes**:
+
+- DB 마이그레이션 필요: `alembic upgrade head`
+  - `076_surge_gate_drop_observations`
+  - `077_surge_missing_trigger_shadow_candidate`
+- 운영 반영 직후 공식 급등예측 후보가 대폭 늘어나지 않는 것이 정상이다.
+  `SPEC-AI-115/116`은 shadow-only이며 최소 10 eligible trading days 이후 GO/NO-GO를
+  판단한다.
+
+### Feature — SPEC-AI-111: scan universe bridge Pool A 제한 활성화 readiness gate (2026-08-07)
+
+**목적**: 이미 구현된 scan universe bridge를 무작정 켜지 않고, Pool A shadow 정밀도와
+기존 평가 precision 기준선을 비교한 뒤 제한 canary 여부를 결정한다.
+
+**핵심 변경**:
+
+1. `evaluate_bridge_activation_readiness()` 추가 — Pool A shadow 후보, 실제 outcome,
+   non-null `SurgePredictionEvaluation.precision`이 모두 있는 날짜만 eligible로 인정한다.
+2. Pool A/C precision을 분리 유지하고, Pool C가 Pool A 통과 판단에 blend되지 않도록
+   회귀 테스트를 추가했다.
+3. Pool A-only bridge config에서 Pool C 0-limit, Pool B fetch 차단, Pool D 제외,
+   bridge 후보 수 로그 관측, 평가 API market/scannable recall 분리 유지 테스트를 추가했다.
+4. 현재 workspace의 app DB(`localhost:5432/news_hive`) 연결 실패로 readiness 운영 실행은
+   NO-GO 처리했고, `scan_universe_bridge_candidates_enabled`는 켜지 않았다.
+
+### Feature — SPEC-AI-110: 급등예측 평가 API 지표 명확화 (2026-08-07)
+
+**목적**: 저장된 `recall` 값이 scannable recall일 수 있어 시장 전체 recall로
+오독되는 문제를 줄인다.
+
+**핵심 변경**:
+
+1. 평가 API 목록/상세/history 응답에 `market_recall`, `market_f1_score`,
+   `recall_basis`를 추가했다.
+2. `scannable_recall`, `coverage`, `scannable_actual_count`, `total_actual_count`,
+   `high_based_recall`, `high_based_precision`, `high_based_coverage`를 명시 노출한다.
+3. 기존 `recall` 필드는 하위호환을 위해 그대로 유지한다.
+
+### Fix — SPEC-AI-109: 급등예측 평가 누락 자동복구 및 관리자 백필 (2026-08-07)
+
+**목적**: 운영 점검에서 공식 급등예측 평가가 2026-08-03까지만 존재하고
+2026-08-04 이후 평가 API가 404를 반환하는 상태를 확인했다. 기존 누락 감시는
+알림만 수행했고, 기존 `re-evaluate` API는 actual outcome이 이미 있는 날짜에만
+유효했으므로, actual/evaluation 누락을 한 번에 복구하는 P0 경로를 추가했다.
+
+**핵심 변경**:
+
+1. `repair_missing_surge_evaluation()` 추가 — actual outcome이 없으면
+   `collect_daily_surge_outcomes()`를 먼저 실행하고, 수집 후에도 actual row가 없으면
+   잘못된 `actual_surge_count=0` 평가 row 생성을 건너뛴다. 기존 수집 함수가 현재
+   상위 상승 종목을 조회하므로, 과거 날짜 actual 자동수집은 기본 차단한다.
+2. 19:15 KST `_run_surge_missing_evaluation_check()`가 누락 감지 시 자동복구를 1회
+   시도한다. 복구 실패는 로그로 격리한다.
+3. 관리자 전용 `POST /api/surge-trading/evaluation-backfill` 추가 — SSH 없이
+   `start_date~end_date` 범위의 평가 백필을 실행할 수 있다.
+4. 서비스/스케줄러/API 집중 테스트 추가.
+
 ### Feature — SPEC-AI-108: 급등예측 지평 시그니처별 정밀도 분리 측정 — 순수 관측 진단 (2026-08-06)
 
 **목적**: SPEC-AI-100이 도입한 지평 시그니처(`same_day_dominant`/`next_day_dominant`/

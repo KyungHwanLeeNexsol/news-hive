@@ -5,7 +5,7 @@ POST /surge/execute는 관리자 인증 필요.
 """
 import json
 import logging
-from datetime import date
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func
@@ -220,21 +220,7 @@ def get_evaluations(
             .limit(days)
             .all()
         )
-        return [
-            {
-                "evaluation_date": str(row.evaluation_date),
-                "predicted_count": row.predicted_count,
-                "actual_surge_count": row.actual_surge_count,
-                "true_positive": row.true_positive,
-                "false_positive": row.false_positive,
-                "false_negative": row.false_negative,
-                "precision": row.precision,
-                "recall": row.recall,
-                "f1_score": row.f1_score,
-                "created_at": row.created_at.isoformat() if row.created_at else None,
-            }
-            for row in rows
-        ]
+        return [_evaluation_list_item(row, db=db) for row in rows]
     except Exception as e:
         logger.error("급등 예측 평가 목록 조회 실패: %s", e)
         raise HTTPException(status_code=500, detail="평가 목록 조회 실패")
@@ -263,6 +249,129 @@ def _extract_pre_signal_change_pct(surge_metadata_json: str | None) -> float | N
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return value
+
+
+def _compute_market_recall(row) -> float | None:
+    """TP/전체 actual_surge_count 기준 시장 전체 recall을 계산한다."""
+    actual_count = int(row.actual_surge_count or 0)
+    if actual_count <= 0:
+        return None
+    return int(row.true_positive or 0) / actual_count
+
+
+def _compute_market_f1(row, market_recall: float | None) -> float | None:
+    """기존 precision과 시장 recall 기준 F1을 계산한다."""
+    precision = row.precision
+    if precision is None or market_recall is None:
+        return None
+    denom = precision + market_recall
+    if denom <= 0:
+        return 0.0
+    return 2 * precision * market_recall / denom
+
+
+def _evaluation_metric_fields(row) -> dict:
+    # @MX:NOTE: [AUTO] SPEC-AI-110 — 기존 recall 컬럼은 scannable recall로 저장될 수
+    # 있어 API 소비자가 시장 전체 recall로 오독하기 쉽다. 하위호환을 위해 recall 필드는
+    # 유지하고, count 기반 market_recall과 basis 필드를 병렬 노출한다.
+    # @MX:SPEC: SPEC-AI-110 REQ-AI110-001
+    market_recall = _compute_market_recall(row)
+    recall_basis = "scannable" if row.scannable_recall is not None else "market"
+    return {
+        "market_recall": market_recall,
+        "market_f1_score": _compute_market_f1(row, market_recall),
+        "recall_basis": recall_basis,
+        "scannable_recall": row.scannable_recall,
+        "coverage": row.coverage,
+        "scannable_actual_count": row.scannable_actual_count,
+        "total_actual_count": row.total_actual_count,
+        "high_based_recall": row.high_based_recall,
+        "high_based_precision": row.high_based_precision,
+        "high_based_coverage": row.high_based_coverage,
+    }
+
+
+def _bridge_candidate_count_fields(db: Session | None, signal_date) -> dict:
+    default = {
+        "bridge_candidate_count": 0,
+        "bridge_pool_a_candidate_count": 0,
+        "bridge_candidate_count_by_pool": {
+            "pool_a": 0,
+            "pool_b": 0,
+            "pool_c": 0,
+            "pool_d": 0,
+        },
+    }
+    if db is None or signal_date is None:
+        return default
+
+    from app.models.fund_signal import FundSignal
+
+    try:
+        rows = (
+            db.query(FundSignal.surge_metadata)
+            .filter(
+                FundSignal.signal_type == "surge_candidate",
+                FundSignal.surge_metadata.isnot(None),
+                func.date(FundSignal.created_at) == signal_date,
+            )
+            .all()
+        )
+    except Exception:
+        return default
+
+    by_pool = dict(default["bridge_candidate_count_by_pool"])
+    total = 0
+    for row in rows:
+        try:
+            metadata = json.loads(row.surge_metadata or "{}")
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(metadata, dict):
+            continue
+        basis = metadata.get("surge_basis")
+        if not isinstance(basis, list) or "scan_universe_bridge" not in basis:
+            continue
+        total += 1
+        for pool in by_pool:
+            if pool in basis:
+                by_pool[pool] += 1
+
+    return {
+        "bridge_candidate_count": total,
+        "bridge_pool_a_candidate_count": by_pool["pool_a"],
+        "bridge_candidate_count_by_pool": by_pool,
+    }
+
+
+def _evaluation_list_item(row, db: Session | None = None) -> dict:
+    item = {
+        "evaluation_date": str(row.evaluation_date),
+        "predicted_count": row.predicted_count,
+        "actual_surge_count": row.actual_surge_count,
+        "true_positive": row.true_positive,
+        "false_positive": row.false_positive,
+        "false_negative": row.false_negative,
+        "precision": row.precision,
+        "recall": row.recall,
+        "f1_score": row.f1_score,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+    item.update(_evaluation_metric_fields(row))
+    if db is not None:
+        from app.services.surge_trading_service import _get_prev_business_day
+        from app.services.surge_lane_metrics_service import build_surge_lane_metrics
+
+        item["lanes"] = build_surge_lane_metrics(db, row)
+        item.update(
+            _bridge_candidate_count_fields(
+                db, _get_prev_business_day(row.evaluation_date)
+            )
+        )
+    else:
+        item["lanes"] = {}
+        item.update(_bridge_candidate_count_fields(None, None))
+    return item
 
 
 def _get_signal_details_for_date(db: Session, eval_date) -> list:
@@ -338,7 +447,7 @@ def get_evaluation_by_date(
         if row is None:
             raise HTTPException(status_code=404, detail=f"{date_str} 평가 데이터 없음")
 
-        return {
+        response = {
             "evaluation_date": str(row.evaluation_date),
             "predicted_count": row.predicted_count,
             "actual_surge_count": row.actual_surge_count,
@@ -356,6 +465,15 @@ def get_evaluation_by_date(
             # 신뢰). 스냅샷 도입 이전 row는 None — signal_details/predicted_count로 fail-open.
             "predicted_codes": restore_predicted_codes(row),
         }
+        response.update(_evaluation_metric_fields(row))
+        from app.services.surge_trading_service import _get_prev_business_day
+        from app.services.surge_lane_metrics_service import build_surge_lane_metrics
+
+        response["lanes"] = build_surge_lane_metrics(db, row)
+        response.update(
+            _bridge_candidate_count_fields(db, _get_prev_business_day(eval_date))
+        )
+        return response
     except HTTPException:
         raise
     except Exception as e:
@@ -481,6 +599,10 @@ def get_prediction_history(
         if include_today:
             today_signals = signals_by_date.get(today, [])
             if today_signals:
+                from app.services.surge_lane_metrics_service import (
+                    compute_same_day_lane_metrics,
+                )
+
                 today_surge_signals = []
                 today_disclosure_signals = []
                 for fs, st in today_signals:
@@ -514,12 +636,36 @@ def get_prediction_history(
                     "precision": None,
                     "recall": None,
                     "f1_score": None,
+                    "market_recall": None,
+                    "market_f1_score": None,
+                    "recall_basis": None,
+                    "scannable_recall": None,
+                    "coverage": None,
+                    "scannable_actual_count": None,
+                    "total_actual_count": None,
+                    "high_based_recall": None,
+                    "high_based_precision": None,
+                    "high_based_coverage": None,
                     "avg_alpha_pct": None,
                     "error_breakdown": {},
                     # 하위호환: signals = surge + disclosure 전체
                     "signals": today_surge_signals + today_disclosure_signals,
                     "surge_signals": today_surge_signals,
                     "disclosure_signals": today_disclosure_signals,
+                    "lanes": {
+                        "next_day": {
+                            "lane": "next_day",
+                            "predicted_count": len(today_surge_signals),
+                            "true_positive": None,
+                            "false_positive": None,
+                            "false_negative": None,
+                            "precision": None,
+                            "recall": None,
+                            "recall_basis": None,
+                        },
+                        "same_day": compute_same_day_lane_metrics(db, today),
+                    },
+                    **_bridge_candidate_count_fields(db, today),
                 })
 
         for ev in evals:
@@ -555,7 +701,7 @@ def get_prediction_history(
             verified = [s["alpha_pct"] for s in surge_signals if s["alpha_pct"] is not None]
             avg_alpha = sum(verified) / len(verified) if verified else None
 
-            result.append({
+            row_item = {
                 # signal_date(T-1)을 행 레이블로 사용: "6/9 행 = 6/9에 생성한 시그널 = 6/10 예측"
                 "trading_date": str(signal_date_for_eval[ev.evaluation_date]),
                 # target_date(T) = 실제 예측 대상일 (급등이 발생하는 날)
@@ -580,7 +726,17 @@ def get_prediction_history(
                 # SPEC-AI-092 REQ-AI092-002: 평가 당시 공식 predicted set 스냅샷(있으면
                 # signal_date drift에 영향받지 않는 정본). 스냅샷 도입 이전 행은 None.
                 "predicted_codes": restore_predicted_codes(ev),
-            })
+            }
+            row_item.update(_evaluation_metric_fields(ev))
+            from app.services.surge_lane_metrics_service import build_surge_lane_metrics
+
+            row_item["lanes"] = build_surge_lane_metrics(db, ev)
+            row_item.update(
+                _bridge_candidate_count_fields(
+                    db, signal_date_for_eval[ev.evaluation_date]
+                )
+            )
+            result.append(row_item)
 
         return result
 
@@ -665,3 +821,84 @@ def re_evaluate_surge_predictions(
     except Exception as e:
         logger.error("급등 예측 재평가 실패: %s", e)
         raise HTTPException(status_code=500, detail="재평가 실패")
+
+
+def _is_surge_backfill_business_day(day: date) -> bool:
+    """급등평가 백필 대상 거래일 여부를 판정한다."""
+    try:
+        from app.services.surge_trading_service import KRX_EXTRA_HOLIDAYS
+
+        return day.weekday() < 5 and day not in KRX_EXTRA_HOLIDAYS
+    except Exception:
+        return day.weekday() < 5
+
+
+@router.post("/evaluation-backfill")
+def backfill_surge_evaluations(
+    request: Request,
+    start_date: str = Query(..., description="백필 시작일 (YYYY-MM-DD)"),
+    end_date: str | None = Query(None, description="백필 종료일 (YYYY-MM-DD, 생략 시 시작일만)"),
+    force_recollect_actual: bool = Query(False),
+    force_re_evaluate: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    # @MX:NOTE: [AUTO] SPEC-AI-109 — 운영 SSH 없이 특정 날짜/범위의
+    # surge_actual_outcome + surge_prediction_evaluation 누락을 복구하는 관리자 API.
+    # @MX:SPEC: SPEC-AI-109 REQ-AI109-003
+    """급등 actual/evaluation 누락을 날짜 범위로 백필한다."""
+    _require_admin(request)
+
+    try:
+        start = date.fromisoformat(start_date)
+        end = date.fromisoformat(end_date) if end_date else start
+    except ValueError:
+        raise HTTPException(status_code=400, detail="날짜 형식 오류: YYYY-MM-DD 필요")
+
+    if end < start:
+        raise HTTPException(status_code=400, detail="end_date는 start_date보다 빠를 수 없습니다.")
+
+    if (end - start).days > 31:
+        raise HTTPException(status_code=400, detail="한 번에 최대 32일 범위까지만 백필할 수 있습니다.")
+
+    from app.services.surge_evaluation_service import repair_missing_surge_evaluation
+
+    results = []
+    current = start
+    while current <= end:
+        if not _is_surge_backfill_business_day(current):
+            results.append({
+                "trading_date": str(current),
+                "status": "skipped_non_trading_day",
+            })
+            current += timedelta(days=1)
+            continue
+
+        try:
+            results.append(
+                repair_missing_surge_evaluation(
+                    db,
+                    current,
+                    force_recollect_actual=force_recollect_actual,
+                    force_re_evaluate=force_re_evaluate,
+                )
+            )
+        except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception("[급등평가백필] 날짜별 백필 실패: trading_date=%s", current)
+            results.append({
+                "trading_date": str(current),
+                "status": "failed",
+                "error": str(exc),
+            })
+        current += timedelta(days=1)
+
+    return {
+        "start_date": str(start),
+        "end_date": str(end),
+        "count": len(results),
+        "failed_count": sum(1 for row in results if row.get("status") == "failed"),
+        "results": results,
+    }

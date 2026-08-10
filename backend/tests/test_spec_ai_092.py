@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy.orm import Session
@@ -35,6 +35,7 @@ from app.services.surge_evaluation_service import (
     check_and_alert_missing_evaluation,
     detect_missing_evaluation_records,
     evaluate_surge_predictions,
+    repair_missing_surge_evaluation,
     restore_predicted_codes,
 )
 
@@ -504,3 +505,174 @@ class TestMissingEvaluationMonitor:
         status = check_and_alert_missing_evaluation(db, trading_date)
         assert status["actual_outcome_missing"] is True
         assert status["evaluation_missing"] is True
+
+    def test_repair_collects_missing_actual_then_evaluates(self, db: Session):
+        trading_date = date(2026, 8, 4)
+
+        async def fake_collect(session: Session, target_date: date) -> int:
+            session.add(SurgeActualOutcome(
+                trading_date=target_date,
+                stock_code="911091",
+                stock_name="복구테스트",
+                change_rate=1.0,
+                was_surge=False,
+                market="KOSPI",
+            ))
+            session.flush()
+            return 1
+
+        def fake_evaluate(session: Session, target_date: date, **kwargs):
+            ev = SurgePredictionEvaluation(
+                evaluation_date=target_date,
+                predicted_count=0,
+                actual_surge_count=0,
+                true_positive=0,
+                false_positive=0,
+                false_negative=0,
+                precision=None,
+                recall=None,
+                f1_score=None,
+            )
+            session.add(ev)
+            session.flush()
+            return ev
+
+        with (
+            patch(
+                "app.services.surge_actual_outcome_service.collect_daily_surge_outcomes",
+                side_effect=fake_collect,
+            ),
+            patch(
+                "app.services.surge_evaluation_service.evaluate_surge_predictions",
+                side_effect=fake_evaluate,
+            ) as mock_evaluate,
+        ):
+            result = repair_missing_surge_evaluation(
+                db,
+                trading_date,
+                allow_historical_actual_collection=True,
+            )
+
+        assert result["status"] == "repaired"
+        assert result["actual_collect_attempted"] is True
+        assert result["actual_collected_count"] == 1
+        assert result["evaluation_attempted"] is True
+        assert result["before"]["actual_outcome_missing"] is True
+        assert result["after"]["actual_outcome_missing"] is False
+        assert result["after"]["evaluation_missing"] is False
+        mock_evaluate.assert_called_once()
+
+    def test_repair_skips_evaluation_when_actual_collection_still_empty(
+        self, db: Session
+    ):
+        trading_date = date(2026, 8, 5)
+
+        async def fake_collect(session: Session, target_date: date) -> int:
+            return 0
+
+        with (
+            patch(
+                "app.services.surge_actual_outcome_service.collect_daily_surge_outcomes",
+                side_effect=fake_collect,
+            ),
+            patch(
+                "app.services.surge_evaluation_service.evaluate_surge_predictions"
+            ) as mock_evaluate,
+        ):
+            result = repair_missing_surge_evaluation(
+                db,
+                trading_date,
+                allow_historical_actual_collection=True,
+            )
+
+        assert result["status"] == "skipped_actual_outcome_missing"
+        assert result["actual_collect_attempted"] is True
+        assert result["actual_collected_count"] == 0
+        assert result["evaluation_attempted"] is False
+        mock_evaluate.assert_not_called()
+
+    def test_repair_skips_historical_actual_collection_by_default(
+        self, db: Session
+    ):
+        trading_date = date(2026, 1, 5)
+
+        with (
+            patch(
+                "app.services.surge_actual_outcome_service.collect_daily_surge_outcomes"
+            ) as mock_collect,
+            patch(
+                "app.services.surge_evaluation_service.evaluate_surge_predictions"
+            ) as mock_evaluate,
+        ):
+            result = repair_missing_surge_evaluation(db, trading_date)
+
+        assert result["status"] == "skipped_historical_actual_collection_unavailable"
+        assert result["actual_collect_attempted"] is False
+        assert result["evaluation_attempted"] is False
+        mock_collect.assert_not_called()
+        mock_evaluate.assert_not_called()
+
+    def test_repair_noops_when_records_already_complete(self, db: Session):
+        trading_date = date(2026, 8, 6)
+        db.add(SurgeActualOutcome(
+            trading_date=trading_date,
+            stock_code="911092",
+            stock_name="완료테스트",
+            change_rate=0.5,
+            was_surge=False,
+            market="KOSPI",
+        ))
+        db.add(SurgePredictionEvaluation(
+            evaluation_date=trading_date,
+            predicted_count=0,
+            actual_surge_count=0,
+            true_positive=0,
+            false_positive=0,
+            false_negative=0,
+            precision=None,
+            recall=None,
+            f1_score=None,
+        ))
+        db.commit()
+
+        with (
+            patch(
+                "app.services.surge_actual_outcome_service.collect_daily_surge_outcomes"
+            ) as mock_collect,
+            patch(
+                "app.services.surge_evaluation_service.evaluate_surge_predictions"
+            ) as mock_evaluate,
+        ):
+            result = repair_missing_surge_evaluation(db, trading_date)
+
+        assert result["status"] == "already_complete"
+        assert result["actual_collect_attempted"] is False
+        assert result["evaluation_attempted"] is False
+        mock_collect.assert_not_called()
+        mock_evaluate.assert_not_called()
+
+    def test_scheduler_missing_monitor_attempts_repair(self, monkeypatch):
+        import app.services.scheduler as scheduler_module
+
+        fake_db = MagicMock(name="db")
+        monkeypatch.setattr(scheduler_module, "_is_kr_market_open", lambda: True)
+
+        with (
+            patch.object(scheduler_module, "SessionLocal", return_value=fake_db),
+            patch(
+                "app.services.surge_evaluation_service.check_and_alert_missing_evaluation",
+                return_value={
+                    "trading_date": "2026-08-07",
+                    "actual_outcome_missing": True,
+                    "evaluation_missing": True,
+                },
+            ),
+            patch(
+                "app.services.surge_evaluation_service.repair_missing_surge_evaluation",
+                return_value={"status": "repaired"},
+            ) as mock_repair,
+        ):
+            scheduler_module._run_surge_missing_evaluation_check()
+
+        mock_repair.assert_called_once_with(fake_db)
+        fake_db.close.assert_called_once()

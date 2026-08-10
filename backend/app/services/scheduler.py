@@ -1151,6 +1151,45 @@ def _run_surge_verify_predictions():
         db.close()
 
 
+def _run_surge_bridge_guardrail_monitor():
+    """SPEC-AI-113: Pool A bridge canary rollback guardrail monitor."""
+    _start = _time.monotonic()
+    from app.services.surge_bridge_readiness_service import (
+        evaluate_pool_a_bridge_rollback_guardrails,
+    )
+    from app.surge_config.surge_settings import get_surge_config
+
+    db = SessionLocal()
+    try:
+        result = evaluate_pool_a_bridge_rollback_guardrails(
+            db,
+            get_surge_config(),
+            runtime_current_sec=None,
+            runtime_baseline_sec=None,
+        )
+        if result.get("recommend_rollback"):
+            logger.error(
+                "[브리지롤백가드] rollback recommended: triggers=%s rollback=%s",
+                result.get("triggers"),
+                result.get("rollback_config"),
+            )
+        else:
+            logger.info(
+                "[브리지롤백가드] status=%s reason=%s",
+                result.get("status"),
+                result.get("reason"),
+            )
+    except Exception as exc:
+        logger.warning("[브리지롤백가드] monitor 실패 (무시): %s", exc)
+    finally:
+        _record_job_duration("surge_bridge_guardrail_monitor", _time.monotonic() - _start)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        db.close()
+
+
 def _run_surge_auto_improve():
     """SPEC-AI-041: 탐지기 가중치 자동 개선 (평일 19:00 KST, verify_signals 18:00 이후)."""
     if not _is_kr_market_open():
@@ -1285,12 +1324,21 @@ def _run_surge_missing_evaluation_check():
         return
 
     _start = _time.monotonic()
-    from app.services.surge_evaluation_service import check_and_alert_missing_evaluation
+    from app.services.surge_evaluation_service import (
+        check_and_alert_missing_evaluation,
+        repair_missing_surge_evaluation,
+    )
 
     db = SessionLocal()
     try:
         status = check_and_alert_missing_evaluation(db)
         logger.info("[급등평가누락감시] 확인 완료: %s", status)
+        if status["actual_outcome_missing"] or status["evaluation_missing"]:
+            try:
+                repair_result = repair_missing_surge_evaluation(db)
+                logger.info("[급등평가누락감시] 자동복구 결과: %s", repair_result)
+            except Exception:
+                logger.exception("[급등평가누락감시] 자동복구 실패")
     except Exception:
         logger.exception("surge missing evaluation check 실패")
         raise
@@ -2783,6 +2831,20 @@ def start_scheduler():
         minute=15,
         timezone="Asia/Seoul",
         id="surge_missing_evaluation_check",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    # 19:20 — SPEC-AI-113 Pool A bridge canary rollback guardrail monitor.
+    # Read-only; if the bridge master flag is disabled it records inactive status and exits.
+    scheduler.add_job(
+        _run_surge_bridge_guardrail_monitor,
+        "cron",
+        day_of_week="mon-fri",
+        hour=19,
+        minute=20,
+        timezone="Asia/Seoul",
+        id="surge_bridge_guardrail_monitor",
         max_instances=1,
         coalesce=True,
         replace_existing=True,

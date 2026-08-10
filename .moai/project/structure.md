@@ -19,10 +19,10 @@ backend/app/
 ├── main.py            # FastAPI 앱 엔트리포인트, Lifespan, APScheduler 초기화
 ├── config.py          # Pydantic BaseSettings (API keys, DB, Redis, JWT, SMTP 등)
 ├── database.py        # SQLAlchemy 엔진 (풀 10+20, 재연결 1800s)
-├── models/            # 38개 SQLAlchemy 데이터 모델
-├── services/          # 55+ 서비스 모듈
+├── models/            # SQLAlchemy 데이터 모델
+├── services/          # 서비스 모듈
 ├── routers/           # 22개 FastAPI 라우터
-└── alembic/           # DB 마이그레이션 (061개+ 버전)
+└── alembic/           # DB 마이그레이션
 ```
 
 ## Key Services (services/)
@@ -46,6 +46,10 @@ backend/app/
 | surge_threshold_service.py | 임계값 히스토리 추적 (SPEC-AI-029) |
 | surge_auto_improver.py | 급등 파라미터 자동 개선 (YAML 패치) |
 | surge_evaluation_service.py | 시그널 평가 메트릭 |
+| surge_absent_attribution_service.py | 실제 급등주가 후보 표면에 없었던 이유 분류 |
+| surge_gate_attribution_service.py | gate/drop 관측과 relaxed gate shadow 리포트 |
+| surge_lane_metrics_service.py | same-day/next-day 급등예측 lane 지표 |
+| surge_missing_trigger_detector_service.py | contract/M&A, volume spike, low-liquidity shadow detector pack |
 | surge_backtest.py | 백테스트 프레임워크 |
 
 ### 공시 처리
@@ -87,6 +91,8 @@ backend/app/
 | Disclosure | corp_code, report_name, impact_score, reflected_pct |
 | SurgeThresholdHistory | threshold values over time (SPEC-AI-029) |
 | SurgePredictionEvaluation | model metrics, recall, precision |
+| SurgeGateDropObservation | 급등 후보가 gate에서 탈락한 이유와 shadow profile 관측 |
+| SurgeMissingTriggerShadowCandidate | missing-trigger detector의 shadow-only 후보 |
 
 ## Routers (API Endpoints)
 

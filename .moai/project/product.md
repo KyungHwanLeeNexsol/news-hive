@@ -37,6 +37,8 @@ NewsHive는 한국 주식시장(KOSPI/KOSDAQ) 급등주를 AI로 사전 탐지�
 - 19:00 KST: 예측 실패 패턴 분석 + 파라미터 자동 조정
 - 매주 일요일 22:00: AI 프롬프트 정제
 - 매월 1일 23:00: 팩터 가중치 최적화
+- 급등예측 회복 관측: absent actual attribution, gate/drop attribution, same-day lane,
+  missing-trigger shadow detector로 recall 개선 후보를 production 승격 전 검증
 
 ### 5. 매크로 리스크 감지
 - 뉴스 기반 거시 경제 충격 탐지 (경고: 3건, 위기: 7건)

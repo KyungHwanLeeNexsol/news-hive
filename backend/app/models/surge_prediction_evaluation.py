@@ -80,10 +80,12 @@ class SurgePredictionEvaluation(Base):
     # 도입 이전) row는 null — API는 null이면 기존 방식(재조회)으로 fail-open한다.
     predicted_codes_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    # SPEC-AI-095 REQ-AI095-003: 고가 기준(high_change_rate) 병렬 평가지표. predicted_set과
-    # COALESCE(high_change_rate, change_rate) >= 10.0 기준 실제급등집합의 교차로 산출한다.
-    # 기존 recall/precision(종가 기준)과 병렬이며 대체하지 않는다(REQ-AI095-002 동결).
-    # predicted_count==0 또는 TP_high+FN_high==0이면 각각 precision/recall은 null(측정 불가).
+    # @MX:NOTE: [AUTO] SPEC-AI-095 REQ-AI095-003 — 고가 기준(high_change_rate) 병렬
+    # 평가지표. predicted_set과 COALESCE(high_change_rate, change_rate) >= 10.0 기준
+    # 실제급등집합의 교차로 산출한다. 기존 recall/precision(종가 기준)과 병렬이며
+    # 대체하지 않는다(REQ-AI095-002 동결). predicted_count==0 또는 TP_high+FN_high==0이면
+    # 각각 precision/recall은 null(측정 불가).
+    # @MX:SPEC: SPEC-AI-095 REQ-AI095-002, REQ-AI095-003
     high_based_recall: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     high_based_precision: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     high_based_coverage: Mapped[Optional[float]] = mapped_column(Float, nullable=True)

@@ -27,6 +27,12 @@ from app.models.fund_signal import FundSignal
 from app.models.news import NewsArticle
 from app.models.sector import Sector
 from app.models.stock import Stock
+from app.services.surge_gate_attribution_service import (
+    GateDropObservation,
+    RELAXED_REGIME_THRESHOLD_PROFILE,
+    build_gate_drop_observation,
+    persist_gate_drop_observations,
+)
 from app.services.keyword_matcher import _keyword_in_text
 
 logger = logging.getLogger(__name__)
@@ -2338,6 +2344,8 @@ _POOL_MEMBER_WARNING_THRESHOLD = 200
 # @MX:SPEC: SPEC-AI-096 REQ-AI096-005
 def _apply_price_fetch_truncation(
     merged: dict[str, SurgeCandidate],
+    *,
+    on_drop: Callable[[str, SurgeCandidate, float, dict[str, Any]], None] | None = None,
 ) -> dict[str, SurgeCandidate]:
     """merged가 _MAX_PRICE_FETCH_CANDIDATES를 초과하면 existing 전용 후보만 절단한다.
 
@@ -2378,6 +2386,29 @@ def _apply_price_fetch_truncation(
         _existing_codes, key=lambda code: _pre_score(merged[code]), reverse=True
     )
     _kept_codes = _pool_codes + _sorted_existing[:_MAX_PRICE_FETCH_CANDIDATES]
+    _dropped_existing = _sorted_existing[_MAX_PRICE_FETCH_CANDIDATES:]
+    if on_drop is not None:
+        for rank, code in enumerate(_dropped_existing, start=_MAX_PRICE_FETCH_CANDIDATES + 1):
+            candidate = merged[code]
+            score = _pre_score(candidate)
+            try:
+                on_drop(
+                    "price_fetch_truncation",
+                    candidate,
+                    score,
+                    {
+                        "original_count": _original_count,
+                        "max_price_fetch_candidates": _MAX_PRICE_FETCH_CANDIDATES,
+                        "pool_member_exempt_count": len(_pool_codes),
+                        "entry_pool": candidate.entry_pool,
+                        "pre_truncation_rank": rank,
+                    },
+                )
+            except Exception as _drop_exc:
+                logger.debug(
+                    "[gate-attribution] price truncation observation failed: %s",
+                    _drop_exc,
+                )
     result = {code: merged[code] for code in _kept_codes}
 
     logger.info(
@@ -2526,6 +2557,38 @@ def gather_surge_candidates(
     # SPEC-AI-067 REQ-005: 스캔 사이클 시작 시 실시간 거래량 조회 예산 카운터 초기화.
     # combo/breakout/PoolB가 이 스캔 안에서 소비하는 모바일 실시간 조회를 max_live_fetches_per_scan로 유계.
     _reset_live_volume_budget()
+    _gate_observation_enabled = bool(
+        getattr(config, "gate_drop_observation_enabled", False)
+    )
+    _gate_observation_date = date.today()
+    _gate_observations: list[GateDropObservation] = []
+
+    def _observe_gate_drop(
+        gate_name: str,
+        candidate: SurgeCandidate,
+        score_before_drop: float | None,
+        reason_metadata: dict[str, Any] | None = None,
+        *,
+        shadow_profile: str | None = None,
+        shadow_candidate: bool = False,
+    ) -> None:
+        if not _gate_observation_enabled:
+            return
+        try:
+            _gate_observations.append(
+                build_gate_drop_observation(
+                    candidate,
+                    trading_date=_gate_observation_date,
+                    gate_name=gate_name,
+                    score_before_drop=score_before_drop,
+                    reason_metadata=reason_metadata or {},
+                    market_regime=market_regime,
+                    shadow_profile=shadow_profile,
+                    shadow_candidate=shadow_candidate,
+                )
+            )
+        except Exception as _obs_exc:
+            logger.debug("[gate-attribution] observation build failed: %s", _obs_exc)
 
     # 각 탐지기 실행
     theme_results = detect_theme_news_cluster(db, [], config)
@@ -2824,7 +2887,10 @@ def gather_surge_candidates(
     # SPEC-AI-038/096: price_5d_trend 조회(HTTP) 전 상위 N개로 사전 필터 — pool 소속
     # 후보(entry_pool in pool_a/b/c/d)는 절단 면제(SPEC-AI-096 REQ-AI096-005). 상세
     # 로직/PRESERVE 상수는 _apply_price_fetch_truncation 참고.
-    merged = _apply_price_fetch_truncation(merged)
+    merged = _apply_price_fetch_truncation(
+        merged,
+        on_drop=_observe_gate_drop if _gate_observation_enabled else None,
+    )
 
     # SPEC-AI-018 REQ-005 fix: price_5d_trend를 candidate에 직접 채움
     # legacy_candidates=[]인 run_surge_signal_generation 경로에서도 페널티가 작동하도록
@@ -2877,6 +2943,19 @@ def gather_surge_candidates(
                 _combo_only_codes.append(_code)
                 logger.info("[앙상블] %s combo단독 제외", _code)
         for _code in _combo_only_codes:
+            _cand = merged[_code]
+            _observe_gate_drop(
+                "combo_chase_guard",
+                _cand,
+                compute_ensemble_score(_cand, config),
+                {
+                    "require_companion_detector": True,
+                    "combo_score": _cand.combo_score,
+                    "theme_cluster_score": _cand.theme_cluster_score,
+                    "immediate_disclosure_score": _cand.immediate_disclosure_score,
+                    "pattern_score": _cand.pattern_score,
+                },
+            )
             del merged[_code]
 
     # 앙상블 점수 계산 및 임계값 필터링
@@ -2885,6 +2964,8 @@ def gather_surge_candidates(
     # SPEC-AI-099 REQ-AI099-001: 메인 루프에서 계산된 모든 후보의 점수를 임시 저장
     # (아직 최종 qualified 여부는 모름 — 4개 루프 종료 후 스냅샷 구성 시 사용)
     _snapshot_scores: dict[str, float] = {}
+    _candidate_thresholds: dict[str, float] = {}
+    _candidate_horizon_signatures: dict[str, str | None] = {}
     _snapshot_scanned_at = datetime.now(timezone.utc)
 
     # SPEC-AI-017 REQ-001: 레짐별 임계값 적용 (없으면 min_score_for_signal 사용)
@@ -2914,7 +2995,10 @@ def gather_surge_candidates(
                 market_regime, _horizon_signature, config
             )
         else:
+            _horizon_signature = None
             _candidate_threshold = effective_threshold
+        _candidate_thresholds[candidate.stock_code] = _candidate_threshold
+        _candidate_horizon_signatures[candidate.stock_code] = _horizon_signature
         if score >= _candidate_threshold:
             qualified.append(candidate)
             qualified_codes.add(candidate.stock_code)
@@ -3003,6 +3087,84 @@ def gather_surge_candidates(
                     _vb_bypass_threshold,
                 )
 
+    _relaxed_shadow_enabled = bool(
+        getattr(config, "relaxed_gate_shadow_enabled", False)
+    )
+    _relaxed_threshold_delta = max(
+        0.0,
+        float(getattr(config, "relaxed_gate_shadow_threshold_delta", 0.0) or 0.0),
+    )
+    for candidate in merged.values():
+        code = candidate.stock_code
+        if code in qualified_codes:
+            continue
+        score = _snapshot_scores.get(code)
+        threshold = _candidate_thresholds.get(code, effective_threshold)
+        shadow_hit = (
+            _relaxed_shadow_enabled
+            and score is not None
+            and _relaxed_threshold_delta > 0
+            and threshold - _relaxed_threshold_delta <= score < threshold
+        )
+        _observe_gate_drop(
+            "below_regime_threshold",
+            candidate,
+            score,
+            {
+                "threshold": threshold,
+                "market_regime": market_regime,
+                "horizon_signature": _candidate_horizon_signatures.get(code),
+                "relaxed_threshold_delta": _relaxed_threshold_delta,
+            },
+            shadow_profile=RELAXED_REGIME_THRESHOLD_PROFILE if shadow_hit else None,
+            shadow_candidate=shadow_hit,
+        )
+
+        if candidate.immediate_disclosure_score > 0:
+            _immediate_score = _recent_surge_penalty(
+                candidate.immediate_disclosure_score,
+                candidate.price_5d_trend,
+            )
+            if _immediate_score < _immediate_bypass_threshold:
+                _observe_gate_drop(
+                    "immediate_bypass_failed",
+                    candidate,
+                    _immediate_score,
+                    {
+                        "immediate_disclosure_score": (
+                            candidate.immediate_disclosure_score
+                        ),
+                        "immediate_bypass_threshold": _immediate_bypass_threshold,
+                        "price_5d_trend": candidate.price_5d_trend,
+                    },
+                )
+
+        _strong_score_raw = max(candidate.theme_cluster_score, candidate.combo_score)
+        if _strong_score_raw >= _bypass:
+            _has_companion = (
+                candidate.combo_score > _companion_threshold
+                or candidate.immediate_disclosure_score > _companion_threshold
+                or candidate.volume_breakout_score > _companion_threshold
+            )
+            _strong_score_after_penalty = _recent_surge_penalty(
+                _strong_score_raw,
+                candidate.price_5d_trend,
+            )
+            if not _has_companion or _strong_score_after_penalty < _bypass:
+                _observe_gate_drop(
+                    "strong_bypass_failed",
+                    candidate,
+                    _strong_score_after_penalty,
+                    {
+                        "strong_single_bypass_threshold": _bypass,
+                        "companion_threshold": _companion_threshold,
+                        "has_companion": _has_companion,
+                        "theme_cluster_score": candidate.theme_cluster_score,
+                        "combo_score": candidate.combo_score,
+                        "price_5d_trend": candidate.price_5d_trend,
+                    },
+                )
+
     # SPEC-AI-099 REQ-AI099-001, REQ-AI099-002: 메인 루프 + 3개 우회 루프 종료 직후,
     # 그 사이클에 고려된 모든 후보(승격/비승격 무관)의 피처 스냅샷을 배치 영속화한다.
     # bridge 후보 합류(아래) 이전 — bridge 후보는 compute_ensemble_score를 거치지 않으므로
@@ -3066,6 +3228,20 @@ def gather_surge_candidates(
                 continue
             if _ratio > _sector_decline_threshold:
                 # 섹터 하락 비율 초과 — 억제
+                _observe_gate_drop(
+                    "sector_contagion_gate",
+                    _cand,
+                    _snapshot_scores.get(
+                        _cand.stock_code,
+                        compute_ensemble_score(_cand, config),
+                    ),
+                    {
+                        "sector_id": _sid,
+                        "sector_decline_ratio": _ratio,
+                        "sector_decline_threshold": _sector_decline_threshold,
+                        "prev_trading_date": _prev_date.isoformat(),
+                    },
+                )
                 logger.info(
                     "sector_contagion 게이트: %s 제거 (섹터 하락비율=%.2f)",
                     _cand.stock_code,
@@ -3082,6 +3258,19 @@ def gather_surge_candidates(
                 _sector_decline_threshold,
             )
         qualified = _sector_filtered
+
+    if _gate_observations:
+        try:
+            persist_gate_drop_observations(db, _gate_observations)
+        except Exception as _obs_persist_exc:
+            logger.warning(
+                "[gate-attribution] drop observation persistence failed (ignored): %s",
+                _obs_persist_exc,
+            )
+            try:
+                db.rollback()
+            except Exception:
+                pass
 
     return qualified
 

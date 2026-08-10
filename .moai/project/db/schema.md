@@ -18,7 +18,8 @@ the auto-sync hook populate it from your migration files._
 
 | Table | Description |
 |-------|-------------|
-| _TBD_ | _TBD_ |
+| `surge_gate_drop_observations` | SPEC-AI-115 append-only observation table for candidates dropped by detection/evaluation gates and relaxed gate shadow profiles. |
+| `surge_missing_trigger_shadow_candidates` | SPEC-AI-116 shadow-only candidates produced by contract/M&A, volume spike, and low-liquidity detector families. |
 
 <!--
 Example:
@@ -52,7 +53,12 @@ Example:
 
 | Table | Columns | Type | Purpose |
 |-------|---------|------|---------|
-| _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| `surge_gate_drop_observations` | `trading_date` | INDEX | Query daily gate/drop attribution reports. |
+| `surge_gate_drop_observations` | `stock_code` | INDEX | Inspect a single stock's gate/drop history. |
+| `surge_gate_drop_observations` | `gate_name` | INDEX | Aggregate dropped candidates by gate. |
+| `surge_gate_drop_observations` | `shadow_profile` | INDEX | Compare relaxed gate shadow profiles. |
+| `surge_gate_drop_observations` | `observed_at` | INDEX | Operational recency filtering. |
+| `surge_missing_trigger_shadow_candidates` | `(trading_date, detector_family)` | COMPOSITE INDEX | Per-family shadow readiness reports. |
 
 <!--
 Example:
@@ -69,7 +75,7 @@ Example:
 
 | Table | Constraint | Type | Definition |
 |-------|-----------|------|-----------|
-| _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| `surge_missing_trigger_shadow_candidates` | primary key | PRIMARY KEY | `(trading_date, stock_code, detector_family, horizon)` |
 
 <!--
 Example:

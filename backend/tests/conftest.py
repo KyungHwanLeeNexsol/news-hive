@@ -154,6 +154,8 @@ def test_engine():
     from app.models.surge_backtest_result import SurgeBacktestResult  # noqa: F401 — SPEC-AI-069 REQ-001
     from app.models.surge_detector_contribution import SurgeDetectorContribution  # noqa: F401 — SPEC-AI-070 REQ-001
     from app.models.surge_feature_snapshot import SurgeFeatureSnapshot  # noqa: F401 — SPEC-AI-099 REQ-AI099-001
+    from app.models.surge_gate_drop_observation import SurgeGateDropObservation  # noqa: F401 — SPEC-AI-115
+    from app.models.surge_missing_trigger_shadow_candidate import SurgeMissingTriggerShadowCandidate  # noqa: F401 — SPEC-AI-116
 
     Base.metadata.create_all(bind=engine)
     yield engine

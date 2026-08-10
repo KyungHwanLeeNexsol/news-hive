@@ -38,6 +38,10 @@ from app.models.surge_universe_pool_history import SurgeUniversePoolHistory
 from app.models.surge_universe_member import SurgeUniverseMember
 from app.models.surge_backtest_result import SurgeBacktestResult
 from app.models.surge_detector_contribution import SurgeDetectorContribution
+from app.models.surge_gate_drop_observation import SurgeGateDropObservation
+from app.models.surge_missing_trigger_shadow_candidate import (
+    SurgeMissingTriggerShadowCandidate,
+)
 
 __all__ = [
     "Sector", "Stock", "NewsArticle", "NewsStockRelation",
@@ -62,4 +66,6 @@ __all__ = [
     "SurgeUniverseMember",
     "SurgeBacktestResult",
     "SurgeDetectorContribution",
+    "SurgeGateDropObservation",
+    "SurgeMissingTriggerShadowCandidate",
 ]

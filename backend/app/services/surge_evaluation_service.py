@@ -28,6 +28,10 @@ from app.models.surge_actual_outcome import SurgeActualOutcome
 from app.models.surge_prediction_evaluation import SurgePredictionEvaluation
 from app.models.surge_signal_forward_outcome import SurgeSignalForwardOutcome
 from app.services.ai_client import ask_ai_with_openai_fallback
+from app.services.surge_gate_attribution_service import (
+    build_evaluation_exclusion_observation,
+    persist_gate_drop_observations,
+)
 from app.services.surge_trading_service import _get_prev_business_day
 
 logger = logging.getLogger(__name__)
@@ -1066,12 +1070,44 @@ def evaluate_surge_predictions(
     predicted_set: set[str] = set()
     excluded_near_limit_up_carry_codes: list[str] = []
     excluded_same_day_event_codes: list[str] = []
+    _gate_observation_enabled = False
+    _evaluation_exclusion_observations = []
+    try:
+        from app.surge_config.surge_settings import get_surge_config
+
+        _gate_observation_enabled = bool(
+            get_surge_config().gate_drop_observation_enabled
+        )
+    except Exception as _cfg_exc:
+        logger.debug(
+            "[gate-attribution] evaluation observation config unavailable: %s",
+            _cfg_exc,
+        )
+
     for row in signal_rows:
         if _is_near_limit_up_carry_signal(row.surge_metadata):
             excluded_near_limit_up_carry_codes.append(row.stock_code)
+            if _gate_observation_enabled:
+                _evaluation_exclusion_observations.append(
+                    build_evaluation_exclusion_observation(
+                        trading_date=trading_date,
+                        stock_code=row.stock_code,
+                        gate_name="evaluation_excluded_near_limit_carry",
+                        surge_metadata_json=row.surge_metadata,
+                    )
+                )
             continue
         if _is_same_day_event_horizon_signal(row.surge_metadata):
             excluded_same_day_event_codes.append(row.stock_code)
+            if _gate_observation_enabled:
+                _evaluation_exclusion_observations.append(
+                    build_evaluation_exclusion_observation(
+                        trading_date=trading_date,
+                        stock_code=row.stock_code,
+                        gate_name="evaluation_excluded_same_day",
+                        surge_metadata_json=row.surge_metadata,
+                    )
+                )
             continue
         predicted_set.add(row.stock_code)
 
@@ -1397,6 +1433,19 @@ def evaluate_surge_predictions(
     db.commit()
     db.refresh(evaluation)
 
+    if _evaluation_exclusion_observations:
+        try:
+            persist_gate_drop_observations(db, _evaluation_exclusion_observations)
+        except Exception as _obs_exc:
+            logger.warning(
+                "[gate-attribution] evaluation exclusion persistence failed (ignored): %s",
+                _obs_exc,
+            )
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
     # 7. SPEC-AI-068 REQ-005: 급등 유형 라벨링 (scannable/non_scannable)
     # AI-061 B01/B02 패턴과 동일하게 핵심 평가 결과(위 commit) 이후 별도 트랜잭션으로
     # 격리한다 — 라벨링 실패가 이미 저장된 precision/recall/scannable_recall/coverage를
@@ -1678,3 +1727,194 @@ def check_and_alert_missing_evaluation(
         logger.info("[급등평가누락감시] 누락 없음: date=%s", status["trading_date"])
 
     return status
+
+
+def _summarize_evaluation(evaluation: SurgePredictionEvaluation) -> dict[str, Any]:
+    """운영 복구/백필 응답에 필요한 평가 핵심 필드만 직렬화한다."""
+    return {
+        "evaluation_date": str(evaluation.evaluation_date),
+        "predicted_count": evaluation.predicted_count,
+        "actual_surge_count": evaluation.actual_surge_count,
+        "true_positive": evaluation.true_positive,
+        "false_positive": evaluation.false_positive,
+        "false_negative": evaluation.false_negative,
+        "precision": evaluation.precision,
+        "recall": evaluation.recall,
+        "f1_score": evaluation.f1_score,
+        "scannable_recall": evaluation.scannable_recall,
+        "coverage": evaluation.coverage,
+        "scannable_actual_count": evaluation.scannable_actual_count,
+        "total_actual_count": evaluation.total_actual_count,
+    }
+
+
+def _get_prior_scannable_metrics(
+    db: Session,
+    trading_date: date,
+) -> dict[str, int] | None:
+    """직전 평가 row의 scannable 분모 정보를 fail-open으로 조회한다."""
+    try:
+        prior_eval = (
+            db.query(SurgePredictionEvaluation)
+            .filter(SurgePredictionEvaluation.evaluation_date < trading_date)
+            .order_by(SurgePredictionEvaluation.evaluation_date.desc())
+            .first()
+        )
+        if prior_eval is None:
+            return None
+        return {
+            "scannable_actual_count": prior_eval.scannable_actual_count or 0,
+            "scan_universe_size": prior_eval.scan_universe_size or 0,
+        }
+    except Exception as exc:
+        logger.warning("[급등평가복구] prior_scannable_metrics 조회 실패 (무시): %s", exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return None
+
+
+def _get_pool_counts_for_evaluation_date(
+    db: Session,
+    trading_date: date,
+) -> dict[str, int] | None:
+    """평가일 T에 대응하는 T-1 scan universe pool_counts를 fail-open으로 조회한다."""
+    try:
+        from app.services.surge_universe_pool_service import get_pool_counts_for_date
+
+        prev_day = _get_prev_business_day(trading_date)
+        return get_pool_counts_for_date(db, prev_day)
+    except Exception as exc:
+        logger.warning("[급등평가복구] pool_counts 조회 실패 (0으로 기록됨): %s", exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return None
+
+
+def repair_missing_surge_evaluation(
+    db: Session,
+    trading_date: date | None = None,
+    *,
+    collect_missing_actual: bool = True,
+    force_recollect_actual: bool = False,
+    force_re_evaluate: bool = False,
+    allow_historical_actual_collection: bool = False,
+) -> dict[str, Any]:
+    # @MX:NOTE: [AUTO] SPEC-AI-109 — actual outcome 누락과 evaluation 누락을 한 번에
+    # 복구하는 운영 백필 진입점. actual 수집이 여전히 0건이면 평가 row 생성을 건너뛰어
+    # "실제급등 0건"으로 오염된 평가를 남기지 않는다.
+    # @MX:SPEC: SPEC-AI-109 REQ-AI109-001
+    """누락된 급등 actual/evaluation row를 안전하게 복구한다.
+
+    기존 ``re-evaluate`` 경로는 ``surge_actual_outcome``이 이미 존재한다는 전제에서만
+    유효하다. 이 함수는 운영 감시/관리자 백필에서 재사용할 수 있도록 actual 수집과
+    평가 실행을 하나의 멱등적인 절차로 묶는다.
+    """
+    from zoneinfo import ZoneInfo
+
+    if trading_date is None:
+        trading_date = datetime.now(ZoneInfo("Asia/Seoul")).date()
+
+    today_kst = datetime.now(ZoneInfo("Asia/Seoul")).date()
+    before = detect_missing_evaluation_records(db, trading_date)
+    actual_collect_attempted = False
+    actual_collected_count: int | None = None
+    evaluation_attempted = False
+    evaluation_summary: dict[str, Any] | None = None
+
+    if before["actual_outcome_missing"] or force_recollect_actual:
+        if not collect_missing_actual:
+            return {
+                "trading_date": str(trading_date),
+                "status": "skipped_actual_collection_disabled",
+                "before": before,
+                "after": before,
+                "actual_collect_attempted": False,
+                "actual_collected_count": None,
+                "evaluation_attempted": False,
+                "evaluation": None,
+            }
+        if trading_date != today_kst and not allow_historical_actual_collection:
+            logger.warning(
+                "[급등평가복구] 과거 actual outcome 자동수집 스킵: trading_date=%s, today=%s",
+                trading_date, today_kst,
+            )
+            return {
+                "trading_date": str(trading_date),
+                "status": "skipped_historical_actual_collection_unavailable",
+                "before": before,
+                "after": before,
+                "actual_collect_attempted": False,
+                "actual_collected_count": None,
+                "evaluation_attempted": False,
+                "evaluation": None,
+            }
+
+        from app.services.surge_actual_outcome_service import collect_daily_surge_outcomes
+
+        actual_collect_attempted = True
+        actual_collected_count = asyncio.run(collect_daily_surge_outcomes(db, trading_date))
+        logger.info(
+            "[급등평가복구] actual outcome 수집 완료: trading_date=%s, count=%s",
+            trading_date, actual_collected_count,
+        )
+
+    after_actual = detect_missing_evaluation_records(db, trading_date)
+    if after_actual["actual_outcome_missing"]:
+        logger.warning(
+            "[급등평가복구] actual outcome 여전히 누락 — 평가 생성 스킵: trading_date=%s",
+            trading_date,
+        )
+        return {
+            "trading_date": str(trading_date),
+            "status": "skipped_actual_outcome_missing",
+            "before": before,
+            "after": after_actual,
+            "actual_collect_attempted": actual_collect_attempted,
+            "actual_collected_count": actual_collected_count,
+            "evaluation_attempted": False,
+            "evaluation": None,
+        }
+
+    needs_evaluation = (
+        before["evaluation_missing"]
+        or before["actual_outcome_missing"]
+        or force_recollect_actual
+        or force_re_evaluate
+    )
+    if needs_evaluation:
+        pool_counts = _get_pool_counts_for_evaluation_date(db, trading_date)
+        prior_scannable_metrics = _get_prior_scannable_metrics(db, trading_date)
+        evaluation_attempted = True
+        evaluation = evaluate_surge_predictions(
+            db,
+            trading_date,
+            pool_counts=pool_counts,
+            prior_scannable_metrics=prior_scannable_metrics,
+        )
+        evaluation_summary = _summarize_evaluation(evaluation)
+        logger.info(
+            "[급등평가복구] 평가 생성/갱신 완료: trading_date=%s, predicted=%d, actual=%d",
+            trading_date,
+            evaluation.predicted_count,
+            evaluation.actual_surge_count,
+        )
+
+    after = detect_missing_evaluation_records(db, trading_date)
+    status = "repaired" if needs_evaluation else "already_complete"
+    if after["actual_outcome_missing"] or after["evaluation_missing"]:
+        status = "incomplete"
+
+    return {
+        "trading_date": str(trading_date),
+        "status": status,
+        "before": before,
+        "after": after,
+        "actual_collect_attempted": actual_collect_attempted,
+        "actual_collected_count": actual_collected_count,
+        "evaluation_attempted": evaluation_attempted,
+        "evaluation": evaluation_summary,
+    }

@@ -26,7 +26,8 @@ List migrations that exist in the codebase but have not yet been applied to prod
 
 | Filename | Created At | Description | Blocking? |
 |----------|-----------|-------------|-----------|
-| _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| `076_surge_gate_drop_observations.py` | 2026-08-10 | Adds `surge_gate_drop_observations` for SPEC-AI-115 gate/drop attribution and relaxed gate shadow evidence. | Yes — apply before running SPEC-AI-115 operator report in production |
+| `077_surge_missing_trigger_shadow_candidate.py` | 2026-08-10 | Adds `surge_missing_trigger_shadow_candidates` for SPEC-AI-116 missing-trigger detector shadow candidates. | Yes — apply before running SPEC-AI-116 shadow detector pack in production |
 
 <!--
 Example:
@@ -42,7 +43,8 @@ Document rollback procedures for each migration that is difficult or non-trivial
 
 | Migration | Risk Level | Rollback Steps | Data Loss? |
 |-----------|-----------|----------------|------------|
-| _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| `076_surge_gate_drop_observations` | Low | `alembic downgrade 075_surge_bridge_shadow_candidate` drops observation table and indexes. | Yes — shadow observation history is removed |
+| `077_surge_missing_trigger_shadow_candidate` | Low | `alembic downgrade 076_surge_gate_drop_observations` drops shadow candidate table and date/family index. | Yes — shadow candidate history is removed |
 
 <!--
 Example:
