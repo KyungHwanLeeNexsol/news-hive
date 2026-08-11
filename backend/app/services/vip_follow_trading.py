@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.models.stock import Stock
 from app.models.vip_trading import VIPDisclosure, VIPPortfolio, VIPTrade
+from app.services.stock_registry_service import _infer_sector_id
 
 logger = logging.getLogger(__name__)
 
@@ -1184,9 +1185,12 @@ def _get_or_create_stock(db: Session, disclosure: VIPDisclosure) -> Stock | None
             disclosure.corp_name,
             disclosure.stock_code,
         )
+        # stocks.sector_id는 NOT NULL — 종목명 키워드 기반으로 추론해 채운다
+        # (미설정 시 NOT NULL 제약 위반, 2026-08-11 프로덕션 오류 rcept_no=20260731000133)
         stock = Stock(
             name=disclosure.corp_name,
             stock_code=disclosure.stock_code,
+            sector_id=_infer_sector_id(disclosure.corp_name),
         )
         db.add(stock)
         db.flush()  # id 획득을 위해 flush (아직 commit은 하지 않음)

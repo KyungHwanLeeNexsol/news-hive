@@ -1079,3 +1079,86 @@ async def test_characterize_rebalance_lock_prevents_concurrent_execution():
         assert result is False, "Lock 경합 시 False를 반환해야 한다"
     finally:
         svc._rebalance_lock.release()
+
+
+# ---------------------------------------------------------------------------
+# 프로덕션 버그 재현 — _get_or_create_stock() sector_id NOT NULL 위반
+# (2026-08-11 프로덕션 로그: rcept_no=20260731000133, stock_code=0218L0, 네오뷰)
+# ---------------------------------------------------------------------------
+
+class TestGetOrCreateStockAutoRegistersSector:
+    """VIP 공시가 stocks 테이블에 없는 신규 종목코드를 참조할 때 자동 등록 경로 검증.
+
+    재현(Rule 4): 수정 전에는 Stock(name=..., stock_code=...)만 생성하고 sector_id를
+    설정하지 않아 stocks.sector_id NOT NULL 제약 위반(IntegrityError)이 발생했다(RED).
+    수정 후에는 stock_registry_service._infer_sector_id()로 sector_id를 추론해 채운다(GREEN).
+    """
+
+    def test_get_or_create_stock_sets_sector_id_for_unregistered_stock_code(
+        self, db, make_sector,
+    ) -> None:
+        from app.services.stock_registry_service import _DEFAULT_SECTOR_ID
+        from app.services.vip_follow_trading import _get_or_create_stock
+
+        # FK가 강제되는 환경(PostgreSQL 프로덕션, 또는 다른 테스트가 SQLite
+        # PRAGMA foreign_keys=ON을 남긴 공유 커넥션)에서도 통과하도록 실제
+        # sectors 행을 미리 준비한다 (_infer_sector_id() 기본값과 id 일치).
+        make_sector(id=_DEFAULT_SECTOR_ID, name="IT서비스")
+
+        disclosure = _make_disclosure(
+            rcept_no="20260731000133",
+            corp_name="네오뷰",
+            stock_code="0218L0",
+        )
+
+        stock = _get_or_create_stock(db, disclosure)
+        db.commit()
+
+        assert stock is not None
+        assert stock.sector_id is not None, (
+            "미등록 종목 자동생성 시 sector_id가 추론되어 설정되어야 한다 "
+            "(NOT NULL 제약 위반 방지)"
+        )
+        assert stock.stock_code == "0218L0"
+        assert stock.name == "네오뷰"
+        assert disclosure.stock_id == stock.id, "disclosure.stock_id가 신규 종목 id로 연결되어야 한다"
+
+    def test_get_or_create_stock_infers_battery_sector_for_battery_keyword_name(
+        self, db, make_sector,
+    ) -> None:
+        """이차전지 키워드가 포함된 신규 종목명은 배터리 섹터(23)로 추론되어야 한다."""
+        from app.services.stock_registry_service import _BATTERY_SECTOR_ID
+        from app.services.vip_follow_trading import _get_or_create_stock
+
+        make_sector(id=_BATTERY_SECTOR_ID, name="전기제품")
+
+        disclosure = _make_disclosure(
+            rcept_no="20260731000134",
+            corp_name="테스트이차전지",
+            stock_code="0218L1",
+        )
+
+        stock = _get_or_create_stock(db, disclosure)
+        db.commit()
+
+        assert stock.sector_id == _BATTERY_SECTOR_ID, (
+            "이차전지 키워드 종목명은 배터리 섹터로 추론되어야 한다"
+        )
+
+    def test_get_or_create_stock_returns_existing_stock_without_recreating(
+        self, db, make_stock,
+    ) -> None:
+        """이미 등록된 종목코드는 재사용되고, sector_id도 기존 값을 유지해야 한다."""
+        from app.services.vip_follow_trading import _get_or_create_stock
+
+        existing = make_stock(stock_code="000001", name="기존종목", sector_id=None)
+        db.commit()
+        existing_sector_id = existing.sector_id
+        existing_id = existing.id
+
+        disclosure = _make_disclosure(stock_code="000001", corp_name="기존종목")
+
+        stock = _get_or_create_stock(db, disclosure)
+
+        assert stock.id == existing_id, "기존 종목은 재생성 없이 그대로 반환되어야 한다"
+        assert stock.sector_id == existing_sector_id, "기존 종목의 sector_id는 변경되지 않아야 한다"
