@@ -1156,6 +1156,9 @@ def evaluate_surge_predictions(
     tp = len(predicted_set & actual_set)
     fp = len(predicted_set - actual_set)
     fn = len(actual_set - predicted_set)
+    # SPEC-AI-116: FN(실제 급등했으나 예측 실패) 종목 코드 목록. 미탐지 트리거 shadow 탐지기
+    # 팩(run_missing_trigger_shadow_detector_pack)의 stock_codes 입력으로 그대로 사용한다.
+    fn_stock_codes: list[str] = sorted(actual_set - predicted_set)
 
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
     # 레거시(시장전체 기준) recall. Scannable Recall이 측정 가능(유니버스 존재)하면 아래에서
@@ -1440,6 +1443,39 @@ def evaluate_surge_predictions(
             logger.warning(
                 "[gate-attribution] evaluation exclusion persistence failed (ignored): %s",
                 _obs_exc,
+            )
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
+    # SPEC-AI-116: FN(실제 급등이나 예측 실패) 종목에 대해 미탐지 트리거 후보를 shadow 모드로
+    # 탐지한다. 평가 레코드가 이미 upsert된 이후(trading_date/FN 집합 모두 확정) 호출하며,
+    # shadow-only 관측 기능이므로 실패해도 evaluate_surge_predictions 본연의 평가 결과
+    # (TP/FP/FN/precision/recall)에는 영향을 주지 않는다.
+    if fn_stock_codes:
+        try:
+            from app.services.surge_missing_trigger_detector_service import (
+                run_missing_trigger_shadow_detector_pack,
+            )
+            from app.surge_config.surge_settings import get_surge_config
+
+            _missing_trigger_config = get_surge_config()
+            if getattr(_missing_trigger_config, "missing_trigger_shadow_enabled", False):
+                _missing_trigger_result = run_missing_trigger_shadow_detector_pack(
+                    db,
+                    trading_date,
+                    _missing_trigger_config,
+                    stock_codes=fn_stock_codes,
+                )
+                logger.info(
+                    "[미탐지트리거shadow] status=%s persisted_count=%d",
+                    _missing_trigger_result.get("status"),
+                    _missing_trigger_result.get("persisted_count", 0),
+                )
+        except Exception as _mt_exc:
+            logger.warning(
+                "[미탐지트리거shadow] 실행 실패 (무시, shadow-only): %s", _mt_exc
             )
             try:
                 db.rollback()
