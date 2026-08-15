@@ -324,9 +324,9 @@ surge_detection:
   # SPEC-AI-116: missing trigger detector pack. Shadow/report only; no production
   # `surge_candidate` emission flag exists in this rollout.
   missing_trigger_shadow_enabled: true
-  missing_trigger_contract_mna_shadow_enabled: false
-  missing_trigger_volume_spike_shadow_enabled: false
-  missing_trigger_low_liquidity_shadow_enabled: false
+  missing_trigger_contract_mna_shadow_enabled: true
+  missing_trigger_volume_spike_shadow_enabled: true
+  missing_trigger_low_liquidity_shadow_enabled: true
   missing_trigger_attribution_activation_threshold: 0.10
   missing_trigger_min_eligible_days: 10
   missing_trigger_volume_ratio_threshold: 3.0

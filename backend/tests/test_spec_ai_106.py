@@ -98,35 +98,62 @@ class TestReadinessLogIntegration:
 
 class TestReadinessExceptionIsolation:
     def test_readiness_exception_does_not_block_core_commit(
-        self, db: Session, monkeypatch, caplog
+        self, monkeypatch, caplog
     ) -> None:
         """readiness 조회가 예외를 던져도 SurgePredictionEvaluation은 정상 커밋되고,
-        경고 로그 1줄만 남으며 INFO 레벨 게이트 로그는 기록되지 않는다."""
+        경고 로그 1줄만 남으며 INFO 레벨 게이트 로그는 기록되지 않는다.
+
+        NOTE: readiness 블록의 except 핸들러가 db.rollback()을 호출하도록 수정된 뒤
+        (session-poisoning 회귀 수정, scheduler.py) 이 테스트는 표준 `db` 픽스처
+        (외부 커넥션-트랜잭션에 직접 바인딩된 세션) 대신, 운영 SessionLocal()과 동일하게
+        전용 엔진에 직접 바인딩된 독립 세션을 사용한다 — `db` 픽스처는 함수 내부의
+        commit() 이후 rollback()이 호출되면 세션이 deassociated 상태가 되는 하네스
+        한계가 있다(test_spec_ai_116.py TestMissingTriggerWiring의 기존 주석 참고.
+        운영 세션 형태에서는 안전함이 별도로 검증되어 있다). 세션 범위(test_engine)를
+        공유하는 `db` 커넥션 대신 이 테스트 전용의 독립 in-memory 엔진을 사용해
+        다른 테스트로의 데이터 누수도 방지한다.
+        """
         import app.services.scheduler as scheduler_module
+        from sqlalchemy import create_engine as _create_engine
+        from sqlalchemy.orm import sessionmaker as _sessionmaker
+        from sqlalchemy.pool import StaticPool as _StaticPool
 
-        today = date.today()
-        _seed_minimal_actual_outcome(db, today)
+        from app.database import Base as _Base
+        from tests.conftest import _patch_array_for_sqlite
 
-        monkeypatch.setattr(scheduler_module, "SessionLocal", lambda: db)
-        monkeypatch.setattr(scheduler_module, "_is_kr_market_open", lambda: True)
-
-        with (
-            patch(
-                "app.services.surge_horizon_readiness_service."
-                "check_horizon_transition_readiness",
-                side_effect=RuntimeError("boom"),
-            ),
-            caplog.at_level(logging.WARNING, logger="app.services.scheduler"),
-        ):
-            scheduler_module._run_surge_verify_predictions()
-
-        # 핵심 평가 결과는 정상 커밋된다 (REQ-AI106-004 무영향 확인).
-        row = (
-            db.query(SurgePredictionEvaluation)
-            .filter(SurgePredictionEvaluation.evaluation_date == today)
-            .first()
+        _patch_array_for_sqlite()
+        engine = _create_engine(
+            "sqlite://", connect_args={"check_same_thread": False}, poolclass=_StaticPool
         )
-        assert row is not None
+        _Base.metadata.create_all(bind=engine)
+        db = _sessionmaker(bind=engine, autocommit=False, autoflush=False)()
+        try:
+            today = date.today()
+            _seed_minimal_actual_outcome(db, today)
+
+            monkeypatch.setattr(scheduler_module, "SessionLocal", lambda: db)
+            monkeypatch.setattr(scheduler_module, "_is_kr_market_open", lambda: True)
+
+            with (
+                patch(
+                    "app.services.surge_horizon_readiness_service."
+                    "check_horizon_transition_readiness",
+                    side_effect=RuntimeError("boom"),
+                ),
+                caplog.at_level(logging.WARNING, logger="app.services.scheduler"),
+            ):
+                scheduler_module._run_surge_verify_predictions()
+
+            # 핵심 평가 결과는 정상 커밋된다 (REQ-AI106-004 무영향 확인).
+            row = (
+                db.query(SurgePredictionEvaluation)
+                .filter(SurgePredictionEvaluation.evaluation_date == today)
+                .first()
+            )
+            assert row is not None
+        finally:
+            db.close()
+            engine.dispose()
 
         warn_logs = [r for r in caplog.records if "readiness 조회 실패" in r.message]
         assert len(warn_logs) == 1

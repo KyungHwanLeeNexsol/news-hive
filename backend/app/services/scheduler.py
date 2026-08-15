@@ -1002,6 +1002,10 @@ def _run_surge_verify_predictions():
 
             diagnose_non_scannable_causes(db, today)
         except Exception as _dge:
+            try:
+                db.rollback()
+            except Exception:
+                pass
             logger.warning("[급등평가] non_scannable 원인 진단 실패 (무시): %s", _dge)
 
         # SPEC-AI-106 REQ-AI106-001/004: 지평 인식 임계값 전환 게이트 3요건 판정
@@ -1023,6 +1027,10 @@ def _run_surge_verify_predictions():
                 readiness["all_criteria_met"],
             )
         except Exception as _hre:
+            try:
+                db.rollback()
+            except Exception:
+                pass
             logger.warning("[지평임계값전환게이트] readiness 조회 실패 (무시): %s", _hre)
 
         # FN 분석 블록 — 예외 격리 (precision/recall/f1 결과는 위 commit으로 이미 보존)
