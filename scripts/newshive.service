@@ -16,6 +16,8 @@ Restart=always
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
+# OOM kill 방지: 850MB 초과 시 systemd가 직접 재시작 (kernel OOM killer 대신)
+MemoryMax=850M
 
 [Install]
 WantedBy=multi-user.target
