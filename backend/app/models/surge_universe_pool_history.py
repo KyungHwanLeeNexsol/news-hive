@@ -18,7 +18,7 @@ class SurgeUniversePoolHistory(Base):
     # @MX:SPEC: SPEC-AI-065 REQ-5
     """날짜별 스캔 유니버스 pool_a/b/c 집계 테이블.
 
-    _run_surge_verify_predictions(18:30 KST)가 T-1 날짜의 레코드를 조회하여
+    _run_surge_verify_predictions(18:38 KST)가 T-1 날짜의 레코드를 조회하여
     evaluate_surge_predictions()의 pool_counts 인자로 전달한다.
     """
 

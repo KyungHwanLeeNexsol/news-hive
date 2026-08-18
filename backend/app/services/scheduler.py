@@ -1223,7 +1223,7 @@ def _run_surge_auto_improve():
 def _run_surge_backtest_gate():
     """SPEC-AI-069 REQ-AI069-001: backtest 운영 게이트 pass/fail/insufficient 판정 영속화.
 
-    평일 18:45 KST (verify_predictions 18:30 이후, auto_improve 19:00 이전).
+    평일 18:45 KST (verify_predictions 18:38 이후, auto_improve 19:00 이전).
     """
     if not _is_kr_market_open():
         logger.debug("주말 — backtest 게이트 스킵")
@@ -1268,7 +1268,7 @@ def _run_surge_backtest_gate():
 def _run_surge_detector_contribution():
     """SPEC-AI-070 REQ-001~004: 탐지기별 기여도 집계 + 은퇴 제안 리포트 발송.
 
-    평일 19:05 KST (verify_predictions 18:30, backtest_gate 18:45 이후,
+    평일 19:05 KST (verify_predictions 18:38, backtest_gate 18:45 이후,
     auto_improve 19:00 이전 — 은퇴 제안이 그날의 최신 backtest 결과를 참조하도록 선행 실행).
     측정·리포트 전용 잡 — surge_detection.yaml/auto.yaml을 쓰지 않으며 탐지기를
     자동으로 추가/제거/비활성화하지 않는다(REQ-004 [HARD]).
@@ -1323,7 +1323,7 @@ def _run_surge_detector_contribution():
 def _run_surge_missing_evaluation_check():
     """SPEC-AI-092 REQ-AI092-006: 장마감 이후 당일 actual/evaluation 레코드 누락 감시.
 
-    평일 19:15 KST (verify_predictions 18:30, backtest_gate 18:45, auto_improve 19:00,
+    평일 19:15 KST (verify_predictions 18:38, backtest_gate 18:45, auto_improve 19:00,
     detector_contribution 19:05 이후 — 모든 평가 관련 잡이 실행을 마친 뒤 확인해야
     "아직 안 돌았음"을 "누락"으로 오판하지 않는다). 순수 읽기 감지 + fail-open 경보.
     """
@@ -2787,20 +2787,23 @@ def start_scheduler():
         coalesce=True,
         replace_existing=True,
     )
-    # 18:30 — T-1 시그널 vs T 실제 결과 평가 (verify_signals 18:00 완료 후)
+    # 18:38 — T-1 시그널 vs T 실제 결과 평가 (verify_signals 18:00 완료 후).
+    # 18:30에는 news_impact_backfill/krx_short_selling_crawl/vip_disclosure_check가
+    # 동시에 기동해 동일 프로세스 메모리를 다투다 이 잡이 매일 OOM killed 당했음(07-30~08-17
+    # dmesg 확인) — 18:30 버스트를 피하면서 backtest_gate(18:45) 이전에 끝나도록 8분 이동.
     scheduler.add_job(
         _run_surge_verify_predictions,
         "cron",
         day_of_week="mon-fri",
         hour=18,
-        minute=30,
+        minute=38,
         timezone="Asia/Seoul",
         id="surge_verify_predictions",
         max_instances=1,
         coalesce=True,
         replace_existing=True,
     )
-    # 18:45 — SPEC-AI-069 REQ-001: backtest 운영 게이트 판정 (verify_predictions 18:30 이후,
+    # 18:45 — SPEC-AI-069 REQ-001: backtest 운영 게이트 판정 (verify_predictions 18:38 이후,
     # auto_improve 19:00 이전 — 자동개선 재활성 시 최신 verdict를 참조할 수 있도록 선행 실행)
     scheduler.add_job(
         _run_surge_backtest_gate,
@@ -2815,7 +2818,7 @@ def start_scheduler():
         replace_existing=True,
     )
     # 19:05 — SPEC-AI-070 REQ-001~004: 탐지기별 기여도 집계 + 은퇴 제안 리포트
-    # (verify_predictions 18:30, backtest_gate 18:45, auto_improve 19:00 이후 실행 —
+    # (verify_predictions 18:38, backtest_gate 18:45, auto_improve 19:00 이후 실행 —
     # 자동개선 잡과 서로 독립적인 별도 측정·리포트 전용 잡이며 config를 쓰지 않는다)
     scheduler.add_job(
         _run_surge_detector_contribution,
@@ -2829,7 +2832,7 @@ def start_scheduler():
         coalesce=True,
         replace_existing=True,
     )
-    # 19:15 — SPEC-AI-092 REQ-AI092-006: 급등평가 누락 감시 (verify_predictions 18:30,
+    # 19:15 — SPEC-AI-092 REQ-AI092-006: 급등평가 누락 감시 (verify_predictions 18:38,
     # backtest_gate 18:45, auto_improve 19:00, detector_contribution 19:05 이후 실행)
     scheduler.add_job(
         _run_surge_missing_evaluation_check,

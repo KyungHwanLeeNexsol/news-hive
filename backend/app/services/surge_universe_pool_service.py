@@ -5,7 +5,7 @@ build_scan_universe()로 계산한 Pool A/B/C 집계는 기존에는 개별 후�
 entry_pool 태깅에만 쓰이고 그 자체는 어디에도 저장되지 않았다.
 
 이 서비스는 해당 pool_counts를 날짜별로 저장하고, 이후 예측 평가 잡
-(18:30 KST, _run_surge_verify_predictions)이 T-1(예측일) 값을 조회하여
+(18:38 KST, _run_surge_verify_predictions)이 T-1(예측일) 값을 조회하여
 evaluate_surge_predictions()의 pool_counts 인자로 전달할 수 있게 한다.
 
 SQLite/PostgreSQL 양쪽에서 동작하도록 postgres 전용 upsert 대신
