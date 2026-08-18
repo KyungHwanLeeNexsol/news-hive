@@ -11,9 +11,13 @@ class Settings(BaseSettings):
     GEMINI_API_KEY_2: str = ""
     GEMINI_API_KEY_3: str = ""
     GEMINI_API_KEY_4: str = ""
-    GEMINI_MODEL: str = "gemini-2.5-flash"           # Pro: 금융 추론 (브리핑, 시그널)
-    GEMINI_MODEL_STANDARD: str = "gemini-2.0-flash"  # Standard: 요약/설명 생성
-    GEMINI_MODEL_LITE: str = "gemini-2.0-flash-lite"  # Lite: 단순 분류/JSON 배열
+    GEMINI_MODEL: str = "gemini-2.5-flash"                  # Pro: 금융 추론 (브리핑, 시그널)
+    GEMINI_MODEL_STANDARD: str = "gemini-flash-latest"       # Standard: 요약/설명 생성
+    GEMINI_MODEL_LITE: str = "gemini-flash-lite-latest"      # Lite: 단순 분류/JSON 배열
+    # gemini-2.0-flash/-lite가 2026-06-01 폐기되어 08-11~17 매일 404 발생(구글 권장 교체 모델명이
+    # 소스마다 gemini-3.5-flash/3.6-flash로 엇갈려 확인됨) — 구글이 항상 최신 안정 flash로 자동
+    # 갱신하는 floating alias(gemini-flash-latest/-lite-latest)로 교체해 동일 폐기 반복을 방지.
+    # 실제 API 키로 models.list() 조회해 두 alias 모두 generateContent 지원 확인(2026-08-18).
 
     # Z.AI (GLM) — Gemini rate limit 소진 시 fallback
     ZAI_API_KEY: str = ""

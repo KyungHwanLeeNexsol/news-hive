@@ -223,7 +223,7 @@ async def ask_ai_free(prompt: str, max_retries: int = 3) -> str | None:
 
 
 async def ask_ai_standard(prompt: str, max_retries: int = 3) -> str | None:
-    """Standard 모델로 AI 호출한다 (gemini-2.0-flash).
+    """Standard 모델로 AI 호출한다 (GEMINI_MODEL_STANDARD).
 
     중간 복잡도 작업(요약 생성, 뉴스/공시 설명, 거시 리스크 분류)에 사용한다.
     """
@@ -232,7 +232,7 @@ async def ask_ai_standard(prompt: str, max_retries: int = 3) -> str | None:
 
 
 async def ask_ai_lite(prompt: str, max_retries: int = 3) -> str | None:
-    """Lite 모델로 AI 호출한다 (gemini-2.0-flash-lite).
+    """Lite 모델로 AI 호출한다 (GEMINI_MODEL_LITE).
 
     단순 분류/JSON 배열 작업(키워드 관련성 점수, 섹터 분류, 감성 분류, 번역)에 사용한다.
     Pro 모델 대비 약 80% 비용 절감.
@@ -243,7 +243,7 @@ async def ask_ai_lite(prompt: str, max_retries: int = 3) -> str | None:
 
 
 async def ask_ai_free_standard(prompt: str, max_retries: int = 3) -> str | None:
-    """Standard 모델로 AI 호출한다 (gemini-2.0-flash) — 무료 키 전용.
+    """Standard 모델로 AI 호출한다 (GEMINI_MODEL_STANDARD) — 무료 키 전용.
 
     뉴스 수집 파이프라인(기사 요약, 공시 요약, 원자재 뉴스 등)에 사용한다.
     유료 키(GEMINI_API_KEY)는 절대 사용하지 않는다.
@@ -253,7 +253,7 @@ async def ask_ai_free_standard(prompt: str, max_retries: int = 3) -> str | None:
 
 
 async def ask_ai_free_lite(prompt: str, max_retries: int = 3) -> str | None:
-    """Lite 모델로 AI 호출한다 (gemini-2.0-flash-lite) — 무료 키 전용.
+    """Lite 모델로 AI 호출한다 (GEMINI_MODEL_LITE) — 무료 키 전용.
 
     뉴스 수집 파이프라인(감성 분류, 번역, 뉴스 분류, 시그널 검증 등)에 사용한다.
     유료 키(GEMINI_API_KEY)는 절대 사용하지 않는다.
