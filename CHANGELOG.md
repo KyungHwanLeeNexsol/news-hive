@@ -4,6 +4,47 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fix — 급등예측 평가 잡 OOM 수정 (2026-08-18)
+
+dmesg 전수 확인 결과 07-30~08-17 20일 연속 매일 저녁 uvicorn 프로세스가 cgroup
+MemoryMax(700MB)에서 OOM killed되고 있었다. 원인은 18:30 KST 크론 슬롯에 5개 잡
+(`_run_news_impact_backfill`, `_run_vip_disclosure_check`,
+`_run_krx_short_selling_crawl`, `_run_failure_aggregation`,
+`_run_surge_verify_predictions`)이 동시 기동해 같은 프로세스 메모리를 다투다가,
+급등예측 평가 잡(`_run_surge_verify_predictions`)만 매번 희생되는 스케줄링
+병목이었다.
+
+`backend/app/services/scheduler.py`에서 `_run_surge_verify_predictions` 크론을
+18:30→18:38 KST로 이동해 동시적재를 회피했다(`_run_surge_backtest_gate`
+18:45와의 의존순서는 유지). 관련 docstring 3곳을 동기화했다. 프로덕션 서버
+systemd `MemoryMax`도 700MB→850MB로 완화했고(swap 2GB 여유 활용), 저장소
+`scripts/newshive.service`에도 반영해 재프로비저닝에 대비했다.
+
+**검증**:
+
+- 관련 파일 테스트 57개, 전체 백엔드 테스트 스위트 2530개 — 무회귀.
+- CI/CD 배포 성공, 프로덕션 서버 반영 확인.
+
+### Fix — 폐기된 Gemini 모델(gemini-2.0-flash/-lite) 교체 (2026-08-18)
+
+2026-06-01 구글이 완전 폐기한 `gemini-2.0-flash`(3회+)와 `gemini-2.0-flash-lite`
+(1257회)가 08-11~17 프로덕션 로그에서 매일 404로 재현되고 있었다. `ask_ai_standard/
+lite`, `ask_ai_free_standard/lite` 경로(뉴스/공시 요약, 감성분류, 번역, 섹터분류 등)가
+광범위하게 영향받았으며, Pro 모델(`GEMINI_MODEL`, gemini-2.5-flash)은 404가 발생하지
+않았다.
+
+`backend/app/config.py`의 `GEMINI_MODEL_STANDARD`/`GEMINI_MODEL_LITE`를 특정 버전
+모델명 대신 구글이 항상 최신 안정 flash로 자동 갱신하는 floating alias
+(`gemini-flash-latest`/`gemini-flash-lite-latest`)로 교체해, 동일한 폐기가 반복되는
+구조적 원인을 제거했다. 실제 API 키로 `client.models.list()`를 조회해 검증했다
+(웹 검색 결과마다 권장 모델명이 엇갈려 실측으로 확인). `backend/app/services/
+ai_client.py`의 관련 docstring도 함께 동기화했다.
+
+**검증**:
+
+- 전체 백엔드 테스트 스위트 2530 passed, 4 skipped, 3 xpassed — 무회귀.
+- CI/CD 배포 성공, 프로덕션 서버 config 반영 확인.
+
 ### Fix — Deploy: Alembic revision id 길이 호환성 (2026-08-10)
 
 - 운영 DB의 `alembic_version.version_num`이 기존 `varchar(32)`인 상태에서
