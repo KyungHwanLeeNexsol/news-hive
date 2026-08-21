@@ -478,7 +478,13 @@ class TestCommonInvariants:
         assert BUY_CUTOFF == _time(11, 0), "BUY_CUTOFF 값 변경 금지([X-5])"
 
     def test_gather_timeout_constant_unchanged(self) -> None:
-        """SPEC-AI-082 gather 타임아웃 상수(간격 산정 근거)는 참조만 — 값 불변."""
-        assert fund_manager._GATHER_TIMEOUT_S == 1200, (
-            "gather 타임아웃 상수는 본 SPEC에서 변경하지 않는다(참조만, SPEC-AI-082 소유)"
+        """gather 타임아웃 상수(간격 산정 근거)는 참조만 — 값 불변.
+
+        SPEC-AI-082가 1200(20분)으로 도입, SPEC-AI-117이 2026-08-19~08-20
+        프로덕션 타임아웃 재발(SPEC-AI-096 스캔 유니버스 확대로 07-20 캘리브레이션
+        무효화)에 따라 2400(40분)으로 임시 완화했다 — 이 SPEC(SPEC-AI-083)은
+        여전히 값을 변경하지 않는다(참조만).
+        """
+        assert fund_manager._GATHER_TIMEOUT_S == 2400, (
+            "gather 타임아웃 상수는 본 SPEC에서 변경하지 않는다(참조만, SPEC-AI-117 소유)"
         )

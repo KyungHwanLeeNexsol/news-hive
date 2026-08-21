@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from statistics import mean, median
 from zoneinfo import ZoneInfo
@@ -56,8 +57,13 @@ _MARKET_DATA_CACHE_TTL: float = 3600.0  # 1시간(초)
 #   라이브 로그로 확인, 최근 ~11거래일 중 7일 재현). 동시에 이 가드는 유계(bounded)로
 #   유지해야 한다 — 제거하거나 사실상 무한 대기로 만들지 말 것(REQ-AI082-003). 테스트는
 #   이 모듈 상수를 monkeypatch 하여 실 HTTP 지연 없이 타임아웃 분기를 결정적으로 구동한다.
+#   [AUTO] 2026-08-03 SPEC-AI-096으로 max_scan_universe가 150→250(+67%)로 확대되며
+#   종목당 순차 HTTP 루프의 실제 소요 시간도 비례 증가, 07-20 기준 캘리브레이션(20분)이
+#   무효화되어 2026-08-19~08-20 프로덕션에서 타임아웃 재발(수십 회, 매번 빈 리스트 반환).
+#   40분으로 상향은 임시 완화이며, 근본 해법(종목별 HTTP 호출 병렬화)은 별도 SPEC에서
+#   진행 예정. 실제 소요 시간은 :1307 부근 로그(성공/타임아웃/예외 각 경로)로 확인 가능.
 # @MX:SPEC: SPEC-AI-082 REQ-AI082-001
-_GATHER_TIMEOUT_S: float = 1200  # 20분 (문서화된 정상 상단 15분 대비 ≈+33% 헤드룸)
+_GATHER_TIMEOUT_S: float = 2400  # 40분 (SPEC-AI-096 스캔 유니버스 확대로 07-20 캘리브레이션 무효화, 2026-08-19~08-20 재발에 따른 임시 완화)
 
 
 def _parse_json_response(text: str) -> dict | None:
@@ -1304,6 +1310,9 @@ async def _gather_surge_candidates(
     # 성능 패치: sync HTTP 루프를 스레드로 분리 + 글로벌 타임아웃(모듈 상수 _GATHER_TIMEOUT_S,
     # SPEC-AI-082 — 상단 선언부 @MX:NOTE 참조)
     # gather_surge_candidates는 종목당 다중 sync HTTP 호출 — 직접 await 시 event loop 블로킹
+    # [AUTO] 2026-08-20 소요시간 로깅 — 향후 타임아웃 재발 시 실제 소요 시간을
+    # 즉시 로그로 확인할 수 있도록 성공/타임아웃/예외 각 경로에서 계측(monotonic 기준)
+    _gather_started_at = time.monotonic()
     try:
         _loop = asyncio.get_event_loop()
         candidates = await asyncio.wait_for(
@@ -1320,14 +1329,20 @@ async def _gather_surge_candidates(
             timeout=_GATHER_TIMEOUT_S,
         )
     except asyncio.TimeoutError:
+        _elapsed_s = time.monotonic() - _gather_started_at
         logger.warning(
-            "[급등탐지] gather_surge_candidates 타임아웃 %ds 초과 — 빈 리스트 반환",
+            "[급등탐지] gather_surge_candidates 타임아웃 %ds 초과(실제 소요 %.1fs) — 빈 리스트 반환",
             _GATHER_TIMEOUT_S,
+            _elapsed_s,
         )
         return []
     except Exception as e:
-        logger.warning("[급등탐지] 탐지기 실행 실패: %s", e)
+        _elapsed_s = time.monotonic() - _gather_started_at
+        logger.warning("[급등탐지] 탐지기 실행 실패(소요 %.1fs): %s", _elapsed_s, e)
         return []
+
+    _elapsed_s = time.monotonic() - _gather_started_at
+    logger.info("[급등탐지] gather_surge_candidates 완료, 소요 %.1fs", _elapsed_s)
 
     if not candidates:
         return []
