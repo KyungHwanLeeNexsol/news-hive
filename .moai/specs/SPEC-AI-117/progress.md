@@ -180,6 +180,77 @@ Korean 리터럴 문자열로 grep 시 항상 0건이 반환되므로(오탐), A
 |----|--------|----------------------|----------------|
 | AC-AI117-004 | N/A — 조건 미충족(PASS 간주) | `journalctl -u newshive --since '2026-08-20 00:00:00' --until '2026-08-20 12:00:00' \| grep 'Pool B'` | Pool B 조회 실패 0건, 정상 카운트 6회 관측(22→50) |
 
+### M5 — Item 3 서버측 진단 (REQ-AI117-005 / AC-AI117-005)
+
+**서버 타임존 확정(중요 — 위임 프롬프트 전제 정정)**: `timedatectl` →
+`Time zone: Etc/UTC (UTC, +0000)`. 즉 journalctl 타임스탬프는 **UTC이며
+KST가 아니다** — 위임 프롬프트의 "2026-08-19 11:26:42(서버 로컬
+타임스탬프, TZ 재확인 필요)"는 TZ 미확인 상태의 인용이었다. 이 세션이
+직접 조회한 재시작 이벤트는 **UTC 11:26:06 = KST 20:26:06**이다(오전이
+아닌 저녁 시각).
+
+**19:15 KST 평가누락감시 잡 실행 로그 조회** (UTC 10:00~10:30 = KST
+19:00~19:30):
+```
+$ journalctl -u newshive --since '2026-08-19 10:00:00' --until '2026-08-19 10:30:00'
+-- No entries --
+```
+→ **이 30분 구간에 로그가 전혀 없다.** `surge_missing_evaluation_check`/
+`[급등평가누락감시]` 관련 로그 라인 자체가 존재하지 않는다 — 잡이
+실행되지 않았음을 강하게 시사한다.
+
+**정지 시점 역추적**: 마지막 정상 로그 활동은 UTC 09:30:24(KST
+18:30:24) — `google_genai.models` AFC 호출 완료 로그. 그 이후 UTC
+11:26:06(KST 20:26:06)까지 **약 1시간 56분간 로그가 전혀 없다.** 19:15
+KST(UTC 10:15)는 이 무로그 구간(18:30~20:26 KST) 내부에 위치한다 —
+프로세스가 이미 응답 불능(메모리 스레싱 추정) 상태였을 가능성이 높다.
+
+**재시작 근본원인 — OOM Kill 확정** (UTC 11:20:00~11:35:00 조회, 원본
+발췌):
+```
+Aug 19 11:26:04 news-hive kernel: systemd-udevd invoked oom-killer: gfp_mask=0x140cca(GFP_HIGHUSER_MOVABLE|__GFP_COMP), order=0, oom_score_adj=-1000
+Aug 19 11:26:09 news-hive kernel: oom-kill:constraint=CONSTRAINT_NONE,nodemask=(null),cpuset=systemd-udevd.service,mems_allowed=0,global_oom,task_memcg=/system.slice/newshive.service,task=uvicorn,pid=1306511,uid=1001
+Aug 19 11:26:09 news-hive kernel: Out of memory: Killed process 1306511 (uvicorn) total-vm:3392864kB, anon-rss:595900kB, file-rss:392kB, shmem-rss:0kB, UID:1001 pgtables:5452kB oom_score_adj:0
+Aug 19 11:26:09 news-hive kernel: oom_reaper: reaped process 1306511 (uvicorn), now anon-rss:168kB, file-rss:244kB, shmem-rss:0kB
+Aug 19 11:26:06 news-hive systemd[1]: newshive.service: Main process exited, code=killed, status=9/KILL
+Aug 19 11:26:06 news-hive systemd[1]: newshive.service: Failed with result 'signal'.
+Aug 19 11:26:06 news-hive systemd[1]: newshive.service: Consumed 13h 39min 35.497s CPU time.
+Aug 19 11:26:12 news-hive systemd[1]: newshive.service: Scheduled restart job, restart counter is at 2.
+Aug 19 11:26:12 news-hive systemd[1]: Stopped NewsHive FastAPI Backend.
+Aug 19 11:26:12 news-hive systemd[1]: Started NewsHive FastAPI Backend.
+Aug 19 11:26:35 news-hive uvicorn[1347390]: INFO:     Started server process [1347390]
+```
+→ **근본원인 확정(추측 아님, 커널 로그 직접 확인): 커널 OOM killer가
+uvicorn 프로세스(PID 1306511)를 SIGKILL로 종료.** `restart counter is at
+2`로 보아 이 사건 전에도 최소 1회 재시작이 있었다(참고 정보, 추가
+역추적 안 함). systemd가 자동 재기동(26초 이내)해 서비스는 즉시
+복구됐다.
+
+**DB 재확인(2026-08-21 기준, 이 세션 직접 조회)**: `surge_prediction_evaluation`
+테이블 `evaluation_date='2026-08-19'` 행 수 — **0건.** 재시작 후 이틀이
+지난 지금도 캐치업되지 않았다(spec.md §Context Item 3의 관측과 일치).
+
+**진단 결론(REQ-AI117-005 필수 조건 (a)/(b) 분기 판정)**: 분기 (b)에
+해당한다 — **19:15 KST 잡 자체가 그날 미실행으로 확인됐다**(19:00~19:30
+KST 무로그 + 정지 구간 18:30~20:26 KST가 19:15를 포함). 근본원인은
+배포/인프라(OOM)이나, "재시작 시 놓친 잡을 스윕하지 않는" 구조적 공백이
+동시에 확인된다(스케줄러가 재기동 시 다음 실행시각을 그냥 익일
+19:15로 계산할 뿐, 놓친 08-19를 캐치업하지 않음 — APScheduler cron
+트리거의 기본 동작).
+
+**이 SPEC 범위 내 조치 여부**: §Non-Goals("2026-08-19 프로세스 재시작의
+근본원인 '수정'"은 범위 밖, "진단 완료, 조치 불필요"로 종결 가능)와
+plan.md M5("추가 REQ로 확장할지는 진단 후 결정 — 강제하지 않음")에 따라,
+**OOM 자체에 대한 코드 수정(메모리 상향 등)은 이 SPEC이 아닌 인프라
+변경 절차를 따른다.** "누락 영업일 캐치업 스윕" 구조적 보강은 신규
+로직 추가(단순 진단을 넘어선 기능 확장)이므로 이 세션은 이 SPEC 범위
+안에서 구현하지 않는다 — Open Questions에 후속 SPEC 후보로 기록한다
+(§E.3 참고).
+
+| AC | Status | Verification Command | Actual Output |
+|----|--------|----------------------|----------------|
+| AC-AI117-005 | PASS(진단 완료) | `journalctl -u newshive --since ... \| grep ...` + `journalctl -k` + DB 재확인 | 19:15 KST 잡 미실행 확인(무로그), OOM 확정(kernel 로그), 08-19 평가 행 0건(08-21 기준) |
+
 ## §E.3 Run-phase Audit-Ready Signal
 
 M1(REQ-AI117-001) 완료·배포 검증 완료. M2(REQ-AI117-002) 진단 완료 —
@@ -188,7 +259,9 @@ M1(REQ-AI117-001) 완료·배포 검증 완료. M2(REQ-AI117-002) 진단 완료 
 characterization 테스트 4건 PASS, 전체 회귀 2534 passed/0 failed
 (`cd backend && uv run pytest tests/ -m "not slow"`), ruff clean.
 M4(REQ-AI117-004) 진단 완료 — Pool B 조회 실패 미관측, 시행하지 않음(N/A).
-M5(REQ-AI117-005)로 진행.
+M5(REQ-AI117-005) 진단 완료 — 19:15 KST 잡 미실행 + OOM kill 근본원인
+확정, 캐치업 스윕은 이 SPEC 범위 밖으로 판단(Open Questions 후속 SPEC
+후보 기록). M6(무회귀 최종 검증 + CHANGELOG 준비)로 진행.
 
 ## §E.4 Sync-phase Audit-Ready Signal
 
