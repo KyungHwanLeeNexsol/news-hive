@@ -312,7 +312,7 @@ M5 진단에서 확인된 "스케줄러 재기동 시 놓친 영업일(예: 08-1
 
 sync_status: complete
 sync_complete_at: 2026-08-21
-sync_commit_sha: pending-backfill-spec-ai-117-sync
+sync_commit_sha: 7071d98
 
 CHANGELOG.md `[Unreleased]` 섹션에 SPEC-AI-117 M1~M6 원본 진단/변경 요약 추가
 (중복 확인: 커밋 전 `grep -c 'SPEC-AI-117' CHANGELOG.md` → 0). spec.md/plan.md/
