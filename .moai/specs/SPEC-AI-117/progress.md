@@ -143,13 +143,52 @@ M2 진단(462860 `price_fetch_truncation` 드롭 1건 확인)이 REQ-AI117-003
 |----|--------|----------------------|----------------|
 | AC-AI117-003 | PASS | `uv run pytest tests/test_spec_ai_117.py tests/test_spec_ai_096.py tests/test_spec_ai_115.py -v` | 28 passed |
 
+### M4 — 조건부: Pool B 실패 경보 승격 (REQ-AI117-004 / AC-AI117-004) — 시행하지 않음
+
+로그 인코딩 발견: 서버 로그는 pythonjsonlogger `ensure_ascii` 이스케이프로
+Korean 텍스트를 `\uXXXX`로 기록한다(예: `[스캔유니버스]` → `[스캔유니버스]`).
+Korean 리터럴 문자열로 grep 시 항상 0건이 반환되므로(오탐), ASCII 하위
+문자열("Pool B")로 검색해 원본 로그를 직접 육안 확인했다.
+
+- 조회: `journalctl -u newshive --since '2026-08-20 00:00:00' --until
+  '2026-08-20 12:00:00' | grep 'Pool B'` (UTC 00:00~12:00 = KST 09:00~21:00,
+  실질 장중 09:00~16:11 KST까지 커버).
+- **결과: 해당 구간에 `Pool B 조회 실패` 라인 0건.** Pool B 소싱은 그날
+  09:26~16:11 KST(UTC 00:26~07:11)에 걸쳐 6회 관측되었고 매회 정상
+  카운트를 반환했다(원본 로그 발췌, 시각순):
+  - 00:26 `[스캔유니버스] Pool B stocks 미존재 종목 제외: 제외=59건`
+  - 00:30 `[스캔유니버스] Pool B(거래량200%+): 22개`
+  - 00:51 `... 26개`
+  - 01:24 `... 30개`
+  - 01:50 `... 29개`
+  - 02:26 `... 30개`
+  - 06:38 `... 49개`
+  - 07:03 `... 50개`
+  - 참고(부가 정보, 원본): 07:01~07:11 KST 구간
+    `app.services.surge_evaluation_service` 로그
+    `[급등평가] non_scannable 원인 진단 완료 — date=2026-08-20 truncated=2
+    absent=43 (Pool B는 사후 재구성 불가로 재판정 대상 제외)` — M2의
+    price_fetch_truncation 드롭 확인(462860 1건)과 정합적인 truncated=2
+    관측이나, 이 카운트가 정확히 어느 2종목인지는 이 세션에서 추가로
+    역추적하지 않는다(REQ-AI117-004 범위 밖).
+- **판정: REQ-AI117-004는 시행하지 않는다.** acceptance.md §D Closure
+  Gates + REQ-AI117-004 필수 조건("진단 결과 Pool B 실패가 실제로
+  관측되지 않으면 이 REQ는 시행하지 않고 spec.md에 그 사실을 기록한다")에
+  따라 조건부 AC는 "N/A — 조건 미충족"으로 PASS 간주한다.
+
+| AC | Status | Verification Command | Actual Output |
+|----|--------|----------------------|----------------|
+| AC-AI117-004 | N/A — 조건 미충족(PASS 간주) | `journalctl -u newshive --since '2026-08-20 00:00:00' --until '2026-08-20 12:00:00' \| grep 'Pool B'` | Pool B 조회 실패 0건, 정상 카운트 6회 관측(22→50) |
+
 ## §E.3 Run-phase Audit-Ready Signal
 
 M1(REQ-AI117-001) 완료·배포 검증 완료. M2(REQ-AI117-002) 진단 완료 —
 `gate_drop_observation_enabled=true`(drift 없음), 462860 드롭 1건 확인/
 049470 드롭 0건. M3(REQ-AI117-003) 시행 완료 — 절단 면제 확장 +
 characterization 테스트 4건 PASS, 전체 회귀 2534 passed/0 failed
-(`cd backend && uv run pytest tests/ -m "not slow"`), ruff clean. M4로 진행.
+(`cd backend && uv run pytest tests/ -m "not slow"`), ruff clean.
+M4(REQ-AI117-004) 진단 완료 — Pool B 조회 실패 미관측, 시행하지 않음(N/A).
+M5(REQ-AI117-005)로 진행.
 
 ## §E.4 Sync-phase Audit-Ready Signal
 
