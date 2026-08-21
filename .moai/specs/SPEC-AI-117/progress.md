@@ -2,7 +2,7 @@
 id: SPEC-AI-117
 title: "급등예측 파이프라인 신뢰성(Tier 0) — 진행 상황"
 version: "0.1.0"
-status: in-progress
+status: completed
 created: 2026-08-21
 updated: 2026-08-21
 author: Nexsol
@@ -310,4 +310,17 @@ M5 진단에서 확인된 "스케줄러 재기동 시 놓친 영업일(예: 08-1
 
 ## §E.4 Sync-phase Audit-Ready Signal
 
-_<pending sync-phase>_
+sync_status: complete
+sync_complete_at: 2026-08-21
+sync_commit_sha: pending-backfill-spec-ai-117-sync
+
+CHANGELOG.md `[Unreleased]` 섹션에 SPEC-AI-117 M1~M6 원본 진단/변경 요약 추가
+(중복 확인: 커밋 전 `grep -c 'SPEC-AI-117' CHANGELOG.md` → 0). spec.md/plan.md/
+acceptance.md/progress.md frontmatter `status: in-progress → completed`
+(merged 3-phase close) + `updated: 2026-08-21` 갱신. MX tag 확인: 신규
+파라미터 `volume_breakout_bypass_threshold`는 이미 run-phase M3 커밋에서
+`_apply_price_fetch_truncation()` docstring 내 `@MX:NOTE: [AUTO] SPEC-AI-117
+REQ-AI117-003` 서브라인으로 문서화됨(surge_detector.py:2358-2365) — fan_in=1
+(단일 호출부, `:2921`)이라 `@MX:ANCHOR` 임계값(fan_in≥3) 미충족, 추가 태깅
+없음. `fund_manager.py`의 타임아웃 변경도 기존 `@MX:NOTE: SPEC-AI-082`
+참조(:1311)에 이미 문서화되어 있어 신규 태그 불필요.

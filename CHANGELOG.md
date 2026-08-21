@@ -4,6 +4,62 @@ NewsHive의 주요 변경 사항을 기록합니다.
 
 ## [Unreleased]
 
+### Fix — 급등예측 파이프라인 신뢰성(Tier 0), SPEC-AI-117 (2026-08-21)
+
+gather-timeout 배포 지연·거래량폭발 절단누락·평가누락감시 사각지대 3개 항목을
+"진단 우선, 조건부 수정" 원칙으로 처리했다(acceptance.md 7개 AC 전부 PASS/N-A-PASS,
+전체 회귀 무회귀).
+
+- **M1 (REQ-AI117-001)**: `backend/app/services/fund_manager.py`의 미커밋 diff
+  (`_GATHER_TIMEOUT_S` 1200→2400 + 성공/타임아웃/예외 3경로 소요시간 로깅)를
+  재작성 없이 배포. 2026-08-03 SPEC-AI-096의 `max_scan_universe` 150→250 확대로
+  종목당 순차 HTTP 조회 시간이 비례 증가해 20분 캘리브레이션이 무효화되고
+  2026-08-19~08-20 프로덕션에서 타임아웃이 재발한 것이 원인. 서버 확인:
+  `git log -1` → `ec015d6`, `_GATHER_TIMEOUT_S=2400` 로드, `NRestarts=0`(단일
+  재기동, 크래시루프 없음).
+- **M2 (REQ-AI117-002, 진단)**: `gate_drop_observation_enabled` 서버 실측값
+  `true` 확인(정합화 불필요). `surge_gate_drop_observations`(SPEC-AI-115)
+  2026-08-20 조회 원본: 더즌(462860)이 `gate_name='price_fetch_truncation'`으로
+  1건 드롭 확인(`pre_truncation_rank=859`가 `max_price_fetch_candidates=50`을
+  크게 초과, `original_count=1416`). 비트플래닛(049470)은 instrumented 게이트
+  7종 어디에도 드롭 기록이 없음 — merged 진입 자체를 못했거나 계측 안 된 경로에서
+  사라졌을 가능성(추가 규명은 이 SPEC 범위 밖).
+- **M3 (REQ-AI117-003, 조건부 시행)**: M2가 드롭을 확인해 시행. `surge_detector.py`
+  `_apply_price_fetch_truncation()`에 키워드 전용 파라미터
+  `volume_breakout_bypass_threshold: float | None = None` 추가 — 기본값 `None`이면
+  SPEC-AI-096 기존 동작과 완전히 동일(무회귀). 값이 주어지면 절단 면제 조건이
+  `entry_pool != "existing" OR volume_breakout_score >= threshold`로 확장된다.
+  호출부는 SPEC-AI-063 기존 `volume_breakout_bypass_threshold` 값을 재사용(새
+  임계값 도입 없음). `_MAX_PRICE_FETCH_CANDIDATES`, `_pre_score()` 가중합,
+  `_POOL_MEMBER_WARNING_THRESHOLD`, pool_a/b/c/d 면제 로직은 무변경. 신규
+  characterization 테스트 4건(`tests/test_spec_ai_117.py`
+  `TestPriceFetchTruncationVolumeBreakoutBypassExemption`) — M2 실측치(462860,
+  volume_breakout_score=0.50, bypass_threshold=0.30) 사용: (a) 미지정 시 절단,
+  (b) 임계값 충족 시 생존, (c) 임계값 미달 시 여전히 절단, (d) pool 소속 면제
+  무변경 검증. 28 passed(`test_spec_ai_117.py` + `test_spec_ai_096.py` +
+  `test_spec_ai_115.py`).
+- **M4 (REQ-AI117-004, 조건부 — 시행하지 않음)**: 2026-08-20 09:00~21:00 KST
+  구간 `journalctl` 조회 결과 `"Pool B 조회 실패"` 0건 — Pool B는 그 시간대
+  6회 정상 카운트(22개→50개) 반환. 조건 미충족으로 N/A — PASS 간주.
+- **M5 (REQ-AI117-005, 진단)**: 서버 타임존이 `Etc/UTC`임을 확인(위임 프롬프트의
+  "서버 로컬=KST" 전제 정정). 2026-08-19 19:00~19:30 KST(UTC 10:00~10:30)
+  구간에 `surge_missing_evaluation_check` 로그가 전혀 없음 — 잡 미실행 확인.
+  정지 구간은 KST 18:30~20:26(약 1시간 56분). 근본원인은 커널 로그로 확정:
+  `Aug 19 11:26:09 ... Out of memory: Killed process 1306511 (uvicorn)` — OOM
+  killer가 SIGKILL, systemd가 26초 내 자동 재기동. 2026-08-21 기준
+  `evaluation_date='2026-08-19'` 평가 행 여전히 0건. 이 SPEC 범위에서는
+  "재시작 시 놓친 영업일을 캐치업하지 않는" 구조적 공백을 코드로 수정하지
+  않음(§Non-Goals) — 후속 SPEC 후보로 기록.
+- **M6 (REQ-AI117-006, 무회귀)**: `cd backend && uv run pytest tests/
+  -m "not slow"` → 2534 passed, 4 skipped, 3 xpassed. `ruff check .` →
+  All checks passed. 급등 탐지 7개 핵심 탐지기 판정·앙상블 가중치·quota
+  배분·`existing_codes` 필터(SPEC-AI-094)·Pool A/B/C/D 소싱 쿼리 조건은 이
+  SPEC의 어떤 마일스톤에서도 변경하지 않음.
+
+**후속 판단 필요**: M5에서 확인된 "스케줄러 재기동 시 놓친 영업일 캐치업 스윕"
+구조적 보강은 이 SPEC이 구현하지 않았다 — 사용자 판단이 필요한 후속 SPEC
+후보로 남김(blocker 아님, SPEC-AI-117 자체는 완결).
+
 ### Fix — 급등예측 평가 잡 OOM 수정 (2026-08-18)
 
 dmesg 전수 확인 결과 07-30~08-17 20일 연속 매일 저녁 uvicorn 프로세스가 cgroup

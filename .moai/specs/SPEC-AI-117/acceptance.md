@@ -2,7 +2,7 @@
 id: SPEC-AI-117
 title: "급등예측 파이프라인 신뢰성(Tier 0) — 인수 기준"
 version: "0.1.0"
-status: in-progress
+status: completed
 created: 2026-08-21
 updated: 2026-08-21
 author: Nexsol
