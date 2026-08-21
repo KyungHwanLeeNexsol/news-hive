@@ -56,9 +56,68 @@ _plan-phase 산출물(spec.md/plan.md/acceptance.md/progress.md) 작성 완료. 
 |----|--------|----------------------|----------------|
 | AC-AI117-001 | PASS | `git log -1 --format='%h'` (서버) + `grep _GATHER_TIMEOUT_S` (서버) + `systemctl show newshive` | 서버 `ec015d6`, `_GATHER_TIMEOUT_S=2400`, `NRestarts=0`/`active`/`running` |
 
+### M2 — Item 2 진단 (REQ-AI117-002 / AC-AI117-002a/002b)
+
+**AC-AI117-002a — gate_drop_observation_enabled 서버 실측값 확인**
+
+- 정적 파일 확인: 서버 `app/surge_config/surge_detection.yaml:321` → `gate_drop_observation_enabled: true`.
+- 서버 `app/surge_config/surge_detection.auto.yaml`(자동개선 루프 전용,
+  레포 미포함) 원본:
+  ```
+  # surge_detection.auto.yaml — SPEC-AI-069 REQ-002 리셋 완료 (auto_improve_enabled=false)
+  # base surge_detection.yaml이 유일 authoritative 소스. 특정 키 오버라이드 없음.
+  ```
+  → `gate_drop_observation_enabled` 키 오버라이드 없음(drift 없음).
+- 앱의 실제 `get_surge_config()` 로더로 실측(서버 `venv/bin/python`,
+  `app.surge_config.surge_settings.get_surge_config()`):
+  ```
+  gate_drop_observation_enabled = True
+  ```
+- **결론: `true`로 확인됨. 정합화(재조정) 불필요 — REQ-AI117-002 필수 조건의
+  "false 확인 시 정합화" 하위 조건은 발동하지 않는다.**
+
+**AC-AI117-002b — surge_gate_drop_observations 원본 조회**
+
+쿼리: `trading_date='2026-08-20' AND stock_code IN ('049470','462860')`
+(서버 DB, `SurgeGateDropObservation` ORM 직접 조회, 서버 `venv/bin/python`)
+
+- 참고: 2026-08-20 전체 `gate_drop_observations` 행 수 26,353건(계측
+  자체는 활발히 동작 중). 그날 관측된 distinct `gate_name`: `below_regime_threshold`,
+  `sector_contagion_gate`, `evaluation_excluded_near_limit_carry`,
+  `evaluation_excluded_same_day`, `price_fetch_truncation`,
+  `strong_bypass_failed`, `immediate_bypass_failed`.
+
+| stock_code | 결과 | gate_name | score_before_drop | market_regime | detector_set_json | reason_metadata_json |
+|---|---|---|---|---|---|---|
+| 462860 (더즌) | **있음(1건)** | `price_fetch_truncation` | 0.095 | BEAR | `["theme_cluster"]` | `{"entry_pool": "existing", "max_price_fetch_candidates": 50, "original_count": 1416, "pool_member_exempt_count": 116, "pre_truncation_rank": 859}` |
+| 049470 (비트플래닛) | **없음(0건)** | — | — | — | — | — |
+
+- 049470 추가 확인: `stock_code LIKE '%049470%'`로 **전체 기간** 조회 —
+  0건(포맷 불일치 가능성 배제, 이 종목은 이 테이블에 단 한 번도 기록된 적이
+  없다).
+- **462860 해석(원본 사실만, 가공 없음)**: `pre_truncation_rank=859`가
+  `max_price_fetch_candidates=50`를 크게 초과 — 이 세션의 spec.md §Context
+  Item 2 가설(가격조회 사전절단이 `entry_pool="existing"`인 순수 신호
+  부족 후보를 bypass 게이트 도달 전에 제거한다)과 정확히 일치하는 드롭
+  기록이 확인됐다. `original_count=1416`은 그날 `merged` 크기가
+  `_MAX_PRICE_FETCH_CANDIDATES`(50)를 28배 초과했음을 의미한다.
+- **049470 해석(원본 사실만)**: instrumented 게이트(위 7개) 중 어느 것으로도
+  드롭이 기록되지 않았다 — 이는 (a) 애초에 `merged`에 진입하지 못했거나
+  (`build_scan_universe()`/`detect_volume_breakout()` 자체 유니버스에서
+  발견되지 않음), (b) instrumented되지 않은 다른 경로(예: `_pre_score`
+  가중합 계산 이전 단계, 또는 콜백이 없는 게이트)에서 사라졌을 가능성을
+  시사한다. 이 세션은 그 이상의 근본원인을 추가로 규명하지 않는다(REQ-AI117-002
+  범위 밖 — spec.md §Non-Goals "알고리즘/임계값 튜닝" 경계 유지).
+
+**REQ-AI117-003 게이트 판정**: AC-AI117-002b가 `gate_name='price_fetch_truncation'`
+드롭을 1건(462860) 확인 → **분기 A, REQ-AI117-003 시행**(acceptance.md
+시나리오 2).
+
 ## §E.3 Run-phase Audit-Ready Signal
 
-M1(REQ-AI117-001) 완료. M2(REQ-AI117-002) 진단으로 진행.
+M1(REQ-AI117-001) 완료·배포 검증 완료. M2(REQ-AI117-002) 진단 완료 —
+`gate_drop_observation_enabled=true`(drift 없음), 462860 드롭 1건 확인/
+049470 드롭 0건. REQ-AI117-003 조건 충족 확인 → M3 진행.
 
 ## §E.4 Sync-phase Audit-Ready Signal
 
