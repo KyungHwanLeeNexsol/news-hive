@@ -39,13 +39,26 @@ _plan-phase 산출물(spec.md/plan.md/acceptance.md/progress.md) 작성 완료. 
 - Push: `git push origin main` 결과는 §E.3에 기록(배포 확인은 커밋 직후
   진행 예정).
 
+- Push: `git push origin main` → `70e56db..ec015d6 main -> main` (커밋
+  `73f94e5`, `ec015d6` 모두 반영).
+- CI/CD 자동배포(`.github/workflows/ci.yml` deploy job, backend 경로 변경 →
+  backend-test + backend-lint 통과 후 `scripts/deploy.sh` 실행) 확인:
+  - 서버 `git log -1 --format='%h'` → `ec015d6` (2026-08-21 02:44:22 UTC 확인,
+    push 후 자동 배포 완료).
+  - 서버 파일 `grep -n '_GATHER_TIMEOUT_S' app/services/fund_manager.py` →
+    `66:_GATHER_TIMEOUT_S: float = 2400  # 40분 (...)` — 값 로드 확인.
+  - `systemctl show newshive -p ActiveState -p SubState -p
+    ExecMainStartTimestamp -p NRestarts` → `NRestarts=0`,
+    `ExecMainStartTimestamp=Fri 2026-08-21 02:46:04 UTC`, `ActiveState=active`,
+    `SubState=running` — 크래시루프 없이 단일 재기동 확인.
+
 | AC | Status | Verification Command | Actual Output |
 |----|--------|----------------------|----------------|
-| AC-AI117-001 | PENDING(push+배포 확인 전) | `journalctl -u newshive -n 50` (배포 후) | 커밋 완료, push/배포 확인 대기 |
+| AC-AI117-001 | PASS | `git log -1 --format='%h'` (서버) + `grep _GATHER_TIMEOUT_S` (서버) + `systemctl show newshive` | 서버 `ec015d6`, `_GATHER_TIMEOUT_S=2400`, `NRestarts=0`/`active`/`running` |
 
 ## §E.3 Run-phase Audit-Ready Signal
 
-_<pending — M1 push/배포 확인 후 갱신>_
+M1(REQ-AI117-001) 완료. M2(REQ-AI117-002) 진단으로 진행.
 
 ## §E.4 Sync-phase Audit-Ready Signal
 
