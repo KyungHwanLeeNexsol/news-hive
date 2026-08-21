@@ -251,17 +251,62 @@ plan.md M5("추가 REQ로 확장할지는 진단 후 결정 — 강제하지 않
 |----|--------|----------------------|----------------|
 | AC-AI117-005 | PASS(진단 완료) | `journalctl -u newshive --since ... \| grep ...` + `journalctl -k` + DB 재확인 | 19:15 KST 잡 미실행 확인(무로그), OOM 확정(kernel 로그), 08-19 평가 행 0건(08-21 기준) |
 
+### M6 — 무회귀 검증 + CHANGELOG 준비 (REQ-AI117-006 / AC-AI117-006)
+
+전체 회귀 및 정적 검사 최종 실행(모든 마일스톤 완료 후 재확인):
+
+```
+$ cd backend && uv run pytest tests/ --tb=short -q -m "not slow"
+==== 2534 passed, 4 skipped, 3 xpassed, 1378 warnings in 295.34s ====
+
+$ uv run ruff check .
+All checks passed!
+
+$ uv run python -c "from app.main import app; print('OK')"
+OK
+```
+
+7개 핵심 탐지기 판정 로직/앙상블 가중치/quota 배분(`pool_b/c_min_slots`)/
+`existing_codes` 필터(SPEC-AI-094)/Pool A/B/C/D 소싱 쿼리 조건 자체는 이
+SPEC의 어떤 마일스톤에서도 변경하지 않았다(git diff 범위 재확인: M1
+`fund_manager.py`+1개 테스트, M3 `surge_detector.py`
+`_apply_price_fetch_truncation()` 절단 면제 조건 한 줄 확장 + 신규 테스트
+파일 1개, M2/M4/M5는 진단 전용으로 코드 변경 없음).
+
+| AC | Status | Verification Command | Actual Output |
+|----|--------|----------------------|----------------|
+| AC-AI117-006 | PASS | `cd backend && uv run pytest tests/ -m "not slow"` | 2534 passed, 0 failed |
+
 ## §E.3 Run-phase Audit-Ready Signal
 
-M1(REQ-AI117-001) 완료·배포 검증 완료. M2(REQ-AI117-002) 진단 완료 —
-`gate_drop_observation_enabled=true`(drift 없음), 462860 드롭 1건 확인/
-049470 드롭 0건. M3(REQ-AI117-003) 시행 완료 — 절단 면제 확장 +
-characterization 테스트 4건 PASS, 전체 회귀 2534 passed/0 failed
-(`cd backend && uv run pytest tests/ -m "not slow"`), ruff clean.
-M4(REQ-AI117-004) 진단 완료 — Pool B 조회 실패 미관측, 시행하지 않음(N/A).
-M5(REQ-AI117-005) 진단 완료 — 19:15 KST 잡 미실행 + OOM kill 근본원인
-확정, 캐치업 스윕은 이 SPEC 범위 밖으로 판단(Open Questions 후속 SPEC
-후보 기록). M6(무회귀 최종 검증 + CHANGELOG 준비)로 진행.
+전체 마일스톤(M1~M6) 완료. run-phase 종료, sync-phase 진입 가능.
+
+**E1. AC PASS/FAIL 매트릭스 (최종)**
+
+| AC | REQ | Status |
+|----|-----|--------|
+| AC-AI117-001 | REQ-AI117-001 | PASS — M1 배포 확인(`ec015d6`, `_GATHER_TIMEOUT_S=2400`, `NRestarts=0`) |
+| AC-AI117-002a | REQ-AI117-002 | PASS — `gate_drop_observation_enabled=true` 서버 실측 확인 |
+| AC-AI117-002b | REQ-AI117-002 | PASS — 462860 드롭 1건/049470 드롭 0건 원본 기록 |
+| AC-AI117-003 | REQ-AI117-003 | PASS — 절단 면제 확장 시행 + characterization 4건 PASS |
+| AC-AI117-004 | REQ-AI117-004 | N/A(조건 미충족, PASS 간주) — Pool B 실패 미관측 |
+| AC-AI117-005 | REQ-AI117-005 | PASS(진단 완료) — 잡 미실행 확인 + OOM 근본원인 확정 |
+| AC-AI117-006 | REQ-AI117-006 | PASS — 전체 회귀 2534 passed/0 failed, ruff clean |
+
+acceptance.md §D Closure Gates: 필수 AC(001/002a/002b/005/006) 전부
+PASS, 조건부 AC(003 시행/004 N/A) 모두 규정된 분기대로 종결 — sync-phase
+진입 조건 충족.
+
+**Open Questions 후속 SPEC 후보 (이 세션이 새로 확인한 사실, 코드 미반영)**:
+M5 진단에서 확인된 "스케줄러 재기동 시 놓친 영업일(예: 08-19)을
+캐치업하지 않는 구조적 공백"은 REQ-AI117-005의 "강제하지 않음" 조항에
+따라 이 SPEC에서 구현하지 않았다. 후속 SPEC 후보로 판단을 넘긴다(사용자
+결정 필요 — 이 세션은 AskUserQuestion 권한이 없는 subagent이므로
+오케스트레이터에게 위임).
+
+**E7. 블로커/후속 판단 필요 사항**: 없음(모든 REQ가 확정적으로 종결됨).
+단, 위 "Open Questions 후속 SPEC 후보"는 사용자 판단이 필요한 항목으로
+보고한다(코드 변경을 막는 blocker는 아님 — 이 SPEC 자체는 완결 상태).
 
 ## §E.4 Sync-phase Audit-Ready Signal
 
