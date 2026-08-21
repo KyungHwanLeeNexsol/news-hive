@@ -113,11 +113,43 @@ _plan-phase 산출물(spec.md/plan.md/acceptance.md/progress.md) 작성 완료. 
 드롭을 1건(462860) 확인 → **분기 A, REQ-AI117-003 시행**(acceptance.md
 시나리오 2).
 
+### M3 — 조건부: 절단 면제 확장 (REQ-AI117-003 / AC-AI117-003)
+
+M2 진단(462860 `price_fetch_truncation` 드롭 1건 확인)이 REQ-AI117-003
+시행 조건을 충족해 시행했다.
+
+- 변경 파일: `app/services/surge_detector.py`
+  - `_apply_price_fetch_truncation()`에 키워드 전용 파라미터
+    `volume_breakout_bypass_threshold: float | None = None` 추가(기본값
+    `None`이면 신규 조건이 비활성화되어 SPEC-AI-096 기존 동작과 완전히
+    동일 — 무회귀).
+  - 면제 조건: `entry_pool != "existing" OR (volume_breakout_bypass_threshold
+    is not None AND candidate.volume_breakout_score >=
+    volume_breakout_bypass_threshold)`.
+  - 호출부(`gather_surge_candidates()`)에서
+    `volume_breakout_bypass_threshold=config.volume_breakout.volume_breakout_bypass_threshold`
+    (SPEC-AI-063 기존 값 재사용, 새 임계값 도입 없음) 전달.
+  - `_MAX_PRICE_FETCH_CANDIDATES`(50) 숫자, `_pre_score()` 가중합 산출식,
+    `_POOL_MEMBER_WARNING_THRESHOLD`(200) 경고 로직, pool_a/b/c/d 소속
+    면제 로직(SPEC-AI-096) 자체는 무변경(REQ-AI117-003 필수 조건 전항목
+    충족).
+- 신규 테스트: `tests/test_spec_ai_117.py`
+  `TestPriceFetchTruncationVolumeBreakoutBypassExemption` 4건 — M2 실측치
+  (462860, volume_breakout_score=0.50, bypass_threshold=0.30) 그대로 사용해
+  (a) 미지정 시 절단(무회귀 기준선), (b) 임계값 충족 시 생존, (c) 임계값
+  미달 시 여전히 절단, (d) pool 소속 면제 로직 무변경을 각각 검증.
+
+| AC | Status | Verification Command | Actual Output |
+|----|--------|----------------------|----------------|
+| AC-AI117-003 | PASS | `uv run pytest tests/test_spec_ai_117.py tests/test_spec_ai_096.py tests/test_spec_ai_115.py -v` | 28 passed |
+
 ## §E.3 Run-phase Audit-Ready Signal
 
 M1(REQ-AI117-001) 완료·배포 검증 완료. M2(REQ-AI117-002) 진단 완료 —
 `gate_drop_observation_enabled=true`(drift 없음), 462860 드롭 1건 확인/
-049470 드롭 0건. REQ-AI117-003 조건 충족 확인 → M3 진행.
+049470 드롭 0건. M3(REQ-AI117-003) 시행 완료 — 절단 면제 확장 +
+characterization 테스트 4건 PASS, 전체 회귀 2534 passed/0 failed
+(`cd backend && uv run pytest tests/ -m "not slow"`), ruff clean. M4로 진행.
 
 ## §E.4 Sync-phase Audit-Ready Signal
 

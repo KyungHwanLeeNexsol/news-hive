@@ -2346,6 +2346,7 @@ def _apply_price_fetch_truncation(
     merged: dict[str, SurgeCandidate],
     *,
     on_drop: Callable[[str, SurgeCandidate, float, dict[str, Any]], None] | None = None,
+    volume_breakout_bypass_threshold: float | None = None,
 ) -> dict[str, SurgeCandidate]:
     """merged가 _MAX_PRICE_FETCH_CANDIDATES를 초과하면 existing 전용 후보만 절단한다.
 
@@ -2353,6 +2354,15 @@ def _apply_price_fetch_truncation(
     그대로 생존하고, entry_pool == "existing"인 candidate만 사전점수(_pre_score)
     내림차순 상위 _MAX_PRICE_FETCH_CANDIDATES개로 절단된다. entry_pool 태깅은 이 함수
     호출보다 먼저 실행되므로(SPEC-AI-065 REQ-2) 별도 조회 없이 판별 가능하다.
+
+    # @MX:NOTE: [AUTO] SPEC-AI-117 REQ-AI117-003 — volume_breakout_bypass_threshold가
+    # 주어지면(None이 아니면) entry_pool == "existing"이더라도
+    # volume_breakout_score가 그 값 이상인 candidate도 추가로 면제된다.
+    # SPEC-AI-096 REQ-AI096-005/D2("이미 외부 독립 신호를 가진 후보는 순수
+    # 앙상블 사전점수만으로 버리지 않는다")와 동일 논리를 SPEC-AI-063 bypass
+    # 게이트 도달 전 후보에 조건 확장한 것 — 새 임계값/새 탐지기 추가 아님.
+    # 기본값 None은 이 확장을 비활성화하여 기존(SPEC-AI-096) 동작과 완전히
+    # 동일하다(무회귀).
     """
     if len(merged) <= _MAX_PRICE_FETCH_CANDIDATES:
         return merged
@@ -2371,8 +2381,24 @@ def _apply_price_fetch_truncation(
             + c.immediate_disclosure_score * 0.08
         )
 
-    _pool_codes = [code for code, c in merged.items() if c.entry_pool != "existing"]
-    _existing_codes = [code for code, c in merged.items() if c.entry_pool == "existing"]
+    _pool_codes = [
+        code
+        for code, c in merged.items()
+        if c.entry_pool != "existing"
+        or (
+            volume_breakout_bypass_threshold is not None
+            and c.volume_breakout_score >= volume_breakout_bypass_threshold
+        )
+    ]
+    _existing_codes = [
+        code
+        for code, c in merged.items()
+        if c.entry_pool == "existing"
+        and not (
+            volume_breakout_bypass_threshold is not None
+            and c.volume_breakout_score >= volume_breakout_bypass_threshold
+        )
+    ]
 
     if len(_pool_codes) > _POOL_MEMBER_WARNING_THRESHOLD:
         logger.warning(
@@ -2885,11 +2911,14 @@ def gather_surge_candidates(
         logger.debug("[z-score] 기준선 적용 실패 (무시): %s", _ze)
 
     # SPEC-AI-038/096: price_5d_trend 조회(HTTP) 전 상위 N개로 사전 필터 — pool 소속
-    # 후보(entry_pool in pool_a/b/c/d)는 절단 면제(SPEC-AI-096 REQ-AI096-005). 상세
-    # 로직/PRESERVE 상수는 _apply_price_fetch_truncation 참고.
+    # 후보(entry_pool in pool_a/b/c/d)는 절단 면제(SPEC-AI-096 REQ-AI096-005).
+    # SPEC-AI-117 REQ-AI117-003: volume_breakout_score가 bypass 임계값 이상인
+    # existing 후보도 추가 면제. 상세 로직/PRESERVE 상수는
+    # _apply_price_fetch_truncation 참고.
     merged = _apply_price_fetch_truncation(
         merged,
         on_drop=_observe_gate_drop if _gate_observation_enabled else None,
+        volume_breakout_bypass_threshold=config.volume_breakout.volume_breakout_bypass_threshold,
     )
 
     # SPEC-AI-018 REQ-005 fix: price_5d_trend를 candidate에 직접 채움
